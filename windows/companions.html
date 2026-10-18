@@ -35,6 +35,18 @@
  .pet-dialogue .dialogue-heard{font-size:10px;color:#aab7cd;-webkit-line-clamp:2;border-bottom:1px solid #ffffff10;padding-bottom:6px}
 @keyframes dialogue-in{from{opacity:0;transform:translateY(-5px) scale(.97)}to{opacity:1;transform:none}}@keyframes message-in{from{opacity:.55;transform:translateY(3px)}to{opacity:1;transform:none}}@keyframes dialogue-pulse{50%{opacity:.35;box-shadow:0 0 0 4px #ffffff0a}}
 @media(prefers-reduced-motion:reduce){.pet-dialogue,.pet-dialogue .arriving,.pet-dialogue strong:before{animation:none!important}}
+
+#shelter{position:absolute;z-index:5;display:flex;align-items:center;box-sizing:border-box;border-radius:18px;background:#222738cc;border:1px solid #ffffff25;box-shadow:inset 0 1px #ffffff08;overflow:hidden;backdrop-filter:blur(12px)}
+#shelter[hidden],#shelter [hidden]{display:none!important}#shelter button{background:transparent;border:0;color:#bdc9e2;cursor:pointer;padding:0;flex:none;width:32px;height:32px;border-radius:50%}#shelter button:hover{background:#ffffff18;color:#fff}#shelter button:focus-visible{outline:2px solid #93c5fd;outline-offset:-2px}#shelter .shelter-home{order:2;margin-left:auto}#shelter svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.shelter-residents{display:flex;align-items:center;overflow-x:auto;scrollbar-width:none;min-width:0;overscroll-behavior:contain;scroll-behavior:smooth}.shelter-residents button{margin:0 2px}.shelter-residents canvas{width:32px;height:32px;display:block}.shelter-residents button[data-attention="true"]{box-shadow:inset 0 0 0 1px #fbbf24}
+.pet-dialogue[data-compact="true"]{height:var(--speech-height,38px);padding:3px 7px;border-radius:12px;box-shadow:0 2px 7px #0003;background:#eaf1fcf5;color:#202738;overflow:visible;animation:speech-in .2s ease-out}
+.pet-dialogue[data-compact="true"] strong,.pet-dialogue[data-compact="true"] .dialogue-heard{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);padding:0;border:0}
+.pet-dialogue[data-compact="true"] p{font-size:10.5px;line-height:15px;max-height:calc(var(--speech-height,38px) - 8px);margin:0;-webkit-line-clamp:2;white-space:normal}
+.pet-dialogue[data-compact="true"] button{position:absolute;inset:0;width:100%;margin:0;padding:0;border:0;background:transparent;color:transparent}
+.pet-dialogue[data-compact="true"]:before{top:calc(50% - 4px);left:auto;width:7px;height:7px;background:#eaf1fc;border:0}
+.pet-dialogue[data-side="left"]:before{left:-4px;border-left:1px solid var(--pet-color);border-bottom:1px solid var(--pet-color)}
+.pet-dialogue[data-side="right"]:before{right:-4px;border-top:1px solid var(--pet-color);border-right:1px solid var(--pet-color)}
+@keyframes speech-in{from{opacity:0;scale:.94}to{opacity:1;scale:1}}
+@media(prefers-reduced-motion:reduce){.pet-dialogue[data-compact="true"]{animation:none}.shelter-residents{scroll-behavior:auto}}
 </style>
   </head>
   <body>

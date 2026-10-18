@@ -731,11 +731,11 @@ test("companion permission requests open the original decision card owned by tha
  assert.deepEqual(sent("approval_decision"),[]);
  assert.deepEqual(sent("approval_ack"),[{requestId:"pet-permission"}]);
 });
-test("a completed agent opens its complete result card without taking another pending decision", () => {
+test("a completed companion speaks its result without stealing focus or opening a status card", () => {
  State.settings={...DEFAULT_SETTINGS,companionMode:true,mainPill:"agent_codex",activeIntegrations:["ai_ollama"]};
  State.loadIntegrationTasks();State.focusId="ai_ollama";
  hook({hook_event_name:"Stop",coucou_agent:"codex",session_id:"own-session",last_assistant_message:"The requested change is ready."});
- assert.equal(State.focusId,"agent_codex");
+ assert.equal(State.focusId,"ai_ollama");
  assert.equal(task("agent_codex").finalLine,"The requested change is ready.");
- assert.ok(asked.includes("alert:finished"));
+ assert.ok(!asked.includes("alert:finished"));
 });

@@ -1,3 +1,4 @@
+import { shelterLayout, speechPlacement, speechText } from "../mochi/shelter";
 import { PetDialogues, BUSY, ATTENTION, phaseFor, animationFor, type PetActivity } from "../mochi/dialogue";
 import { NoticeQueue, type PetNotice } from "../mochi/notices";
 import { Bridge, emitToWindow, onEvent } from "../core/bridge";
@@ -51,6 +52,40 @@ function positionNotice() {
   notice.style.left=`${left}px`;notice.style.top=`${(world.band?.height??p.y+30)+8}px`;
   notice.style.setProperty("--tip",`${Math.max(12,Math.min(280,p.x-left-6))}px`);
 }
+const shelter = document.createElement("div"); shelter.id="shelter"; shelter.hidden=true;
+const home = document.createElement("button"); home.type="button"; home.className="shelter-home";
+home.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 12 3l9 8M5 10v10h14V10M9 20v-5a3 3 0 0 1 6 0v5"/></svg>';
+const residents=document.createElement("div");residents.className="shelter-residents";
+residents.addEventListener("wheel",event=>{if(residents.scrollWidth>residents.clientWidth){event.preventDefault();residents.scrollLeft+=event.deltaY||event.deltaX;}},{passive:false});
+shelter.append(home,residents);document.body.append(shelter);
+let shelterOpen=false,shelterKey="";
+function refreshShelter() {
+  const layout=shelterLayout(snapshot.band,snapshot.pets.length,shelterOpen);
+  shelter.hidden=!layout || !snapshot.enabled || !nativeVisible;
+  if(!layout)return;
+  Object.assign(shelter.style,{left:`${layout.left}px`,top:`${layout.top}px`,width:`${layout.width}px`,height:`${layout.height}px`});
+  home.setAttribute("aria-expanded",String(shelterOpen));
+  home.title=`Abrigo dos pets · ${snapshot.pets.length} disponíveis`;
+  home.setAttribute("aria-label",home.title);
+  residents.hidden=!shelterOpen;
+  const key=JSON.stringify(snapshot.pets.map(p=>[p.id,p.name,p.color,p.outfit,p.attention]));
+  if(key===shelterKey)return;shelterKey=key;residents.replaceChildren();
+  for(const identity of snapshot.pets) {
+    const button=document.createElement("button");button.type="button";button.title=identity.name;button.setAttribute("aria-label",`Chamar ${identity.name}`);
+    button.dataset.attention=String(identity.attention);
+    const canvas=document.createElement("canvas");canvas.width=canvas.height=64;
+    const engine=new BotEngine();engine.bodyColor=hexToRGB(identity.color);engine.setState(identity.attention?"approval":"sleeping",true);engine.setOutfit(identity.outfit,false);engine.update(.016);engine.draw(canvas.getContext("2d")!,64,64);
+    button.append(canvas);button.onclick=()=>{ const p=world.pets.get(identity.id);if(p)open(p); };
+    residents.append(button);
+  }
+}
+function setShelter(open:boolean) {
+  shelterOpen=open;refreshShelter();
+  world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented,motion:world.motion},window.innerWidth,performance.now()/1000);
+  refreshDialogue();input(performance.now()/1000,true);wake();
+}
+home.onclick=()=>setShelter(!shelterOpen);
+const nativeSpeech=new Map<string,{text:string;at:number;key:string}>();
 const dialogues = new PetDialogues();
 const decisions = new Map<string,{pet:string;phase:string}>();
 let pendingFold: {pet:string;until:number}|null = null;
@@ -77,7 +112,8 @@ let dialogueTimer: number | null = null;
 let liveVoice: VoiceView | null = null;
 const phaseLabel = (phase: string) => ({preparing:"A ligar o microfone",thinking:"A pensar",working:"A trabalhar",searching:"A pesquisar",message:"A responder",speaking:"A falar",listening:"A ouvir",approval:"Precisa da tua aprovação",question:"Precisa de uma resposta tua",error:"Precisa de atenção",ratelimit:"Limite atingido",done:"Concluído",stopped:"Interrompido",failed:"Não conseguiu terminar"}[phase] ?? "Disponível");
 function activeSnapshot(s: CompanionsSnapshot): CompanionsSnapshot {
-  return {...s,pets:s.pets.map(identity=>{
+  const room=shelterLayout(s.band,s.pets.length,shelterOpen);
+  return {...s,sheltered:!!room,band:room && s.band ? {...s.band,lanes:room.lanes}:s.band,pets:s.pets.map(identity=>{
     const phase=decisionPhase(identity.id) ?? phaseFor(dialogues.current(identity.id,performance.now()),identity.state);
     const busy=BUSY.has(phase),attention=ATTENTION.has(phase);
     const entry=dialogues.entries.get(identity.id);
@@ -93,38 +129,52 @@ function activityPhase(p: PetLife) {
   if(voicePet===p.identity.id && liveVoice) return value && BUSY.has(value.phase) ? value.phase : liveVoice.phase;
   return phaseFor(value,native);
 }
+function positionDialogue() {
+  if(dialogue.hidden || !dialoguePet)return;
+  const p=world.pets.get(dialoguePet);if(!p?.shown){dialogue.hidden=true;return;}
+  const placement=speechPlacement(p.x,p.y,world.scale,world.band,world.width,[...world.pets.values()].filter(other=>other!==p && other.shown).map(other=>other.x));
+  if(!placement){dialogue.style.visibility="hidden";return;}
+  dialogue.style.visibility="visible";
+  Object.assign(dialogue.style,{left:`${placement.left}px`,top:`${placement.top}px`,width:`${placement.width}px`});
+  dialogue.dataset.side=placement.side;dialogue.dataset.compact=String(!!world.band);
+  dialogue.style.setProperty("--speech-height",`${"height" in placement?placement.height:38}px`);
+  dialogue.style.setProperty("--tip",`${placement.tip}px`);
+}
 function refreshDialogue() {
   const now = performance.now();
   const selected=dialogues.selected && world.pets.get(dialogues.selected);
-  const owner = voicePet ?? (selected && (dialogues.visible(selected.identity.id,now,false) || BUSY.has(activityPhase(selected))) ? selected.identity.id : null) ?? [...world.pets.values()].find(p=>p.identity.attention || BUSY.has(activityPhase(p)))?.identity.id;
+  const recent=[...nativeSpeech.entries()].filter(([,s])=>now-s.at<=9000).sort((a,b)=>b[1].at-a[1].at)[0]?.[0];
+  const owner = voicePet ?? (selected && dialogues.visible(selected.identity.id,now,false) ? selected.identity.id : null) ?? recent ?? [...world.pets.values()].find(p=>p.identity.attention)?.identity.id;
   const p = owner ? world.pets.get(owner) : undefined;
   dialogue.hidden = true; dialoguePet = null;
-  if (!p?.shown || !snapshot.enabled || !nativeVisible || snapshot.paused) return;
-  // The original decision card always has presentation priority.
-  if (snapshot.presented) return;
+  if (!p?.shown || !snapshot.enabled || !nativeVisible || snapshot.paused || snapshot.presented || shelterOpen) return;
   const value = dialogues.visible(p.identity.id,now,false);
   const phase = activityPhase(p);
   const voiced = voicePet === p.identity.id ? liveVoice : null;
-  if (!value && !voiced && !ATTENTION.has(phase) && !BUSY.has(phase)) return;
+  const native=nativeSpeech.get(p.identity.id);
+  const message = voiced?.phase === "speaking" ? voiced.answer : value?.message ?? native?.text ?? "";
+  const text=speechText(phase,message,value?.messageAt??native?.at??now,now);
+  if(!text)return;
   dialoguePet = p.identity.id; dialogue.hidden = false;
-  dialogue.dataset.phase = phase;
-  dialogue.style.setProperty("--pet-color",p.identity.color);
-  dialogueTitle.textContent = `${p.identity.name} · ${phaseLabel(phase)}`;
-  const message = voiced?.phase === "speaking" ? voiced.answer : value?.message ?? voiced?.answer ?? "";
-  if (dialogueText.textContent !== message) { dialogueText.textContent = message; dialogueText.classList.add("arriving"); }
-  dialogueText.hidden = !message;
-  const heard=voiced?.heard?.replace(/^[^·]+ · /, "") ?? "";
-  dialogueHeard.hidden=!heard || ["listening"].includes(voiced?.phase ?? "");
-  dialogueHeard.textContent=heard ? `Ouvi: ${heard}` : "";
-  dialogueAction.hidden = !ATTENTION.has(phase);
+  dialogue.dataset.phase = phase; dialogue.style.setProperty("--pet-color",p.identity.color);
+  dialogueTitle.textContent = p.identity.name;
+  if (dialogueText.textContent !== text) { dialogueText.textContent = text; dialogueText.classList.remove("arriving");void dialogueText.offsetWidth;dialogueText.classList.add("arriving"); }
+  dialogue.title=text;dialogueText.hidden=false;dialogueHeard.hidden=true;
+  dialogueAction.hidden = !world.band && !ATTENTION.has(phase);
+  dialogueAction.textContent=ATTENTION.has(phase)?"Rever pedido":`Ler mensagem de ${p.identity.name}`;
+  dialogueAction.setAttribute("aria-label",dialogueAction.textContent);
   dialogue.setAttribute("aria-busy",String(BUSY.has(phase)));
-  const left = Math.max(8,Math.min(world.width-320,p.x-150));
-  dialogue.style.left = `${left}px`; dialogue.style.top = `${(world.band?.height ?? p.y+30)+8}px`;
-  dialogue.style.setProperty("--tip",`${Math.max(14,Math.min(290,p.x-left-6))}px`);
+  positionDialogue();
   if (dialogueTimer != null) window.clearTimeout(dialogueTimer);
-  dialogueTimer = window.setTimeout(()=>{dialogueTimer=null;world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented,motion:world.motion},window.innerWidth,performance.now()/1000);refreshDialogue();input(performance.now()/1000,true);wake();},9500);
+  const remaining=phase==="speaking" || ATTENTION.has(phase) ? 9500 : Math.max(50,9001-(now-(value?.messageAt??native?.at??now)));
+  dialogueTimer = window.setTimeout(()=>{dialogueTimer=null;world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented,motion:world.motion},window.innerWidth,performance.now()/1000);refreshDialogue();input(performance.now()/1000,true);wake();},remaining);
 }
-dialogueAction.onclick = () => { const p=dialoguePet && world.pets.get(dialoguePet); if(p) open(p); };
+dialogueAction.onclick = () => {
+  const p=dialoguePet && world.pets.get(dialoguePet);if(!p)return;
+  const final=nativeSpeech.get(p.identity.id);
+  const native=final && performance.now()-final.at<=9000 && !dialogues.visible(p.identity.id,performance.now(),false);
+  open(p,ATTENTION.has(activityPhase(p))?undefined:native?"finished":"prompt");
+};
 let voicePet: string | null = null;
 let voiceActive = false;
 interface VoiceView { phase: string; heard: string; answer: string; pet?: string; announcementId?: number; note?: boolean }
@@ -132,6 +182,7 @@ let bubble: {view: VoiceView; dictation: boolean} | null = null;
 function voiceBubble(view: VoiceView | null, dictation = false) {
   bubble = view ? {view,dictation} : null;
   if (!dictation) {
+    if(shelterOpen){shelterOpen=false;refreshShelter();}
     const starting=!liveVoice && view?.phase==="preparing";
     liveVoice = view;
     voice.hidden = true;
@@ -203,6 +254,7 @@ function presentPending() {
 
 function open(p: PetLife, view?: string) {
   pendingPresentation = null;
+  if(shelterOpen){shelterOpen=false;refreshShelter();}
   if(shownNotice) { if(noticeTimer!=null)window.clearTimeout(noticeTimer);noticeTimer=null;shownNotice=null;notice.hidden=true; }
   closeMenu();
   world.touch(p.identity.id, performance.now() / 1000);
@@ -301,6 +353,7 @@ function create(p: PetLife): PetView {
 function input(now: number, force = false) {
   if (!force && now - shapeAt < 0.1) return;
   const rects: [number, number, number, number][] = [];
+  if(!shelter.hidden && snapshot.enabled){const r=shelter.getBoundingClientRect();rects.push([r.x,r.y,r.width,r.height]);}
   if (snapshot.enabled) for (const p of world.pets.values()) {
     if (!p.shown || p.visibility === "leaving" || p.opacity <= 0.05) continue;
     const scale = world.scale;
@@ -317,7 +370,7 @@ function input(now: number, force = false) {
     rects.push([r.x, r.y, r.width, r.height]);
   }
   if (!notice.hidden && snapshot.enabled) { const r=notice.getBoundingClientRect();rects.push([r.x,r.y,r.width,r.height]); }
-  if (!dialogue.hidden && snapshot.enabled) { const r=dialogue.getBoundingClientRect();rects.push([r.x,r.y,r.width,r.height]); }
+  if (!dialogue.hidden && dialogue.style.visibility!=="hidden" && snapshot.enabled) { const r=dialogue.getBoundingClientRect();rects.push([r.x,r.y,r.width,r.height]); }
   if (!voice.hidden && snapshot.enabled) { const r = voice.getBoundingClientRect(); rects.push([r.x,r.y,r.width,r.height]); }
   const key = JSON.stringify(rects.map(r => r.map(Math.round)));
   shapeAt = now;
@@ -387,6 +440,16 @@ function draw(p: PetLife, v: PetView, dt: number, now: number) {
   }
   engine.applyDance(ctx, PET_SIZE, PET_SIZE);
   engine.draw(ctx, PET_SIZE, PET_SIZE);
+  if(phase==="speaking" || phase==="message") {
+    ctx.fillStyle="#182032";ctx.beginPath();ctx.ellipse(32,40,3.5,world.motion?1.5+Math.abs(Math.sin(now*12))*2:2,0,0,Math.PI*2);ctx.fill();
+  } else if(phase==="thinking") {
+    ctx.strokeStyle="#182032";ctx.lineWidth=1.6;ctx.lineCap="round";
+    ctx.beginPath();ctx.moveTo(24,22);ctx.lineTo(28,20.5);ctx.stroke();
+    ctx.fillStyle=p.identity.color;ctx.beginPath();ctx.ellipse(41,42,3.5,2.5,-.5,0,Math.PI*2);ctx.fill();
+  } else if(phase==="listening") {
+    ctx.strokeStyle="#93c5fd";ctx.lineWidth=1.4;ctx.lineCap="round";
+    for(const side of [-1,1]) {const pulse=world.motion?Math.sin(now*3)*1.2:0;ctx.beginPath();ctx.ellipse(32+side*19,32,2+pulse*.2,6+pulse,0,-Math.PI/2,Math.PI/2);ctx.stroke();}
+  }
   if (busy && world.motion && !snapshot.paused) {
     ctx.strokeStyle = p.identity.color; ctx.lineWidth = 2; ctx.lineCap = "round";
     for(let i=0;i<3;i++) { const angle=now*2.6+i*Math.PI*2/3;ctx.beginPath();ctx.arc(32,32,23,angle,angle+0.42);ctx.stroke(); }
@@ -418,6 +481,7 @@ function frame() {
     world.tick(dt, now);
     for (const [id, v] of views) if (!world.pets.has(id)) { v.button.remove(); views.delete(id); }
     for (const p of world.pets.values()) draw(p, views.get(p.identity.id)!, dt, now);
+    positionDialogue();
     input(now);
   } catch (error) {
     // A drawing failure must not leave invisible input regions over the apps.
@@ -474,10 +538,17 @@ async function start() {
   await onEvent<boolean>("companions-visible", visible => {
     nativeVisible = visible;
     if (!visible && timer != null) { window.clearTimeout(timer); timer = null; }
-    if (visible) { presentPending(); showNextNotice(); wake(); }
+    if (visible) { void emitToWindow("island",PET_EVENTS.ready);presentPending();showNextNotice();wake(); }
+    refreshShelter();
   });
   await onEvent<CompanionsSnapshot>(PET_EVENTS.state, s => {
     snapshot = s;
+    if(s.presented)shelterOpen=false;
+    for(const pet of s.pets) if(pet.message) {
+      const key=JSON.stringify([pet.message,pet.activity]);
+      if(nativeSpeech.get(pet.id)?.key!==key)nativeSpeech.set(pet.id,{text:pet.message,at:performance.now(),key});
+    }
+    refreshShelter();
     setLanguage(resolveLanguage(s.language ?? "", systemLanguages()));
     if (!s.enabled || (menuPet && !s.pets.some(p=>p.id===menuPet))) closeMenu();
     const oldPet = s.presented ? world.pets.get(s.presented) : null;

@@ -16,6 +16,7 @@ export class CompanionsLink {
   private dirty = false;
   private showing = false;
   private band: CompanionsSnapshot["band"] = null;
+  private presence: {running:string[];activity:Record<string,number>} = {running:[],activity:{}};
 
   private open: (id: string, view?: string) => void;
   private outfit: () => Outfit;
@@ -41,6 +42,20 @@ export class CompanionsLink {
       State.notify();
     });
     await onEvent("companions-layout-changed", () => { this.configuration = ""; void this.sync(); });
+    await onEvent("screen-changed", () => { this.configuration = ""; void this.sync(); });
+    await onEvent<typeof this.presence>("companions-presence", value => {
+      const closed=this.presence.running.filter(id=>!value.running.includes(id));
+      this.presence=value;
+      for(const id of closed) {
+        const task=State.tasks.find(t=>t.id===id);
+        // A crashed/closed client may never send SessionEnd. Another live
+        // client, an active native conversation or a real decision wins.
+        if(!task || (State.chatBusyProvider && State.chatBusyProvider===providerForPill(id)) || State.pendingApproval?.pillId===id)continue;
+        task.sessionId=null;task.sessionCwd=null;State.removeTask(id);
+      }
+      void this.sync();
+    });
+    this.presence = await Bridge.companionsPresence() ?? this.presence;
     State.subscribe(() => void this.sync());
   }
 
@@ -58,7 +73,7 @@ export class CompanionsLink {
         const snapshot: CompanionsSnapshot = {
           enabled: this.enabled, paused: State.paused, motion: State.settings.companionMotion,
           language: State.settings.language, presented: State.mode === "expanded" ? State.focusId : null,
-          pets: companionIdentities(State.tasks.map(t => State.chatBusyProvider && providerForPill(t.id) === State.chatBusyProvider ? {...t,state:"thinking" as const} : t), State.pendingApproval, State.spotifyPlaying, this.outfit(), new Set(Spotify.state.running ? [SPOTIFY_ID] : []), new Map([[SPOTIFY_ID, Spotify.state.track?.id ?? ""]])),
+          pets: companionIdentities(State.tasks.map(t => State.chatBusyProvider && providerForPill(t.id) === State.chatBusyProvider ? {...t,state:"thinking" as const} : t), State.pendingApproval, State.spotifyPlaying, this.outfit(), new Set([...this.presence.running,...(Spotify.state.running ? [SPOTIFY_ID] : [])]), new Map([...Object.entries(this.presence.activity).map(([id,seq])=>[id,String(seq)] as [string,string]),[SPOTIFY_ID, Spotify.state.track?.id ?? ""]])),
         };
         const configuration = JSON.stringify([snapshot.enabled, snapshot.pets.length, State.settings.screen, State.settings.companionTopClearance, State.settings.companionBarMode]);
         if (configuration !== this.configuration) {

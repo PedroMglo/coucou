@@ -17,22 +17,37 @@ with ten pixels of clearance are used. Bar controls and application content
 are never paths for ambient wandering. The ordinary clearance mode remains
 available when bar geometry is not configured.
 
-Unused integrations are absent. Configuration or an installed hook alone is
-not use: a known open agent session, actual work or a running player justifies
-presence. Closing the app/session shrinks and fades its pet out over 350 ms;
-the exiting pet immediately releases its pointer target. New events reverse
-an unfinished transition smoothly. Reduced motion uses immediate changes.
+All configured pets are available from a small home button in the free bar space,
+including immediately after login when no client is open. Clicking it reveals a
+scrollable row of sleeping residents in the bar; selecting one recalls its exact
+card without launching an application. The drawer reserves its own geometry and
+releases its input region when closed. A mouse wheel scrolls crowded drawers.
 
-Open but quiet integrations rest at the left of the first free interval after
-60 seconds without meaningful events or interaction. Sleeping pets are static.
-Work, permissions and questions stay awake. A track change or a new tool step
-wakes only its owner; repeated status/progress polls do not postpone rest.
-A completed CLI turn is distinct from SessionEnd: the former can leave an
-open session resting, while the latter clears even a declared pill's presence.
-Hovering or clicking wakes a resting pet in its parking slot without moving
-its target. A manual call, original card or voice/notice event also recalls an
-absent pet; it leaves again after the card/bubble closes and its eight-second
-interaction grace expires, unless real app/session activity keeps it present.
+Opening a known AI CLI/application recalls its configured pet before the first
+prompt or hook. Linux reconciles same-user executable identities every two seconds,
+including clients already open before Coucou. It emits only presence changes, never
+prompts, process arguments, titles or session files. Codex app-server transports,
+Electron helper processes and the Ollama service do not count as user clients.
+An unchanged process sample does not postpone rest. Closing the last observed client
+also clears a missed SessionEnd, while native conversations and pending decisions
+retain their ownership. Other integrations retain their own event/MPRIS sources.
+
+Quiet pets fade into the shelter after 60 seconds without meaningful activity.
+Work, permissions and questions stay visible. Clicking the home button, a manual
+call, an original card or voice recalls a hidden pet. Reduced motion, static
+sleeping canvases and the eight-second interaction grace remain supported.
+The habitat waits for actual published free bar space before mapping, preventing
+an empty early surface being placed below the bar during login. A newly mapped
+webview requests the current snapshot; monitor changes reconfigure the habitat.
+
+Thinking, working and listening are expressions and animations on the pet itself,
+with a speaking mouth for public responses. They no longer create permanent status
+cards. Brief actual messages use a small speech tail beside the pet, positioned on
+every animation frame and clipped to free bar space without crossing other pets or
+bar controls. The text can be read in full by explicitly clicking the bubble.
+Completion hooks supply the final speech without stealing focus or automatically
+opening a full result card. Approval/question cards retain their original controls.
+
 Real activity wakes resting pets for walking. Active pets take longer random walks,
 pause, look around and greet neighbours. Alerts take priority over movement.
 An open card holds its own pet still. Bar changes reposition its card without
@@ -68,8 +83,9 @@ fallback. MPRIS does not provide account sign-in or arbitrary music search.
 
 Rendering is bounded to 24 fps while walking/dancing/greeting, 4 fps while
 awake and stationary, 1 fps for reduced motion, and no recurring frames when
-all pets sleep or are absent. Presence transitions use the same bounded loop;
-they do not install a new poller. Sleeping canvases are cached even while neighbours animate.
+all pets sleep or are absent. Presence transitions use the same bounded rendering loop.
+The separate native client reconciliation runs every two seconds only while the
+habitat is enabled; unchanged samples emit no events and restart no frames. Sleeping canvases are cached even while neighbours animate.
 Hidden habitats stop timers. Regions update at most 10 times a second and only
 if changed. The settings animation is gated by native window visibility as
 well as document visibility; WebKit alone did not reliably suspend it.
@@ -145,3 +161,13 @@ an explicit spotify:ad: ID and restores volume only when the user has not
 changed it. Stalled playback notices require sixty seconds without progress.
 The native music card scrolls within its panel, keeping these controls reachable.
 Real advertisements and full-catalog OAuth search have not been validated.
+
+## mochi.6 acceptance
+
+TypeScript/Vite, 466 JavaScript tests and native workspace tests pass (511 app
+checks plus 34 relay checks; ten platform-specific tests remain ignored).
+Browser interaction checks use the compiled companion surface at the station's
+actual 42-pixel band and free interval: thinking has no text card, speech stays
+inside that band, six residents remain accessible, and selecting Gravity routes
+only to Gravity. These checks do not execute a model or an application command.
+Login mapping and actual compositor stacking are separately checked at delivery.

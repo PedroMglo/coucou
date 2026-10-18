@@ -27,6 +27,7 @@ mod openai_compat;
 mod phone_link;
 mod pipe;
 mod pet_activity;
+mod pet_presence;
 mod platform;
 #[cfg(target_os = "linux")]
 mod portal;
@@ -847,6 +848,7 @@ pub fn run() {
             companions::companions_input,
             companions::companions_open,
             companions::companions_anchor,
+            pet_presence::companions_presence,
             desktop::desktop_mochi_info,
             desktop::desktop_mochi_pick_up,
             desktop::desktop_mochi_carry,
@@ -913,6 +915,7 @@ pub fn run() {
             // Same rule for Mochi's desktop window and the dictation pill.
             desktop::setup(&handle);
             companions::setup(&handle);
+            pet_presence::setup(&handle);
             flow::setup(&handle);
             notes::setup(&handle);
 

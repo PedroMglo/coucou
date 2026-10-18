@@ -1,5 +1,5 @@
 //! A single non-activating habitat, with an input region only over each pet.
-//! No cursor poll, application inspection, automatic media actions or permissions.
+//! No cursor poll, automatic media actions or permissions.
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use serde::Serialize;
@@ -234,7 +234,12 @@ mod native {
         if win.set_size(LogicalSize::new(surface.width, surface.height)).is_err() { return None; }
         habitat.enabled.store(true, Ordering::Relaxed);
         crate::flow::pill::update(app, |_| {});
-        if win.show().is_err() { habitat.enabled.store(false, Ordering::Relaxed); return None; }
+        // Mapping a blank habitat before the desktop bar exists puts it below
+        // that bar for the entire login. Wait for published free space before
+        // mapping; recreation of the bar follows the same hide/show lifecycle.
+        if bar_mode && surface.band.as_ref().is_none_or(|b| b.lanes.is_empty()) {
+            let _ = win.hide();
+        } else if win.show().is_err() { habitat.enabled.store(false, Ordering::Relaxed); return None; }
         Some(surface)
     }
 }

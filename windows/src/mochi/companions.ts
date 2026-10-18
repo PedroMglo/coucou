@@ -28,6 +28,7 @@ export interface PetIdentity {
   /** Meaningful events only, never a poll/position timestamp or transcript. */
   activity: string;
   outfit: Outfit;
+  message?: string;
 }
 
 export interface CompanionsSnapshot {
@@ -38,6 +39,7 @@ export interface CompanionsSnapshot {
   language?: string;
   pets: PetIdentity[];
   band?: { height: number; lanes: [number, number][] } | null;
+  sheltered?: boolean;
 }
 
 /** Selection never changes another pet's identity, expression or music state. */
@@ -57,6 +59,7 @@ export function companionIdentities(
       activity: JSON.stringify([state, t.sessionId ?? null, t.stepSeq ?? t.stepIndex, t.pillBadge ?? null, activity.get(t.id) ?? null]),
       attention: ["approval", "question", "error", "ratelimit"].includes(state),
       dancing: t.id === SPOTIFY_ID && music && !["approval", "question", "error", "sleeping"].includes(state),
+      message: state === "finished" ? t.finalLine ?? undefined : undefined,
     };
   });
 }
@@ -104,6 +107,7 @@ export class CompanionWorld {
   private layoutKey = "";
   scale = 1;
   presented: string | null = null;
+  sheltered = false;
   band: CompanionsSnapshot["band"] = null;
   get spacing() { return (this.band ? 56 : PET_SPACING) * this.scale; }
   bounds(p: PetLife): [number, number] { return p.lane ?? [40, this.width - 40]; }
@@ -111,6 +115,7 @@ export class CompanionWorld {
   sync(snapshot: CompanionsSnapshot, width: number, now: number) {
     this.width = Math.max(80, width);
     this.band = snapshot.band;
+    this.sheltered = snapshot.sheltered ?? false;
     this.scale = this.band ? Math.min(0.75, Math.max(0.3, (this.band.height - 4) / PET_SIZE)) : 1;
     this.paused = snapshot.paused;
     this.presented = snapshot.presented ?? null;
@@ -164,7 +169,7 @@ export class CompanionWorld {
   private shouldPark(p: PetLife, now: number) {
     // Pointer interaction must never relocate the target under that pointer.
     // A dormant pet wakes in its parking slot, and only real activity moves it.
-    if (p.visibility === "hidden" || p.retired || !p.identity.active || p.identity.busy || p.identity.attention) return false;
+    if (this.sheltered || p.visibility === "hidden" || p.retired || !p.identity.active || p.identity.busy || p.identity.attention) return false;
     if (p.parked) return true;
     return this.hovered !== p.identity.id && this.presented !== p.identity.id
       && now >= p.holdUntil && now - p.lastActivity >= PET_IDLE_SECONDS;
@@ -173,7 +178,8 @@ export class CompanionWorld {
   private updatePresence(now: number): boolean {
     let changed = false;
     for (const p of this.pets.values()) {
-      const wanted = !p.retired && (p.identity.active || p.identity.attention || this.presented === p.identity.id
+      const awake = !this.sheltered || p.identity.busy || p.identity.attention || now-p.lastActivity<PET_IDLE_SECONDS;
+      const wanted = !p.retired && ((p.identity.active && awake) || p.identity.attention || this.presented === p.identity.id
         || this.hovered === p.identity.id || now < p.holdUntil);
       const target = wanted ? 1 : 0;
       if ((wanted && ["hidden", "leaving"].includes(p.visibility))
@@ -227,7 +233,7 @@ export class CompanionWorld {
       for(let j=0;j<group.length;j++) {
         const p=group[j], initial=!p.lane;
         p.lane=[a+this.spacing/2,b-this.spacing/2];
-        if(initial) p.x=(a+b)/2+(j-(group.length-1)/2)*this.spacing;
+        if(initial) p.x=group.length===1 ? a+this.spacing/2 : (a+b)/2+(j-(group.length-1)/2)*this.spacing;
         p.x=Math.max(p.lane[0],Math.min(p.lane[1],p.x));
         if(j) p.x=Math.max(p.x,group[j-1].x+this.spacing);
       }

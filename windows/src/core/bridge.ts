@@ -180,6 +180,7 @@ export interface PhoneAnswersStatus {
 
 export const Bridge = {
   boot: () => call<BootInfo>("boot"),
+  companionsPresence: () => call<{running:string[];activity:Record<string,number>}>("companions_presence"),
   /** The system's languages as the webview sees them, for Rust's own texts (i18n.rs). */
   setSystemLanguages: (languages: string[]) => call<void>("set_system_languages", { languages }),
 

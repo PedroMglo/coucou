@@ -264,7 +264,8 @@ function handleHook(island: Island, payload: HookPayload) {
   /** Alerts force the island open; work events only reveal the compact island. */
   const surface = (view: Parameters<Island["alert"]>[0], isAlert: boolean) => {
     if (State.settings.companionMode) {
-      if (isAlert) { State.setFocus(agentId); island.alert(view); }
+      // Completion is the pet's speech. Decisions/errors retain their original card.
+      if (isAlert && view !== "finished") { State.setFocus(agentId); island.alert(view); }
       else State.notify();
       return;
     }
