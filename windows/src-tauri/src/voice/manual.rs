@@ -99,7 +99,7 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, finish: &AtomicBool) {
         return;
     }
     super::show(app, Some(VoiceView { phase: "thinking".into(), heard: String::new(), answer: String::new() }));
-    let Some(transcript) = speech::transcribe(&samples) else { return; };
+    let Some(transcript) = super::transcribe(app, &samples, Some(stop)) else { return; };
     drop(samples);
     let question = transcript.text.trim();
     crate::log::line(format!("voice: recognized {} words", crate::flow::text::word_count(question)));

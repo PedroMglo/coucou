@@ -4,6 +4,7 @@
 
 /** Every command the island invoked, oldest first: [name, args]. */
 export const calls = [];
+export const subscriptions = [];
 
 const listeners = new Map();
 
@@ -11,6 +12,7 @@ export const internals = {
   transformCallback: (callback) => callback,
   invoke: async (cmd, args) => {
     if (cmd === "plugin:event|listen") {
+      subscriptions.push({ event: args.event, target: args.target });
       listeners.set(args.event, args.handler);
       return listeners.size;
     }

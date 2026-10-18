@@ -8,6 +8,50 @@ use std::time::{Duration, Instant};
 const HELPER: &str = include_str!("edge_tts_helper.py");
 const MAX_AUDIO: u64 = 8 * 1024 * 1024;
 
+/// Feed Read Aloud frames directly to the installed GStreamer audio player.
+/// Playback starts before synthesis finishes. None keeps the portable webview path.
+#[cfg(target_os = "linux")]
+pub fn speak(python: &Path, text: &str, mut running: impl FnMut() -> bool, mut started: impl FnMut()) -> Option<bool> {
+    let player = Path::new("/usr/bin/gst-launch-1.0");
+    if !player.is_file() { return None; }
+    if text.trim().is_empty() || text.chars().count() > 8000 || !python.is_file() || !running() { return Some(false); }
+    let mut audio = Command::new(player).args(["-q", "fdsrc", "fd=0", "!", "decodebin", "!", "audioconvert", "!", "audioresample", "!", "pulsesink", "client-name=Coucou"])
+        .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().ok()?;
+    let child = Command::new(python).args(["-I", "-c", HELPER]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn();
+    let Ok(mut child) = child else { let _=audio.kill(); let _=audio.wait(); return Some(false); };
+    let input = serde_json::to_vec(&serde_json::json!({"text":text})).unwrap_or_default();
+    let written=child.stdin.take().is_some_and(|mut pipe|pipe.write_all(&input).is_ok());
+    let mut output=child.stdout.take().unwrap();
+    let mut sink=audio.stdin.take().unwrap();
+    let (first_tx, first_rx)=std::sync::mpsc::sync_channel(1);
+    let copy=std::thread::spawn(move || {
+        let mut total=0_u64; let mut buffer=[0_u8;8192];
+        loop {
+            let length=output.read(&mut buffer).ok()?;
+            if length==0 { break; }
+            if total==0 { let _=first_tx.send(()); }
+            total+=length as u64;
+            if total>MAX_AUDIO { return None; }
+            sink.write_all(&buffer[..length]).ok()?;
+        }
+        (total>0).then_some(())
+    });
+    let until=Instant::now()+Duration::from_secs(150);
+    let mut first=false; let mut produced=None;
+    let success=loop {
+        if !first && first_rx.try_recv().is_ok() { first=true; started(); }
+        if !written || !running() || Instant::now()>=until { break false; }
+        if produced.is_none() { match child.try_wait() { Ok(Some(s))=>produced=Some(s.success()), Ok(None)=>{}, Err(_)=>break false } }
+        if produced==Some(false) { break false; }
+        match audio.try_wait() { Ok(Some(s))=>break s.success() && produced==Some(true), Ok(None)=>{}, Err(_)=>break false }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    // Killing only these owned children also unblocks a reader/writer on cancel.
+    let _=child.kill(); let _=child.wait(); let _=audio.kill(); let _=audio.wait();
+    let copied=copy.join().ok().flatten().is_some();
+    Some(success && copied && running())
+}
+
 pub fn generate(python: &Path, text: &str, running: impl FnMut() -> bool) -> Option<Vec<u8>> {
     if text.trim().is_empty() || text.chars().count() > 8000 || !python.is_file() {
         return None;

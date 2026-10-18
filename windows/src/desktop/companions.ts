@@ -1,3 +1,4 @@
+import { PetDialogues, BUSY, ATTENTION, phaseFor, animationFor, type PetActivity } from "../mochi/dialogue";
 import { NoticeQueue, type PetNotice } from "../mochi/notices";
 import { Bridge, emitToWindow, onEvent } from "../core/bridge";
 import { FlowBridge, type PillState } from "../core/flow";
@@ -31,6 +32,7 @@ function showNextNotice() {
   if(shownNotice || !snapshot.enabled || snapshot.paused || !nativeVisible || voicePet || snapshot.presented) return;
   const next=noticeQueue.take(); if(!next)return;
   const p=world.pets.get(next.pet);
+  if(p && !p.retired) world.touch(next.pet,performance.now()/1000);
   if(!p?.shown){showNextNotice();return;}
   shownNotice=next; world.presented=next.pet; world.touch(next.pet,performance.now()/1000);
   const name=document.createElement("strong");name.textContent=p.identity.name;
@@ -49,24 +51,109 @@ function positionNotice() {
   notice.style.left=`${left}px`;notice.style.top=`${(world.band?.height??p.y+30)+8}px`;
   notice.style.setProperty("--tip",`${Math.max(12,Math.min(280,p.x-left-6))}px`);
 }
+const dialogues = new PetDialogues();
+const decisions = new Map<string,{pet:string;phase:string}>();
+let pendingFold: {pet:string;until:number}|null = null;
+function decisionPhase(pet:string) { return [...decisions.values()].find(d=>d.pet===pet)?.phase; }
+function foldResolvedCard() {
+  const value=pendingFold; if(!value)return;
+  if(performance.now()>value.until){pendingFold=null;return;}
+  const p=snapshot.pets.find(p=>p.id===value.pet);
+  if(decisions.size || p?.attention || ATTENTION.has(p?.state??""))return;
+  pendingFold=null;
+  if(snapshot.presented===value.pet) void emitToWindow("island","companions-hide-popup");
+}
+const dialogue = document.createElement("aside");
+dialogue.className = "pet-dialogue"; dialogue.hidden = true;
+dialogue.setAttribute("role", "status"); dialogue.setAttribute("aria-live", "polite");
+const dialogueTitle = document.createElement("strong");
+const dialogueText = document.createElement("p");
+const dialogueHeard = document.createElement("p"); dialogueHeard.className="dialogue-heard";
+const dialogueAction = document.createElement("button");
+dialogueAction.textContent = "Rever pedido";
+dialogue.append(dialogueTitle, dialogueHeard, dialogueText, dialogueAction); document.body.append(dialogue);
+let dialoguePet: string | null = null;
+let dialogueTimer: number | null = null;
+let liveVoice: VoiceView | null = null;
+const phaseLabel = (phase: string) => ({preparing:"A ligar o microfone",thinking:"A pensar",working:"A trabalhar",searching:"A pesquisar",message:"A responder",speaking:"A falar",listening:"A ouvir",approval:"Precisa da tua aprovação",question:"Precisa de uma resposta tua",error:"Precisa de atenção",ratelimit:"Limite atingido",done:"Concluído",stopped:"Interrompido",failed:"Não conseguiu terminar"}[phase] ?? "Disponível");
+function activeSnapshot(s: CompanionsSnapshot): CompanionsSnapshot {
+  return {...s,pets:s.pets.map(identity=>{
+    const phase=decisionPhase(identity.id) ?? phaseFor(dialogues.current(identity.id,performance.now()),identity.state);
+    const busy=BUSY.has(phase),attention=ATTENTION.has(phase);
+    const entry=dialogues.entries.get(identity.id);
+    const reading=!!entry && ["done","stopped","failed"].includes(entry.phase) && performance.now()-entry.changedAt<9000;
+    return {...identity,state:animationFor(phase,identity.state),busy:identity.busy||busy,activity:`${identity.activity}:${entry?.turn}:${entry?.changedAt}`,active:identity.active||busy||attention||reading,attention:identity.attention||attention};
+  })};
+}
+function activityPhase(p: PetLife) {
+  const value = dialogues.current(p.identity.id,performance.now());
+  const native = snapshot.pets.find(identity=>identity.id===p.identity.id)?.state ?? p.identity.state;
+  const attention=decisionPhase(p.identity.id) ?? (ATTENTION.has(native) ? native : null);
+  if(attention)return attention;
+  if(voicePet===p.identity.id && liveVoice) return value && BUSY.has(value.phase) ? value.phase : liveVoice.phase;
+  return phaseFor(value,native);
+}
+function refreshDialogue() {
+  const now = performance.now();
+  const selected=dialogues.selected && world.pets.get(dialogues.selected);
+  const owner = voicePet ?? (selected && (dialogues.visible(selected.identity.id,now,false) || BUSY.has(activityPhase(selected))) ? selected.identity.id : null) ?? [...world.pets.values()].find(p=>p.identity.attention || BUSY.has(activityPhase(p)))?.identity.id;
+  const p = owner ? world.pets.get(owner) : undefined;
+  dialogue.hidden = true; dialoguePet = null;
+  if (!p?.shown || !snapshot.enabled || !nativeVisible || snapshot.paused) return;
+  // The original decision card always has presentation priority.
+  if (snapshot.presented) return;
+  const value = dialogues.visible(p.identity.id,now,false);
+  const phase = activityPhase(p);
+  const voiced = voicePet === p.identity.id ? liveVoice : null;
+  if (!value && !voiced && !ATTENTION.has(phase) && !BUSY.has(phase)) return;
+  dialoguePet = p.identity.id; dialogue.hidden = false;
+  dialogue.dataset.phase = phase;
+  dialogue.style.setProperty("--pet-color",p.identity.color);
+  dialogueTitle.textContent = `${p.identity.name} · ${phaseLabel(phase)}`;
+  const message = voiced?.phase === "speaking" ? voiced.answer : value?.message ?? voiced?.answer ?? "";
+  if (dialogueText.textContent !== message) { dialogueText.textContent = message; dialogueText.classList.add("arriving"); }
+  dialogueText.hidden = !message;
+  const heard=voiced?.heard?.replace(/^[^·]+ · /, "") ?? "";
+  dialogueHeard.hidden=!heard || ["listening"].includes(voiced?.phase ?? "");
+  dialogueHeard.textContent=heard ? `Ouvi: ${heard}` : "";
+  dialogueAction.hidden = !ATTENTION.has(phase);
+  dialogue.setAttribute("aria-busy",String(BUSY.has(phase)));
+  const left = Math.max(8,Math.min(world.width-320,p.x-150));
+  dialogue.style.left = `${left}px`; dialogue.style.top = `${(world.band?.height ?? p.y+30)+8}px`;
+  dialogue.style.setProperty("--tip",`${Math.max(14,Math.min(290,p.x-left-6))}px`);
+  if (dialogueTimer != null) window.clearTimeout(dialogueTimer);
+  dialogueTimer = window.setTimeout(()=>{dialogueTimer=null;world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented,motion:world.motion},window.innerWidth,performance.now()/1000);refreshDialogue();input(performance.now()/1000,true);wake();},9500);
+}
+dialogueAction.onclick = () => { const p=dialoguePet && world.pets.get(dialoguePet); if(p) open(p); };
 let voicePet: string | null = null;
 let voiceActive = false;
 interface VoiceView { phase: string; heard: string; answer: string; pet?: string; announcementId?: number; note?: boolean }
 let bubble: {view: VoiceView; dictation: boolean} | null = null;
 function voiceBubble(view: VoiceView | null, dictation = false) {
   bubble = view ? {view,dictation} : null;
+  if (!dictation) {
+    const starting=!liveVoice && view?.phase==="preparing";
+    liveVoice = view;
+    voice.hidden = true;
+    voicePet = view ? view.pet ?? "agent_codex" : null;
+    const owner=snapshot.pets.find(p=>p.id===voicePet);
+    if(starting && snapshot.presented===voicePet && !decisions.size && !owner?.attention && !ATTENTION.has(owner?.state??"")) void emitToWindow("island","companions-hide-popup");
+    world.presented = voicePet ?? snapshot.presented ?? null;
+    if (voicePet) { world.touch(voicePet,performance.now()/1000); world.sync({...activeSnapshot(snapshot),presented:voicePet,motion:world.motion},window.innerWidth,performance.now()/1000); }
+    refreshDialogue(); input(performance.now()/1000,true); wake(); return;
+  }
   voice.hidden = !view;
   voice.replaceChildren();
   if (!view) { voicePet = null; showNextNotice(); world.presented = snapshot.presented ?? null; input(performance.now()/1000, true); return; }
   const owner = dictation ? "ai_ollama" : view.pet;
   const p = owner ? world.pets.get(owner) : world.pets.get("agent_codex") ?? world.pets.get("ai_ollama");
+  if(p && !p.retired) world.touch(p.identity.id,performance.now()/1000);
   if (!p?.shown) { voice.hidden = true; return; }
   voicePet = p.identity.id;
   if(shownNotice) dismissNotice();
   world.presented = voicePet;
   world.touch(voicePet, performance.now()/1000);
-  world.sync({...snapshot,presented:voicePet,motion:world.motion},window.innerWidth,performance.now()/1000);
-  void emitToWindow("island", "companions-hide-popup");
+  world.sync({...activeSnapshot(snapshot),presented:voicePet,motion:world.motion},window.innerWidth,performance.now()/1000);
   const title = document.createElement("strong");
   const phases: Record<string,string> = {listening:t("Listening"),thinking:t("Thinking…"),speaking:t("Answers"),copied:t("Dictation")};
   title.textContent = `${p.identity.name} · ${dictation ? t("Dictation") : phases[view.phase] ?? view.phase}`;
@@ -110,6 +197,7 @@ function presentPending() {
   if (!e) return;
   if (performance.now() > e.until) { pendingPresentation = null; return; }
   const p = world.pets.get(e.id);
+  if(p && !p.retired) world.touch(e.id,performance.now()/1000);
   if (p?.shown && nativeVisible) open(p, e.view);
 }
 
@@ -118,7 +206,7 @@ function open(p: PetLife, view?: string) {
   if(shownNotice) { if(noticeTimer!=null)window.clearTimeout(noticeTimer);noticeTimer=null;shownNotice=null;notice.hidden=true; }
   closeMenu();
   world.touch(p.identity.id, performance.now() / 1000);
-  world.sync({...snapshot,presented:p.identity.id,motion:world.motion},window.innerWidth,performance.now()/1000);
+  world.sync({...activeSnapshot(snapshot),presented:p.identity.id,motion:world.motion},window.innerWidth,performance.now()/1000);
   void Bridge.companionsOpen(p.identity.id, p.x, p.y, view ?? (p.identity.id === "ai_ollama" ? "prompt" : undefined));
 }
 
@@ -163,6 +251,7 @@ function showMenu(p: PetLife) {
 function create(p: PetLife): PetView {
   const button = document.createElement("button");
   button.className = "pet";
+  button.hidden = true;
   const canvas = document.createElement("canvas");
   const label = document.createElement("span");
   button.append(canvas, label);
@@ -213,7 +302,7 @@ function input(now: number, force = false) {
   if (!force && now - shapeAt < 0.1) return;
   const rects: [number, number, number, number][] = [];
   if (snapshot.enabled) for (const p of world.pets.values()) {
-    if (!p.shown) continue;
+    if (!p.shown || p.visibility === "leaving" || p.opacity <= 0.05) continue;
     const scale = world.scale;
     // Disc rows around the body, plus its own label. Empty habitat never takes
     // input. A small margin accommodates the movement between region updates.
@@ -228,6 +317,7 @@ function input(now: number, force = false) {
     rects.push([r.x, r.y, r.width, r.height]);
   }
   if (!notice.hidden && snapshot.enabled) { const r=notice.getBoundingClientRect();rects.push([r.x,r.y,r.width,r.height]); }
+  if (!dialogue.hidden && snapshot.enabled) { const r=dialogue.getBoundingClientRect();rects.push([r.x,r.y,r.width,r.height]); }
   if (!voice.hidden && snapshot.enabled) { const r = voice.getBoundingClientRect(); rects.push([r.x,r.y,r.width,r.height]); }
   const key = JSON.stringify(rects.map(r => r.map(Math.round)));
   shapeAt = now;
@@ -240,11 +330,18 @@ function draw(p: PetLife, v: PetView, dt: number, now: number) {
   const { engine, canvas, button, label } = v;
   button.hidden = !p.shown;
   if (!p.shown) { v.sleepKey = undefined; return; }
-  const sleeping = p.action === "sleep";
+  button.disabled = p.visibility === "leaving";
+  button.style.opacity = String(p.opacity);
+  const scale = world.scale * (0.35 + 0.65 * p.opacity);
+  button.style.transform = `translate(${p.x - 32 * scale}px, ${p.y - 32 * scale + (1 - p.opacity) * 8 * world.scale}px) scale(${scale})`;
+  button.style.transformOrigin = "top left";
+  const phase = activityPhase(p);
+  const busy = !snapshot.paused && BUSY.has(phase);
+  const sleeping = p.action === "sleep" && !busy && !ATTENTION.has(phase);
   const sleepKey = sleeping ? JSON.stringify([p.x,p.y,world.scale,p.identity.color,p.identity.outfit]) : undefined;
   if (sleeping && v.sleepKey === sleepKey) return;
   v.sleepKey = sleepKey;
-  engine.setState(sleeping ? "sleeping" : p.identity.state, sleeping);
+  engine.setState(sleeping ? "sleeping" : animationFor(phase,p.identity.state), sleeping);
   engine.bodyColor = hexToRGB(p.identity.color);
   engine.setOutfit(p.identity.outfit, false);
   engine.setDancing(p.action === "dance" || (world.motion && p.identity.dancing && p.action === "walk"));
@@ -290,23 +387,25 @@ function draw(p: PetLife, v: PetView, dt: number, now: number) {
   }
   engine.applyDance(ctx, PET_SIZE, PET_SIZE);
   engine.draw(ctx, PET_SIZE, PET_SIZE);
-  if (p.identity.attention) {
+  if (busy && world.motion && !snapshot.paused) {
+    ctx.strokeStyle = p.identity.color; ctx.lineWidth = 2; ctx.lineCap = "round";
+    for(let i=0;i<3;i++) { const angle=now*2.6+i*Math.PI*2/3;ctx.beginPath();ctx.arc(32,32,23,angle,angle+0.42);ctx.stroke(); }
+  }
+  if (p.identity.attention || ATTENTION.has(phase)) {
     ctx.fillStyle = "#fbbf24";
     ctx.beginPath(); ctx.arc(52, 11, 5, 0, Math.PI*2); ctx.fill();
   }
   ctx.restore();
-  button.style.transform = `translate(${p.x - 32 * world.scale}px, ${p.y - 32 * world.scale}px) scale(${world.scale})`;
-  button.style.transformOrigin = "top left";
   button.style.clipPath = world.band ? "circle(25px at 32px 32px)" : "none";
   label.hidden = !!world.band;
   button.dataset.attention = String(p.identity.attention);
-  const description = `${p.identity.name} · ${t("Open")}`;
+  const description = `${p.identity.name} · ${phaseLabel(phase)}`;
   if (button.title !== description) { button.title = description; button.setAttribute("aria-label", description); }
   if (label.textContent !== p.identity.name) label.textContent = p.identity.name;
 }
 
 function wake() {
-  if (timer != null || ![...world.pets.values()].some(p => p.shown) || !snapshot.enabled || !nativeVisible || document.hidden || !world.pets.size) return;
+  if (timer != null || !snapshot.enabled || !nativeVisible || document.hidden) return;
   timer = window.setTimeout(frame, 0);
 }
 function frame() {
@@ -317,6 +416,7 @@ function frame() {
   last = now;
   try {
     world.tick(dt, now);
+    for (const [id, v] of views) if (!world.pets.has(id)) { v.button.remove(); views.delete(id); }
     for (const p of world.pets.values()) draw(p, views.get(p.identity.id)!, dt, now);
     input(now);
   } catch (error) {
@@ -326,14 +426,33 @@ function frame() {
     lastShape = "";
     return;
   }
-  if (world.needsFrames) {
-    const moving = [...world.pets.values()].some(p => p.shown && ["walk","wave","dance","celebrate"].includes(p.action));
+  if (world.needsFrames || (!snapshot.paused && [...world.pets.values()].some(p=>p.shown && BUSY.has(activityPhase(p))))) {
+    const moving = [...world.pets.values()].some(p => p.shown && (p.visibility !== "visible" || BUSY.has(activityPhase(p)) || ["walk","wave","dance","celebrate"].includes(p.action)));
     timer = window.setTimeout(frame, !world.motion ? 1000 : moving ? 1000 / 24 : 250);
   }
 }
 
 async function start() {
-  await registerVoiceSpeech();
+  await registerVoiceSpeech("companions");
+  await onEvent<{id:string;provider:string;kind:string}>("agent-request", request=>{
+    const pet=({codex:"agent_codex",antigravity:"agent_antigravity",copilot:"agent_copilot"} as Record<string,string>)[request.provider.toLowerCase()];
+    if(pet)decisions.set(request.id,{pet,phase:request.kind==="question"?"question":"approval"});
+    refreshDialogue();wake();
+  });
+  await onEvent<{id:string}>("agent-request-ended", request=>{
+    const decision=decisions.get(request.id);decisions.delete(request.id);
+    if(decision)pendingFold={pet:decision.pet,until:performance.now()+3000};
+    refreshDialogue();wake();
+  });
+  await onEvent<PetActivity>("pet-activity", value => {
+    const before=dialogues.entries.get(value.pet);
+    if (!dialogues.update(value,performance.now())) return;
+    if(!before || before.turn!==value.turn) pendingFold={pet:value.pet,until:performance.now()+3000};
+    foldResolvedCard();
+    const p=world.pets.get(value.pet); if(p) world.touch(value.pet,performance.now()/1000);
+    world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented,motion:world.motion},window.innerWidth,performance.now()/1000);
+    refreshDialogue(); input(performance.now()/1000,true); wake();
+  }, "companions");
   await onEvent<PetNotice>("companions-notice", n=>{noticeQueue.push(n);showNextNotice();});
   await onEvent<VoiceView | null>("companions-voice", view => { voiceActive = !!view; voiceBubble(view); });
   await onEvent<PillState>("companions-flow", state => {
@@ -363,12 +482,14 @@ async function start() {
     if (!s.enabled || (menuPet && !s.pets.some(p=>p.id===menuPet))) closeMenu();
     const oldPet = s.presented ? world.pets.get(s.presented) : null;
     const oldPosition = oldPet ? [oldPet.x, oldPet.y] : null;
-    world.sync({ ...s, presented: voicePet ?? s.presented ?? shownNotice?.pet, motion: s.motion && !reducedMotion.matches }, window.innerWidth, performance.now() / 1000);
+    world.sync({ ...activeSnapshot(s), presented: voicePet ?? s.presented ?? shownNotice?.pet, motion: s.motion && !reducedMotion.matches }, window.innerWidth, performance.now() / 1000);
     for (const [id, v] of views) if (!world.pets.has(id)) { v.button.remove(); views.delete(id); }
     for (const p of world.pets.values()) if (!views.has(p.identity.id)) views.set(p.identity.id, create(p));
     if (shownNotice && (s.paused || !s.enabled || s.presented)) dismissNotice();
     presentPending();
     positionNotice();
+    foldResolvedCard();
+    refreshDialogue();
     showNextNotice();
     if (bubble) voiceBubble(bubble.view,bubble.dictation);
     else if (oldPet?.shown && oldPosition && (oldPet.x !== oldPosition[0] || oldPet.y !== oldPosition[1])) {
@@ -388,7 +509,7 @@ async function start() {
   document.addEventListener("pointerdown", e => { if (e.target === document.body) { closeMenu(); wake(); } });
   reducedMotion.addEventListener("change", () => { world.motion = snapshot.motion && !reducedMotion.matches; wake(); });
   window.addEventListener("resize", () => {
-    world.sync({ ...snapshot, motion: snapshot.motion && !reducedMotion.matches }, window.innerWidth, performance.now() / 1000);
+    world.sync({ ...activeSnapshot(snapshot), motion: snapshot.motion && !reducedMotion.matches }, window.innerWidth, performance.now() / 1000);
     wake();
   });
   await emitToWindow("island", PET_EVENTS.ready);

@@ -37,7 +37,7 @@ fn reserve(app: &AppHandle) -> Result<Arc<AtomicBool>, String> {
     if session.is_some() || pill::dictating(app) || crate::notes::is_recording(app) {
         return Err(crate::i18n::t("The microphone is already in use."));
     }
-    if !speech::is_ready() {
+    if !super::asr_ready(app) {
         return Err(crate::i18n::t(
             "Download the voice model so Coucou can hear you.",
         ));
@@ -48,11 +48,12 @@ fn reserve(app: &AppHandle) -> Result<Arc<AtomicBool>, String> {
     if let Some(background) = super::RUNNING.lock().unwrap().take() {
         background.stop.store(true, Ordering::Relaxed);
     }
-    speech::preload();
+    super::preload_asr(app, stop.clone());
     Ok(stop)
 }
 
 fn finish(app: &AppHandle, stop: &Arc<AtomicBool>) {
+    crate::speech::whisper::release();
     let mut session = SESSION.lock().unwrap();
     if session.as_ref().is_some_and(|s| Arc::ptr_eq(s, stop)) {
         *session = None;
@@ -133,7 +134,8 @@ fn available(app: &AppHandle, pet: Pet) -> bool {
 
 /// Returns one speech segment or None on stop/inactivity. Bounded queues and
 /// VAD bound the audio retained in memory. No recording is saved on disk.
-fn listen(app: &AppHandle, stop: &AtomicBool, idle: &mut Idle) -> Result<Option<Vec<f32>>, String> {
+fn listen(app: &AppHandle, stop: &AtomicBool, idle: &mut Idle, ready: impl FnOnce()) -> Result<Option<Vec<f32>>, String> {
+    let mut ready=Some(ready);
     let Some(_lease) = super::capture_lease(stop) else {
         return Ok(None);
     };
@@ -151,6 +153,7 @@ fn listen(app: &AppHandle, stop: &AtomicBool, idle: &mut Idle) -> Result<Option<
         crate::i18n::t("Coucou can't hear you: the microphone is not allowed or not available.")
     })?;
     let mut vad = super::wake::Vad::default();
+    vad.hangover = 38; // 1.14 s: retain clauses across natural Portuguese pauses.
     FINISH.store(false, Ordering::Relaxed);
     let mut meter = audio::BandMeter::default();
     let segment = loop {
@@ -166,6 +169,7 @@ fn listen(app: &AppHandle, stop: &AtomicBool, idle: &mut Idle) -> Result<Option<
         }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(chunk) => {
+                if !chunk.is_empty() { if let Some(ready)=ready.take() { ready(); } }
                 let segments = vad.feed(&chunk);
                 if vad.in_speech() {
                     idle.touch(Instant::now());
@@ -196,14 +200,8 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>) -> bool {
     let mut brains = HashMap::<Pet, super::brain::Brain>::new();
     let mut answer = crate::i18n::t("Say a pet name, such as Codex or Gravity, or say dictation.");
     while !stop.load(Ordering::Relaxed) {
-        view(
-            app,
-            "listening",
-            selected.map(Pet::name).unwrap_or(""),
-            &answer,
-            selected,
-        );
-        let samples = match listen(app, stop, &mut idle) {
+        view(app, "preparing", selected.map(Pet::name).unwrap_or(""), &answer, selected);
+        let samples = match listen(app, stop, &mut idle, || view(app,"listening",selected.map(Pet::name).unwrap_or(""),&answer,selected)) {
             Ok(Some(samples)) => samples,
             Ok(None) => break,
             Err(error) => {
@@ -215,9 +213,11 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>) -> bool {
             break;
         }
         view(app, "thinking", "", "", selected);
-        let transcript = speech::transcribe(&samples)
-            .map(|t| t.text)
-            .unwrap_or_default();
+        let transcript = super::transcribe(app, &samples, Some(stop)).map(|t|t.text).unwrap_or_default();
+        if transcript.trim().is_empty() {
+            answer = "Não consegui perceber. Podes repetir?".into();
+            idle.touch(Instant::now()); continue;
+        }
         if stop.load(Ordering::Relaxed) {
             break;
         }
@@ -290,10 +290,10 @@ pub async fn voice_learn_alias(app: AppHandle, provider: String) -> Result<Strin
     let pet = Pet::from_provider(&provider).ok_or_else(|| "Unknown pet.".to_string())?;
     let stop = reserve(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        view(&app, "listening", pet.name(), &crate::i18n::t("Say only this pet's name."), Some(pet));
+        view(&app, "preparing", pet.name(), &crate::i18n::t("Say only this pet's name."), Some(pet));
         let result = (|| {
-            let samples = listen(&app, &stop, &mut Idle::new(Instant::now(), 20))?.ok_or_else(|| crate::i18n::t("No speech detected. Check your microphone."))?;
-            let spelling = speech::transcribe(&samples).map(|t| super::wake::normalize(&t.text)).filter(|s| !s.is_empty() && s.len() <= 80)
+            let samples = listen(&app, &stop, &mut Idle::new(Instant::now(), 20), || view(&app,"listening",pet.name(),&crate::i18n::t("Say only this pet's name."),Some(pet)))?.ok_or_else(|| crate::i18n::t("No speech detected. Check your microphone."))?;
+            let spelling = super::transcribe(&app, &samples, Some(&stop)).map(|t| super::wake::normalize(&t.text)).filter(|s| !s.is_empty() && s.len() <= 80)
                 .ok_or_else(|| crate::i18n::t("No speech detected. Check your microphone."))?;
             if stop.load(Ordering::Relaxed) { return Err(crate::i18n::t("Cancelled")); }
             let shared = app.state::<crate::Shared>();

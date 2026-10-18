@@ -205,7 +205,7 @@ fn run(app: AppHandle, stop: Arc<AtomicBool>) {
             if segment.len() < speech::SAMPLE_RATE as usize * 35 / 100 {
                 continue;
             }
-            let Some(heard) = speech::transcribe(&segment).map(|t| t.text.trim().to_string()) else { continue };
+            let Some(heard) = transcribe(&app, &segment, Some(&stop)).map(|t| t.text.trim().to_string()) else { continue };
             if heard.is_empty() {
                 continue;
             }
@@ -295,6 +295,31 @@ async fn until_stopped<T>(future: impl std::future::Future<Output = T>, stop: Op
     }
 }
 
+fn asr_ready(app: &AppHandle) -> bool {
+    let settings=app.state::<crate::Shared>().settings.lock().unwrap().clone();
+    if settings.voice_asr_python.is_empty() { return crate::speech::is_ready(); }
+    let expand=|path: &str|path.strip_prefix("~/").map(|p|crate::platform::home_dir().join(p)).unwrap_or_else(||path.into());
+    expand(&settings.voice_asr_python).is_file() && expand(&settings.voice_asr_model).join("model.bin").is_file()
+}
+fn preload_asr(app: &AppHandle, stop: std::sync::Arc<AtomicBool>) {
+    if app.state::<crate::Shared>().settings.lock().unwrap().voice_asr_python.is_empty() { crate::speech::preload(); return; }
+    let app=app.clone(); std::thread::spawn(move || { let _=transcribe(&app,&[],Some(&stop)); });
+}
+
+pub(crate) fn transcribe(app: &AppHandle, samples: &[f32], stop: Option<&AtomicBool>) -> Option<crate::speech::Transcript> {
+    let settings=app.state::<crate::Shared>().settings.lock().unwrap().clone();
+    if settings.voice_asr_python.is_empty() || settings.voice_asr_model.is_empty() { return crate::speech::transcribe(samples); }
+    let expand=|path: &str|path.strip_prefix("~/").map(|p|crate::platform::home_dir().join(p)).unwrap_or_else(||path.into());
+    let python=expand(&settings.voice_asr_python); let model=expand(&settings.voice_asr_model);
+    if samples.is_empty() { return crate::speech::whisper::transcribe(&python,&model,samples,stop); }
+    let mut result=crate::speech::Transcript::default();
+    for (_,chunk) in crate::speech::audio::split_for_model(samples,crate::speech::SAMPLE_RATE,28.0) {
+        let part=crate::speech::whisper::transcribe(&python,&model,chunk,stop)?;
+        if !part.text.is_empty() { if !result.text.is_empty() { result.text.push(' '); } result.text.push_str(&part.text); }
+    }
+    Some(result)
+}
+
 fn cancel_speech(app: &AppHandle) {
     let _ = app.emit_to(pill::LABEL, "voice-cancel", ());
     let _ = app.emit_to(crate::companions::LABEL, "voice-cancel", ());
@@ -321,6 +346,9 @@ fn speak_with_language(app: &AppHandle, text: &str, stop: Option<&AtomicBool>, p
         .unwrap_or_else(|| ("system".into(), "female".into()));
     if output == "off" {
         return;
+    }
+    if output == "edge" {
+        if tts::speak_streaming(app, text, stop).is_some() { return; }
     }
     let audio = if output == "elevenlabs" { elevenlabs(text, &gender).map(|mp3| format!("data:audio/mpeg;base64,{}", base64(&mp3))) }
         else { tts::generate(app, &output, provider, text, stop) };

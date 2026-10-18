@@ -136,6 +136,8 @@ export interface Settings {
   localVoiceDirs: Record<string, string>;
   edgeVoicePython: string;
   voiceModels: Record<string, string>;
+  voiceAsrPython: string;
+  voiceAsrModel: string;
   /** Model server addresses once connected; empty means not connected. */
   ollamaUrl: string;
   lmstudioUrl: string;
@@ -206,6 +208,8 @@ export const DEFAULT_SETTINGS: Settings = {
   localVoiceDirs: {},
   edgeVoicePython: "",
   voiceModels: { codex: "gpt-6-luna" },
+  voiceAsrPython: "",
+  voiceAsrModel: "",
   chatModels: {},
   ollamaUrl: "",
   lmstudioUrl: "",
@@ -358,7 +362,9 @@ class AppState {
     this.setPillBadge(req.pillId, null);
     const previous = this.focusBeforeApproval;
     this.focusBeforeApproval = null;
-    if (previous && this.focusId === req.pillId && this.tasks.some((t) => t.id === previous)) {
+    // The singleton temporarily borrows another integration's card. Separate
+    // companions own their cards: answering Codex must never reveal Gravity.
+    if (!this.settings.companionMode && previous && this.focusId === req.pillId && this.tasks.some((t) => t.id === previous)) {
       this.focusId = previous;
     }
     this.notify();

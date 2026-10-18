@@ -24,6 +24,17 @@
       #voice button { margin-right: 8px; border: 1px solid #ffffff35; border-radius: 6px; padding: 4px 9px; color: inherit; background: #ffffff0a; cursor: pointer; }
     .pet-notice{position:absolute;width:300px;box-sizing:border-box;padding:12px;border-radius:14px;color:#eef2f6;background:#20242ef5;border:1px solid #ffffff32;font:13px system-ui;box-shadow:0 4px 14px #0005}
 .pet-notice[hidden]{display:none}.pet-notice:before{content:"";position:absolute;top:-7px;left:var(--tip);width:12px;height:12px;background:#20242e;transform:rotate(45deg);border-left:1px solid #ffffff32;border-top:1px solid #ffffff32}.pet-notice p{line-height:1.4;margin:8px 0}.pet-notice button{color:inherit;background:#ffffff13;border:1px solid #ffffff28;border-radius:7px;padding:5px 10px;margin-right:8px;cursor:pointer}
+
+.pet-dialogue{position:absolute;z-index:3;box-sizing:border-box;width:312px;padding:11px 13px;border:1px solid color-mix(in srgb,var(--pet-color,#818cf8) 50%,transparent);border-radius:16px;background:linear-gradient(145deg,#202737f5,#111722f5);box-shadow:0 10px 28px #0004;color:#edf2fc;font-size:12px;animation:dialogue-in .22s ease-out;backdrop-filter:blur(14px)}
+.pet-dialogue[hidden]{display:none}.pet-dialogue:before{content:"";position:absolute;left:var(--tip);top:-6px;width:10px;height:10px;background:#202737;transform:rotate(45deg);border-top:1px solid var(--pet-color);border-left:1px solid var(--pet-color)}
+.pet-dialogue strong{display:flex;gap:8px;align-items:center;font-size:11px;letter-spacing:.02em;color:var(--pet-color)}
+.pet-dialogue strong:before{content:"";display:block;flex:none;width:7px;height:7px;border-radius:50%;background:currentColor}
+.pet-dialogue[data-phase="thinking"] strong:before,.pet-dialogue[data-phase="working"] strong:before,.pet-dialogue[data-phase="message"] strong:before,.pet-dialogue[data-phase="speaking"] strong:before{animation:dialogue-pulse 1.3s ease-in-out infinite}
+.pet-dialogue p{margin:8px 0 0;line-height:1.55;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden;white-space:pre-wrap}.pet-dialogue p[hidden]{display:none}.pet-dialogue .arriving{animation:message-in .18s ease-out}
+.pet-dialogue button{margin-top:10px;color:#fff;background:#ffffff12;border:1px solid #ffffff30;border-radius:9px;padding:6px 10px;cursor:pointer;font:inherit}.pet-dialogue button[hidden]{display:none}.pet-dialogue button:hover{background:#ffffff24}.pet-dialogue button:focus-visible{outline:2px solid var(--pet-color);outline-offset:2px}
+ .pet-dialogue .dialogue-heard{font-size:10px;color:#aab7cd;-webkit-line-clamp:2;border-bottom:1px solid #ffffff10;padding-bottom:6px}
+@keyframes dialogue-in{from{opacity:0;transform:translateY(-5px) scale(.97)}to{opacity:1;transform:none}}@keyframes message-in{from{opacity:.55;transform:translateY(3px)}to{opacity:1;transform:none}}@keyframes dialogue-pulse{50%{opacity:.35;box-shadow:0 0 0 4px #ffffff0a}}
+@media(prefers-reduced-motion:reduce){.pet-dialogue,.pet-dialogue .arriving,.pet-dialogue strong:before{animation:none!important}}
 </style>
   </head>
   <body>

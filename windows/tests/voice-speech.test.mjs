@@ -1,14 +1,18 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { calls, emit, sent } from "./tauri.mjs";
+import { calls, emit, sent, subscriptions } from "./tauri.mjs";
 import { registerVoiceSpeech, VoiceSpeech } from "../src/pill/voice-speech.ts";
 
 const reply = { id: 42, text: "Olá, Pedro.", lang: "pt-PT", audio: "data:audio/mpeg;base64,reply", gender: "female", allowSystemFallback: false };
-beforeEach(() => { calls.length = 0; });
+beforeEach(() => { calls.length = 0; subscriptions.length = 0; });
 
 test("the mapped pet surface can play and acknowledge speech without the hidden pill", async () => {
   let heard;
-  await registerVoiceSpeech(() => {}, { cancel() {}, async play(source) { heard = source; return true; } });
+  await registerVoiceSpeech("companions", () => {}, { cancel() {}, async play(source) { heard = source; return true; } });
+  assert.deepEqual(subscriptions, [
+    { event: "voice-say", target: { kind: "Webview", label: "companions" } },
+    { event: "voice-cancel", target: { kind: "Webview", label: "companions" } },
+  ]);
   emit("voice-say", reply);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(heard, reply.audio);

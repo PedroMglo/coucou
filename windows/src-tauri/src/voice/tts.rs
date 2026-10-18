@@ -6,6 +6,27 @@ use std::sync::{
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
+/// Native streaming avoids waiting for the complete MP3 before playback.
+pub fn speak_streaming(app: &AppHandle, text: &str, stop: Option<&AtomicBool>) -> Option<bool> {
+    #[cfg(target_os = "linux")] {
+        let settings=app.state::<crate::Shared>().settings.lock().unwrap().clone();
+        let python=settings.edge_voice_python.strip_prefix("~/")
+            .map(|p|crate::platform::home_dir().join(p)).unwrap_or_else(||settings.edge_voice_python.into());
+        let epoch=epoch(); let began=std::time::Instant::now();
+        let result=crate::speech::edge_tts::speak(&python,text,
+            || self::epoch()==epoch && !stop.is_some_and(|s|s.load(Ordering::Relaxed)),
+            || crate::log::line(format!("voice: streaming audio started after {} ms",began.elapsed().as_millis())));
+        if let Some(played)=result {
+            crate::log::line(format!("voice: native streaming complete played={played}"));
+            if !played && self::epoch()==epoch && !stop.is_some_and(|s|s.load(Ordering::Relaxed)) {
+                crate::flow::pill::announce(app,"voice","#FFB84D","Não foi possível reproduzir a voz. A resposta continua disponível em texto.".into(),None,7);
+            }
+        }
+        result
+    }
+    #[cfg(not(target_os = "linux"))] { let _=(app,text,stop); None }
+}
+
 pub fn generate(
     app: &AppHandle,
     output: &str,

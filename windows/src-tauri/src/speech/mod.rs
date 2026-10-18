@@ -10,6 +10,7 @@
 pub mod audio;
 pub mod local_tts;
 pub mod edge_tts;
+pub mod whisper;
 
 use std::io::Write;
 use std::path::PathBuf;

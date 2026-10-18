@@ -198,6 +198,7 @@ pub fn answer(
     cancel: Option<Arc<AtomicBool>>,
     mut on_session: impl FnMut(&str),
     mut on_delta: impl FnMut(String),
+    mut on_event: impl FnMut(&Value),
 ) -> Result<Reply, String> {
     let mut args = vec![
         "--input-format",
@@ -244,15 +245,17 @@ pub fn answer(
         let line = process.line()?;
         let message: Value = serde_json::from_str(&line)
             .map_err(|_| "Antigravity returned an invalid protocol message.")?;
+        on_event(&message);
         if message["event"] == "init" {
             if let Some(id) = message["conversation_id"].as_str() {
                 on_session(id);
             }
         }
+        let before=stream.text.len();
         if let Some(reply) = stream.event(&message)? {
             return Ok(reply);
         }
-        if !stream.text.is_empty() {
+        if stream.text.len()!=before && !stream.text.is_empty() {
             on_delta(stream.text.clone());
         }
     }

@@ -128,7 +128,11 @@ impl Brain {
         if let Some(settings) = settings.as_ref().filter(|s| s.chat_provider == "ollama") {
             self.messages.clear();
             let not_stopped = AtomicBool::new(false);
-            return self.local.respond(app, settings, transcript, stop.as_deref().unwrap_or(&not_stopped));
+            let activity = crate::pet_activity::Reporter::new(app, provider, stop.clone());
+            activity.update("working", "");
+            let reply = self.local.respond(app, settings, transcript, stop.as_deref().unwrap_or(&not_stopped));
+            if let Some(reply) = &reply { activity.finish("done", &reply.text); }
+            return reply;
         }
         self.local.clear();
         if let Some(mut settings) = settings.clone().filter(|s| matches!(s.chat_provider.as_str(), "codex" | "antigravity")) {
@@ -146,7 +150,7 @@ impl Brain {
                 settings.chat_models.insert("antigravity".into(), model);
             }
             let model = crate::chat::model_for(&settings, &settings.chat_provider);
-            return match crate::cli_chat::run(app, &self.cli_chat, &settings, &settings.chat_provider, &model, transcript, None, true, &tools(), stop, |_| {}) {
+            return match crate::cli_chat::run(app, &self.cli_chat, &settings, &settings.chat_provider, provider, &model, transcript, None, true, &tools(), stop, |_| {}) {
                 Ok((text, acted)) => {
                     Some(Reply { text: spoken_text(&text), acted, language: None })
                 }

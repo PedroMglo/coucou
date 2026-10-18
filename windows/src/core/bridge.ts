@@ -610,7 +610,7 @@ export async function onDragDrop(handler: (e: DragDropPayload) => void) {
   };
 }
 
-export async function onEvent<T>(name: string, handler: (payload: T) => void) {
+export async function onEvent<T>(name: string, handler: (payload: T) => void, webview?: string) {
   if (!IS_TAURI) return () => {};
-  return listen<T>(name, (e) => handler(e.payload));
+  return listen<T>(name, (e) => handler(e.payload), webview ? { target: { kind: "Webview", label: webview } } : undefined);
 }

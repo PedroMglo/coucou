@@ -26,6 +26,7 @@ mod notes;
 mod openai_compat;
 mod phone_link;
 mod pipe;
+mod pet_activity;
 mod platform;
 #[cfg(target_os = "linux")]
 mod portal;

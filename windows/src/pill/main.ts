@@ -419,7 +419,7 @@ let speaking = false;
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  await registerVoiceSpeech(value => { speaking = value; wake(); });
+  await registerVoiceSpeech("pill", value => { speaking = value; wake(); });
   const boot = await Bridge.boot();
   setLanguage(resolveLanguage(boot?.settings.language, systemLanguages()));
   const status = await FlowBridge.status();

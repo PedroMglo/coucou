@@ -73,11 +73,11 @@ export class VoiceSpeech {
   }
 }
 
-export async function registerVoiceSpeech(changed: (speaking: boolean) => void = () => {}, audio?: AudioPort) {
+export async function registerVoiceSpeech(webview: "pill" | "companions", changed: (speaking: boolean) => void = () => {}, audio?: AudioPort) {
   const speaker = new VoiceSpeech(changed, audio);
   await Promise.all([
-    onEvent<SpokenReply>("voice-say", reply => void speaker.say(reply)),
-    onEvent("voice-cancel", () => speaker.cancel()),
+    onEvent<SpokenReply>("voice-say", reply => void speaker.say(reply), webview),
+    onEvent("voice-cancel", () => speaker.cancel(), webview),
   ]);
   return speaker;
 }

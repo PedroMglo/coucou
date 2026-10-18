@@ -104,6 +104,7 @@ pub async fn send(
             &chat,
             &settings,
             &provider,
+            &provider,
             &model,
             &query,
             context.as_ref(),
@@ -128,15 +129,17 @@ pub fn run(
     chat: &Chat,
     settings: &Settings,
     provider: &str,
+    pet_provider: &str,
     model: &str,
     query: &str,
     context: Option<&ChatContext>,
     voice: bool,
     tools: &[Value],
     cancel: Option<std::sync::Arc<AtomicBool>>,
-    on_delta: impl FnMut(String),
+    mut on_delta: impl FnMut(String),
 ) -> Result<(String, bool), String> {
     let turn = chat.begin_with_cancel(provider, cancel.unwrap_or_default());
+    let activity = std::sync::Arc::new(crate::pet_activity::Reporter::new(app, pet_provider, Some(turn.cancel.clone())));
     if turn.cancel.load(Ordering::Relaxed) { return Err("Voice session stopped.".into()); }
     let user_text = crate::local_chat::user_text(turn.first, context, query);
     let cwd = workspace(settings)?;
@@ -159,6 +162,8 @@ pub fn run(
             let mut client =
                 crate::codex_chat::rpc::Client::start(&exe, &cwd, Duration::from_secs(1800), true)?;
             client.cancel_with(turn.cancel.clone());
+            let observer = activity.clone();
+            client.observe(move |event| { if let Some((phase,text)) = crate::pet_activity::codex_progress(event) { observer.update(phase,&text); } });
             let reply = client.answer(
                 crate::codex_chat::rpc::TurnOptions {
                     model,
@@ -170,9 +175,13 @@ pub fn run(
                     full_access: settings.cli_full_access,
                 },
                 |name, args| crate::voice::run_tool(app, name, args),
-                |method, params| codex_request(app, method, params, &turn.cancel),
+                |method, params| {
+                    activity.update(if params["questions"].is_array() { "question" } else { "approval" }, "");
+                    let answer=codex_request(app, method, params, &turn.cancel);
+                    activity.update("working", ""); answer
+                },
                 |id| chat.remember_session(&turn, id, &cwd_text, settings.cli_full_access),
-                on_delta,
+                |text| { activity.update("message", text.rsplit("\n\n").next().unwrap_or(&text)); on_delta(text); },
             )?;
             chat.remember_session(
                 &turn,
@@ -194,7 +203,8 @@ pub fn run(
                 settings.cli_full_access,
                 Some(turn.cancel.clone()),
                 |id| chat.remember_session(&turn, id, &cwd_text, settings.cli_full_access),
-                on_delta,
+                |text| { activity.update("message", text.rsplit("\n\n").next().unwrap_or(&text)); on_delta(text); },
+                |event| { if event["event"]=="step_update" && event["step_update"]["step_type"]=="tool" { activity.update("working", ""); } },
             )?;
             (reply.text, reply.acted)
         }
@@ -210,6 +220,7 @@ pub fn run(
         &user_text,
         &text,
     );
+    activity.finish("done", &text);
     Ok((text, acted))
 }
 

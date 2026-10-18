@@ -45,6 +45,7 @@ pub struct Client {
     pending: VecDeque<Value>,
     cancel: Option<Arc<AtomicBool>>,
     active_turn: Option<(String, String)>,
+    observer: Option<Box<dyn FnMut(&Value) + Send>>,
 }
 
 impl Client {
@@ -106,6 +107,7 @@ impl Client {
             pending: VecDeque::new(),
             cancel: None,
             active_turn: None,
+            observer: None,
         };
         client.request("initialize", json!({
             "clientInfo": { "name": "coucou_mochi", "title": "Coucou — Mochi", "version": "0.5.0" },
@@ -158,6 +160,8 @@ impl Client {
             }
         }
     }
+
+    pub fn observe(&mut self, observer: impl FnMut(&Value) + Send + 'static) { self.observer = Some(Box::new(observer)); }
 
     pub fn cancel_with(&mut self, cancel: Arc<AtomicBool>) {
         self.cancel = Some(cancel);
@@ -341,6 +345,7 @@ impl Client {
             if params.get("turnId").is_some() && params["turnId"] != turn_id {
                 continue;
             }
+            if let Some(observer) = &mut self.observer { observer(&message); }
             let before = answer.text();
             if message["method"] == "item/completed"
                 && matches!(
@@ -458,7 +463,8 @@ impl Answer {
                 if p["turn"]["status"] != "completed" {
                     return Err(rpc_error(&p["turn"]["error"]));
                 }
-                let text = self.text();
+                // Commentary belongs in progress bubbles, not the spoken final answer.
+                let text = self.items.last().map(|(_, text)| text.clone()).unwrap_or_default();
                 if text.trim().is_empty() {
                     return Err("Codex returned an empty reply.".into());
                 }
@@ -504,6 +510,15 @@ mod tests {
                 .unwrap(),
             Some("Olá!".into())
         );
+    }
+
+    #[test]
+    fn commentary_is_progress_and_only_the_final_message_is_returned_for_speech() {
+        let mut answer=Answer::default();
+        answer.event(&json!({"method":"item/completed","params":{"item":{"id":"progress","type":"agentMessage","text":"Vou criar o Postgres."}}})).unwrap();
+        answer.event(&json!({"method":"item/completed","params":{"item":{"id":"final","type":"agentMessage","text":"O Postgres está pronto."}}})).unwrap();
+        assert!(answer.text().contains("Vou criar"));
+        assert_eq!(answer.event(&json!({"method":"turn/completed","params":{"turn":{"status":"completed"}}})).unwrap(),Some("O Postgres está pronto.".into()));
     }
 
     #[test]

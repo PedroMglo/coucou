@@ -128,3 +128,38 @@ Validação desta implementação: 445 testes JavaScript, TypeScript e build Vit
 Rust → Python → MP3. O ensaio da ponte Raquel gerou 37 152 bytes em 3,71 s.
 O sysworkspace passou 423 testes (2 ignorados) e a verificação de configuração
 do Hyprland. Nenhuma destas verificações abriu o microfone do utilizador.
+
+
+## Conversa e progresso no pet (mochi.5)
+
+As contas CLI emitem estados e mensagens públicas para o pet correspondente.
+Pensar, trabalhar, responder, aguardar aprovação/pergunta, concluir, falhar e
+interromper são estados distintos. Os balões são compactos e os pets têm animação
+de trabalho. Mensagens parciais atualizam o balão durante a execução. O pedido
+ouvido aparece como «Ouvi», para detetar uma transcrição errada. Não se mostram
+raciocínios privados, argumentos de ferramentas ou comandos no balão de progresso.
+Os cartões originais de decisão têm prioridade e não são aprovados pelo balão.
+Depois da decisão, o cartão resolvido pode recolher para a conversa continuar
+junto do pet. Um cartão aberto manualmente durante o trabalho é preservado.
+
+No Linux, se GStreamer estiver instalado, a Raquel é reproduzida à medida que
+chegam frames MP3, sem esperar pelo ficheiro inteiro. Falta do player conserva
+a reprodução portátil por blob no webview. Erros ficam explícitos e não compram
+uma API ou selecionam outra voz. As mensagens de progresso Codex não entram na
+leitura da resposta final.
+
+`linux/prepare-whisper.py` prepara o reconhecedor privado local; `--gpu` inclui
+CUDA 12/cuDNN 9 nesse venv, sem alterar drivers ou bibliotecas globais. As versões
+e hashes estão nos lockfiles e o modelo numa revisão fixa em
+`linux/whisper-model.json`. Configurar `voiceAsrPython` e `voiceAsrModel` no
+fragmento revisto do sysworkspace. Sem configuração, mantém-se Parakeet.
+O Whisper recebe PCM 16 kHz em memória, fixa português com contexto de Portugal,
+não traduz nem usa um serviço cloud. O processo aquece durante a escuta e termina
+no fim da sessão ou por inatividade. GPU indisponível permite CPU local.
+
+A amostra sintética «Olá, Pedro. Posso ajudar-te a organizar os ficheiros, passo
+a passo» foi reconhecida corretamente pelo Whisper em CPU: 4,82 s a frio e
+3,76 s quente, com silêncio rejeitado. Isto não certifica o microfone Bluetooth
+ou a voz real do utilizador. Confirmar esses aspetos na aplicação instalada. Com as bibliotecas privadas CUDA
+12, a mesma amostra foi reconhecida em 0,76 s na RTX 4060 (pré-carga 1,70 s),
+com a mesma transcrição e silêncio rejeitado.

@@ -401,7 +401,7 @@ fn finish(app: &AppHandle, flow: &Arc<Flow>, mut l: Listening, busy: Arc<AtomicB
 
 fn process(app: &AppHandle, flow: &Arc<Flow>, samples: &[f32], front: Option<&(String, String)>, seconds: f64) -> Result<(), String> {
     let started = Instant::now();
-    let transcript = speech::transcribe(samples).ok_or("the voice model is not loaded")?;
+    let transcript = crate::voice::transcribe(app, samples, None).ok_or("the voice model is not loaded")?;
     let raw = transcript.text.trim().to_string();
     if raw.is_empty() {
         pill::update(app, |s| s.phase = "idle".into());
