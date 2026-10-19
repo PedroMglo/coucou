@@ -163,7 +163,8 @@ pub async fn send(
     if model.is_empty() {
         return Err(tf("Pick a {name} model above the chat box.", &[("name", p.name)]));
     }
-    let turn = chat.begin(p.id);
+    let turn = chat.begin_cli(p.id,std::sync::Arc::default())?;
+    let _lease=chat.lease(&turn);
     let user = user_message(turn.first, context.as_ref(), &query);
     let body = request_body(p, model, &chat::system_prompt(false), &turn.history, &user);
 
@@ -185,7 +186,7 @@ pub async fn send(
     let text = reply_text(p, &json)?;
 
     let plain = chat::plain_question(turn.first, context.as_ref(), &query);
-    chat.commit(&turn, user, json!({ "role": "assistant", "content": text }), &plain, &text);
+    chat.commit_reply(&turn, user, json!({ "role": "assistant", "content": text }), &plain, &text)?;
     Ok(ChatReply { text })
 }
 

@@ -44,6 +44,7 @@ pub fn center(app: &AppHandle) -> Option<(f64, f64)> {
 
 #[tauri::command]
 pub async fn companions_configure(app: AppHandle, enabled: bool, count: usize) -> Option<Surface> {
+    if !enabled{crate::pet_chat::pet_chat_hide(app.clone());}
     #[cfg(target_os = "linux")]
     { native::configure(&app, enabled, count.min(64)).await }
     #[cfg(not(target_os = "linux"))]
@@ -129,7 +130,7 @@ mod native {
         });
         BAR_WATCH.with(|slot| *slot.borrow_mut() = Some(monitor));
     }
-    fn bar_band(screen: &island::ScreenInfo) -> Option<Band> {
+    fn bar_band(screen: &island::ScreenInfo, control:bool, system_center:bool) -> Option<Band> {
         use std::io::Read;
         let mut bytes = Vec::new();
         std::fs::File::open(bar_path()?).ok()?.take(65537).read_to_end(&mut bytes).ok()?;
@@ -148,6 +149,7 @@ mod native {
             if !x.is_finite() || !w.is_finite() || w < 0.0 { return None; }
             if w > 0.0 { occupied.push(((x - 10.0).max(0.0), (x + w + 10.0).min(screen.width))); }
         }
+        if control { let w=crate::pet_control::width(screen.width,system_center);occupied.push(((screen.width-w)/2.0-10.0,(screen.width+w)/2.0+10.0)); }
         occupied.sort_by(|a,b| a.0.total_cmp(&b.0));
         let mut start = 8.0_f64;
         let mut lanes = Vec::new();
@@ -173,13 +175,24 @@ mod native {
         }
         match WebviewWindowBuilder::new(app, LABEL, url)
             .additional_browser_args(crate::BROWSER_ARGS)
+            .disable_drag_drop_handler()
             .title("Coucou companions").inner_size(640.0, 240.0)
             .resizable(true).decorations(false).transparent(true).shadow(false)
             .always_on_top(true).skip_taskbar(true).visible_on_all_workspaces(true)
             .focusable(false).focused(false).visible(false)
-            .maximizable(false).minimizable(false).closable(false).disable_drag_drop_handler().build() {
+            .maximizable(false).minimizable(false).closable(false).build() {
             Ok(win) => {
-                if !platform::prepare_companions_window(&win, mode) { let _ = win.destroy(); }
+                if !platform::prepare_companions_window(&win, mode) { crate::log::line("companions window: platform preparation failed");let _ = win.destroy(); }
+                #[cfg(target_os="linux")]if let Err(error)=crate::linux_documents::install(&win){crate::log::line(error);}
+                win.on_window_event(|event|{
+                    if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Enter{paths,position})=event{
+                        crate::log::line(format!("companions drag enter: {} item(s) at {},{}",paths.len(),position.x,position.y));
+                    }
+                    if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop{paths,..})=event{
+                        crate::log::line(format!("companions drop: {} item(s)",paths.len()));
+                        crate::files::allow_dropped(paths.iter().map(|p|p.to_string_lossy().to_string()));
+                    }
+                });
             }
             Err(error) => crate::log::line(format!("companions window: {error}")),
         }
@@ -197,13 +210,13 @@ mod native {
             let _ = win.hide();
             return Some(habitat.surface.lock().unwrap().clone());
         }
-        let (pref, clearance, bar_mode) = {
+        let (pref, clearance, bar_mode, control, system_center) = {
             let shared = app.state::<Shared>();
             let settings = shared.settings.lock().unwrap();
-            (settings.screen.clone(), settings.companion_top_clearance, settings.companion_bar_mode)
+            (settings.screen.clone(), settings.companion_top_clearance, settings.companion_bar_mode, settings.pet_control_bar, settings.pet_system_center)
         };
         let screen = island::screen_info(app, &pref);
-        let band = bar_mode.then(|| bar_band(&screen).unwrap_or(Band { height: 40.0, lanes: Vec::new() }));
+        let band = bar_mode.then(|| bar_band(&screen,control,system_center).unwrap_or(Band { height: 40.0, lanes: Vec::new() }));
         let top = if bar_mode { 0.0 } else if clearance.is_finite() { clearance.clamp(0.0, 240.0) } else { 64.0 };
         let width = screen.width.max(80.0);
         let columns = ((width - 16.0) / 76.0).floor().max(1.0) as usize;

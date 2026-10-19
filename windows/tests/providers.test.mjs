@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS } from "../src/core/state.ts";
 const settings = (over = {}) => ({ ...DEFAULT_SETTINGS, ...over });
 
 test("the provider ids and credential requirements match the Rust side", () => {
-  assert.deepEqual(PROVIDERS.map((p) => p.id), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "ollama", "lmstudio", "custom"]);
+  assert.deepEqual(PROVIDERS.map((p) => p.id), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "copilot", "gemini-cli", "claude-cli", "ollama", "lmstudio", "custom"]);
   assert.equal(providerDef("google").key, "google-api-key");
   assert.equal(providerDef("openai").key, "openai-api-key");
   assert.equal(providerDef("openrouter").key, "openrouter-api-key");
@@ -25,7 +25,7 @@ test("the provider ids and credential requirements match the Rust side", () => {
 test("Claude's model is the existing setting; the others are kept per provider", () => {
   assert.equal(activeModel(settings()), "claude-opus-5");
   assert.equal(activeModel(settings({ chatProvider: "google" })), "gemini-2.0-flash");
-  assert.equal(activeModel(settings({ chatProvider: "ollama" })), "");
+  assert.equal(activeModel(settings({ chatProvider: "ollama" })), "@default");
   let s = withModel(settings({ chatProvider: "openai" }), "openai", "gpt-5-mini");
   assert.equal(activeModel(s), "gpt-5-mini");
   assert.equal(s.model, "claude-opus-5");
@@ -38,9 +38,9 @@ test("Claude's model is the existing setting; the others are kept per provider",
 
 test("model servers show in the picker once connected, or while in use", () => {
   const ids = (s) => visibleProviders(s).map((p) => p.id);
-  assert.deepEqual(ids(settings()), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity"]);
-  assert.deepEqual(ids(settings({ ollamaUrl: "http://127.0.0.1:11434" })), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "ollama"]);
-  assert.deepEqual(ids(settings({ chatProvider: "custom" })), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "custom"]);
+  assert.deepEqual(ids(settings()), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "copilot"]);
+  assert.deepEqual(ids(settings({ ollamaUrl: "http://127.0.0.1:11434" })), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "copilot", "ollama"]);
+  assert.deepEqual(ids(settings({ chatProvider: "custom" })), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "copilot", "custom"]);
 });
 
 test("the saved model is kept when offered, else a sensible one is picked", () => {
@@ -56,6 +56,9 @@ test("the saved model is kept when offered, else a sensible one is picked", () =
 test("each CLI Mochi opens chat with its own account", () => {
   assert.equal(providerForPill("agent_codex"), "codex");
   assert.equal(providerForPill("agent_antigravity"), "antigravity");
+  assert.equal(providerForPill("integration_claude"), null);
+  assert.equal(providerForPill("agent_gemini"), null);
+  assert.equal(providerForPill("agent_cursor"), null);
   assert.equal(providerForPill("vscode"), null);
   assert.equal(providerForPill(undefined), null);
 });
@@ -80,4 +83,19 @@ test("an address says whether what you type leaves this computer", () => {
   assert.equal(urlExposure("ftp://example.com"), "invalid");
   assert.equal(urlExposure("http://user:pw@example.com"), "invalid");
   assert.equal(urlExposure("http://"), "invalid");
+});
+
+test("Gravity model-family chats never require a separate paid API key",()=>{
+ for(const id of ["gemini-cli","claude-cli"]){
+  assert.equal(providerDef(id).key,null);assert.match(providerDef(id).name,/via Gravity/);
+  assert.ok(visibleProviders(settings({chatProvider:id})).some(p=>p.id===id));
+ }
+});
+
+
+test("service pets use distinct logical conversations through the native account, without API credentials",()=>{
+ for(const id of ["integration_spotify","integration_github","integration_notion","integration_n8n","integration_vercel","integration_resend","integration_calcom","integration_stripe"]){
+  assert.equal(providerForPill(id),id);assert.equal(providerDef(id).key,null);assert.match(providerDef(id).name,/via Codex/);
+  assert.equal(activeModel(settings({chatProvider:id})),"@default");assert.ok(visibleProviders(settings({chatProvider:id})).some(p=>p.id===id));
+ }
 });

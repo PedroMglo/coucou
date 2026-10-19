@@ -5,7 +5,7 @@
 // the last turn. Port of ClaudeVoiceBrain.swift.
 
 use std::time::{Duration, Instant};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
@@ -15,15 +15,14 @@ const FORGET_AFTER: Duration = Duration::from_secs(90);
 
 pub struct Brain {
     messages: Vec<Value>,
-    cli_chat: crate::chat::Chat,
     local: super::local::Brain,
     last: Instant,
-    family_model: Option<String>,
+    family_models: std::collections::HashMap<String,String>,
 }
 
 impl Default for Brain {
     fn default() -> Self {
-        Self { messages: Vec::new(), cli_chat: Default::default(), local: Default::default(), last: Instant::now(), family_model: None }
+        Self { messages: Vec::new(), local: Default::default(), last: Instant::now(), family_models: Default::default() }
     }
 }
 
@@ -33,7 +32,7 @@ pub struct Reply {
     pub language: Option<String>,
 }
 
-pub(super) fn tools() -> Vec<Value> {
+pub(crate) fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "pills",
@@ -53,8 +52,9 @@ pub(super) fn tools() -> Vec<Value> {
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["play_pause", "next", "previous", "set_volume", "search"] },
-                    "query": { "type": "string", "description": "What to search, for search." },
+                    "action": { "type": "string", "enum": ["play_pause", "pause", "play", "next", "previous", "set_volume", "search", "play_item"] },
+                    "query": { "type": "string", "description": "What to search, for search. Search opens results; it does not start a track." },
+                    "uri": {"type":"string","description":"Exact spotify:track/album/playlist/episode URI, for play_item. Obtain a real item; never invent its ID."},
                     "volume": { "type": "integer", "description": "0-100 for set_volume." }
                 },
                 "required": ["action"]
@@ -109,17 +109,16 @@ Pills: {pills}",
 
 impl Brain {
     /// The legacy hotword conversation keeps its original retention policy.
-    /// Explicit pet sessions retain context until their session ends.
+    /// CLI pets use the shared assistant memory across microphone sessions.
     pub fn forget_if_idle(&mut self) {
         if self.last.elapsed() > FORGET_AFTER {
             self.messages.clear();
-            self.cli_chat.reset();
             self.local.clear();
         }
     }
 
     /// The spoken pet belongs to this dialogue, independent of the text chat's
-    /// provider. Each pet has its own Brain and native conversation.
+    /// provider. CLI context belongs to the logical pet in the shared Chat store.
     pub fn respond_as(&mut self, app: &AppHandle, transcript: &str, provider: &str, stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>) -> Option<Reply> {
         self.last = Instant::now();
         let settings = app.try_state::<crate::Shared>().map(|s| {
@@ -135,26 +134,35 @@ impl Brain {
             return reply;
         }
         self.local.clear();
-        if let Some(mut settings) = settings.clone().filter(|s| matches!(s.chat_provider.as_str(), "codex" | "antigravity")) {
-            if matches!(provider, "gemini-cli" | "claude-cli") {
-                let family = if provider == "gemini-cli" { "gemini" } else { "claude" };
-                let configured = settings.voice_models.get(provider).filter(|m| !m.is_empty()).cloned()
-                    .or_else(|| settings.chat_models.get(provider).filter(|m| !m.is_empty()).cloned())
-                    .or_else(|| settings.chat_models.get("antigravity").filter(|m| m.to_lowercase().contains(family)).cloned());
-                let model = configured.or_else(|| self.family_model.clone()).or_else(|| {
-                    let offered = tauri::async_runtime::block_on(super::until_stopped(crate::gravity_chat::models(), stop.as_deref()))?.ok()?;
-                    offered.into_iter().find(|m| m.id.to_lowercase().contains(family)).map(|m| m.id)
-                });
-                let Some(model) = model else { return Some(Reply { text: crate::i18n::t("Connect this pet in Settings → Chat first."), acted: false, language: None }); };
-                self.family_model = Some(model.clone());
-                settings.chat_models.insert("antigravity".into(), model);
-            }
-            let model = crate::chat::model_for(&settings, &settings.chat_provider);
-            return match crate::cli_chat::run(app, &self.cli_chat, &settings, &settings.chat_provider, provider, &model, transcript, None, true, &tools(), stop, |_| {}) {
+        if let Some(settings) = settings.clone().filter(|s| crate::cli_chat::backend(&s.chat_provider).is_some()) {
+            let chat=app.state::<crate::chat::Chat>();
+            let id=match chat.conversation_id(provider){Ok(id)=>id,Err(text)=>return Some(Reply{text,acted:false,language:None})};
+            let reservation=match chat.reserve_conversation(provider,Some(&id)){Ok(r)=>r.broadcast(app,transcript),Err(text)=>return Some(Reply{text,acted:false,language:None})};
+            let channel=reservation.channel();
+            let settings=app.try_state::<crate::Shared>().map(|s|crate::cli_chat::voice_settings(&s.settings.lock().unwrap(),provider)).unwrap_or(settings);
+            let attachment=crate::pet_documents::context(provider,&id);
+            if let Some(file)=&attachment{if let Err(text)=crate::pet_documents::validate(provider,&id,&file.file.path,file.sequence){return Some(Reply{text,acted:false,language:None});}}
+            let context=attachment.as_ref().map(|file|file.chat_context());
+            let selected=crate::chat::model_for(&settings,provider);
+            let selected=if selected.is_empty() {self.family_models.get(provider).cloned().unwrap_or_default()} else {selected};
+            let model=tauri::async_runtime::block_on(super::until_stopped(crate::cli_chat::resolve_model(&settings,provider,&selected),stop.as_deref()))?;
+            let model=match model {
+                Ok(model)=>model,
+                Err(err)=>return Some(Reply{text:err,acted:false,language:None}),
+            };
+            if matches!(provider,"gemini-cli"|"claude-cli") {self.family_models.insert(provider.into(),model.clone());}
+            let backend=crate::cli_chat::backend(provider)?;
+            if let Some(file)=&attachment{if let Err(text)=crate::pet_documents::validate(provider,&id,&file.file.path,file.sequence){return Some(Reply{text,acted:false,language:None});}}
+            return match crate::cli_chat::run(app, &channel, &settings, backend, provider, &model, transcript, context.as_ref(), true, &tools(), stop.clone(), None, |_| {}) {
                 Ok((text, acted)) => {
+                    if let Some(file)=&attachment{crate::pet_documents::consume(app,file);}
                     Some(Reply { text: spoken_text(&text), acted, language: None })
                 }
                 Err(err) => {
+                    if err==crate::chat::BUSY_ERROR {return Some(Reply{text:err,acted:false,language:None});}
+                    if err=="The CLI request was cancelled."||stop.as_ref().is_some_and(|s|s.load(std::sync::atomic::Ordering::Relaxed)) {
+                        return Some(Reply{text:"A tarefa foi interrompida.".into(),acted:false,language:None});
+                    }
                     crate::log::line(format!("voice: CLI turn failed: {err}"));
                     Some(Reply { text: crate::i18n::t("The CLI agent could not answer. Check its connection in Settings → Chat."), acted: false, language: None })
                 }

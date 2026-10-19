@@ -1,4 +1,5 @@
 import { providerForPill } from "../core/providers";
+import {sessionLabel} from '../core/pet-sessions';
 // Island views — DOM ports of IslandViewContent.swift. Paddings, font sizes,
 // colours and wording are copied from the Swift views so both platforms read
 // identically.
@@ -10,7 +11,7 @@ import { State, type AgentTask } from "../core/state";
 import { washRGBA, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
-import { buildChoose, buildUpload, buildUploading } from "./upload";
+import { buildChoose, buildUpload, buildUploading, buildMail } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
 import { highlightRow, listRows, openRow } from "./github";
 import { pillDefinition, sessionSubtitle } from "../core/pills";
@@ -27,6 +28,7 @@ import { SPOTIFY_ID } from "../core/spotify";
 import type { Outfit, OutfitSelection } from "../mochi/wardrobe";
 import { language, t, tl, type Msg } from "../i18n/i18n";
 import type { ViewCommand } from "../island/shortcuts";
+import {buildPetOverview} from './pet-overview';
 
 export interface ViewActions {
   setView(v: IslandViewName): void;
@@ -49,6 +51,7 @@ export interface ViewActions {
   setVolume(v: number): void;
   setAutoClose(seconds: number): void;
   openSettingsWindow(): void;
+  openPetSettings?(id:string):void;
   blip(): void;
   /** Wardrobe click: keeps the outfit ("auto" and "none" included). */
   chooseOutfit(selection: OutfitSelection): void;
@@ -96,7 +99,15 @@ function agentWho(task: AgentTask | null, label: string): HTMLElement {
     row.append(dot(task.color, 8), h("span", { class: "n", text: task.name }));
   }
   row.append(h("span", { text: label }));
+  if(task?.sessionId&&!['approval','question'].includes(State.view))row.append(h('span',{class:'session-source',text:sessionLabel(task),title:task.sessionCwd??''}));
   return row;
+}
+
+function approvalOrigin():HTMLElement {
+  const req=State.pendingApproval;
+  if(!req)return h('div');
+  const label=sessionLabel({sessionId:req.sessionId,sessionTitle:req.sessionTitle,sessionCwd:req.cwd,sessionOwned:req.owned});
+  return h('div',{class:'session-origin',title:`${label}\n${req.cwd??''}`},h('span',{text:label}),h('span',{text:req.cwd??''}));
 }
 
 function stack(padLeft: number, padRight: number, ...children: Node[]): HTMLElement {
@@ -107,23 +118,35 @@ function stack(padLeft: number, padRight: number, ...children: Node[]): HTMLElem
 
 // ── Header ────────────────────────────────────────────────────────────────────
 
-export function buildHeader(actions: ViewActions): ViewHost {
+export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse'|'toggleSound'>,sessionCount?:(pet:string)=>number): ViewHost {
   const tabHome = h("button", { class: "tab", title: tl("Overview"), onclick: () => go("overview") }, svg(ICONS.house, 13));
   const tabChat = h("button", { class: "tab", title: tl("Ask"), onclick: () => go("prompt") }, svg(ICONS.bubble, 13));
   const tabDrop = h("button", { class: "tab", title: tl("Drop"), onclick: () => go("upload") }, svg(ICONS.plus, 13));
 
-  const gearBtn = h("button", { title: tl("Settings"), onclick: () => go("settings") }, svg(ICONS.gear, 14));
+  const expandChat=h('button',{title:'Expandir conversa numa janela flutuante','aria-label':'Expandir conversa',onclick:()=>{
+    const task=State.focusTask;if(!task)return;
+    const session=State.view!=='prompt'&&task.sessionId&&task.sessionBackend?{id:task.sessionId,backend:task.sessionBackend,title:task.sessionTitle??'',cwd:task.sessionCwd??'',steps:task.steps.slice(-64).map(s=>s.slice(0,2048)),finalLine:(task.finalLine??'').slice(0,16000)}:undefined;
+    void Bridge.petChatOpen(task.id,session).catch(error=>{State.chatFeedback.set(State.chatProvider,String(error));State.notify();});
+  }},svg(ICONS.arrowUpRight,13));
+  const gearBtn = h("button", { class:'header-settings',title: tl("Settings"), onclick: () => go("settings") }, svg(ICONS.gear, 14));
   const closeBtn = h("button", { class: "close-card", title: tl("Close"), "aria-label": tl("Close"), onclick: () => actions.collapse() }, svg(ICONS.xmark, 12));
   const soundBtn = h("button", { title: tl("Mute"), onclick: () => actions.toggleSound() }, svg(ICONS.speakerOn, 14));
   // Plan usage pills (off by default): before the gear, Claude first, as on the Mac.
   const claudePill = buildPlanPill(false);
   const codexPill = buildPlanPill(true);
   const companionName = h("span", { class: "companion-owner" });
+  const sessionsButton=h('button',{class:'session-picker',title:'Consultar e escolher sessões deste pet',onclick:()=>{
+    void Bridge.petPanelOpen(360,50,State.focusId??undefined,'sessions');
+  }});
   const planPills = h("div", { class: "plan-pills" }, claudePill.el, codexPill.el);
   let codexShown = false;
 
   function go(v: IslandViewName) {
     actions.blip();
+    if(v==='prompt'&&State.settings.companionMode&&State.focusId){
+      void Bridge.petChatOpen(State.focusId).catch(error=>{State.chatFeedback.set(State.chatProvider,String(error));State.notify();});
+      return;
+    }
     actions.setView(v);
   }
 
@@ -131,7 +154,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
     "div",
     { id: "header" },
     h("div", { class: "tabs" }, tabHome, tabChat, tabDrop),
-    h("div", { class: "header-actions" }, companionName, planPills, gearBtn, soundBtn, closeBtn),
+    h("div", { class: "header-actions" }, sessionsButton,expandChat,companionName, planPills, gearBtn, soundBtn, closeBtn),
   );
   const headerActions = el.lastElementChild as HTMLElement;
 
@@ -140,6 +163,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
     sync() {
       const v = State.view;
       closeBtn.hidden = !State.settings.companionMode;
+      expandChat.hidden=!State.settings.companionMode || !State.focusTask;
       tabHome.classList.toggle("on", v === "overview" || v === "empty");
       const ownChat = !State.settings.companionMode || providerForPill(State.focusId ?? undefined) != null;
       tabChat.hidden = tabDrop.hidden = !ownChat;
@@ -153,6 +177,10 @@ export function buildHeader(actions: ViewActions): ViewHost {
       companionName.hidden = !State.settings.companionMode;
       companionName.textContent = State.focusTask?.name ?? "Mochi";
       companionName.style.color = State.focusTask?.color ?? "inherit";
+      const task=State.focusTask,count=task?(sessionCount?.(task.id)??State.petSessions.list(task.id).length):0;
+      sessionsButton.hidden=!task||(!providerForPill(task.id)&&!['workspace','agent','ai'].includes(pillDefinition(task.id)?.category??''));
+      sessionsButton.textContent=`${count} ${count===1?'sessão':'sessões'}`;
+      sessionsButton.title=task?.sessionId?`${sessionLabel(task)}\n${task.sessionCwd??''}\nConsultar todas as sessões`:'Consultar sessões e conversas deste pet';
       syncPlanPills();
       el.style.opacity = v === "confused" ? "0" : "1";
     },
@@ -177,7 +205,17 @@ export function buildHeader(actions: ViewActions): ViewHost {
 
 // ── Overview ──────────────────────────────────────────────────────────────────
 
-function buildOverview(actions: ViewActions): ViewHost {
+export function buildOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'blip'|'openSettingsWindow'|'openPetSettings'>): ViewHost {
+  // Boot settings arrive after the island is constructed. Choose the surface
+  // during sync so the first window also receives the companion dashboard.
+  const pet=buildPetOverview(actions),legacy=buildLegacyOverview(actions);
+  for(const view of [pet,legacy]){view.el.classList.remove('view');view.el.classList.add('overview-surface');}
+  const el=h('div',{class:'view overview-host'},pet.el,legacy.el);
+  const current=()=>State.settings.companionMode?pet:legacy;
+  return {el,sync(){pet.el.hidden=!State.settings.companionMode;legacy.el.hidden=State.settings.companionMode;current().sync();},tick:now=>current().tick?.(now),command:command=>current().command?.(command)};
+}
+
+function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'blip'|'openSettingsWindow'>): ViewHost {
   /** The diff open in the left card (a FileDiff id), as activeDiffId on macOS. */
   let activeDiffId: number | null = null;
   const closeDiff = () => {
@@ -291,7 +329,7 @@ function buildOverview(actions: ViewActions): ViewHost {
         return;
       }
       const task = State.focusTask;
-      const diffs = task ? State.sessionDiffs.get(task.id) : undefined;
+      const diffs = task ? State.diffsFor(task.id) : undefined;
       const last = diffs?.[diffs.length - 1];
       if (last?.id == null) return;
       activeDiffId = last.id;
@@ -299,8 +337,9 @@ function buildOverview(actions: ViewActions): ViewHost {
     },
     sync() {
       const task = State.focusTask;
-      if (task?.id !== lastFocus) {
-        lastFocus = task?.id ?? null;
+      const focusKey=task?JSON.stringify([task.id,task.sessionBackend,task.sessionId]):null;
+      if (focusKey !== lastFocus) {
+        lastFocus = focusKey;
         detailOpen = false;
         activeDiffId = null;
         cardKey = "";
@@ -356,7 +395,7 @@ function buildOverview(actions: ViewActions): ViewHost {
         who.append(
           dot(task.color, 7),
           h("span", { class: "name", text: task.name }),
-          h("span", { class: "tool", text: t(sessionSubtitle(task.id)) }),
+          h("span", { class: "tool", text: task.sessionId?sessionLabel(task):t(sessionSubtitle(task.id)),title:task.sessionCwd??'' }),
         );
         if (task.steps.length > 1) {
           who.append(h("span", {
@@ -433,7 +472,7 @@ export function hasSessionTicker(task: AgentTask): boolean {
   return isSession && (task.state !== "idle" || task.steps.length > 0);
 }
 
-function buildPill(task: AgentTask, actions: ViewActions): HTMLElement {
+function buildPill(task: AgentTask, actions: Pick<ViewActions,'setFocus'>): HTMLElement {
   const label = task.id === "integration_claude" ? pillDefinition(task.id)!.name : task.name;
   const canvas = createMiniBot(task, 24);
   const pill = h(
@@ -536,7 +575,8 @@ function buildApproval(actions: ViewActions): ViewHost {
         shownAt = performance.now();
       }
       clear(who);
-      who.append(agentWho(State.focusTask, t("needs permission")));
+      const approvalTask=State.tasks.find(t=>t.id===State.pendingApproval?.pillId)??State.focusTask;
+      who.append(agentWho(approvalTask, t("needs permission")),approvalOrigin());
       // The whole point of approving here rather than in the terminal: this line
       // is the command, the file path or the URL being authorised, not just the
       // name of the tool asking.
@@ -613,7 +653,7 @@ function buildQuestion(actions: ViewActions): ViewHost {
       const asking = questions.length > 1
         ? t("is asking ({index} of {total})", { index: index + 1, total: questions.length })
         : t("is asking");
-      who.append(agentWho(State.focusTask, asking));
+      who.append(agentWho(State.focusTask, asking),approvalOrigin());
       title.textContent = q.question;
       title.title = q.question;
 
@@ -824,14 +864,14 @@ export function buildViews(
   map.set("confused", buildConfused());
   map.set("note", buildNote());
   map.set("settings", buildSettings(actions));
-  map.set("prompt", buildPrompt(onChatHeightChange));
+  map.set("prompt", buildPrompt(onChatHeightChange,undefined,()=>actions.setView('choose')));
   map.set("upload", buildUpload());
   map.set("uploading", buildUploading());
   map.set("choose", buildChoose(actions));
   map.set("recap", buildRecap(actions));
   map.set("wardrobe", buildWardrobe(actions));
   // Not in the Windows v1: sending a file by email, window attach + web result.
-  map.set("mail", buildPlaceholder(tl("Sending by email isn't in this version."), ""));
+  map.set("mail", buildMail(actions));
   map.set("searching", buildPlaceholder(tl("Claude is searching…"), ""));
   map.set("result", buildPlaceholder(tl("Result"), ""));
   return map;

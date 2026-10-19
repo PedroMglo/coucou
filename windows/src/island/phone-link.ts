@@ -64,7 +64,7 @@ export function linkUsage(): PhoneLinkUsage {
 
 /** The files a session changed, newest last, by name and counts only (the lines are sent when a phone asks). */
 export function linkFiles(pillId: string): PhoneLinkFile[] {
-  return (State.sessionDiffs.get(pillId) ?? []).slice(-20).map((d) => {
+  return State.diffsFor(pillId).slice(-20).map((d) => {
     const f: PhoneLinkFile = { id: d.id, name: fileName(d.path), added: d.added, removed: d.removed };
     if (d.tooLarge) f.tooLarge = true;
     if (d.isNewFile) f.isNew = true;

@@ -99,9 +99,9 @@ export function toggle(on: boolean, onChange: (v: boolean) => void): HTMLElement
 export function segmented<T extends string>(options: [T, string][], value: T, onChange: (v: T) => void): HTMLElement {
   const el = h("div", { class: "hub-segmented" });
   for (const [id, text] of options) {
-    const b = h("button", { class: id === value ? "on" : "", text });
+    const b = h("button", { class: id === value ? "on" : "", text,'aria-pressed':id===value });
     b.addEventListener("click", () => {
-      for (const other of el.querySelectorAll("button")) other.classList.toggle("on", other === b);
+      for (const other of el.querySelectorAll("button")){other.classList.toggle("on", other === b);other.setAttribute('aria-pressed',String(other===b));}
       onChange(id);
     });
     el.append(b);

@@ -59,6 +59,8 @@ pub enum KeyEvent {
 pub struct Flow {
     pub store: Mutex<Store>,
     running: Mutex<Option<Running>>,
+    /// Keep persisted preferences, runtime changes and events in the same order.
+    prefs_update: Mutex<()>,
 }
 
 struct Running {
@@ -68,6 +70,24 @@ struct Running {
 }
 
 impl Flow {
+    /// Publish runtime changes only after this preference payload is on disk.
+    /// The separate gate spans the callback without holding the store mutex:
+    /// voice and shortcut setup read that store themselves.
+    fn update_prefs(&self, prefs: &Prefs, apply: impl FnOnce(Prefs)) -> Result<(), String> {
+        let _update = self.prefs_update.lock().unwrap();
+        let before = {
+            let mut store = self.store.lock().unwrap();
+            let before = store.set_prefs(prefs.clone())
+                .map_err(|err| format!("Não foi possível guardar as preferências: {err}"))?;
+            if before.keep_days != prefs.keep_days {
+                store.prune(store::now_ms());
+            }
+            before
+        };
+        apply(before);
+        Ok(())
+    }
+
     fn send(&self, event: KeyEvent) {
         if let Some(r) = self.running.lock().unwrap().as_ref() {
             let _ = r.tx.send((event, Instant::now()));
@@ -122,7 +142,7 @@ fn is_terminal(id: &str) -> bool {
 // ── Setup, on and off ─────────────────────────────────────────────────────────
 
 pub fn setup(app: &AppHandle) {
-    let flow = Arc::new(Flow { store: Mutex::new(Store::load()), running: Mutex::new(None) });
+    let flow = Arc::new(Flow { store: Mutex::new(Store::load()), running: Mutex::new(None), prefs_update: Mutex::new(()) });
     app.manage(flow.clone());
     pill::setup(app);
     let prefs = flow.store.lock().unwrap().prefs.clone();
@@ -321,7 +341,7 @@ fn run(app: AppHandle, flow: Arc<Flow>, rx: mpsc::Receiver<(KeyEvent, Instant)>)
 /// Opens the microphone. None (and the pill says why) when it can't.
 fn begin(app: &AppHandle, flow: &Arc<Flow>) -> Option<Listening> {
     crate::voice::manual::cancel(app);
-    if !speech::is_ready() {
+    if !crate::voice::asr_ready(app) {
         pill::announce(
             app,
             "download",
@@ -472,6 +492,7 @@ fn paste_again(app: &AppHandle, flow: &Arc<Flow>) {
 pub struct FlowStatus {
     prefs: Prefs,
     models: speech::ModelsStatus,
+    recognition: crate::voice::RecognitionStatus,
     /// "ok", or why the key can't be watched here ("wayland", "no-display").
     keys: String,
     has_claude_key: bool,
@@ -489,6 +510,7 @@ pub fn flow_status(app: AppHandle, flow: State<Arc<Flow>>) -> FlowStatus {
     FlowStatus {
         prefs: flow.store.lock().unwrap().prefs.clone(),
         models: speech::status(),
+        recognition: crate::voice::recognition_status(&app),
         keys: match os::keys_supported() {
             Ok(()) => "ok".into(),
             Err(why) => why.into(),
@@ -505,38 +527,30 @@ pub fn flow_status(app: AppHandle, flow: State<Arc<Flow>>) -> FlowStatus {
 }
 
 #[tauri::command]
-pub fn flow_set_prefs(app: AppHandle, flow: State<Arc<Flow>>, prefs: Prefs) {
+pub async fn flow_set_prefs(app: AppHandle, flow: State<'_, Arc<Flow>>, prefs: Prefs) -> Result<(), String> {
     let flow = flow.inner().clone();
-    let before = {
-        let mut store = flow.store.lock().unwrap();
-        let before = store.prefs.clone();
-        store.prefs = prefs.clone();
-        store.save_prefs();
-        if before.keep_days != prefs.keep_days {
-            store.prune(store::now_ms());
+    tauri::async_runtime::spawn_blocking(move || flow.update_prefs(&prefs, |before| {
+        pill::update(&app, |s| {
+            s.edge = pill::edge_name(prefs.edge).into();
+            s.key = key_id(prefs.key);
+        });
+        let restart = before.key != prefs.key;
+        if before.enabled && (!prefs.enabled || restart) {
+            disable(&app, &flow);
         }
-        before
-    };
-    pill::update(&app, |s| {
-        s.edge = pill::edge_name(prefs.edge).into();
-        s.key = key_id(prefs.key);
-    });
-    let restart = before.key != prefs.key;
-    if before.enabled && (!prefs.enabled || restart) {
-        disable(&app, &flow);
-    }
-    if prefs.enabled && (!before.enabled || restart) {
-        enable(&app, &flow);
-    }
-    if before.voice != prefs.voice { crate::voice::session::allow_hotword(); }
-    if before.voice != prefs.voice || before.mic != prefs.mic {
-        if before.mic != prefs.mic {
-            crate::voice::restart(&app);
-        } else {
-            crate::voice::sync(&app);
+        if prefs.enabled && (!before.enabled || restart) {
+            enable(&app, &flow);
         }
-    }
-    let _ = app.emit("flow-prefs", &prefs);
+        if before.voice != prefs.voice { crate::voice::session::allow_hotword(); }
+        if before.voice != prefs.voice || before.mic != prefs.mic {
+            if before.mic != prefs.mic {
+                crate::voice::restart(&app);
+            } else {
+                crate::voice::sync(&app);
+            }
+        }
+        let _ = app.emit("flow-prefs", &prefs);
+    })).await.map_err(|_| "Não foi possível concluir a alteração das preferências.".to_string())?
 }
 
 #[tauri::command]
@@ -619,10 +633,12 @@ pub fn flow_words(flow: State<Arc<Flow>>) -> Words {
 }
 
 #[tauri::command]
-pub fn flow_set_words(flow: State<Arc<Flow>>, words: Words) {
-    let mut store = flow.store.lock().unwrap();
-    store.words = words;
-    store.save_words();
+pub async fn flow_set_words(flow: State<'_, Arc<Flow>>, words: Words) -> Result<(), String> {
+    let flow = flow.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        flow.store.lock().unwrap().set_words(words)
+            .map_err(|err| format!("Não foi possível guardar o dicionário: {err}"))
+    }).await.map_err(|_| "Não foi possível concluir a gravação.".to_string())?
 }
 
 #[tauri::command]
@@ -631,10 +647,12 @@ pub fn flow_snippets(flow: State<Arc<Flow>>) -> Vec<Snippet> {
 }
 
 #[tauri::command]
-pub fn flow_set_snippets(flow: State<Arc<Flow>>, snippets: Vec<Snippet>) {
-    let mut store = flow.store.lock().unwrap();
-    store.snippets = snippets;
-    store.save_snippets();
+pub async fn flow_set_snippets(flow: State<'_, Arc<Flow>>, snippets: Vec<Snippet>) -> Result<(), String> {
+    let flow = flow.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        flow.store.lock().unwrap().set_snippets(snippets)
+            .map_err(|err| format!("Não foi possível guardar os atalhos de texto: {err}"))
+    }).await.map_err(|_| "Não foi possível concluir a gravação.".to_string())?
 }
 
 #[tauri::command]
@@ -643,10 +661,12 @@ pub fn flow_styles(flow: State<Arc<Flow>>) -> Vec<AppStyle> {
 }
 
 #[tauri::command]
-pub fn flow_set_styles(flow: State<Arc<Flow>>, styles: Vec<AppStyle>) {
-    let mut store = flow.store.lock().unwrap();
-    store.app_styles = styles;
-    store.save_styles();
+pub async fn flow_set_styles(flow: State<'_, Arc<Flow>>, styles: Vec<AppStyle>) -> Result<(), String> {
+    let flow = flow.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        flow.store.lock().unwrap().set_styles(styles)
+            .map_err(|err| format!("Não foi possível guardar os estilos: {err}"))
+    }).await.map_err(|_| "Não foi possível concluir a gravação.".to_string())?
 }
 
 #[derive(Serialize, Deserialize)]
@@ -734,5 +754,72 @@ pub fn pill_action(app: AppHandle, flow: State<Arc<Flow>>, action: String, id: O
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod preference_tests {
+    use super::*;
+
+    fn fixture() -> (Flow, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("coucou-flow-prefs-{}-{}", std::process::id(), text::new_id()));
+        let flow = Flow { store: Mutex::new(Store::load_from(dir.clone())), running: Mutex::new(None), prefs_update: Mutex::new(()) };
+        (flow, dir)
+    }
+
+    #[test]
+    fn failed_preferences_do_not_change_runtime_or_prune_history() {
+        let (flow, dir) = fixture();
+        std::fs::write(&dir, b"block directory creation").unwrap();
+        let before = {
+            let mut store = flow.store.lock().unwrap();
+            store.history.push(Entry { id: "synthetic".into(), date: store::now_ms(), text: "preserve me".into(), app: None, words: 2, seconds: 1.0 });
+            store.prefs.clone()
+        };
+        let mut next = before.clone();
+        next.enabled = !before.enabled;
+        next.voice = !before.voice;
+        next.keep_days = 0;
+        let mut applied = false;
+        assert!(flow.update_prefs(&next, |_| applied = true).is_err());
+        assert!(!applied);
+        let store = flow.store.lock().unwrap();
+        assert_eq!(store.prefs, before);
+        assert_eq!(store.history[0].text, "preserve me");
+        assert_eq!(std::fs::read(&dir).unwrap(), b"block directory creation");
+        std::fs::remove_file(dir).unwrap();
+    }
+
+    #[test]
+    fn successful_preferences_are_persisted_before_runtime_with_store_unlocked() {
+        let (flow, dir) = fixture();
+        let before = flow.store.lock().unwrap().prefs.clone();
+        let mut next = before.clone();
+        next.mic = "microfone sintético 🎙".into();
+        let mut applied = false;
+        flow.update_prefs(&next, |old| {
+            applied = true;
+            assert_eq!(old, before);
+            assert!(flow.prefs_update.try_lock().is_err(), "runtime must remain inside the ordered update");
+            assert_eq!(flow.store.try_lock().unwrap().prefs, next);
+            let saved: Prefs = serde_json::from_slice(&std::fs::read(dir.join("prefs.json")).unwrap()).unwrap();
+            assert_eq!(saved, next);
+        }).unwrap();
+        assert!(applied);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn successive_preference_effects_receive_the_previous_committed_payload() {
+        let (flow, dir) = fixture();
+        let first = flow.store.lock().unwrap().prefs.clone();
+        let mut second = first.clone();
+        second.mic = "second".into();
+        flow.update_prefs(&second, |old| assert_eq!(old, first)).unwrap();
+        let mut third = second.clone();
+        third.edge = store::Edge::Left;
+        flow.update_prefs(&third, |old| assert_eq!(old, second)).unwrap();
+        assert_eq!(Store::load_from(dir.clone()).prefs, third);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

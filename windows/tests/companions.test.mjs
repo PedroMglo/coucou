@@ -275,3 +275,12 @@ test("a new event reverses disappearance without an opacity jump, and reduced mo
  world.sync(snapshot([task("a")],{motion:false}),1000,4);
  assert.equal(p.visibility,"hidden");assert.equal(world.needsFrames,false);
 });
+
+test('a terminal-owned decision stays with its exact session and an active island request takes precedence',()=>{
+ const row={...session('agent_codex','approval'),sessionBackend:'codex',decisionInTerminal:true};
+ assert.equal(companionIdentities([row],null,false,'none')[0].session.decisionInTerminal,true);
+ const own={pillId:'agent_codex',sessionId:row.sessionId,requestId:'actual-island-request'};
+ assert.equal(companionIdentities([row],own,false,'none')[0].session.decisionInTerminal,false);
+ assert.equal(companionIdentities([row],{...own,pillId:'another-pet'},false,'none')[0].session.decisionInTerminal,true);
+ assert.equal(companionIdentities([row],{...own,sessionId:'different-session'},false,'none')[0].session.decisionInTerminal,true);
+});

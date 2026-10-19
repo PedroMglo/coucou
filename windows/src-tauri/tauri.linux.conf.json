@@ -8,7 +8,14 @@
     ],
     "resources": {
       "../target/release/coucou-hook.exe": null,
-      "../target/release/coucou-hook": "coucou-hook"
+      "../target/release/coucou-hook": "coucou-hook",
+      "../../extensions/copilot/extension.mjs": "copilot/extension.mjs",
+      "../../extensions/copilot/package.json": "copilot/package.json",
+      "../../extensions/copilot/dist/extension.js": "copilot/dist/extension.js",
+      "../../extensions/copilot/dist/bridge.js": "copilot/dist/bridge.js",
+      "../../extensions/copilot/dist/runtime.js": "copilot/dist/runtime.js",
+      "../../extensions/copilot/dist/public-history.js": "copilot/dist/public-history.js",
+      "../../extensions/copilot/dist/protocol.js": "copilot/dist/protocol.js"
     },
     "linux": {
       "appimage": {
@@ -52,7 +59,7 @@
         "maximizable": false,
         "minimizable": false,
         "closable": false,
-        "dragDropEnabled": true,
+        "dragDropEnabled": false,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required"
       }
     ]

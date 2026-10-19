@@ -1,6 +1,6 @@
 // Local event policy. No model, transcript, network or animation timer.
 import type { AgentTask, ApprovalInfo } from "../core/state";
-export interface PetNotice { key: string; pet: string; text: string; urgent: boolean; view?: string }
+export interface PetNotice { key: string; pet: string; text: string; urgent: boolean; view?: string;origin?:string;session?:{id:string;backend:string;cwd?:string|null;title?:string;owned?:boolean} }
 export class PetNotices {
   private seen = new Set<string>();
   private previous = new Map<string,string>();
@@ -33,7 +33,7 @@ export class NoticeQueue {
     if(this.seen.has(notice.key)) return;
     this.seen.add(notice.key);
     if(this.seen.size>128)this.seen.delete(this.seen.values().next().value!);
-    this.items=this.items.filter(n=>n.pet!==notice.pet || n.urgent);
+    this.items=this.items.filter(n=>n.pet!==notice.pet || n.urgent || n.session?.id!==notice.session?.id || n.session?.backend!==notice.session?.backend);
     this.items.push(notice);
     this.items.sort((a,b)=>Number(b.urgent)-Number(a.urgent));
     this.items=this.items.slice(0,16);

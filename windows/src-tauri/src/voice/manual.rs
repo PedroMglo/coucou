@@ -36,6 +36,7 @@ pub fn toggle(app: &AppHandle) {
     // The explicit voice turn temporarily takes the microphone from hotword
     // listening; sync starts it again only if that preference remains enabled.
     if let Some(background) = super::RUNNING.lock().unwrap().take() { background.stop.store(true, Ordering::Relaxed); }
+    super::cancel_speech(app);
     let stop = Arc::new(AtomicBool::new(false));
     let finish = Arc::new(AtomicBool::new(false));
     *turn = Some(Turn { stop: stop.clone(), finish: finish.clone() });

@@ -31,7 +31,7 @@ function time(ms: number): string {
 export async function dictationPage(page: HTMLElement, ctx: HubContext) {
   const status = ctx.status;
   const key = keyLabel(status.keys === "wayland" ? "wayland" : status.prefs.key, status.platform);
-  const ready = status.prefs.enabled && status.models.parakeet.state === "ready";
+  const ready = status.prefs.enabled && (status.recognition?.ready ?? status.models.parakeet.state === "ready");
 
   const record = button(t("Record a call"), () => {
     void FlowBridge.startNote().then(() => ctx.navigate("notes"), (err) => alertLine.replaceChildren(String(err)));

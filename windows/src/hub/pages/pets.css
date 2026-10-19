@@ -1,0 +1,41 @@
+.pets-manager{color:var(--hub-text,#e9eef6);padding:26px;max-width:1250px;margin:auto}.pets-manager header,.pets-manager nav,.pets-manager footer,.pets-management-filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pets-manager header{justify-content:space-between}.pets-manager h1{font-size:27px;margin:0 0 12px}.pets-manager h2{font-size:15px;margin:0 0 7px}.pets-manager p{font-size:13px;line-height:1.5;overflow-wrap:anywhere}.pets-manager button,.pets-manager select,.pets-manager input{font:inherit;font-size:12px;color:inherit;background:#ffffff0d;border:1px solid #ffffff20;border-radius:9px;padding:7px 10px;max-width:100%}.pets-manager button{cursor:pointer}.pets-manager button:hover{background:#ffffff22}.pets-manager button[aria-selected=true]{background:#2dd4bf24;border-color:#2dd4bf77}.pets-manager[data-busy=true] .pets-management-content button{pointer-events:none;opacity:.5}.pets-management-content{margin-top:15px;min-height:160px}.pets-management-content article{border:1px solid #ffffff18;background:#ffffff05;border-radius:13px;padding:15px;margin:10px 0}.pets-management-content article[data-context=true]{opacity:.7}.pets-manager pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px monospace;max-height:350px;overflow:auto}.pets-manager dl{display:grid;grid-template-columns:minmax(100px,190px) 1fr;gap:10px;font-size:13px}.pets-manager dt{opacity:.65}.pets-manager dd{margin:0;overflow-wrap:anywhere}.pets-manager progress{width:100%;accent-color:#2dd4bf;height:8px}.pets-quota>div{margin:8px 0}.pets-management-summary{opacity:.7}.pets-management-confirmation:not(:empty){padding:14px;border:1px solid #fbbf24;border-radius:12px;background:#fbbf2410}.pets-manager [data-error=true]{color:#fca5a5}.pets-manager .assistant-prefs-body{display:grid;grid-template-columns:1fr;gap:12px}.pets-manager .assistant-prefs label{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:10px 0;font-size:13px}.pets-manager .assistant-prefs input,.pets-manager .assistant-prefs select{width:55%}.pets-manager .assistant-prefs [hidden]{display:none}.pets-manager .assistant-prefs footer{margin-top:20px}.pets-manager .assistant-prefs p{opacity:.75}
+.pet-panel{margin:0;color:#edf1f8;background:transparent;font:13px system-ui;user-select:none;height:100vh;display:flex;flex-direction:column;border-radius:16px;overflow:hidden;box-sizing:border-box;border:1px solid #ffffff24;box-shadow:0 8px 30px #0006}
+.pet-panel-handle{display:flex;justify-content:space-between;align-items:center;padding:7px 15px;background:#161b24;font-size:11px;color:#b8c4d8}.pet-panel-handle button{background:transparent;color:inherit;border:0;font:20px system-ui;cursor:pointer}
+.pet-panel #manager{flex:1;min-height:0;display:flex;background:#11161ffb}.pet-panel .pets-manager{width:100%;height:100%;max-width:none;margin:0;padding:14px 18px;box-sizing:border-box;display:flex;flex-direction:column}
+.pet-panel .pets-manager h1{font-size:19px;margin:0}.pet-panel .pets-manager header{margin-bottom:10px}.pet-panel .pets-manager nav{gap:5px}.pet-panel .pets-manager nav button{font-size:11px;padding:6px 8px}.pet-panel .pets-management-content{overflow:auto;flex:1;min-height:0;margin-top:8px;scrollbar-width:thin}.pet-panel .pets-management-summary{margin:8px 0}.pet-panel .pets-manager article{padding:12px;margin:7px 0}.pet-panel .pets-manager p:empty{display:none}
+.pet-panel-favorites{display:flex;gap:5px;overflow:auto;padding:0 0 10px;scrollbar-width:thin}.pet-panel-favorites button{white-space:nowrap;border-radius:20px;padding:5px 9px;font-size:11px}.pet-panel-favorites:empty{display:none}
+.pet-panel{color-scheme:dark}
+.pets-manager select{background-color:#212832;color:#edf1f8}.pets-manager option{background:#212832;color:#edf1f8}
+/* Same surface as Coucou's original island; settings and actions stay intact. */
+.pet-panel{border-radius:0 0 22px 22px;border-top:0;background:#000}
+.pet-panel-handle,.pet-panel #manager{background:#000}
+@media(prefers-reduced-motion:no-preference){.pet-panel{animation:pet-panel-arrive .18s ease-out}@keyframes pet-panel-arrive{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:translateY(0)}}}
+
+.pets-manager{color-scheme:dark;--pets-accent:#72dcca;--pets-muted:#a2aab8}
+.pets-manager nav{padding:4px 0 11px;border-bottom:1px solid #ffffff18;gap:6px}
+.pets-manager nav button{border-color:transparent;background:transparent;color:var(--pets-muted);min-height:32px}
+.pets-manager nav button[aria-pressed=true]{color:#baf4e9;border-color:#72dcca40;background:#2dd4bf15}
+.pets-manager button:focus-visible,.pets-manager input:focus-visible,.pets-manager select:focus-visible,.pets-manager summary:focus-visible{outline:2px solid var(--pets-accent);outline-offset:2px}
+.pets-manager button:disabled,.pets-manager select:disabled,.pets-manager input:disabled{opacity:.5;cursor:default}
+.pets-manager .pets-management-summary{color:var(--pets-muted);opacity:1;font-size:12px;line-height:1.6;margin:12px 0}
+.pets-manager .pets-management-filters{gap:8px}.pets-manager .pets-management-filters input{flex:1;min-width:160px}
+.pets-manager .pets-management-content article{background:#ffffff05;border-color:#ffffff16;margin:10px 0;padding:16px}
+.pets-manager .pets-management-content article>p{color:var(--pets-muted);font-size:12px}
+.pets-manager article footer{gap:7px;margin-top:14px}.pets-manager article footer button{min-height:32px}
+.pets-manager .assistant-prefs-body{gap:18px}.pets-manager .assistant-prefs fieldset{border:1px solid #ffffff18;border-radius:12px;margin:0;padding:10px 14px}
+.pets-manager .assistant-prefs legend{color:#edf1f8;font-size:13px;font-weight:600;padding:0 7px}
+.pets-manager .assistant-prefs h2{margin:0 0 12px;font-size:13px}
+.pets-manager .assistant-prefs label{font-size:12px;line-height:1.5;margin:12px 0;gap:16px}
+.pets-manager .assistant-prefs label>span{max-width:45%}
+.pets-manager .assistant-prefs input:not([type=checkbox]),.pets-manager .assistant-prefs select{box-sizing:border-box;min-height:34px;flex-shrink:0;width:55%;padding:8px 10px;background-color:#ffffff08;border-color:#ffffff20}
+.pets-manager .assistant-prefs select{background-color:#171a20}
+.pets-manager .assistant-prefs input[type=checkbox]{width:16px;height:16px;accent-color:var(--pets-accent);flex-shrink:0}
+.pets-manager .assistant-prefs p{font-size:12px;color:var(--pets-muted);opacity:1}
+.pets-manager .pet-profile-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.pets-manager .assistant-prefs .assistant-task-context{font-size:10px;overflow-wrap:anywhere;margin:0}
+.pets-manager .assistant-prefs .pet-save-actions{position:sticky;bottom:0;display:flex;margin-top:16px;padding:12px 0 3px;background:#000;border-top:1px solid #ffffff20;gap:8px;z-index:1}
+.pets-manager .pet-save-status{flex:1;margin:0;min-width:120px}
+.pets-manager .pet-primary-action{background:#2dd4bf24;border-color:#72dcca66;color:#baf4e9;min-width:90px}
+.pets-manager .pet-primary-action:hover{background:#2dd4bf38}
+.pets-manager .assistant-prefs [hidden]{display:none!important}
+@media(max-width:520px){.pets-manager{padding:16px}.pets-manager nav{gap:4px}.pets-manager nav button{flex-grow:1}.pets-manager .assistant-prefs label{align-items:flex-start}.pets-manager .assistant-prefs label:has(input:not([type=checkbox])),.pets-manager .assistant-prefs label:has(select){flex-direction:column;gap:5px}.pets-manager .assistant-prefs label>span{max-width:none}.pets-manager .assistant-prefs input:not([type=checkbox]),.pets-manager .assistant-prefs select{width:100%}.pets-manager dl{grid-template-columns:1fr}.pets-manager dd{margin-bottom:8px}}

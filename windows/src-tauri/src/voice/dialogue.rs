@@ -4,42 +4,81 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Pet {
     Codex,
+    Copilot,
     Gravity,
     Claude,
     Gemini,
     Ollama,
+    Spotify,
+    GitHub,
+    Notion,
+    Vercel,
+    N8n,
+    Resend,
+    Stripe,
+    Calcom,
 }
 
 impl Pet {
-    pub const ALL: [Self; 5] = [Self::Codex, Self::Gravity, Self::Claude, Self::Gemini, Self::Ollama];
+    pub const ALL: [Self; 14] = [Self::Codex, Self::Copilot, Self::Gravity, Self::Claude, Self::Gemini, Self::Ollama,Self::Spotify,Self::GitHub,Self::Notion,Self::Vercel,Self::N8n,Self::Resend,Self::Stripe,Self::Calcom];
     pub fn from_provider(provider: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.provider() == provider)
     }
     pub fn provider(self) -> &'static str {
         match self {
             Self::Codex => "codex",
+            Self::Copilot => "copilot",
             Self::Gravity => "antigravity",
             Self::Claude => "claude-cli",
             Self::Gemini => "gemini-cli",
             Self::Ollama => "ollama",
+            Self::Spotify => "integration_spotify",
+            Self::GitHub => "integration_github",
+            Self::Notion => "integration_notion",
+            Self::Vercel => "integration_vercel",
+            Self::N8n => "integration_n8n",
+            Self::Resend => "integration_resend",
+            Self::Stripe => "integration_stripe",
+            Self::Calcom => "integration_calcom",
+
         }
     }
     pub fn name(self) -> &'static str {
         match self {
             Self::Codex => "Codex",
+            Self::Copilot => "Copilot",
             Self::Gravity => "Gravity",
             Self::Claude => "Claude",
             Self::Gemini => "Gemini",
             Self::Ollama => "Ollama",
+            Self::Spotify => "Spotify",
+            Self::GitHub => "GitHub",
+            Self::Notion => "Notion",
+            Self::Vercel => "Vercel",
+            Self::N8n => "n8n",
+            Self::Resend => "Resend",
+            Self::Stripe => "Stripe",
+            Self::Calcom => "Cal.com",
+
         }
     }
     pub fn pill(self) -> &'static str {
         match self {
             Self::Codex => "agent_codex",
+            Self::Copilot => "agent_copilot",
             Self::Gravity => "agent_antigravity",
             Self::Claude => "integration_claude",
             Self::Gemini => "agent_gemini",
             Self::Ollama => "ai_ollama",
+            Self::Spotify => "integration_spotify",
+            Self::GitHub => "integration_github",
+            Self::Notion => "integration_notion",
+            Self::Vercel => "integration_vercel",
+            Self::N8n => "integration_n8n",
+            Self::Resend => "integration_resend",
+            Self::Stripe => "integration_stripe",
+            Self::Calcom => "integration_calcom",
+
         }
     }
 }
@@ -48,8 +87,24 @@ impl Pet {
 pub enum Command {
     Select(Pet, String),
     Stop,
+    CancelTask,
+    TaskStatus,
     Dictate,
     Message(String),
+}
+
+#[cfg(test)]
+mod task_control_tests {
+    use super::*;
+    #[test]
+    fn explicit_task_stop_and_audio_off_are_distinct_even_when_addressing_a_pet() {
+        for text in ["interrompe a tarefa","cancela a tarefa","pára a tarefa","cancel task"] {assert_eq!(parse(text),Command::CancelTask);}
+        for text in ["desligar microfone","parar conversa"] {assert_eq!(parse(text),Command::Stop);}
+        let Command::Select(Pet::Codex,question)=parse("Codex, interrompe a tarefa") else{panic!("pet address lost")};
+        assert_eq!(parse(&question),Command::CancelTask);
+        for text in ["estado da tarefa","como está a tarefa","task status"] {assert_eq!(parse(text),Command::TaskStatus);}
+        assert_eq!(parse("parar o servidor"),Command::Message("parar o servidor".into()));
+    }
 }
 
 pub fn parse(text: &str) -> Command {
@@ -64,6 +119,10 @@ pub fn parse(text: &str) -> Command {
     ) {
         return Command::Stop;
     }
+    if matches!(normalized.as_str(),"interromper tarefa"|"interromper a tarefa"|"interrompe a tarefa"|"interrompe tarefa"|"cancelar tarefa"|"cancelar a tarefa"|"cancela a tarefa"|"cancela tarefa"|"para a tarefa"|"parar a tarefa"|"stop task"|"cancel task") {
+        return Command::CancelTask;
+    }
+    if matches!(normalized.as_str(),"estado da tarefa"|"como vai a tarefa"|"como esta a tarefa"|"estado do trabalho"|"task status") {return Command::TaskStatus;}
     if matches!(normalized.as_str(), "ditado" | "ditar" | "dictation") {
         return Command::Dictate;
     }
@@ -101,11 +160,22 @@ pub fn parse(text: &str) -> Command {
     };
     let (pet, count) = match (first, norm.get(start + 1).map(String::as_str)) {
         ("codex", _) => (Pet::Codex, 1),
+        ("copilot", Some("cli")) => (Pet::Copilot,2),
+        ("copilot"|"copiloto", _) => (Pet::Copilot,1),
         ("gravity" | "antigravity" | "antigravidade", _) => (Pet::Gravity, 1),
         ("anti", Some("gravity" | "gravidade")) => (Pet::Gravity, 2),
         ("claude", _) => (Pet::Claude, 1),
         ("gemini", _) => (Pet::Gemini, 1),
         ("ollama" | "olama", _) => (Pet::Ollama, 1),
+        ("spotify", _) => (Pet::Spotify,1),
+        ("github", _) => (Pet::GitHub,1),
+        ("notion", _) => (Pet::Notion,1),
+        ("vercel", _) => (Pet::Vercel,1),
+        ("n8n", _) => (Pet::N8n,1),
+        ("resend", _) => (Pet::Resend,1),
+        ("stripe", _) => (Pet::Stripe,1),
+        ("calcom", _) => (Pet::Calcom,1),
+
         _ => return Command::Message(text.trim().into()),
     };
     let question = words[start + count..]
@@ -172,6 +242,14 @@ impl Idle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn every_service_name_addresses_its_own_conversation_instead_of_the_codex_pet() {
+        for pet in Pet::ALL {assert_eq!(Pet::from_provider(pet.provider()),Some(pet));}
+        for (spoken,pet) in [("Spotify, pause",Pet::Spotify),("GitHub, verifica o CI",Pet::GitHub),("Notion, abre a app",Pet::Notion)] {
+            let Command::Select(selected,_) = parse(spoken) else {panic!("service was not addressed")};assert_eq!(selected,pet);assert_ne!(selected.provider(),"codex");
+        }
+    }
+
     #[test]
     fn names_switch_and_preserve_the_question() {
         assert_eq!(parse("Codex."), Command::Select(Pet::Codex, String::new()));

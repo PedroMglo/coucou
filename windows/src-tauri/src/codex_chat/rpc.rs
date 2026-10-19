@@ -17,6 +17,8 @@ use serde_json::{json, Value};
 const MAX_LINE: usize = 1024 * 1024;
 const MAX_TOTAL: usize = 32 * 1024 * 1024;
 const MAX_ANSWER: usize = 4 * 1024 * 1024;
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
+const CANCEL_POLL: Duration = Duration::from_millis(100);
 pub const SIGN_IN: &str =
     "Sign in to Codex with your ChatGPT account first: run codex login, then try again.";
 
@@ -28,6 +30,8 @@ pub struct TurnOptions<'a> {
     pub tools: &'a [Value],
     pub session_id: Option<&'a str>,
     pub full_access: bool,
+    pub effort: Option<&'a str>,
+    pub name: Option<&'a str>,
 }
 
 pub struct Reply {
@@ -46,10 +50,25 @@ pub struct Client {
     cancel: Option<Arc<AtomicBool>>,
     active_turn: Option<(String, String)>,
     observer: Option<Box<dyn FnMut(&Value) + Send>>,
+    write_incomplete: bool,
 }
 
 impl Client {
     pub fn start(exe: &Path, cwd: &Path, timeout: Duration, voice: bool) -> Result<Self, String> {
+        Self::start_inner(exe, cwd, timeout, voice, None, INITIALIZE_TIMEOUT)
+    }
+
+    /// Attach the turn's cancellation before starting the server or handshake.
+    pub fn start_with_cancel(exe: &Path, cwd: &Path, timeout: Duration, voice: bool, cancel: Arc<AtomicBool>) -> Result<Self, String> {
+        Self::start_inner(exe, cwd, timeout, voice, Some(cancel), INITIALIZE_TIMEOUT)
+    }
+
+    fn start_inner(exe: &Path, cwd: &Path, timeout: Duration, voice: bool, cancel: Option<Arc<AtomicBool>>, initialize_timeout: Duration) -> Result<Self, String> {
+        if cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err("The CLI request was cancelled.".into());
+        }
+        let started = Instant::now();
+        let deadline = started + timeout;
         let mut cmd = Command::new(exe);
         cmd.args([
             "app-server",
@@ -81,13 +100,28 @@ impl Client {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x08000000);
         }
+        if cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err("The CLI request was cancelled.".into());
+        }
         let mut child = cmd.spawn().map_err(|err| {
             format!("Cannot start Codex. Install Codex CLI and sign in with codex login: {err}")
         })?;
         let input = child.stdin.take();
-        let stdout = child.stdout.take().ok_or("Codex did not open stdout.")?;
+        #[cfg(target_os="linux")]
+        if let Some(input)=&input {
+            use std::os::fd::AsRawFd;
+            let fd=input.as_raw_fd();let flags=unsafe{libc::fcntl(fd,libc::F_GETFL)};
+            if flags<0||unsafe{libc::fcntl(fd,libc::F_SETFL,flags|libc::O_NONBLOCK)}<0{
+                let _=child.kill();let _=child.wait();return Err("Cannot prepare bounded Codex input.".into());
+            }
+        }
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Codex did not open stdout.".into());
+        };
         let (tx, output) = mpsc::sync_channel(32);
-        std::thread::spawn(move || {
+        std::thread::Builder::new().name("coucou-codex-reader".into()).spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut total = 0;
             loop {
@@ -97,43 +131,63 @@ impl Client {
                     break;
                 }
             }
-        });
+        }).map_err(|_| {
+            let _ = child.kill();
+            let _ = child.wait();
+            "Cannot start the Codex response reader.".to_string()
+        })?;
         let mut client = Self {
             child,
             input,
             output,
-            deadline: Instant::now() + timeout,
+            deadline: deadline.min(started + initialize_timeout),
             next_id: 0,
             pending: VecDeque::new(),
-            cancel: None,
+            cancel,
             active_turn: None,
             observer: None,
+            write_incomplete: false,
         };
         client.request("initialize", json!({
-            "clientInfo": { "name": "coucou_mochi", "title": "Coucou — Mochi", "version": "0.5.0" },
+            "clientInfo": { "name": "coucou_mochi", "title": "Coucou — Mochi", "version": env!("CARGO_PKG_VERSION") },
             "capabilities": { "experimentalApi": voice }
         }))?;
         client.write(json!({ "method": "initialized" }))?;
+        // The handshake limit must not become the deadline of a long task.
+        client.deadline = deadline;
         Ok(client)
     }
 
     fn write(&mut self, message: Value) -> Result<(), String> {
-        let input = self.input.as_mut().ok_or("Codex closed its input.")?;
-        serde_json::to_writer(&mut *input, &message).map_err(|_| "Cannot write to Codex.")?;
-        input
-            .write_all(b"\n")
-            .and_then(|_| input.flush())
-            .map_err(|_| "Cannot write to Codex.".into())
+        self.write_frame(message,self.deadline,false)
+    }
+
+    /// Cleanup may interrupt its exact native turn even after cancellation.
+    fn write_message(&mut self, message: Value) -> Result<(), String> {
+        self.write_frame(message,Instant::now()+Duration::from_millis(100),true)
+    }
+    fn write_frame(&mut self,message:Value,deadline:Instant,cleanup:bool)->Result<(),String>{
+        if !cleanup{self.check_cancel()?;}
+        if self.write_incomplete{return Err("Codex input contains an interrupted frame.".into());}
+        let mut bytes=serde_json::to_vec(&message).map_err(|_|"Cannot encode Codex request.")?;
+        if bytes.len()>=MAX_TOTAL{return Err("Codex request exceeds the local transport limit.".into());}
+        bytes.push(b'\n');let mut offset=0;
+        while offset<bytes.len(){
+            if !cleanup{self.check_cancel()?;}
+            if Instant::now()>=deadline{return Err("Codex did not receive the request in time.".into());}
+            match self.input.as_mut().ok_or("Codex closed its input.")?.write(&bytes[offset..]){
+                Ok(0)=>return Err("Codex closed its input.".into()),
+                Ok(size)=>{offset+=size;self.write_incomplete=offset<bytes.len();},
+                Err(error) if error.kind()==std::io::ErrorKind::Interrupted=>continue,
+                Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>std::thread::sleep(Duration::from_millis(10)),
+                Err(_)=>return Err("Cannot write to Codex.".into()),
+            }
+        }
+        Ok(())
     }
 
     fn read(&mut self) -> Result<Value, String> {
-        if self
-            .cancel
-            .as_ref()
-            .is_some_and(|c| c.load(Ordering::Relaxed))
-        {
-            return Err("The CLI request was cancelled.".into());
-        }
+        self.check_cancel()?;
         if let Some(message) = self.pending.pop_front() {
             return Ok(message);
         }
@@ -142,22 +196,27 @@ impl Client {
 
     fn read_raw(&self) -> Result<Value, String> {
         loop {
-            if self
-                .cancel
-                .as_ref()
-                .is_some_and(|c| c.load(Ordering::Relaxed))
-            {
-                return Err("The CLI request was cancelled.".into());
-            }
+            self.check_cancel()?;
             let left = self.deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return Err("Codex did not finish in time. Try again.".into());
             }
-            match self.output.recv_timeout(left.min(Duration::from_secs(1))) {
-                Ok(message) => return message,
+            match self.output.recv_timeout(left.min(CANCEL_POLL)) {
+                Ok(message) => {
+                    self.check_cancel()?;
+                    return message;
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(_) => return Err("Codex closed the connection before finishing.".into()),
             }
+        }
+    }
+
+    fn check_cancel(&self) -> Result<(), String> {
+        if self.cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            Err("The CLI request was cancelled.".into())
+        } else {
+            Ok(())
         }
     }
 
@@ -253,6 +312,8 @@ impl Client {
             tools,
             session_id,
             full_access,
+            effort,
+            name,
         } = options;
         let configuration = self.request("config/read", json!({ "includeLayers": false }))?;
         let native = configuration["config"]["developer_instructions"]
@@ -288,18 +349,23 @@ impl Client {
             .ok_or("Codex did not create a conversation.")?
             .to_string();
         on_session(&thread_id);
+        if let Some(name)=name {
+            let existing=thread["thread"].get("name");
+            if session_id.is_none() || existing.is_some_and(|v|v.is_null() || v.as_str().is_some_and(|n|n.starts_with("Mochi ·"))) {
+                let _=self.request("thread/name/set",json!({"threadId":thread_id,"name":name}));
+            }
+        }
         if session_id.is_none() && !history.is_empty() {
             self.request(
                 "thread/inject_items",
                 json!({ "threadId": thread_id, "items": history_items(history) }),
             )?;
         }
-        let turn = self.request(
-            "turn/start",
-            json!({
-                "threadId": thread_id, "input": [{ "type": "text", "text": query }]
-            }),
-        )?;
+        let mut turn_params = json!({
+            "threadId": thread_id, "input": [{ "type": "text", "text": query }]
+        });
+        if let Some(effort) = effort { turn_params["effort"] = json!(effort); }
+        let turn = self.request("turn/start", turn_params)?;
         let turn_id = turn["turn"]["id"]
             .as_str()
             .ok_or("Codex did not start a reply.")?
@@ -373,8 +439,8 @@ impl Client {
 
 impl Drop for Client {
     fn drop(&mut self) {
-        if let Some((thread, turn)) = self.active_turn.take() {
-            let _ = self.write(json!({ "id": self.next_id + 1, "method": "turn/interrupt", "params": { "threadId": thread, "turnId": turn } }));
+        if let Some((thread, turn)) = self.active_turn.take().filter(|_|!self.write_incomplete) {
+            let _ = self.write_message(json!({ "id": self.next_id + 1, "method": "turn/interrupt", "params": { "threadId": thread, "turnId": turn } }));
         }
         self.input.take();
         for _ in 0..50 {
@@ -556,17 +622,21 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn mock() -> (std::path::PathBuf, std::path::PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
+    pub(super) fn mock() -> (std::path::PathBuf, std::path::PathBuf) {
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "coucou-rpc-{}-{}",
+            "coucou-rpc-{}-{}-{}",
             std::process::id(),
-            SEQ.fetch_add(1, Ordering::Relaxed)
+            SEQ.fetch_add(1, Ordering::Relaxed),
+            crate::flow::text::new_id()
         ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let exe = dir.join("mock-codex");
-        std::fs::write(&exe, r#"#!/usr/bin/python3
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+        // Execute the stable interpreter, with our fixture as the `app-server`
+        // argument. Parallel forks can briefly retain a freshly written script
+        // descriptor and make direct shebang exec fail with ETXTBSY on Linux.
+        let exe = std::path::PathBuf::from("/usr/bin/python3");
+        std::fs::write(dir.join("app-server"), r#"#!/usr/bin/python3
 import json,sys,pathlib,time
 def send(message):
     print(json.dumps(message),flush=True)
@@ -574,10 +644,12 @@ for line in sys.stdin:
     m=json.loads(line); method=m.get('method'); p=m.get('params',{}); result={}
     if method=='initialized': continue
     if method=='account/read': result={'account':{'type':'apiKey' if pathlib.Path('api-key').exists() else 'chatgpt'}}
+    if method=='thread/name/set':pathlib.Path('name.json').write_text(json.dumps(p))
     if method=='thread/start':
         pathlib.Path('request.json').write_text(json.dumps(p))
         result={'thread':{'id':'owned-thread'}}
     if method=='turn/start':
+        pathlib.Path('turn.json').write_text(json.dumps(p))
         send({'method':'item/agentMessage/delta','params':{'threadId':'owned-thread','turnId':'turn-1','itemId':'a','delta':'partial'}})
         result={'turn':{'id':'turn-1'}}
     if method is not None:
@@ -589,7 +661,6 @@ for line in sys.stdin:
         send({'method':'item/completed','params':{'threadId':'owned-thread','turnId':'turn-1','item':{'type':'agentMessage','id':'a','text':text}}})
         send({'method':'turn/completed','params':{'threadId':'owned-thread','turn':{'id':'turn-1','status':'completed'}}})
 "#).unwrap();
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
         (dir, exe)
     }
 
@@ -611,6 +682,8 @@ for line in sys.stdin:
                         tools: &[],
                         session_id: None,
                         full_access,
+                        effort: if full_access {Some("low")} else {None},
+                        name: Some("Mochi · Codex"),
                     },
                     |_, _| (String::new(), false),
                     |method, params| {
@@ -623,6 +696,9 @@ for line in sys.stdin:
                     |text| deltas.push(text),
                 )
                 .unwrap();
+            let sent_turn: Value = serde_json::from_slice(&std::fs::read(cwd.join("turn.json")).unwrap()).unwrap();
+            assert_eq!(sent_turn["effort"], if full_access {json!("low")} else {Value::Null});
+            let label:Value=serde_json::from_slice(&std::fs::read(cwd.join("name.json")).unwrap()).unwrap();assert_eq!(label["threadId"],"owned-thread");assert_eq!(label["name"],"Mochi · Codex");
             assert!(asked);
             assert!(deltas.iter().any(|text| text == "partial"));
             assert_eq!(reply.text, "accepted");
@@ -669,5 +745,264 @@ for line in sys.stdin:
         );
         drop(client);
         std::fs::remove_dir_all(cwd).unwrap();
+    }
+}
+
+// Synthetic stdio server only: stable /usr/bin/python3 + the existing mock()
+// fixture directory. No real Codex, accounts, inference or global settings.
+#[cfg(all(test, unix))]
+mod initialize_cancel_tests {
+    use super::*;
+    use super::tests::mock;
+    use std::path::PathBuf;
+
+    const CANCELLED: &str = "The CLI request was cancelled.";
+    const SERVER: &str = r#"import json,os,pathlib,sys,time
+root=pathlib.Path('.')
+mode=(root/'fixture-mode').read_text()
+(root/'pid').write_text(str(os.getpid()))
+def send(value):
+    print(json.dumps(value),flush=True)
+for line in sys.stdin:
+    value=json.loads(line)
+    with (root/'requests.jsonl').open('a') as log:
+        log.write(json.dumps(value)+'\n')
+    method=value.get('method')
+    if method=='initialize':
+        (root/'pid').write_text(str(os.getpid()))
+        (root/'initialize.ready').write_text('ready')
+        if mode=='hang-initialize':
+            while True: time.sleep(1)
+    elif method=='initialized':
+        (root/'initialized.ready').write_text('ready')
+        if mode=='block-input':
+            while True: time.sleep(1)
+        continue
+    elif method=='probe/hang':
+        (root/'probe.ready').write_text('ready')
+        continue
+    elif method=='turn/interrupt':
+        (root/'interrupt.json').write_text(json.dumps(value))
+    if 'id' in value:
+        send({'id':value['id'],'result':{'synthetic':True}})
+"#;
+
+    struct Fixture { cwd:PathBuf, exe:PathBuf }
+    impl Fixture {
+        fn new(mode:&str) -> Self {
+            let(cwd,exe)=mock();
+            // Only overwrite the script inside this existing test fixture.
+            // Execute the stable interpreter, never a newly written executable.
+            std::fs::write(cwd.join("app-server"),SERVER).unwrap();
+            std::fs::write(cwd.join("fixture-mode"),mode).unwrap();
+            Self{cwd,exe}
+        }
+        fn pid(&self)->libc::pid_t {wait_file(&self.cwd.join("pid")).trim().parse().unwrap()}
+        fn requests(&self)->Vec<Value> {
+            std::fs::read_to_string(self.cwd.join("requests.jsonl")).unwrap_or_default()
+                .lines().map(|line|serde_json::from_str(line).unwrap()).collect()
+        }
+        fn methods(&self)->Vec<String> {
+            self.requests().iter().map(|value|value["method"].as_str().unwrap().to_owned()).collect()
+        }
+    }
+    impl Drop for Fixture {fn drop(&mut self){let _=std::fs::remove_dir_all(&self.cwd);}}
+
+    fn wait_file(path:&Path)->String {
+        let deadline=Instant::now()+Duration::from_secs(2);
+        loop {
+            if let Ok(text)=std::fs::read_to_string(path) {if !text.is_empty(){return text;}}
+            assert!(Instant::now()<deadline,"Synthetic server did not reach its readiness marker");
+            // Poll a concrete readiness condition, not an assumed startup delay.
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    // Bound a broken initialization regression too. On an assertion/receive
+    // timeout, terminate only this synthetic child and join its owning thread.
+    struct Attempt<T> {
+        result:mpsc::Receiver<T>, worker:Option<std::thread::JoinHandle<()>>,
+        cancel:Arc<AtomicBool>, pid_path:PathBuf,
+    }
+    impl<T:Send+'static> Attempt<T> {
+        fn new(fixture:&Fixture,cancel:Arc<AtomicBool>,job:impl FnOnce()->T+Send+'static)->Self {
+            let(tx,result)=mpsc::channel();
+            let worker=std::thread::spawn(move||{let _=tx.send(job());});
+            Self{result,worker:Some(worker),cancel,pid_path:fixture.cwd.join("pid")}
+        }
+        fn finish(mut self)->T {
+            let result=self.result.recv_timeout(Duration::from_secs(3)).expect("Synthetic worker exceeded its bounded deadline");
+            self.worker.take().unwrap().join().unwrap();result
+        }
+    }
+    impl<T> Drop for Attempt<T> {
+        fn drop(&mut self) {
+            let Some(worker)=self.worker.take()else{return;};
+            self.cancel.store(true,Ordering::Release);
+            if !worker.is_finished() {
+                if let Some(pid)=std::fs::read_to_string(&self.pid_path).ok().and_then(|text|text.trim().parse::<libc::pid_t>().ok()).filter(|pid|*pid>1) {
+                    // This path is written only by our fixture's own process.
+                    unsafe{libc::kill(pid,libc::SIGKILL);}
+                }
+            }
+            let _=worker.join();
+        }
+    }
+
+    fn assert_reaped(pid:libc::pid_t) {
+        assert!(pid>1);
+        assert_eq!(unsafe{libc::kill(pid,0)},-1,"Synthetic child is still alive or unreaped");
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(),Some(libc::ESRCH));
+        let mut status=0;
+        assert_eq!(unsafe{libc::waitpid(pid,&mut status,libc::WNOHANG)},-1);
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(),Some(libc::ECHILD));
+    }
+
+    fn assert_no_account_or_turn_start(fixture:&Fixture) {
+        assert!(fixture.methods().iter().all(|method|method!="account/read"&&method!="turn/start"));
+    }
+
+    #[test]
+    fn pre_cancelled_start_refuses_before_spawning_or_initializing() {
+        let f=Fixture::new("handshake");let cancel=Arc::new(AtomicBool::new(true));
+        let missing=f.cwd.join("definitely-not-an-executable");
+        let before=Instant::now();
+        let result=Client::start_with_cancel(&missing,&f.cwd,Duration::from_secs(1800),false,cancel);
+        assert_eq!(result.err().unwrap(),CANCELLED);assert!(before.elapsed()<Duration::from_secs(3));
+        assert!(!f.cwd.join("pid").exists());assert!(!f.cwd.join("initialize.ready").exists());
+        assert!(f.requests().is_empty());
+    }
+
+    #[test]
+    fn cancellation_during_initialize_is_prompt_and_reaps_the_child() {
+        let f=Fixture::new("hang-initialize");let cancel=Arc::new(AtomicBool::new(false));
+        let flag=cancel.clone();let exe=f.exe.clone();let cwd=f.cwd.clone();let began=Instant::now();
+        let attempt=Attempt::new(&f,cancel.clone(),move||Client::start_with_cancel(&exe,&cwd,Duration::from_secs(1800),true,flag));
+        wait_file(&f.cwd.join("initialize.ready"));let pid=f.pid();
+        cancel.store(true,Ordering::Release);
+        assert_eq!(attempt.finish().err().unwrap(),CANCELLED);
+        assert!(began.elapsed()<Duration::from_secs(3));assert_reaped(pid);
+        assert_eq!(f.methods(),vec!["initialize"]);assert_no_account_or_turn_start(&f);
+    }
+
+    #[test]
+    fn initialize_timeout_is_bounded_independently_from_a_thirty_minute_task() {
+        let f=Fixture::new("hang-initialize");let cancel=Arc::new(AtomicBool::new(false));
+        let flag=cancel.clone();let exe=f.exe.clone();let cwd=f.cwd.clone();let began=Instant::now();
+        let attempt=Attempt::new(&f,cancel,move||Client::start_inner(&exe,&cwd,Duration::from_secs(1800),false,Some(flag),Duration::from_secs(1)));
+        let error=attempt.finish().err().unwrap();
+        assert!(error.contains("in time"));assert!(began.elapsed()<Duration::from_secs(3));
+        assert_reaped(f.pid());assert_eq!(f.methods(),vec!["initialize"]);assert_no_account_or_turn_start(&f);
+    }
+
+    #[test]
+    fn a_successful_initialize_restores_the_original_five_second_deadline() {
+        let f=Fixture::new("handshake");
+        let mut client=Client::start_inner(&f.exe,&f.cwd,Duration::from_secs(5),false,None,Duration::from_secs(1)).unwrap();
+        wait_file(&f.cwd.join("initialized.ready"));let pid=client.child.id()as libc::pid_t;
+        // Proves the handshake deadline did not become the whole task deadline,
+        // without relying on an arbitrary sleep past that shorter deadline.
+        assert!(client.deadline.saturating_duration_since(Instant::now())>Duration::from_secs(3));
+        assert_eq!(client.request("probe/metadata",json!({})).unwrap(),json!({"synthetic":true}));
+        drop(client);assert_reaped(pid);
+        assert_eq!(f.methods(),vec!["initialize","initialized","probe/metadata"]);
+        assert_no_account_or_turn_start(&f);
+    }
+
+    #[test]
+    fn cancelling_after_initialize_prevents_account_turn_and_notification_writes() {
+        let f=Fixture::new("handshake");let cancel=Arc::new(AtomicBool::new(false));
+        let mut client=Client::start_with_cancel(&f.exe,&f.cwd,Duration::from_secs(5),false,cancel.clone()).unwrap();
+        wait_file(&f.cwd.join("initialized.ready"));let pid=client.child.id()as libc::pid_t;
+        cancel.store(true,Ordering::Release);
+        assert_eq!(client.require_account().unwrap_err(),CANCELLED);
+        assert_eq!(client.request("turn/start",json!({"threadId":"synthetic-thread","input":[]})).unwrap_err(),CANCELLED);
+        assert_eq!(client.write(json!({"method":"synthetic/notification"})).unwrap_err(),CANCELLED);
+        drop(client);assert_reaped(pid);
+        assert_eq!(f.methods(),vec!["initialize","initialized"]);assert_no_account_or_turn_start(&f);
+    }
+
+    #[test]
+    fn drop_interrupts_its_exact_turn_even_when_the_cancellation_flag_is_set() {
+        let f=Fixture::new("handshake");let cancel=Arc::new(AtomicBool::new(false));
+        let mut client=Client::start_with_cancel(&f.exe,&f.cwd,Duration::from_secs(5),false,cancel.clone()).unwrap();
+        wait_file(&f.cwd.join("initialized.ready"));let pid=client.child.id()as libc::pid_t;
+        client.active_turn=Some(("synthetic-exact-thread".into(),"synthetic-exact-turn".into()));
+        cancel.store(true,Ordering::Release);drop(client);assert_reaped(pid);
+        let request:Value=serde_json::from_slice(&std::fs::read(f.cwd.join("interrupt.json")).unwrap()).unwrap();
+        assert_eq!(request["method"],"turn/interrupt");
+        assert_eq!(request["params"],json!({"threadId":"synthetic-exact-thread","turnId":"synthetic-exact-turn"}));
+        assert_eq!(f.methods(),vec!["initialize","initialized","turn/interrupt"]);
+        assert_no_account_or_turn_start(&f);
+    }
+
+    #[test]
+    fn the_initial_cancel_token_remains_attached_while_waiting_after_handshake() {
+        let f=Fixture::new("handshake");let cancel=Arc::new(AtomicBool::new(false));
+        let flag=cancel.clone();let exe=f.exe.clone();let cwd=f.cwd.clone();let began=Instant::now();
+        let attempt=Attempt::new(&f,cancel.clone(),move||{
+            let mut client=Client::start_with_cancel(&exe,&cwd,Duration::from_secs(1800),false,flag)?;
+            client.request("probe/hang",json!({}))
+        });
+        wait_file(&f.cwd.join("probe.ready"));let pid=f.pid();cancel.store(true,Ordering::Release);
+        assert_eq!(attempt.finish().unwrap_err(),CANCELLED);
+        assert!(began.elapsed()<Duration::from_secs(3));assert_reaped(pid);
+        assert_eq!(f.methods(),vec!["initialize","initialized","probe/hang"]);
+        assert_no_account_or_turn_start(&f);
+    }
+
+    #[cfg(target_os="linux")]
+    fn monitor_pipe(client:&Client)->std::os::fd::OwnedFd{
+        use std::os::fd::{AsRawFd,FromRawFd};
+        let fd=unsafe{libc::dup(client.input.as_ref().unwrap().as_raw_fd())};assert!(fd>=0);
+        unsafe{std::os::fd::OwnedFd::from_raw_fd(fd)}
+    }
+    #[cfg(target_os="linux")]
+    fn wait_full_pipe(fd:&std::os::fd::OwnedFd){
+        use std::os::fd::AsRawFd;
+        let size=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GETPIPE_SZ)};assert!(size>0);
+        let deadline=Instant::now()+Duration::from_secs(2);
+        loop{
+            let mut bytes=0;assert_eq!(unsafe{libc::ioctl(fd.as_raw_fd(),libc::FIONREAD,&mut bytes)},0);
+            if bytes>=size{return;}
+            assert!(Instant::now()<deadline,"Synthetic write never reached real backpressure");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    #[test]#[cfg(target_os="linux")]
+    fn a_large_write_to_a_stalled_child_obeys_stop_and_reaps_only_that_child(){
+        let f=Fixture::new("block-input");let cancel=Arc::new(AtomicBool::new(false));
+        let mut client=Client::start_with_cancel(&f.exe,&f.cwd,Duration::from_secs(1800),false,cancel.clone()).unwrap();
+        wait_file(&f.cwd.join("initialized.ready"));let pid=f.pid();let monitor=monitor_pipe(&client);
+        client.active_turn=Some(("synthetic-thread".into(),"synthetic-turn".into()));
+        let attempt=Attempt::new(&f,cancel.clone(),move||client.write(json!({"method":"probe/large","params":{"text":"x".repeat(2*1024*1024)}})));
+        wait_full_pipe(&monitor);cancel.store(true,Ordering::Release);
+        assert_eq!(attempt.finish().unwrap_err(),CANCELLED);drop(monitor);assert_reaped(pid);
+        assert_eq!(f.methods(),vec!["initialize","initialized"]);
+    }
+    #[test]#[cfg(target_os="linux")]
+    fn a_stalled_write_uses_the_task_deadline_instead_of_hanging_inside_write_all(){
+        let f=Fixture::new("block-input");let cancel=Arc::new(AtomicBool::new(false));
+        let mut client=Client::start_with_cancel(&f.exe,&f.cwd,Duration::from_secs(1800),false,cancel.clone()).unwrap();
+        wait_file(&f.cwd.join("initialized.ready"));let pid=f.pid();let monitor=monitor_pipe(&client);
+        client.deadline=Instant::now()+Duration::from_secs(1);
+        let attempt=Attempt::new(&f,cancel,move||client.write(json!({"method":"probe/large","params":{"text":"x".repeat(2*1024*1024)}})));
+        wait_full_pipe(&monitor);assert!(attempt.finish().unwrap_err().contains("in time"));drop(monitor);assert_reaped(pid);
+    }
+    #[test]#[cfg(target_os="linux")]
+    fn drop_interrupt_has_its_own_short_budget_when_the_pipe_is_full(){
+        use std::os::fd::AsRawFd;
+        let f=Fixture::new("block-input");let cancel=Arc::new(AtomicBool::new(false));
+        let mut client=Client::start_with_cancel(&f.exe,&f.cwd,Duration::from_secs(1800),false,cancel.clone()).unwrap();
+        wait_file(&f.cwd.join("initialized.ready"));let pid=f.pid();
+        let flags=unsafe{libc::fcntl(client.input.as_ref().unwrap().as_raw_fd(),libc::F_GETFL)};
+        assert_ne!(flags&libc::O_NONBLOCK,0,"Fixture filling must itself be nonblocking");
+        loop{match client.input.as_mut().unwrap().write(b"{}\n"){
+            Ok(3)=>{},Err(error)if error.kind()==std::io::ErrorKind::WouldBlock=>break,
+            other=>panic!("Unexpected synthetic pipe fill: {other:?}"),
+        }}
+        client.active_turn=Some(("synthetic-thread".into(),"synthetic-turn".into()));
+        let attempt=Attempt::new(&f,cancel,move||{let began=Instant::now();drop(client);began.elapsed()});
+        assert!(attempt.finish()<Duration::from_secs(2));assert_reaped(pid);
     }
 }

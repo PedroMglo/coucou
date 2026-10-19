@@ -8,6 +8,9 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { Settings } from "./state";
 import type { RecapHistory, RecapPrefs } from "../recap/summary";
 import type { SpotifyState } from "./spotify";
+import type {PetConfiguration,PetDocument} from "../mochi/pet-preferences";
+import {reportSettingsError} from './settings-feedback';
+import type { AssistantTask } from "../mochi/tasks";
 
 export const IS_TAURI =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -31,6 +34,16 @@ export interface BootInfo {
   /** False where the OS has no global cursor (Wayland): see Island.followPageCursor. */
   cursorPoll: boolean;
 }
+
+export interface ConversationView {id:string;messages:{role:"user"|"assistant";content:string}[];busy?:boolean;turn?:number;stream?:string;query?:string;notice?:string}
+export interface ChatTurnState {provider:string;conversationId:string;turn:number;busy:boolean;query:string}
+export interface AgentRequest {
+  id:string;provider:string;kind:string;detail:string;origin?:string;
+  approvalScope?:'turn'|'once';
+  target?:import('./session-chat').SessionTarget;
+  questions?:{id:string;question:string;isSecret?:boolean;options?:{label:string}[]}[]|null;
+}
+export interface ConversationSummary {id:string;provider:string;title:string;preview:string;created:number;updated:number;messageCount:number;current:boolean}
 
 /** The phone link (src-tauri/src/phone_link): how it is, never its secrets. */
 export interface PhoneLinkStatus {
@@ -179,14 +192,18 @@ export interface PhoneAnswersStatus {
 }
 
 export const Bridge = {
+  petModelSelect:(model:string,selectionId:string)=>callOrThrow<{provider:string;model:string;selectionId:string;generation:number}>('pet_model_select',{model,selectionId}),
+  petFocusSession:(provider:string,id:string)=>callOrThrow<{message?:string}>('pet_focus_session',{provider,id}),
   boot: () => call<BootInfo>("boot"),
   companionsPresence: () => call<{running:string[];activity:Record<string,number>}>("companions_presence"),
   /** The system's languages as the webview sees them, for Rust's own texts (i18n.rs). */
   setSystemLanguages: (languages: string[]) => call<void>("set_system_languages", { languages }),
 
-  saveSettings: (settings: Settings) => call<void>("save_settings", { settings }),
+  saveSettings: (settings: Settings) => callOrThrow<void>("save_settings", { settings }),
+  reportSettingsError,
 
-  cliAgentAnswer: (id: string, answer: Record<string, unknown>) => invoke<void>("cli_agent_answer", { id, answer }),
+  cliAgentAnswer: (id: string, answer: Record<string, unknown>,target?:import('./session-chat').SessionTarget) => invoke<void>("cli_agent_answer", { id, answer,...(target?{target}:{}) }),
+  cliAgentPending:()=>callOrThrow<AgentRequest[]>("cli_agent_pending"),
 
   /** Shrink the window down to the invisible wake strip (hidden) or back to full. */
   setCollapsed: (collapsed: boolean) => call<void>("set_collapsed", { collapsed }),
@@ -235,7 +252,8 @@ export const Bridge = {
 
   quit: () => call<void>("quit_app"),
 
-  openSettingsWindow: () => call<void>("open_settings_window"),
+  openSettingsWindow: (page?:string) => call<void>("open_settings_window", {page}),
+  petManagement: <T>(action:string,provider="",identifier="",keepAlive="10m") => callOrThrow<T>("pet_management",{request:{action,provider,identifier,keepAlive}}),
 
   /** Writes to %LOCALAPPDATA%\Coucou\coucou.log, next to the Rust lines. */
   log: (message: string) => call<void>("log_line", { message }),
@@ -331,10 +349,35 @@ export const Bridge = {
 
   // ── Chat, files, secrets ──────────────────────────────────────────────────
   /** One chat turn. The API key and any file bytes never leave Rust. */
-  chatSend: (query: string, context: ChatContext | null, provider?: string) =>
-    callOrThrow<{ text: string }>("chat_send", { query, context, provider }),
-  chatReset: (provider?: string) => call<void>("chat_reset", {provider}),
-  chatCancel: () => call<void>("chat_cancel"),
+  chatSend: (query: string, context: ChatContext | null, provider?: string,conversationId?:string,selectedModel?:string,documentSequence?:number) =>
+    callOrThrow<{ text: string }>("chat_send", { query, context, provider,...(conversationId===undefined?{}:{conversationId}),...(selectedModel===undefined?{}:{selectedModel}),...(documentSequence===undefined?{}:{documentSequence}) }),
+  chatReset: (provider?: string) => callOrThrow<ConversationView|null>("chat_reset", {provider}),
+  chatCancel: (provider?:string,conversationId?:string,turn?:number) => callOrThrow<boolean>("chat_cancel",{provider,...(conversationId===undefined?{}:{conversationId}),...(turn===undefined?{}:{turn})}),
+  chatHistory: (provider:string) => call<{role:"user"|"assistant";content:string}[]>("chat_history",{provider}),
+  chatConversation:(provider:string)=>callOrThrow<ConversationView>("chat_conversation",{provider}),
+  chatReadConversation:(provider:string,id:string)=>callOrThrow<ConversationView>("chat_read_conversation",{provider,id}),
+  chatConversations:(provider:string,query="")=>callOrThrow<ConversationSummary[]>("chat_conversations",{provider,query}),
+  petUsage:(provider:string,conversationId?:string)=>callOrThrow<import('./pet-usage').PetUsage|null>('pet_usage',{provider,...(conversationId?{conversationId}:{})}),
+  chatRestoreConversation:(provider:string,id:string)=>callOrThrow<ConversationView>("chat_restore_conversation",{provider,id}),
+  assistantTasks: () => call<AssistantTask[]>("assistant_tasks"),
+  voiceLearnAlias: (provider:string) => callOrThrow<string>("voice_learn_alias",{provider}),
+  voiceSessionToggle: () => callOrThrow<void>("voice_session_toggle"),
+  petChatOpen:async(pet:string,session?:{id:string;backend:string;title:string;cwd:string;steps:string[];finalLine:string},showSessions=false,target?:import('./session-chat').SessionTarget)=>{
+    await callOrThrow<void>("pet_chat_open",{request:{pet,session,showSessions,...(target?{target:{...target}}:{})}});
+    await emitToWindow('island','pet-chat-presented',{pet});
+  },
+  petControlContext:()=>call<{pet?:string;section?:string}>("pet_control_context"),
+  petControlInput:(rect:{x:number;y:number;w:number;h:number},expanded:boolean)=>call<void>("pet_control_input",{rect,expanded}),
+  petControlConfigure:()=>call<void>("pet_control_configure"),
+  petSystemPanel:(panel:'calendar'|'media'|'weather'|'notifications'|'quick-settings')=>callOrThrow<void>('pet_system_panel',{panel}),
+  petSystemStatus:()=>callOrThrow<import('../desktop/system-center').SystemCenterStatus>('pet_system_status'),
+  petControlOpen:(pet?:string)=>callOrThrow<void>("pet_control_open",{pet}),
+  petPanelOpen:(x:number,y:number,pet?:string,section?:string)=>callOrThrow<void>("pet_panel_open",{x,y,pet,section}),
+  petPanelHide:()=>callOrThrow<void>("pet_panel_hide"),
+  voiceSessionStart: (provider:string) => callOrThrow<void>("voice_session_start",{provider}),
+  assistantSetWorkspace:(provider:string,path:string)=>callOrThrow<string>("assistant_set_workspace",{provider,path}),
+  assistantCancelTask: (id:string) => callOrThrow<boolean>("assistant_cancel_task",{id}),
+  assistantResumeTask: (id:string,cwd?:string) => callOrThrow<{text:string}>("assistant_resume_task",{id,...(cwd===undefined?{}:{cwd})}),
   /**
    * The models a provider offers, for the picker in the chat view. Rust asks
    * the provider only when it has a key (or a server address).
@@ -342,12 +385,16 @@ export const Bridge = {
   chatModels: (provider: string) => callOrThrow<ModelInfo[]>("chat_models", { provider }),
   /** Settings → Local models → Connect: does the server answer, and with which models? */
   /** The custom server's key, bound to the address it is entered for. */
-  localSetKey: (url: string, key: string) => call<void>("local_set_key", { url, key }),
+  localSetKey: (url: string, key: string) => callOrThrow<void>("local_set_key", { url, key }),
 
   localConnect: (provider: "ollama" | "lmstudio" | "custom", url: string) =>
     callOrThrow<LocalServer>("local_connect", { provider, url }),
   /** Copies a dropped file into the inbox. */
-  ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
+  ingestFile: (path: string,provider?:string,conversationId?:string,dropId?:string) => callOrThrow<DroppedFile>("ingest_file", { path,provider,...(conversationId===undefined?{}:{conversationId}),...(dropId===undefined?{}:{dropId}) }),
+  petDocumentCancelDrop:(provider:string,dropId:string)=>callOrThrow<void>('pet_document_cancel_drop',{provider,dropId}),
+  petDocumentContext:(provider:string,conversationId:string)=>callOrThrow<DroppedFile|null>('pet_document_context',{provider,conversationId}),
+  petDocumentClear:(provider:string,conversationId:string,sequence:number)=>callOrThrow<void>('pet_document_clear',{provider,conversationId,sequence}),
+  petMailDraft:(provider:string,path:string,recipient:string,subject:string,body:string)=>callOrThrow<string>("pet_mail_draft",{provider,path,recipient,subject,body}),
   /** Only ever tells you whether a key exists — never its value. */
   secretPresent: (key: string) => call<boolean>("secret_present", { key }),
   secretSet: (key: string, value: string) => callOrThrow<void>("secret_set", { key, value }),
@@ -387,6 +434,9 @@ export const Bridge = {
   companionsConfigure: (enabled: boolean, count: number) => call<{ width: number; height: number; top: number; band: { height: number; lanes: [number, number][] } | null }>("companions_configure", { enabled, count }),
   companionsAnchor: (x: number, y: number) => call<void>("companions_anchor", {x,y}),
   companionsInput: (rects: number[][]) => call<void>("companions_input", { rects }),
+  petConfiguration: () => callOrThrow<PetDocument>("pet_configuration"),
+  petRoster:()=>callOrThrow<string[]>("pet_roster"),
+  petConfigurationSave: (config:PetConfiguration,expectedRevision:string) => callOrThrow<PetDocument>("pet_configuration_save",{config,expectedRevision}),
   companionsOpen: (pillId: string, x: number, y: number, view?: string) => call<void>("companions_open", { pillId, x, y, view }),
   desktopInfo: () => call<DesktopInfo>("desktop_mochi_info"),
   /** Dragged out of the island: (x, y) is the pointer in island-window coordinates. */
@@ -483,6 +533,11 @@ export interface LocalServer {
 }
 
 export interface DroppedFile {
+  provider?:string;
+  conversationId?:string;
+  sequence?:number;
+  kind:"file"|"folder";
+  entries:number;
   name: string;
   path: string;
   size: number;
@@ -541,8 +596,11 @@ export type BridgeEvent =
   | { name: "screen-changed"; payload: null };
 
 export interface DragDropPayload {
-  type: "enter" | "over" | "drop" | "leave";
+  type: "enter" | "over" | "drop" | "leave" | "rejected";
+  error?:string;
+  dropId?:string;
   paths?: string[];
+  position?: {x:number;y:number};
 }
 
 interface WebView2Bridge {
@@ -560,11 +618,19 @@ interface WebView2Bridge {
  */
 export async function onDragDrop(handler: (e: DragDropPayload) => void) {
   if (!IS_TAURI) return () => {};
+  // Defence in depth: native drops deliver real paths; the page must never
+  // allow the browser to navigate to a PDF/image/link dropped on a surface.
+  const preventNavigation=(e:DragEvent)=>e.preventDefault();
+  window.addEventListener("dragover",preventNavigation);
+  window.addEventListener("drop",preventNavigation);
   const webview = (window as unknown as { chrome?: { webview?: WebView2Bridge } }).chrome?.webview;
   if (!webview) {
-    return getCurrentWebview().onDragDropEvent((event) => {
+    const nativeFiles=await getCurrentWebview().listen<DragDropPayload>('pet-file-drag',event=>handler(event.payload));
+    const nativeRejected=await getCurrentWebview().listen<string>('pet-file-rejected',event=>handler({type:'rejected',error:event.payload}));
+    const unlisten=await getCurrentWebview().onDragDropEvent((event) => {
       handler(event.payload as DragDropPayload);
     });
+    return ()=>{nativeFiles();nativeRejected();unlisten();window.removeEventListener("dragover",preventNavigation);window.removeEventListener("drop",preventNavigation);};
   }
   const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files") ?? false;
   // dragenter/dragleave fire for every element crossed; only the outermost pair counts.
@@ -608,6 +674,8 @@ export async function onDragDrop(handler: (e: DragDropPayload) => void) {
     window.removeEventListener("dragleave", onLeave);
     window.removeEventListener("drop", onDrop);
     unlisten();
+    window.removeEventListener("dragover",preventNavigation);
+    window.removeEventListener("drop",preventNavigation);
   };
 }
 

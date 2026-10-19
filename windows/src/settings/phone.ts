@@ -6,6 +6,7 @@ import { modelId, modelsOf, toggleModel, usableProviders } from "../core/phone-c
 import { PROVIDERS, type ProviderDef } from "../core/providers";
 import type { Settings } from "../core/state";
 import { h } from "../views/dom";
+import { PendingWrite } from "../core/pending-write";
 import { t } from "../i18n/i18n";
 
 type Toggle = (on: boolean, onChange: (v: boolean) => void) => HTMLElement;
@@ -280,36 +281,38 @@ const PHONE_SERVICES: [string, string][] = [
  * connection and sends a phone only the services ticked here.
  */
 function servicesBlock(): HTMLElement {
-  const note = h("div", { class: "hint" });
-  let ticked: string[] = [];
+  const note = h("div", { class: "hint", role: "status" });
+  const retry = h("button", { text: t("Retry"), hidden: true }) as HTMLButtonElement;
+  let ticked: string[] = [], ready = false;
+  const writer = new PendingWrite<string[]>(value => Bridge.phoneServicesSet(value), state => {
+    note.textContent = state.error || (state.pending ? t("Saving…") : "");
+    retry.hidden = !state.retryable;
+  });
   const boxes = PHONE_SERVICES.map(([id, name]) => {
-    const box = h("input", { type: "checkbox" }) as HTMLInputElement;
+    const box = h("input", { type: "checkbox", disabled: true }) as HTMLInputElement;
     box.addEventListener("change", () => {
-      void (async () => {
-        note.textContent = "";
-        const next = box.checked ? [...new Set([...ticked, id])] : ticked.filter((x) => x !== id);
-        try {
-          ticked = (await Bridge.phoneServicesSet(next)).services;
-        } catch (err) {
-          box.checked = ticked.includes(id);
-          note.textContent = String(err);
-        }
-      })();
+      if (!ready) return;
+      ticked = box.checked ? [...new Set([...ticked, id])] : ticked.filter(x => x !== id);
+      void writer.write(ticked);
     });
     return { id, box, row: h("div", { class: "row" }, h("label", {}, box, h("span", { text: ` ${name}` }))) };
   });
-  void Bridge.phoneServicesStatus().then((status) => {
-    if (!status) return;
-    ticked = status.services;
-    for (const b of boxes) b.box.checked = ticked.includes(b.id);
-  });
+  async function load() {
+    retry.hidden = true; note.textContent = t("Loading…");
+    try {
+      const status = await Bridge.phoneServicesStatus();
+      if (!status) throw Error(t("Could not load phone services."));
+      ticked = status.services; ready = true; note.textContent = "";
+      for (const b of boxes) { b.box.checked = ticked.includes(b.id); b.box.disabled = false; }
+    } catch (error) { note.textContent = String(error).replace(/^Error:\s*/, ""); retry.hidden = false; }
+  }
+  retry.addEventListener("click", () => { if (ready) void writer.retry(); else void load(); });
+  void load();
   return h(
-    "div",
-    {},
+    "div", {},
     h("div", { class: "row" }, h("label", { text: t("Show these services on the phone") })),
     h("div", { class: "hint", text: t("Each tick lets your paired phone see that service's card: a headline and up to three short lines, read-only. Nothing is shown until you tick it. No addresses, subjects, links or keys are ever sent.") }),
-    ...boxes.map((b) => b.row),
-    note,
+    ...boxes.map(b => b.row), note, retry,
   );
 }
 
@@ -489,17 +492,25 @@ function pairingRows(pairing: PhoneLinkPairing, again: () => void): HTMLElement[
   const qr = h("div", { class: "qr" });
   qr.innerHTML = pairing.qrSvg;
 
-  const link = h("input", { type: "text", readonly: "true", value: pairing.link, style: "width:100%" }) as HTMLInputElement;
+  const link = h("input", { type: "text", readonly: "true", value: pairing.link, "aria-label": t("Pairing link"), style: "width:100%" }) as HTMLInputElement;
   link.addEventListener("focus", () => link.select());
-
-  const copy = h("button", { text: t("Copy link") });
+  const copy = h("button", { text: t("Copy link") }) as HTMLButtonElement;
   const copied = copyLinkHint();
+  const copyError = h("div", { class: "hint", role: "status", hidden: true });
   copy.addEventListener("click", () => {
-    void navigator.clipboard?.writeText(pairing.link).then(() => {
-      copied.hidden = false; // stays after the button text is restored
-      copy.textContent = t("Copied");
-      window.setTimeout(() => (copy.textContent = t("Copy link")), 1500);
-    });
+    void (async () => {
+      copy.disabled = true; copyError.hidden = true;
+      try {
+        if (!navigator.clipboard?.writeText) throw Error(t("Clipboard unavailable"));
+        await navigator.clipboard.writeText(pairing.link);
+        copied.hidden = false;
+        copy.textContent = t("Copied");
+        window.setTimeout(() => (copy.textContent = t("Copy link")), 1500);
+      } catch (error) {
+        copyError.textContent = t("Could not copy. Select the link and copy it manually. {error}", { error: String(error).replace(/^Error:\s*/, "") });
+        copyError.hidden = false; link.focus(); link.select();
+      } finally { copy.disabled = false; }
+    })();
   });
 
   const repair = h("button", { text: t("Pair again") });
@@ -510,6 +521,7 @@ function pairingRows(pairing: PhoneLinkPairing, again: () => void): HTMLElement[
     qr,
     h("div", { class: "row" }, link, copy),
     copied,
+    copyError,
     ...(pairing.relay ? [h("div", { class: "hint", text: t("This code also carries the access key and the end-to-end key for the relay {host}. Pair again makes a new key and a new room.", { host: pairing.relay }) })] : []),
     h("div", { class: "row" }, repair, h("span", { class: "hint", text: t("The phone that was paired is disconnected and needs the new code.") })),
   ];

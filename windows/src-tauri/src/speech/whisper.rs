@@ -68,9 +68,23 @@ pub fn transcribe(python: &Path, model: &Path, samples: &[f32], stop: Option<&At
         }
     })();
     if result.is_none() { *guard=None; }
-    crate::log::line(format!("voice: local Whisper pt transcription completed={} in {} ms",result.is_some(),began.elapsed().as_millis()));
+    crate::log::line(format!("voice: local Whisper multilingual transcription completed={} in {} ms",result.is_some(),began.elapsed().as_millis()));
     result
 }
 
-/// End an explicit conversation without holding GPU/RAM until the idle timer.
-pub fn release() { *slot().lock().unwrap()=None; }
+/// Never block microphone controls behind an ASR request. A busy worker observes
+/// its cancelled voice token; otherwise its existing 120 s idle timeout applies.
+pub fn release_if_idle() {
+    if let Ok(mut worker)=slot().try_lock() {*worker=None;}
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn microphone_cleanup_never_waits_for_a_busy_asr_worker() {
+        let worker=super::slot().lock().unwrap();let (tx,rx)=std::sync::mpsc::channel();
+        let release=std::thread::spawn(move||{super::release_if_idle();tx.send(()).unwrap();});
+        let ready=rx.recv_timeout(std::time::Duration::from_secs(1)).is_ok();
+        drop(worker);release.join().unwrap();assert!(ready);
+    }
+}

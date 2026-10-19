@@ -3,7 +3,7 @@
 // webview and the bundler normally would.
 
 import { readFileSync } from "node:fs";
-import { registerHooks } from "node:module";
+import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { fileURLToPath } from "node:url";
 import { internals } from "./tauri.mjs";
 
@@ -19,6 +19,12 @@ registerHooks({
   // Vite imports JSON (src/i18n/*.json) without `with { type: "json" }`;
   // Node would refuse it, so it is handed over as a module.
   load(url, context, nextLoad) {
+    // Actual Island methods also import TypeScript parameter properties.
+    // Transform those as tsc/Vite do, rather than Node's strip-only default.
+    if (url.startsWith("file:") && url.endsWith(".ts") && !url.includes("/node_modules/")) {
+      const source = readFileSync(fileURLToPath(url), "utf8");
+      return { format: "module", source: stripTypeScriptTypes(source, { mode: "transform" }), shortCircuit: true };
+    }
     if (url.startsWith("file:") && url.endsWith(".json") && !url.includes("/node_modules/")) {
       const source = readFileSync(fileURLToPath(url), "utf8");
       return { format: "module", source: `export default ${source};`, shortCircuit: true };

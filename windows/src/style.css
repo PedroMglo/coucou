@@ -1343,6 +1343,10 @@ input[type="range"]::-webkit-slider-thumb {
   font: 400 13px var(--font);
   outline: none;
   cursor: text;
+  resize:none;
+  line-height:1.5;
+  max-height:72px;
+  overflow-y:auto;
 }
 
 .chat-input::placeholder {
@@ -2643,3 +2647,51 @@ html[data-dir="rtl"] #views :is(.bubble, .reply .md-p, .reply .md-h, .reply .md-
 
 .header-actions .close-card { width: 24px; height: 24px; cursor: pointer; color: #C5C8CD; border-radius: 6px; }
 .header-actions .close-card:hover { color: white; background: #ffffff20; }
+
+/* Model choice stays readable in the compact pet conversation. */
+.model-row{justify-content:flex-start;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 10px}
+.model-btn{flex:1 1 240px;justify-content:flex-start;border-radius:9px;padding:7px 10px;color:#e6edf7;cursor:pointer}
+.model-name{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;font-size:12px;color:#e6edf7;line-height:1.4;text-align:left}
+.picker-model{cursor:pointer;min-height:34px}
+.picker-model-name{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.picker-model.on{box-shadow:inset 3px 0 var(--accent)}
+
+.pet-mail-form{display:flex;flex-direction:column;gap:6px;padding:10px 14px 10px 84px;max-height:240px;box-sizing:border-box;overflow:auto}
+.pet-mail-form input,.pet-mail-form textarea{width:100%;min-height:32px;border:1px solid #ffffff25;border-radius:8px;background:#ffffff0a;color:inherit;padding:7px 9px;box-sizing:border-box;font:inherit}
+.pet-mail-form textarea{height:54px;resize:vertical}
+.pet-mail-form .sub{white-space:normal;overflow-wrap:anywhere}
+.assistant-prefs fieldset{border:1px solid #ffffff25;border-radius:10px;margin:14px 0;padding:10px}
+.assistant-prefs fieldset label{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.assistant-prefs fieldset input[type=checkbox]{width:18px;height:18px;flex:none;accent-color:#2dd4bf}
+
+/* The HTML hidden attribute wins over button/card display rules. */
+[hidden]{display:none!important}
+/* Session identity stays attached to decisions and never uses terminal output. */
+.session-origin { display:flex; flex-direction:column; gap:2px; font-size:11px; color:#aab6c8; min-width:0; }
+.session-origin span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.session-picker { max-width:95px; white-space:nowrap; color:#bcd5d1; }
+.pet-panel { color-scheme:dark; }
+.session-source{font-size:10px;color:#aab6c8;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pet-overview{background:#141518;border:1px solid #ffffff12;border-radius:16px;overflow:auto;scrollbar-width:thin}
+.overview-host>.overview-surface{position:absolute;inset:0;opacity:1;transform:none;pointer-events:auto}
+.pet-summary-content{display:flex;flex-direction:column;gap:10px;min-height:100%;padding:14px 16px}
+.pet-summary-identity{display:flex;align-items:center;gap:12px;flex-shrink:0}.pet-summary-identity>div:last-child{flex:1;min-width:0}
+.pet-summary-avatar{width:44px;height:44px;flex-shrink:0}.pet-summary-heading{display:flex;align-items:center;gap:12px}.pet-summary-heading>strong{font-size:16px;font-weight:600}
+.pet-summary-status{font-size:11px;color:#b0c5bd;display:flex;align-items:center;gap:5px}.pet-summary-status:before{content:"";width:5px;height:5px;background:#58cfa1;border-radius:50%}.pet-summary-status[data-state=error]:before,.pet-summary-status[data-state=ratelimit]:before{background:#f5a524}
+.pet-summary-model{font-size:11px;line-height:1.5;color:#a9b2c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}
+.pet-summary-activity{font-size:12px;line-height:1.5;color:#c9cfd8;overflow-wrap:anywhere;max-height:36px;overflow:auto;user-select:text}
+.pet-summary-usage{display:flex;gap:10px;flex-shrink:0}.pet-summary-usage>div{display:flex;flex:1;flex-direction:column;gap:3px;border:1px solid #ffffff0c;background:#ffffff04;border-radius:9px;padding:8px 11px}.pet-summary-usage strong{font-size:17px;font-weight:500;font-variant-numeric:tabular-nums}.pet-summary-usage span{font-size:10px;color:#98a3b2}
+.pet-summary-sessions{display:flex;min-height:16px;gap:10px;align-items:center;min-width:0;font-size:10px;color:#93a0b1}.pet-summary-sessions>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pet-summary-session{max-width:55%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pet-overview button{font:500 11px var(--font);color:#c2ccd9;background:#ffffff08;border:1px solid #ffffff18;border-radius:8px;padding:7px 10px;cursor:pointer;line-height:1.4}.pet-overview button:hover{background:#ffffff15;border-color:#ffffff30}.pet-overview button:focus-visible{outline:2px solid #72dcca;outline-offset:2px}.pet-overview button:disabled{opacity:.45}
+.pet-summary-actions{display:flex;gap:7px;align-items:center;flex-shrink:0;margin-top:auto}.pet-summary-actions .pet-summary-primary{color:#c0f4e6;border-color:#66dab640;background:#2dd4bf18}.pet-summary-actions button:last-child{margin-left:auto}.pet-summary-error{color:#f4c575;font-size:11px}
+.pet-summary-music{height:100%}.pet-summary-music .card{border:0}
+.companion-overview .companion-owner{display:none}
+.companion-overview .header-actions{gap:7px;padding-right:10px;min-width:0}
+.companion-overview .companion-owner,.companion-overview .plan-pills{display:none}
+.companion-overview .who{padding-left:16px;padding-right:28px;flex-wrap:wrap}
+.companion-overview .who .tool{flex-basis:100%;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.companion-overview .ticker{margin-left:16px}
+.companion-overview .diff-card{padding-left:16px}
+.failed-request-review{font-size:11px;color:var(--dim);margin:4px 0;user-select:text}
+.failed-request-review summary{cursor:pointer}
+.failed-request-text{max-height:110px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;color:var(--ink-2);padding:7px;background:var(--tab-on);border-radius:8px}

@@ -132,6 +132,7 @@ export class Ticker {
   private displayIndex = -1;
   /** True once Claude has finished: the final message holds still. */
   private still = false;
+  private sessionKey='';
 
   /** `onDiffTap` receives the diff id of a clicked diff row. */
   constructor(onDiffTap?: (diffId: number) => void) {
@@ -158,6 +159,8 @@ export class Ticker {
   }
 
   sync(task: AgentTask | null) {
+    const key=JSON.stringify([task?.id,task?.sessionBackend,task?.sessionId]);
+    if(key!==this.sessionKey){this.sessionKey=key;this.displayIndex=-1;this.queue=[];this.startMs=null;}
     const steps = task?.steps ?? [];
     // Where the newest step sits in the whole session, not in `steps`: that
     // list is capped at 20, and counting inside it made the ticker stop for

@@ -146,7 +146,8 @@ pub async fn send(
     let key = secrets::get(KEY).ok_or_else(|| t("API key missing. Open settings."))?;
     let endpoint = endpoint()?;
 
-    let turn = chat.begin(chat::ANTHROPIC);
+    let turn = chat.begin_cli(chat::ANTHROPIC,std::sync::Arc::default())?;
+    let _lease=chat.lease(&turn);
     let user = json!({ "role": "user", "content": user_content(turn.first, context.as_ref(), &query) });
     let body = request_body(model, &chat::system_prompt(true), &turn.history, &user);
 
@@ -156,7 +157,7 @@ pub async fn send(
     // Store the whole content — tool_use / tool_result blocks included — so the
     // next turn has the right context.
     let plain = chat::plain_question(turn.first, context.as_ref(), &query);
-    chat.commit(&turn, user, json!({ "role": "assistant", "content": blocks }), &plain, &text);
+    chat.commit_reply(&turn, user, json!({ "role": "assistant", "content": blocks }), &plain, &text)?;
     Ok(ChatReply { text })
 }
 

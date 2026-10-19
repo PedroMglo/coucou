@@ -3,6 +3,8 @@
 // The inbox is swept of anything older than a week, as on macOS.
 
 use std::path::{Path, PathBuf};
+use std::io::{Read,Write};
+const MAX_FILE:u64=100*1024*1024;
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
@@ -17,6 +19,8 @@ pub struct DroppedFile {
     pub name: String,
     pub path: String,
     pub size: u64,
+    pub kind:String,
+    pub entries:usize,
 }
 
 pub fn inbox_dir() -> PathBuf {
@@ -49,7 +53,7 @@ pub fn allow_dropped<I: IntoIterator<Item = String>>(paths: I) {
 }
 
 /// True (once) when `path` was delivered by a drop in the last couple of minutes.
-fn take_dropped(path: &str) -> bool {
+pub(crate) fn take_dropped(path: &str) -> bool {
     let mut list = DROPPED.lock().unwrap_or_else(|e| e.into_inner());
     let now = std::time::Instant::now();
     list.retain(|(_, at)| now.duration_since(*at) < DROP_VALID_FOR);
@@ -67,47 +71,41 @@ pub fn ingest(source: &str) -> Result<DroppedFile, String> {
         return Err(crate::i18n::t("Only files dropped on the island can be added."));
     }
     let src = Path::new(source);
-    let meta = std::fs::metadata(src)
-        .map_err(|e| crate::i18n::tf("Cannot read {path}: {error}", &[("path", source), ("error", &e.to_string())]))?;
-    if meta.is_dir() {
-        return Err(crate::i18n::t("Folders can't be dropped yet."));
+    let meta = std::fs::symlink_metadata(src).map_err(|_|"Não foi possível ler o ficheiro arrastado.".to_string())?;
+    if !meta.is_file() {return Err("Entrega um ficheiro normal, sem pastas ou ligações simbólicas.".into());}
+    if meta.len()>MAX_FILE{return Err("O documento excede o limite de 100 MiB.".into());}
+    let dir=inbox_dir();
+    crate::platform::ensure_private_dir(&settings::local_dir()).map_err(|e|e.to_string())?;
+    crate::platform::ensure_private_dir(&dir).map_err(|e|e.to_string())?;
+    let name=src.file_name().ok_or("Nome de ficheiro inválido.")?.to_string_lossy().to_string();
+    let stem=src.file_stem().unwrap_or_default().to_string_lossy();
+    let ext=src.extension().map(|s|format!(".{}",s.to_string_lossy())).unwrap_or_default();
+    let mut source=std::fs::OpenOptions::new();source.read(true);
+    #[cfg(unix)]{use std::os::unix::fs::OpenOptionsExt;source.custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK);}
+    let source=source.open(src).map_err(|_|"O ficheiro deixou de estar disponível.".to_string())?;
+    if !source.metadata().map_err(|e|e.to_string())?.is_file(){return Err("O documento não é um ficheiro normal.".into());}
+    let mut output=None;
+    for i in 1..=10000{
+        let dest=dir.join(if i==1{name.clone()}else{format!("{stem} ({i}){ext}")});
+        let mut options=std::fs::OpenOptions::new();options.write(true).create_new(true);
+        #[cfg(unix)]{use std::os::unix::fs::OpenOptionsExt;options.mode(0o600).custom_flags(libc::O_NOFOLLOW);}
+        match options.open(&dest){Ok(file)=>{output=Some((dest,file));break;},Err(e)if e.kind()==std::io::ErrorKind::AlreadyExists=>continue,Err(e)=>return Err(e.to_string())}
     }
-
-    let dir = inbox_dir();
-    crate::platform::ensure_private_dir(&settings::local_dir()).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-
-    let name = src
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "file".into());
-
-    let mut dest = dir.join(&name);
-    if dest.exists() {
-        let stem = src.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        let ext = src.extension().map(|s| format!(".{}", s.to_string_lossy())).unwrap_or_default();
-        for i in 2..1000 {
-            let candidate = dir.join(format!("{stem} ({i}){ext}"));
-            if !candidate.exists() {
-                dest = candidate;
-                break;
-            }
-        }
-    }
-
-    std::fs::copy(src, &dest).map_err(|e| crate::i18n::tf("Cannot copy: {error}", &[("error", &e.to_string())]))?;
-    // CopyFileEx carries the source's timestamps across, so a file last edited
-    // three years ago would arrive already older than the sweep window and be
-    // deleted on the spot. The inbox ages from when *we* copied it.
-    if let Ok(file) = std::fs::File::options().write(true).open(&dest) {
-        let _ = file.set_modified(SystemTime::now());
-    }
+    let (dest,mut file)=output.ok_or("Não foi possível reservar uma cópia do documento.")?;
+    let copied=(||->Result<u64,String>{
+        let count=std::io::copy(&mut source.take(MAX_FILE+1),&mut file).map_err(|e|e.to_string())?;
+        if count>MAX_FILE{return Err("O documento excede 100 MiB.".into());}
+        file.flush().map_err(|e|e.to_string())?;Ok(count)
+    })();
+    let size=match copied{Ok(size)=>size,Err(e)=>{drop(file);let _=std::fs::remove_file(&dest);return Err(e);}};
+    let _=file.set_modified(SystemTime::now());drop(file);
     sweep(&dir);
 
     Ok(DroppedFile {
         name,
         path: dest.to_string_lossy().to_string(),
-        size: meta.len(),
+        size,
+        kind:"file".into(),entries:1,
     })
 }
 
@@ -121,7 +119,7 @@ fn sweep(dir: &Path) {
         let Ok(meta) = entry.metadata() else { continue };
         let Ok(copied) = meta.modified() else { continue };
         if now.duration_since(copied).map(|age| age > KEEP_FOR).unwrap_or(false) {
-            let _ = std::fs::remove_file(entry.path());
+            if meta.is_dir(){let _=std::fs::remove_dir_all(entry.path());}else{let _ = std::fs::remove_file(entry.path());}
         }
     }
 }

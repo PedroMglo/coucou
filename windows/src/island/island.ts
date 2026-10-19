@@ -1,3 +1,4 @@
+import {taskPet} from "../mochi/tasks";
 import { emitToWindow } from "../core/bridge";
 // The island: DOM shell, sizing animation, Mochi placement, mouse handling.
 // Mirrors IslandRootView.swift + IslandWindowController.swift.
@@ -15,6 +16,7 @@ import {
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
 import { providerForPill } from "../core/providers";
+import {dialogueId} from '../core/chat-dialogue';
 import { SPOTIFY_ID, islandDances } from "../core/spotify";
 import { BotEngine, hexToRGB } from "../mochi/engine";
 import { Greeting } from "../mochi/greeting";
@@ -101,7 +103,7 @@ export class Island {
 
   private confusedRecovery: number | null = null;
   private prevViewBeforeConfused: IslandViewName = "overview";
-  private lastSyncedView: IslandViewName | null = null;
+  private keyboardView = '';
 
   /** The launch greeting ended, or the island came out of hidden — two of the
    *  moments the Monday recap may open (see src/recap/recap.ts). */
@@ -117,10 +119,15 @@ export class Island {
   /** Drop sequence bookkeeping: last tick played, and whether the ✓ has fired. */
   private uploadTens = 0;
   private uploadDone = false;
+  private dragHeight:number|null=null;
+  private dragOwner:{provider:string;conversationId:string|undefined;pet:string|null}|null=null;
 
   constructor(root: HTMLElement) {
     this.root = root;
     void onEvent("companions-hide-popup", () => { if (State.settings.companionMode) this.collapse(); });
+    void onEvent<{pet:string}>('pet-chat-presented',({pet})=>{
+      if(State.settings.companionMode&&State.focusId===pet&&!State.pendingApproval)this.collapse();
+    });
     this.desktop = new DesktopLink({
       openFromDesktop: (id, view) => this.openFromDesktop(id, view),
       reveal: () => this.reveal(),
@@ -128,14 +135,28 @@ export class Island {
       dizzyFromDesktop: () => this.handleDizzy(),
     });
     this.build();
+    const refreshEditing=()=>{
+      const active=document.activeElement;
+      const editing=State.mode==='expanded'&&document.hasFocus()&&!!active&&this.contentEl.contains(active)&&active.matches('input,textarea,[contenteditable="true"]');
+      const before=this.fsm.editing;this.fsm.editing=editing;
+      if(before&&!editing&&!this.wasInIsland)this.fsm.mouseLeft();
+    };
+    document.addEventListener('focusin',refreshEditing);
+    document.addEventListener('focusout',()=>window.setTimeout(refreshEditing,0));
+    window.addEventListener('focus',refreshEditing);
+    window.addEventListener('blur',()=>window.setTimeout(refreshEditing,0));
     const cliRequests = new Set<string>();
     let wasPinned = false;
-    void onEvent<{ id: string; provider: string }>("agent-request", ({ id, provider }) => {
+    void onEvent<{ id: string; provider: string;origin?:string;target?:import('../core/session-chat').SessionTarget }>("agent-request", ({ id, provider,origin,target }) => {
+      if(target?.origin==='external'){
+        void emitToWindow('companions','companions-notice',{key:`external-request:${id}`,pet:target.petId,text:'Esta sessão de terminal precisa de uma decisão tua.',urgent:true,origin,view:'floating',session:{id:target.sessionId,backend:target.provider}});
+        return;
+      }
       if (!cliRequests.size) wasPinned = this.fsm.pinned;
       cliRequests.add(id);
       this.fsm.pinned = true;
       if (State.settings.companionMode) {
-        void emitToWindow("companions", "companions-present", {id: ({codex:"agent_codex",antigravity:"agent_antigravity",copilot:"agent_copilot"} as Record<string,string>)[provider.toLowerCase()],view:"prompt"});
+        void emitToWindow("companions", "companions-present", {id: taskPet(provider.toLowerCase())??({copilot:"agent_copilot"} as Record<string,string>)[provider.toLowerCase()],view:"prompt"});
       } else { this.reveal(); this.setView("prompt"); }
     });
     void onEvent<{ id: string }>("agent-request-ended", ({ id }) => {
@@ -157,9 +178,10 @@ export class Island {
 
   /** The request has its answer: the card goes and the session carries on. */
   private closeApproval() {
-    State.endApproval();
+    const editor=State.endApproval();
     this.fsm.pinned = false;
-    this.setView(State.defaultView());
+    if(editor&&State.settings.companionMode)this.alert(editor);
+    else this.setView(editor??State.defaultView());
   }
 
   /**
@@ -196,7 +218,10 @@ export class Island {
         const task = State.focusTask;
         // Sessions from the Claude desktop app live there, not in a terminal.
         if (task?.id === CLAUDE_DESKTOP_ID) void Bridge.openClaudeDesktop();
-        else void Bridge.openSession(task?.sessionId ?? null, task?.sessionCwd ?? null);
+        else if(task?.sessionId && task.sessionBackend){
+          if(task.sessionOwned){this.setView('prompt');return;}
+          void Bridge.petFocusSession(task.sessionBackend,task.sessionId).catch(()=>Bridge.petPanelOpen(360,50,task.id,'sessions'));
+        }else void Bridge.openSession(task?.sessionId ?? null, task?.sessionCwd ?? null);
       },
       // The ↗ button — same targets as openAgentTarget() on macOS.
       openTarget: () => {
@@ -212,7 +237,9 @@ export class Island {
         };
         if (task.id === CLAUDE_DESKTOP_ID) void Bridge.openClaudeDesktop();
         else if (task.id === "integration_claude" || task.sessionId) {
-          void Bridge.openSession(task.sessionId ?? null, task.sessionCwd ?? null);
+          if(task.sessionOwned)this.setView('prompt');
+          else if(task.sessionId&&task.sessionBackend)void Bridge.petFocusSession(task.sessionBackend,task.sessionId).catch(()=>Bridge.petPanelOpen(360,50,task.id,'sessions'));
+          else void Bridge.openSession(task.sessionId ?? null, task.sessionCwd ?? null);
         } else if (task.id === "integration_n8n") void Bridge.openN8n();
         else if (task.id === SPOTIFY_ID) void Bridge.spotifyOpen();
         else if (urls[task.id]) void Bridge.openUrl(urls[task.id]);
@@ -245,19 +272,19 @@ export class Island {
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
         Sound.setEnabled(State.settings.soundEnabled);
-        void Bridge.saveSettings(State.settings);
+        void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
         State.notify();
       },
       setVolume: (v) => {
         State.settings.soundVolume = v;
         Sound.setVolume(v);
-        void Bridge.saveSettings(State.settings);
+        void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
         State.notify();
       },
       setAutoClose: (s) => {
         State.settings.autoCloseInterval = s;
         this.fsm.homeToPetitDelay = s;
-        void Bridge.saveSettings(State.settings);
+        void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
         State.notify();
       },
       openSettingsWindow: () => void Bridge.openSettingsWindow(),
@@ -265,7 +292,7 @@ export class Island {
       chooseOutfit: (selection) => {
         if (parseOutfit(State.settings.mochiOutfit) === selection) return;
         State.settings.mochiOutfit = selection;
-        void Bridge.saveSettings(State.settings);
+        void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
         Sound.play("pop");
         this.engine.triggerEmote("proud");
         State.notify();
@@ -382,9 +409,16 @@ export class Island {
 
   openFromDesktop(id?: string, view?: string) {
     if (id) State.setFocus(id);
+    // A companion's completed ingestion enters the real document actions.
+    // The hover canvas belongs only to the still-active native drag.
+    if(view==='choose'){
+      UploadSeq.deactivate();this.dragHeight=null;this.dragOwner=null;State.fileDragOver=false;
+      this.engine.animateMorph(0);
+    }
     void Bridge.reposition();
     const request = State.pendingApproval;
-    const target = view && view in VIEW_LAYOUTS ? view as IslandViewName : id && request?.pillId !== id ? "overview" : State.defaultView();
+    const decision=request?.pillId===State.focusId&&(!view||['overview','approval','question'].includes(view));
+    const target = decision?(request.questions?'question':'approval'):view && view in VIEW_LAYOUTS ? view as IslandViewName : id && request?.pillId !== id ? "overview" : State.defaultView();
     this.alert(target, true);
   }
 
@@ -422,6 +456,7 @@ export class Island {
   /** Navigating out of the drop flow ends the sequence, as on macOS. */
   private stopSequenceIfLeaving(view: IslandViewName) {
     if (UploadSeq.isActive && !UPLOAD_VIEWS.has(view)) UploadSeq.deactivate();
+    if(!UPLOAD_VIEWS.has(view)){this.dragHeight=null;this.dragOwner=null;State.fileDragOver=false;}
   }
 
   expand(view: IslandViewName) {
@@ -580,19 +615,33 @@ export class Island {
 
   // ── File drop ───────────────────────────────────────────────────────────────
 
-  private onDragDrop(e: { type: string; paths?: string[] }) {
+  private onDragDrop(e: { type: string; paths?: string[];dropId?:string;error?:string }) {
     if (e.type !== "over") void Bridge.log(`drag ${e.type} ${e.paths?.length ?? 0} file(s)`);
     if (State.paused) return;
+    if(e.type==='rejected'){
+      const owner=this.dragOwner,provider=owner?.provider??State.chatProvider;
+      this.dragOwner=null;this.dragHeight=null;State.fileDragOver=false;
+      UploadSeq.deactivate();this.engine.animateMorph(0);
+      State.chatFeedback.set(provider,e.error??'O documento não foi recebido. Volta a arrastá-lo para o pet.');
+      if(provider===State.chatProvider&&State.view==='upload'&&State.pendingApproval?.pillId!==State.focusId)this.setView(State.fileFor(provider)?'choose':'prompt');
+      else this.animateGeometry(true);
+      State.notify();return;
+    }
     switch (e.type) {
       case "enter":
       case "over": {
+        if(State.pendingApproval?.pillId===State.focusId)return;
         if (State.fileDragOver) return;
+        this.dragHeight=this.targetSize().h;
+        this.dragOwner={provider:State.chatProvider,conversationId:dialogueId(State.chatProvider),pet:State.focusId};
         State.fileDragOver = true;
         this.engine.animateMorph(1);
         // enterZone must run before the island expands, so the sequence is
         // already active by the time the view becomes `upload`.
         UploadSeq.enterZone(State.mouseInIsland.x, State.mouseInIsland.y);
-        this.alert("upload");
+        // This surface already owns the drag. Re-presenting it through the
+        // habitat moves the native destination out from under the pointer.
+        this.alert("upload",true);
         break;
       }
       case "leave": {
@@ -601,18 +650,21 @@ export class Island {
         this.engine.animateMorph(0);
         // The island deliberately stays open: the drag session is still alive.
         UploadSeq.exitZone();
+        // Keep the expanded destination stable until the next user action;
+        // crossing the pet/card boundary can emit leave before enter.
         State.notify();
         break;
       }
       case "drop": {
         State.fileDragOver = false;
+        const owner=this.dragOwner;this.dragOwner=null;this.dragHeight=null;
         const path = e.paths?.[0];
         if (!path) {
           this.engine.animateMorph(0);
           this.setView(State.defaultView());
           return;
         }
-        this.swallow(path);
+        void this.swallow(path,e.dropId,owner);
         break;
       }
     }
@@ -623,47 +675,43 @@ export class Island {
    * the inbox runs in the background and swaps the path in when it lands, so a
    * slow disk can never stall the animation — same as FileDropHandler on macOS.
    */
-  private swallow(path: string) {
-    const name = path.split(/[\\/]/).pop() || "file";
-    State.droppedFile = { name, path };
-    State.promptContext = { kind: "file", name, path };
-    State.chatHistory = [];
-    void Bridge.chatReset(State.chatProvider);
-
-    UploadSeq.performDrop(State.uploadDuration);
-    this.uploadTens = 0;
-    this.uploadDone = false;
-
-    this.engine.gulp();
-    Sound.play("approve");
-    this.engine.triggerEmote("happy");
-    this.engine.animateMorph(0);
-
-    State.uploadProgress = 0;
-    this.setView("uploading");
-    this.ensureRunning();
-
-    void Bridge.ingestFile(path)
-      .then((file) => {
-        // Cancelled (or replaced by another drop) while the copy was running.
-        if (State.droppedFile?.path !== path) return;
-        State.droppedFile = { name: file.name, path: file.path };
-        State.promptContext = { kind: "file", name: file.name, path: file.path };
-        State.notify();
-      })
-      .catch((err) => {
-        if (State.droppedFile?.path !== path) return;
-        UploadSeq.deactivate();
-        State.noteMessage = String(err).replace(/^Error:\s*/, "");
-        this.engine.animateMorph(0);
-        this.setView("note");
-        Sound.play("error");
-        window.setTimeout(() => this.setView(State.defaultView()), 2400);
-      });
+  private dropSequence=0;
+  private providerDrops=new Map<string,number>();
+  private providerDropTokens=new Map<string,string>();
+  private async swallow(path: string,dropId?:string,owner:{provider:string;conversationId:string|undefined;pet:string|null}|null=null) {
+    const sequence=++this.dropSequence,provider=owner?.provider??State.chatProvider;
+    this.providerDrops.set(provider,sequence);
+    if(dropId)this.providerDropTokens.set(provider,dropId);
+    try {
+      const file=await Bridge.ingestFile(path,provider,owner?owner.conversationId:dialogueId(provider),dropId);
+      if(this.providerDrops.get(provider)!==sequence)return;
+      if(file.conversationId){const current=await Bridge.chatConversation(provider);if(current.id!==file.conversationId)return;}
+      State.setFileContext(provider,file);State.chatFeedback.set(provider,`${file.name} recebido.`);State.notify();
+      // The file is ready. Retire the pre-drop canvas so it cannot cover the
+      // real document actions while still waiting for performDrop().
+      if(sequence===this.dropSequence)UploadSeq.deactivate();
+      if(sequence!==this.dropSequence || provider!==State.chatProvider || State.pendingApproval?.pillId===State.focusId)return;
+      this.engine.gulp();Sound.play("approve");this.engine.triggerEmote("happy");this.engine.animateMorph(0);
+      this.setView("choose");
+    } catch(error) {
+      if(this.providerDrops.get(provider)!==sequence)return;
+      const message=String(error).replace(/^Error:\s*/, "");
+      State.chatFeedback.set(provider,message);State.notify();
+      const pet=owner?.pet??State.focusId;
+      if(pet && State.settings.companionMode)void emitToWindow("companions","companions-notice",{key:`file:${sequence}`,pet,text:message,urgent:false,view:"prompt"});
+      if(sequence!==this.dropSequence || provider!==State.chatProvider || State.pendingApproval?.pillId===State.focusId)return;
+      UploadSeq.deactivate();this.engine.animateMorph(0);this.setView("prompt");Sound.play("error");
+    }
   }
 
   /** "Cancel" on the dropped file: forget it, so the chat does not pick it up. */
   private discardDrop() {
+    this.dropSequence++;
+    this.providerDrops.delete(State.chatProvider);
+    const provider=State.chatProvider,dropId=this.providerDropTokens.get(provider),file=State.fileFor(provider);
+    this.providerDropTokens.delete(provider);
+    if(dropId)void Bridge.petDocumentCancelDrop(provider,dropId).catch(()=>{});
+    if(file?.conversationId&&file.sequence!==undefined)void Bridge.petDocumentClear(provider,file.conversationId,file.sequence).catch(()=>{});
     State.droppedFile = null;
     State.promptContext = null;
     this.setView(State.defaultView());
@@ -701,12 +749,13 @@ export class Island {
   private targetSize(): { w: number; h: number; r: number } {
     let { w, h } = islandSize(State.mode, State.view, State.chatHistory.length);
     if (State.mode === "expanded" && State.view === "overview") {
-      if (State.settings.companionMode) w = 380;
+      if (State.settings.companionMode) { w = 640; h = 296; }
       if (State.focusId === "integration_spotify") h = 300;
     }
     if (State.mode === "expanded" && State.view === "question" && State.pendingApproval?.questions) {
       h = QUESTION_PICKER_H;
     }
+    if(State.mode==='expanded'&&State.view==='upload'&&this.dragHeight!==null)h=Math.max(h,this.dragHeight);
     const r = State.mode === "expanded" ? EXPANDED_CORNER : ROUNDED_CORNER;
     return { w, h, r };
   }
@@ -730,6 +779,7 @@ export class Island {
     const hh = this.height.value;
     const r = this.radius.value;
     this.islandEl.classList.toggle("companion-card", State.settings.companionMode);
+    this.islandEl.classList.toggle('companion-overview',State.settings.companionMode&&State.view==='overview');
     this.islandEl.style.width = `${w}px`;
     this.islandEl.style.height = `${hh}px`;
     this.islandEl.style.borderRadius = State.settings.companionMode ? `${r}px` : `0 0 ${r}px ${r}px`;
@@ -1191,6 +1241,7 @@ export class Island {
   // ── DOM sync ────────────────────────────────────────────────────────────────
 
   private syncDom() {
+    if((State.view==='approval'||State.view==='question')&&!State.pendingApproval){this.setView(State.defaultView());return;}
     const expanded = State.mode === "expanded";
     const greetingActive = expanded && State.view === "greeting";
 
@@ -1215,15 +1266,15 @@ export class Island {
       if (on) view.sync();
     }
 
-    // The chat is the only view with a text field, so it is the only time the
-    // island is allowed to take keyboard focus.
-    if (this.lastSyncedView !== State.view) {
-      const wasChat = this.lastSyncedView === "prompt";
-      this.lastSyncedView = State.view;
-      if (State.view === "prompt") {
+    // Chat and the explicit email draft form accept text input.
+    const keyboardView=State.mode==='expanded'&&(State.view==='prompt'||State.view==='mail')?State.view:'';
+    if (this.keyboardView !== keyboardView) {
+      this.keyboardView = keyboardView;
+      if (keyboardView) {
         void Bridge.focusWindow(true);
-        window.setTimeout(() => this.views.get("prompt")?.focus?.(), 120);
-      } else if (wasChat) {
+        const view=State.view;window.setTimeout(() => {if(State.mode==='expanded'&&State.view===view&&document.hasFocus())this.views.get(view)?.focus?.();}, 120);
+      } else {
+        this.fsm.editing=false;
         void Bridge.focusWindow(false);
       }
     }

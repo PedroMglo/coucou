@@ -966,8 +966,10 @@ pub fn prepare_companions_window(win: &WebviewWindow, mode: super::DesktopMode) 
         unsafe {
             layer::gtk_layer_init_for_window(ptr);
             layer::gtk_layer_set_namespace(ptr, c"coucou-companions".as_ptr());
-            // Fullscreen applications stay above the pets.
-            layer::gtk_layer_set_layer(ptr, layer::LAYER_TOP);
+            // The DMS bar has an invisible full-width scroll strip. The pet
+            // discs must receive pointer/drop events above it; the native mask
+            // still passes through every pixel outside the visible pets.
+            layer::gtk_layer_set_layer(ptr, layer::LAYER_OVERLAY);
             layer::gtk_layer_set_anchor(ptr, layer::EDGE_TOP, 1);
             layer::gtk_layer_set_anchor(ptr, layer::EDGE_LEFT, 1);
             layer::gtk_layer_set_exclusive_zone(ptr, -1);
@@ -1000,4 +1002,78 @@ pub fn prepare_companions_window(win: &WebviewWindow, mode: super::DesktopMode) 
 pub fn set_companions_input(win: &WebviewWindow, rects: Vec<(f64, f64, f64, f64)>) {
     *COMPANIONS_SHAPE.lock().unwrap() = rects.clone();
     if let Ok(gw) = win.gtk_window() { apply_rects(&gw, &rects); }
+}
+
+/// An explicitly opened shelter popout can take keyboard focus for search.
+static PET_CONTROL_SHAPE:Mutex<Vec<(f64,f64,f64,f64)>>=Mutex::new(Vec::new());
+static PET_CONTROL_EXPANDED:AtomicBool=AtomicBool::new(false);
+thread_local! {static PET_CONTROL_POINTER_WATCH:std::cell::RefCell<Option<gtk::glib::SourceId>>=const{std::cell::RefCell::new(None)};}
+/// WebKitGTK loses DOM pointerleave when a Wayland input region is left.
+/// Observe compositor focus only while expanded; compact/hidden uses no timer.
+fn watch_pet_control_pointer(win:&WebviewWindow,gw:&gtk::ApplicationWindow,expanded:bool){
+ PET_CONTROL_POINTER_WATCH.with(|slot|{
+  if !expanded {if let Some(source)=slot.borrow_mut().take(){source.remove();}return;}
+  if slot.borrow().is_some(){return;}
+  let win=win.clone();let gw=gw.clone();let inside=std::cell::Cell::new(false);
+  let source=gtk::glib::timeout_add_local(std::time::Duration::from_millis(33),move||{
+   let now_inside=(||{
+    let ours=gw.window()?;let pointer=gw.display().default_seat()?.pointer()?;
+    let(under,_,_)=pointer.window_at_position();Some(under?.toplevel()==ours.toplevel())
+   })().unwrap_or(false);
+   if inside.replace(now_inside)!=now_inside {use tauri::Emitter;let _=win.emit("pet-control-pointer-inside",now_inside);}
+   gtk::glib::ControlFlow::Continue
+  });
+  *slot.borrow_mut()=Some(source);
+ });
+}
+pub fn set_pet_control_input(win:&WebviewWindow,rects:Vec<(f64,f64,f64,f64)>,expanded:bool){
+ *PET_CONTROL_SHAPE.lock().unwrap()=rects.clone();
+ if let Ok(gw)=win.gtk_window(){
+  apply_rects(&gw,&rects);
+  watch_pet_control_pointer(win,&gw,expanded);
+  if PET_CONTROL_EXPANDED.swap(expanded,Ordering::Relaxed)!=expanded {
+   gw.set_accept_focus(expanded);
+   if desktop_mode()==super::DesktopMode::Layer {unsafe{layer::gtk_layer_set_keyboard_mode(gtk_window_ptr(&gw),if expanded{layer::KEYBOARD_ON_DEMAND}else{layer::KEYBOARD_NONE});}}
+   if expanded{let _=win.set_focus();}
+  }
+ }
+}
+pub fn prepare_pet_control(win:&WebviewWindow)->bool {
+ let Ok(gw)=win.gtk_window() else{return false};gw.set_accept_focus(false);
+ if desktop_mode()==super::DesktopMode::Layer {
+  if gw.is_realized(){return false;}
+  gw.set_titlebar(None::<&gtk::Widget>);let ptr=gtk_window_ptr(&gw);
+  unsafe{layer::gtk_layer_init_for_window(ptr);layer::gtk_layer_set_namespace(ptr,c"coucou-pet-control".as_ptr());layer::gtk_layer_set_layer(ptr,layer::LAYER_OVERLAY);layer::gtk_layer_set_anchor(ptr,layer::EDGE_TOP,1);layer::gtk_layer_set_anchor(ptr,layer::EDGE_LEFT,1);layer::gtk_layer_set_exclusive_zone(ptr,-1);layer::gtk_layer_set_keyboard_mode(ptr,layer::KEYBOARD_NONE);}
+  let remapped=std::cell::Cell::new(false);
+  gw.connect_map_event(move|w,_|{apply_rects(w,&PET_CONTROL_SHAPE.lock().unwrap());if !remapped.replace(true){let w=w.clone();gtk::glib::idle_add_local_once(move||{w.hide();w.show_all();apply_rects(&w,&PET_CONTROL_SHAPE.lock().unwrap());});}gtk::glib::Propagation::Proceed});
+ }else{gw.set_type_hint(gtk::gdk::WindowTypeHint::Dock);gw.set_keep_above(true);}
+ true
+}
+pub fn prepare_pet_panel(win:&WebviewWindow)->bool {
+ prepare_pet_popup(win,c"coucou-pets-panel")
+}
+pub fn prepare_pet_chat(win:&WebviewWindow)->bool {
+ prepare_pet_popup(win,c"coucou-pet-chat")
+}
+fn prepare_pet_popup(win:&WebviewWindow,namespace:&std::ffi::CStr)->bool {
+ let Ok(gw)=win.gtk_window() else{return false};
+ gw.set_accept_focus(true);
+ gw.set_focus_on_map(false);
+ if desktop_mode()==super::DesktopMode::Layer{
+  if gw.is_realized(){return false;}
+  gw.set_titlebar(None::<&gtk::Widget>);let ptr=gtk_window_ptr(&gw);
+  unsafe{layer::gtk_layer_init_for_window(ptr);layer::gtk_layer_set_namespace(ptr,namespace.as_ptr());layer::gtk_layer_set_layer(ptr,layer::LAYER_OVERLAY);layer::gtk_layer_set_anchor(ptr,layer::EDGE_TOP,1);layer::gtk_layer_set_anchor(ptr,layer::EDGE_LEFT,1);layer::gtk_layer_set_exclusive_zone(ptr,-1);layer::gtk_layer_set_keyboard_mode(ptr,layer::KEYBOARD_ON_DEMAND);}
+  // WebKitGTK needs the same initial remap as the island and habitat. Without
+  // it the DOM is accessible but the first layer buffer can remain invisible.
+  let remapped=std::cell::Cell::new(false);
+  gw.connect_map_event(move|w,_|{
+   if !remapped.replace(true){let w=w.clone();gtk::glib::idle_add_local_once(move||{if w.is_visible(){w.hide();w.show_all();}});}
+   gtk::glib::Propagation::Proceed
+  });
+ }else{gw.set_type_hint(gtk::gdk::WindowTypeHint::Utility);gw.set_keep_above(true);}
+ true
+}
+pub fn place_pet_panel(app:&tauri::AppHandle,win:&WebviewWindow,x:f64,y:f64){
+ if desktop_mode()==super::DesktopMode::Layer{if let Some(island)=crate::island::window(app){layer_display(&island,win);}set_layer_margins(win,x,y);}
+ else{let _=win.set_position(tauri::LogicalPosition::new(x,y));}
 }

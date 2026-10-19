@@ -13,6 +13,7 @@ import type { BotEmoteName, IslandViewName } from "../core/layout";
 import { cyclePill, islandKeyAction, navigate, pillByNumber, type IslandKeyAction } from "../core/shortcuts";
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
+import {resetDialogue} from "../core/chat-dialogue";
 
 const CLAUDE_DESKTOP_ID = "agent_claude-desktop";
 
@@ -67,7 +68,7 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
         const provider = providerForPill(State.focusTask?.id);
         if (provider) {
           State.settings = { ...State.settings, chatProvider: provider };
-          void Bridge.saveSettings(State.settings);
+          void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
         }
       }
       host.alert("prompt");
@@ -121,7 +122,7 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
       const on = !State.settings.soundEnabled;
       State.settings.soundEnabled = on;
       Sound.setEnabled(on);
-      void Bridge.saveSettings(State.settings);
+      void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
       if (on) Sound.play("tick");
       host.emote(on ? "happy" : "annoyed");
       State.notify();
@@ -170,16 +171,13 @@ export function runIslandKey(host: ShortcutHost, action: IslandKeyAction) {
     case "diff":
       host.viewCommand("toggleDiff");
       break;
-    case "newChat":
-      // Not while an answer is on its way: it would land in the new chat.
-      if (State.stateOverride === "thinking") return;
-      State.chatHistory = [];
-      State.droppedFile = null;
-      State.promptContext = null;
-      void Bridge.chatReset(State.chatProvider);
-      Sound.play("blip");
-      host.setView("prompt");
+    case "newChat": {
+      const provider=State.chatProvider;
+      void resetDialogue(provider).then(ok=>{
+        if(ok && State.chatProvider===provider){Sound.play("blip");host.setView("prompt");}
+      });
       break;
+    }
     case "settings":
       void Bridge.openSettingsWindow();
       break;

@@ -17,6 +17,7 @@ pub mod local;
 pub mod manual;
 pub mod wake;
 pub mod dialogue;
+mod services;
 pub mod session;
 mod tts;
 
@@ -65,12 +66,16 @@ fn capture_lease(stop: &AtomicBool) -> Option<std::sync::MutexGuard<'static, ()>
     }
 }
 
-/// Rust waits on these for the island's answers and the end of speech.
-fn pending() -> &'static Mutex<HashMap<u64, mpsc::Sender<String>>> {
-    static P: OnceLock<Mutex<HashMap<u64, mpsc::Sender<String>>>> = OnceLock::new();
+struct Pending {speech:bool,tx:mpsc::Sender<String>}
+/// Tool replies survive turning speech off while their CLI job continues.
+fn pending() -> &'static Mutex<HashMap<u64, Pending>> {
+    static P: OnceLock<Mutex<HashMap<u64, Pending>>> = OnceLock::new();
     P.get_or_init(|| Mutex::new(HashMap::new()))
 }
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+fn cancel_playback(pending:&mut HashMap<u64,Pending>) {
+    pending.retain(|_,p|if p.speech {let _=p.tx.send(String::new());false}else{true});
+}
 
 /// Whether « OK Coucou » can run: the voice model and a Claude key.
 pub fn provider_ready(app: &AppHandle) -> bool {
@@ -80,13 +85,14 @@ pub fn provider_ready(app: &AppHandle) -> bool {
         "ollama" => local::config(&settings).is_some(),
         "codex" => crate::codex_chat::installed(),
         "antigravity" => crate::gravity_chat::executable().is_ok(),
+        "copilot"=>crate::copilot_chat::executable().is_ok(),
         "" | "anthropic" => crate::secrets::present(crate::claude::KEY),
         _ => false,
     }
 }
 
 pub fn requirements_met(app: &AppHandle) -> bool {
-    speech::is_ready() && provider_ready(app)
+    asr_ready(app) && provider_ready(app)
 }
 
 /// Starts or stops listening to follow the preference.
@@ -100,13 +106,14 @@ pub fn sync(app: &AppHandle) {
             let app2 = app.clone();
             let stop2 = stop.clone();
             std::thread::Builder::new().name("coucou-voice".into()).spawn(move || run(app2, stop2)).ok();
+            preload_asr(app,stop.clone());
             *running = Some(Running { stop });
-            speech::preload();
             crate::log::line("voice: « OK Coucou » listening");
         }
         (false, true) => {
             if let Some(r) = running.take() {
                 r.stop.store(true, Ordering::Relaxed);
+                cancel_speech(app);
             }
             let dictation = crate::flow::get(app).is_some_and(|f| f.store.lock().unwrap().prefs.enabled);
             if !dictation && !explicit && !crate::notes::is_recording(app) {
@@ -127,6 +134,7 @@ pub fn is_listening() -> bool {
 pub fn restart(app: &AppHandle) {
     if let Some(r) = RUNNING.lock().unwrap().take() {
         r.stop.store(true, Ordering::Relaxed);
+        cancel_speech(app);
     }
     sync(app);
 }
@@ -295,20 +303,40 @@ async fn until_stopped<T>(future: impl std::future::Future<Output = T>, stop: Op
     }
 }
 
-fn asr_ready(app: &AppHandle) -> bool {
-    let settings=app.state::<crate::Shared>().settings.lock().unwrap().clone();
-    if settings.voice_asr_python.is_empty() { return crate::speech::is_ready(); }
+fn asr_engine(settings:&crate::settings::Settings)->&'static str {
+    match settings.voice_asr_engine.as_str() {
+        "parakeet"=>"parakeet",
+        "whisper"=>"whisper",
+        _ if !settings.voice_asr_python.is_empty()&&!settings.voice_asr_model.is_empty()=>"whisper",
+        _=>"parakeet",
+    }
+}
+fn whisper_ready(settings:&crate::settings::Settings)->bool {
+    if settings.voice_asr_python.is_empty()||settings.voice_asr_model.is_empty(){return false;}
     let expand=|path: &str|path.strip_prefix("~/").map(|p|crate::platform::home_dir().join(p)).unwrap_or_else(||path.into());
     expand(&settings.voice_asr_python).is_file() && expand(&settings.voice_asr_model).join("model.bin").is_file()
 }
+#[derive(Serialize)]#[serde(rename_all="camelCase")]
+pub struct RecognitionStatus{engine:&'static str,ready:bool,whisper_available:bool}
+pub(crate) fn recognition_status(app:&AppHandle)->RecognitionStatus {
+    let settings=app.state::<crate::Shared>().settings.lock().unwrap().clone();
+    let engine=asr_engine(&settings);let whisper_available=whisper_ready(&settings);
+    RecognitionStatus{engine,ready:if engine=="whisper"{whisper_available}else{crate::speech::is_ready()},whisper_available}
+}
+pub(crate) fn asr_ready(app: &AppHandle) -> bool {recognition_status(app).ready}
 fn preload_asr(app: &AppHandle, stop: std::sync::Arc<AtomicBool>) {
-    if app.state::<crate::Shared>().settings.lock().unwrap().voice_asr_python.is_empty() { crate::speech::preload(); return; }
+    if asr_engine(&app.state::<crate::Shared>().settings.lock().unwrap())=="parakeet" { crate::speech::preload(); return; }
     let app=app.clone(); std::thread::spawn(move || { let _=transcribe(&app,&[],Some(&stop)); });
 }
 
 pub(crate) fn transcribe(app: &AppHandle, samples: &[f32], stop: Option<&AtomicBool>) -> Option<crate::speech::Transcript> {
     let settings=app.state::<crate::Shared>().settings.lock().unwrap().clone();
-    if settings.voice_asr_python.is_empty() || settings.voice_asr_model.is_empty() { return crate::speech::transcribe(samples); }
+    if stop.is_some_and(|s|s.load(Ordering::Relaxed)){return None;}
+    if asr_engine(&settings)=="parakeet" {
+        let result=crate::speech::transcribe(samples);
+        return if stop.is_some_and(|s|s.load(Ordering::Relaxed)){None}else{result};
+    }
+    if !whisper_ready(&settings){return None;}
     let expand=|path: &str|path.strip_prefix("~/").map(|p|crate::platform::home_dir().join(p)).unwrap_or_else(||path.into());
     let python=expand(&settings.voice_asr_python); let model=expand(&settings.voice_asr_model);
     if samples.is_empty() { return crate::speech::whisper::transcribe(&python,&model,samples,stop); }
@@ -323,7 +351,7 @@ pub(crate) fn transcribe(app: &AppHandle, samples: &[f32], stop: Option<&AtomicB
 fn cancel_speech(app: &AppHandle) {
     let _ = app.emit_to(pill::LABEL, "voice-cancel", ());
     let _ = app.emit_to(crate::companions::LABEL, "voice-cancel", ());
-    for (_, tx) in pending().lock().unwrap().drain() { let _ = tx.send(String::new()); }
+    cancel_playback(&mut pending().lock().unwrap());
     tts::cancel_native();
 }
 
@@ -358,7 +386,7 @@ fn speak_with_language(app: &AppHandle, text: &str, stop: Option<&AtomicBool>, p
     if output == "edge" && audio.is_none() { return; }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel();
-    pending().lock().unwrap().insert(id, tx);
+    pending().lock().unwrap().insert(id, Pending{speech:true,tx});
     // WebKit can suspend the hidden pill. The visible pet surface owns audio
     // while companions are enabled, just as it owns the conversation bubble.
     let target = if crate::companions::enabled(app) { crate::companions::LABEL } else { pill::LABEL };
@@ -367,7 +395,9 @@ fn speak_with_language(app: &AppHandle, text: &str, stop: Option<&AtomicBool>, p
     let words = crate::flow::text::word_count(text) as u64;
     let until = Instant::now() + Duration::from_millis(4000 + words.min(200) * 600);
     while Instant::now() < until {
-        if stop.is_some_and(|s| s.load(Ordering::Relaxed)) { cancel_speech(app); break; }
+        // The controller cancels playback before releasing microphone ownership.
+        // A superseded waiter must never send a global cancel to a newer voice.
+        if stop.is_some_and(|s| s.load(Ordering::Relaxed)) { break; }
         if rx.recv_timeout(Duration::from_millis(50)).is_ok() { break; }
     }
     pending().lock().unwrap().remove(&id);
@@ -377,8 +407,8 @@ fn speak_with_language(app: &AppHandle, text: &str, stop: Option<&AtomicBool>, p
 #[tauri::command]
 pub fn voice_done(id: u64, text: Option<String>, played: Option<bool>) {
     if let Some(played) = played { crate::log::line(format!("voice: playback complete id={id}, played={played}")); }
-    if let Some(tx) = pending().lock().unwrap().remove(&id) {
-        let _ = tx.send(text.unwrap_or_default());
+    if let Some(p) = pending().lock().unwrap().remove(&id) {
+        let _ = p.tx.send(text.unwrap_or_default());
     }
 }
 
@@ -467,7 +497,7 @@ fn base64(bytes: &[u8]) -> String {
 pub fn ask_island(app: &AppHandle, kind: &str, input: Value) -> Option<String> {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel();
-    pending().lock().unwrap().insert(id, tx);
+    pending().lock().unwrap().insert(id, Pending{speech:false,tx});
     let _ = app.emit_to(crate::island::WINDOW_LABEL, "voice-ask", json!({ "id": id, "kind": kind, "input": input }));
     let answer = rx.recv_timeout(Duration::from_secs(5)).ok();
     pending().lock().unwrap().remove(&id);
@@ -476,6 +506,11 @@ pub fn ask_island(app: &AppHandle, kind: &str, input: Value) -> Option<String> {
 
 /// Runs one of Claude's tools: what goes back to Claude, and whether something changed.
 pub fn run_tool(app: &AppHandle, name: &str, input: &Value) -> (String, bool) {
+    run_tool_for(app,"ai_anthropic",name,input)
+}
+pub fn run_tool_for(app:&AppHandle,pet:&str,name:&str,input:&Value)->(String,bool){
+    let grant=match name{"prepare_email"=>Some("emailDrafts"),"music"=>Some("music"),"open_app"=>Some("openApps"),_=>None};
+    if let Some(grant)=grant{if let Err(error)=crate::pet_config::require(pet,grant){return(error,false);}}
     match name {
         "pills" => {
             let answer = ask_island(app, "pills", input.clone()).unwrap_or_else(|| "the island did not answer".into());
@@ -515,9 +550,12 @@ fn music(app: &AppHandle, input: &Value) -> (String, bool) {
     let action = input["action"].as_str().unwrap_or("");
     let (control, value) = match action {
         "play_pause" => ("playPause", None),
+        "pause" => ("pause",None),
+        "play" => ("play",None),
         "next" => ("next", None),
         "previous" => ("previous", None),
         "set_volume" => ("volume", Some(input["volume"].as_f64().unwrap_or(50.0).clamp(0.0, 100.0))),
+        "play_item"=>{let ok=tauri::async_runtime::block_on(crate::spotify::spotify_play_item(app.clone(),input["uri"].as_str().unwrap_or("").into()));return(if ok{"Spotify accepted the playback request.".into()}else{"Spotify did not accept that item.".into()},ok);},
         "search" => {
             let q = input["query"].as_str().unwrap_or("").trim();
             if q.is_empty() {
@@ -532,7 +570,8 @@ fn music(app: &AppHandle, input: &Value) -> (String, bool) {
     let app2 = app.clone();
     let done = tauri::async_runtime::block_on(crate::spotify::spotify_control(app2, control.into(), value));
     if done {
-        ("done".into(), true)
+        let state=tauri::async_runtime::block_on(crate::spotify::spotify_refresh(app.clone()));
+        (state.map(|s|json!({"requestAccepted":true,"playing":s.playing,"volume":s.volume,"track":s.track.map(|t|json!({"title":t.title,"artist":t.artist}))}).to_string()).unwrap_or_else(||"Request accepted; playback state is not confirmed.".into()),true)
     } else {
         ("Spotify is not running or not playing: tell the user to open it.".into(), false)
     }
@@ -619,7 +658,33 @@ fn find_app(wanted: &str) -> Option<(String, Box<dyn FnOnce()>)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn downloading_parakeet_does_not_replace_an_existing_whisper_choice(){
+        let mut settings=crate::settings::Settings::default();
+        assert_eq!(super::asr_engine(&settings),"parakeet");
+        settings.voice_asr_python="/project/python".into();settings.voice_asr_model="/project/model".into();
+        assert_eq!(super::asr_engine(&settings),"whisper");
+        settings.voice_asr_engine="parakeet".into();assert_eq!(super::asr_engine(&settings),"parakeet");
+        assert_eq!(settings.voice_asr_python,"/project/python");assert_eq!(settings.voice_asr_model,"/project/model");
+        settings.voice_asr_engine="whisper".into();assert_eq!(super::asr_engine(&settings),"whisper");
+    }
+    #[test]
+    fn incomplete_whisper_setup_does_not_make_auto_unusable(){
+        let mut settings=crate::settings::Settings::default();settings.voice_asr_python="/project/python".into();
+        assert_eq!(super::asr_engine(&settings),"parakeet");
+        settings.voice_asr_engine="whisper".into();assert_eq!(super::asr_engine(&settings),"whisper");
+        assert!(!super::whisper_ready(&settings));
+    }
     use super::*;
+
+    #[test]
+    fn cancelling_audio_does_not_cancel_an_in_flight_mochi_tool_reply() {
+        let (voice,heard)=mpsc::channel();let (tool,answer)=mpsc::channel();
+        let mut waiting=HashMap::from([(1,Pending{speech:true,tx:voice}),(2,Pending{speech:false,tx:tool})]);
+        cancel_playback(&mut waiting);assert_eq!(heard.recv().unwrap(),"");
+        assert!(waiting.contains_key(&2));assert!(answer.try_recv().is_err());
+        waiting.remove(&2).unwrap().tx.send("service data".into()).unwrap();assert_eq!(answer.recv().unwrap(),"service data");
+    }
 
     #[test]
     fn stopping_does_not_wait_for_the_previous_microphone_owner() {

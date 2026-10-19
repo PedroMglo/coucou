@@ -9,11 +9,12 @@ import { t } from "../i18n/i18n";
 import { onEvent } from "../core/bridge";
 import { FlowBridge, type FlowPrefs, type FlowStatus, type ModelsStatus } from "../core/flow";
 import { hero, liveMochi } from "./hero";
+import {labelControls} from './control-labels';
 import { icon, keyLabel } from "./ui";
 
 export type PageId =
   | "dictation" | "notes" | "insights" | "dictionary" | "snippets" | "styles" | "flowsettings"
-  | "general" | "pills" | "agents" | "chat" | "voice" | "integrations" | "phone" | "shortcuts";
+  | "pets" | "general" | "pills" | "agents" | "chat" | "voice" | "integrations" | "phone" | "shortcuts";
 
 interface PageDef {
   id: PageId;
@@ -34,6 +35,7 @@ export const FLOW_PAGES: PageDef[] = [
 ];
 
 export const NOTCH_PAGES: PageDef[] = [
+  {id:"pets",icon:"grid",title:()=>"Pets",subtitle:()=>"Tarefas, sessões, contas e modelos locais."},
   { id: "general", icon: "gear", title: () => t("General"), subtitle: () => t("Mochi, his sounds and how the island behaves.") },
   { id: "pills", icon: "grid", title: () => t("Active pills"), subtitle: () => t("The pills shown in the island, their order and their colours.") },
   { id: "agents", icon: "terminal", title: () => t("Agents"), subtitle: () => t("Claude Code, Codex and the other agents Mochi follows.") },
@@ -58,6 +60,10 @@ export interface HubContext {
   hero(page: PageId, title: string, subtitle: string | null, actions?: HTMLElement[], compact?: boolean): HTMLElement;
   /** Set by a page: called when the page is left. */
   onLeave?: () => void;
+  petSelection?:string;
+  petSection?:string;
+  initialVisible?:boolean;
+  visibilityEvent?:string;
 }
 
 export type FlowPageRenderer = (container: HTMLElement, ctx: HubContext) => void | Promise<void>;
@@ -66,7 +72,7 @@ export interface HubOptions {
   version: string;
   flowPages: Partial<Record<PageId, FlowPageRenderer>>;
   /** Draws the island's settings for one of the Notch pages into `container`. */
-  renderNotch(page: PageId, container: HTMLElement): Promise<void>;
+  renderNotch(page: PageId, container: HTMLElement, context:HubContext): Promise<void>;
 }
 
 const DEFAULT_STATUS: FlowStatus = {
@@ -91,6 +97,8 @@ export async function startHub(root: HTMLElement, opts: HubOptions) {
   const statusLine = h("div", { class: "hub-status" });
   const scroll = h("div", { class: "hub-scroll" });
   let rendering = 0;
+  let activePageContext:HubContext|undefined;
+  const dispose=(context:HubContext|undefined)=>{const cleanup=context?.onLeave;if(context)context.onLeave=undefined;cleanup?.();};
 
   const ctx: HubContext = {
     get status() {
@@ -134,22 +142,30 @@ export async function startHub(root: HTMLElement, opts: HubOptions) {
 
   async function show(page: PageId) {
     const def = ALL.find((p) => p.id === page) ?? FLOW_PAGES[0];
-    ctx.onLeave?.();
-    ctx.onLeave = undefined;
+    dispose(activePageContext);
     current = def.id;
-    for (const [id, el] of items) el.classList.toggle("on", id === current);
+    for (const [id, el] of items){el.classList.toggle("on", id === current);if(id===current)el.setAttribute('aria-current','page');else el.removeAttribute('aria-current');}
     const token = ++rendering;
+    const pageContext=Object.create(ctx) as HubContext;activePageContext=pageContext;
     const page_ = h("div", { class: "hub-page" });
     const renderer = opts.flowPages[def.id];
-    if (renderer) {
-      await renderer(page_, ctx);
-    } else {
-      page_.append(hero(def.id, def.title(), def.subtitle?.() ?? null));
-      const container = h("div", { id: "settings-root" });
-      page_.append(container);
-      await opts.renderNotch(def.id, container);
+    try{
+      if (renderer) {
+        await renderer(page_, pageContext);
+      } else {
+        page_.append(hero(def.id, def.title(), def.subtitle?.() ?? null));
+        const container = h("div", { id: "settings-root" });
+        page_.append(container);
+        await opts.renderNotch(def.id, container, pageContext);
+      }
+    }catch(error){
+      dispose(pageContext);clear(page_);
+      page_.append(h('div',{class:'notice err',role:'alert',text:`Não foi possível abrir esta página. ${String(error).replace(/^Error:\s*/,'')}`}),h('button',{class:'primary',text:'Tentar novamente',onclick:()=>void show(def.id)}));
     }
-    if (token !== rendering) return;
+    if (token !== rendering){dispose(pageContext);return;}
+    labelControls(page_);
+    const observer=new MutationObserver(()=>labelControls(page_));observer.observe(page_,{childList:true,subtree:true});
+    const pageCleanup=pageContext.onLeave;pageContext.onLeave=()=>{observer.disconnect();pageCleanup?.();};
     clear(scroll);
     scroll.append(page_);
     scroll.scrollTop = 0;
@@ -179,7 +195,9 @@ export async function startHub(root: HTMLElement, opts: HubOptions) {
   await show(current);
 
   void onEvent<string>("hub-page", (page) => {
-    const id = (page === "settings" ? "flowsettings" : page) as PageId;
+    const [requested,pet]=page.split(":");
+    ctx.petSelection=requested==="pets"?pet:undefined;
+    const id = (requested === "settings" ? "flowsettings" : requested) as PageId;
     if (ALL.some((p) => p.id === id)) void show(id);
   });
   void onEvent<FlowPrefs>("flow-prefs", (prefs) => {

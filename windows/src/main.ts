@@ -1,6 +1,7 @@
 // Entry point: boot the bridge, wire the island, start the greeting.
 
 import "./style.css";
+import {OllamaModelSelection} from './core/ollama-selection';
 import { Bridge, IS_TAURI, onEvent } from "./core/bridge";
 import { Sound } from "./core/sound";
 import { State, type Settings } from "./core/state";
@@ -126,7 +127,7 @@ async function main() {
   // The settings window writes preferences; apply them here without a restart.
   await onEvent<Settings>("settings-changed", (s) => {
     const previousMain = State.mainPillId;
-    State.settings = { ...State.settings, ...s };
+    State.settings = OllamaModelSelection.applySettings({ ...State.settings, ...s });
     applyLanguage();
     island.applySettings();
     State.loadIntegrationTasks();

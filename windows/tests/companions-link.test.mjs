@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test,beforeEach,afterEach,mock } from "node:test";
 import assert from "node:assert/strict";
 import { emit, sent } from "./tauri.mjs";
 import { Bridge } from "../src/core/bridge.ts";
@@ -6,15 +6,44 @@ import { DEFAULT_SETTINGS, State } from "../src/core/state.ts";
 import { CompanionsLink } from "../src/island/companions.ts";
 import { PET_EVENTS } from "../src/mochi/companions.ts";
 
+test('a completed document replaces an older pending summon with its action chooser',async()=>{
+ const configure=Bridge.companionsConfigure,conversation=Bridge.chatConversation,opened=[];
+ try{
+  Bridge.companionsConfigure=async()=>({width:1440,height:320,top:0});
+  Bridge.chatConversation=async()=>({id:'ollama-doc-chat',messages:[]});
+  State.settings={...DEFAULT_SETTINGS,companionMode:true,mainPill:'agent_codex',activeIntegrations:['ai_ollama']};
+  State.tasks=[task('agent_codex'),task('ai_ollama')];State.pendingApproval=null;State.clearAllDialogueContexts();
+  const link=new CompanionsLink((id,view)=>opened.push({id,view}),()=> 'none');await link.init();
+  const file={name:'a.pdf',path:'/private/inbox/a.pdf',conversationId:'ollama-doc-chat',sequence:11};
+  emit('pet-document',{pet:'ai_ollama',file});await settle();
+  assert.deepEqual(opened.at(-1),{id:'ai_ollama',view:'choose'});
+  assert.ok(sent('plugin:event|emit_to').some(e=>e.event==='companions-present'&&e.payload.id==='ai_ollama'&&e.payload.view==='choose'));
+  assert.equal(State.fileFor('ollama').sequence,11);assert.equal(State.fileFor('codex'),null);
+  const before=opened.length;State.pendingApproval={pillId:'agent_codex',requestId:'native-decision'};
+  emit('pet-document',{pet:'ai_ollama',file:{...file,sequence:12}});await settle();
+  assert.equal(opened.length,before+1,'another pet waiting for approval must not block document actions');
+  assert.deepEqual(opened.at(-1),{id:'ai_ollama',view:'choose'});
+  assert.equal(State.pendingApproval.requestId,'native-decision');
+  assert.equal(State.fileFor('ollama').sequence,12);
+  State.pendingApproval={pillId:'ai_ollama',requestId:'own-decision'};
+  emit('pet-document',{pet:'ai_ollama',file:{...file,sequence:13}});await settle();
+  assert.equal(opened.length,before+1,'the receiving pet keeps its own pending decision');
+  assert.equal(State.pendingApproval.requestId,'own-decision');
+  assert.deepEqual(sent('chat_send'),[]);assert.deepEqual(sent('approval_decision'),[]);
+ }finally{Bridge.companionsConfigure=configure;Bridge.chatConversation=conversation;State.pendingApproval=null;}
+});
+
 const task = id => ({ id, name: id, state: "idle", color: "#88aaff", steps: [], stepIndex: 0, source: "agent", isIntegration: true });
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+beforeEach(()=>mock.timers.enable({apis:['setInterval']}));
+afterEach(()=>mock.timers.reset());
 
 test("click routing never approves a permission or opens an integration absent from the habitat", async () => {
   const original = Bridge.companionsConfigure;
   const configurations = [], opened = [];
   try {
     Bridge.companionsConfigure = async (enabled, count) => { configurations.push([enabled, count]); return { width: 1440, height: 256, top: 64 }; };
-    State.settings = { ...DEFAULT_SETTINGS, companionMode: true };
+    State.settings = { ...DEFAULT_SETTINGS, companionMode: true, mainPill:"agent_codex", activeIntegrations:["integration_spotify"] };
     State.tasks = [task("agent_codex"), task("integration_spotify")];
     State.paused = false;
     const link = new CompanionsLink(id => opened.push(id), () => "none");
@@ -87,4 +116,46 @@ test("reconciles an already-open client before hooks and wakes it only on a real
   emit('companions-presence',{running:['agent_codex'],activity:{agent_codex:3}});await settle();
   assert.equal(state().pets[0].active,true);assert.notEqual(state().pets[0].activity,activity);
  }finally{Bridge.companionsConfigure=configure;Bridge.companionsPresence=presence;}
+});
+
+test("a service opens its own conversation without sending a job to the global provider",async()=>{
+ const original=Bridge.companionsConfigure,opened=[];
+ try{
+  Bridge.companionsConfigure=async()=>({width:1440,height:320,top:0});
+  State.settings={...DEFAULT_SETTINGS,companionMode:true,chatProvider:"ollama"};State.tasks=[task("integration_github")];State.preparedChat=null;
+  const link=new CompanionsLink((id,view)=>opened.push([id,view]),()=>"none");await link.init();
+  emit(PET_EVENTS.open,{pillId:"integration_github",view:"prompt"});
+  assert.deepEqual(opened,[["integration_github","prompt"]]);assert.equal(State.preparedChat,null);assert.equal(State.settings.chatProvider,"ollama");assert.deepEqual(sent("chat_send"),[]);
+  emit(PET_EVENTS.delegate,{pet:"missing-pet"});assert.equal(opened.length,1);
+ }finally{Bridge.companionsConfigure=original;}
+});
+
+
+test("using a pet profile changes only its next model preference and never starts or moves a task",async()=>{
+ const original=Bridge.companionsConfigure;
+ try{
+  Bridge.companionsConfigure=async()=>({width:1440,height:320,top:0});State.settings={...DEFAULT_SETTINGS,chatProvider:"ollama",chatModels:{codex:"manual",ollama:"local"}};
+  const link=new CompanionsLink(()=>{},()=>"none");await link.init();
+  emit("pet-use-profile",{provider:"codex"});await settle();
+  assert.equal(State.settings.chatModels.codex,"@default");assert.equal(State.settings.chatModels.ollama,"local");assert.equal(State.settings.chatProvider,"ollama");assert.deepEqual(sent("chat_send"),[]);
+  emit("pet-use-profile",{provider:"unknown"});await settle();assert.equal(State.settings.chatModels.unknown,undefined);
+ }finally{Bridge.companionsConfigure=original;}
+});
+
+
+test("the shelter lists only configured entities and rejects unconfigured services without running models",async()=>{
+ const original=Bridge.companionsConfigure,opened=[];
+ try{
+  Bridge.companionsConfigure=async()=>({width:1440,height:320,top:0});
+  State.settings={...DEFAULT_SETTINGS,companionMode:true,mainPill:"agent_codex",activeIntegrations:["agent_antigravity","ai_ollama","integration_spotify"]};State.tasks=[task("agent_codex")];
+  const link=new CompanionsLink(id=>opened.push(id),()=>"none");await link.init();await link.launch();
+  const snapshot=sent("plugin:event|emit_to").filter(e=>e.event===PET_EVENTS.state).at(-1).payload;
+  assert.equal(snapshot.pets.length,1);assert.equal(snapshot.catalog.length,4);
+  for(const id of ["agent_codex","agent_antigravity","ai_ollama","integration_spotify"])assert.ok(snapshot.catalog.some(p=>p.id===id),id);
+  emit(PET_EVENTS.summon,{pillId:"integration_spotify"});await settle();assert.equal(opened.at(-1),"integration_spotify");
+  assert.ok(State.tasks.some(t=>t.id==="integration_spotify"));
+  assert.ok(sent('plugin:event|emit_to').some(e=>e.event==='companions-present'&&e.payload.id==='integration_spotify'));
+  emit(PET_EVENTS.summon,{pillId:"integration_vercel"});emit(PET_EVENTS.summon,{pillId:"ai_openai"});emit(PET_EVENTS.summon,{pillId:"missing"});await settle();assert.equal(opened.length,1);
+  assert.deepEqual(sent("chat_send"),[]);assert.deepEqual(sent("spotify_control"),[]);assert.deepEqual(sent("approval_decision"),[]);
+ }finally{Bridge.companionsConfigure=original;}
 });

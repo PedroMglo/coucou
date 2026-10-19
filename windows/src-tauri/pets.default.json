@@ -1,0 +1,576 @@
+{
+  "version": 1,
+  "reasoningTerms": [
+    "pensa a fundo",
+    "raciocínio elevado",
+    "raciocínio profundo",
+    "análise profunda",
+    "arquitetura",
+    "arquitectura",
+    "migração complexa",
+    "investiga a causa",
+    "analisa as causas",
+    "plano detalhado",
+    "refatoração",
+    "refactor",
+    "auditoria de segurança",
+    "root cause",
+    "think deeply",
+    "reason carefully",
+    "high reasoning"
+  ],
+  "reasoningLength": 1600,
+  "pets": {
+    "integration_claude": {
+      "name": "Claude Code",
+      "aliases": [
+        "claude"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "claude-sonnet-4-6",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "claude-opus-4-6-thinking",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_cursor": {
+      "name": "Cursor",
+      "aliases": [
+        "cursor"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_antigravity": {
+      "name": "Gravity",
+      "aliases": [
+        "gravity"
+      ],
+      "provider": "antigravity",
+      "mode": "auto",
+      "fast": {
+        "model": "gemini-3.8-flash-low",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "claude-opus-4-6-thinking",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      }
+    },
+    "agent_codex": {
+      "name": "Codex",
+      "aliases": [
+        "codex"
+      ],
+      "provider": "codex",
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      }
+    },
+    "agent_gemini": {
+      "name": "Gemini CLI",
+      "aliases": [
+        "gemini"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "gemini-3.8-flash-low",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "gemini-3.8-flash-high",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_copilot": {
+      "name": "Copilot CLI",
+      "aliases": [
+        "copilot cli",
+        "copilot"
+      ],
+      "provider": "copilot",
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "claude-sonnet-5.5",
+        "effort": "high"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_muse": {
+      "name": "Muse Code",
+      "aliases": [
+        "muse code"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_opencode": {
+      "name": "OpenCode",
+      "aliases": [
+        "opencode"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_amp": {
+      "name": "Amp",
+      "aliases": [
+        "amp"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_hermes": {
+      "name": "Hermes",
+      "aliases": [
+        "hermes"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_claude-desktop": {
+      "name": "Claude Desktop",
+      "aliases": [
+        "claude desktop"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "ai_anthropic": {
+      "name": "Anthropic",
+      "aliases": [
+        "anthropic"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      }
+    },
+    "ai_google": {
+      "name": "Google AI",
+      "aliases": [
+        "google ai"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      }
+    },
+    "ai_openai": {
+      "name": "OpenAI",
+      "aliases": [
+        "openai"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      }
+    },
+    "ai_ollama": {
+      "name": "Ollama",
+      "aliases": [
+        "ollama"
+      ],
+      "provider": "ollama",
+      "mode": "auto",
+      "fast": {
+        "model": "gemma3:4b",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "qwen3:8b",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": true,
+        "music": true,
+        "openApps": true
+      }
+    },
+    "ai_lmstudio": {
+      "name": "LM Studio",
+      "aliases": [
+        "lm studio"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      }
+    },
+    "integration_resend": {
+      "name": "Resend",
+      "aliases": [
+        "resend"
+      ],
+      "provider": "codex",
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_n8n": {
+      "name": "n8n",
+      "aliases": [
+        "n8n"
+      ],
+      "provider": "codex",
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_vercel": {
+      "name": "Vercel",
+      "aliases": [
+        "vercel"
+      ],
+      "provider": "codex",
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_github": {
+      "name": "GitHub",
+      "aliases": [
+        "github"
+      ],
+      "provider": "codex",
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_notion": {
+      "name": "Notion",
+      "aliases": [
+        "notion"
+      ],
+      "provider": "codex",
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_calcom": {
+      "name": "Cal.com",
+      "aliases": [
+        "cal.com"
+      ],
+      "provider": "codex",
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_stripe": {
+      "name": "Stripe",
+      "aliases": [
+        "stripe"
+      ],
+      "provider": "codex",
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_music": {
+      "name": "Apple Music",
+      "aliases": [
+        "apple music"
+      ],
+      "provider": "",
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_spotify": {
+      "name": "Spotify",
+      "aliases": [
+        "spotify"
+      ],
+      "provider": "codex",
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      }
+    }
+  }
+}

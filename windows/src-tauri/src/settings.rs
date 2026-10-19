@@ -30,6 +30,10 @@ pub struct Settings {
     pub companion_mode: bool,
     pub companion_motion: bool,
     pub companion_bar_mode: bool,
+    /// Separate native island bar; roaming pets and their cards remain independent.
+    pub pet_control_bar: bool,
+    /// Prepared optional clock and native system-panel shortcuts in the pet island.
+    pub pet_system_center: bool,
     pub companion_top_clearance: f64,
     pub autostart: bool,
     pub hooks_installed: bool,
@@ -53,6 +57,8 @@ pub struct Settings {
     pub chat_models: BTreeMap<String, String>,
     /// Working folder for Mochi's CLI agents; empty means the user's home.
     pub cli_workspace: String,
+    /// Optional per-pet folders, shared by voice and written tasks.
+    pub cli_workspaces: BTreeMap<String,String>,
     /// Explicit opt-in to unattended execution for Mochi's CLI sessions only.
     pub cli_full_access: bool,
     pub voice_idle_seconds: u64,
@@ -61,6 +67,8 @@ pub struct Settings {
     pub edge_voice_python: String,
     pub voice_asr_python: String,
     pub voice_asr_model: String,
+    /// auto keeps an existing Whisper setup; otherwise use built-in Parakeet.
+    pub voice_asr_engine: String,
     pub voice_models: BTreeMap<String, String>,
     /// Addresses of the model servers once connected; empty means not connected.
     pub ollama_url: String,
@@ -157,6 +165,8 @@ impl Default for Settings {
             companion_mode: false,
             companion_motion: true,
             companion_bar_mode: false,
+            pet_control_bar: false,
+            pet_system_center: false,
             companion_top_clearance: 64.0,
             autostart: false,
             hooks_installed: false,
@@ -167,6 +177,7 @@ impl Default for Settings {
             chat_provider: crate::chat::ANTHROPIC.into(),
             chat_models: BTreeMap::new(),
             cli_workspace: String::new(),
+            cli_workspaces: BTreeMap::new(),
             cli_full_access: false,
             voice_idle_seconds: 60,
             voice_pet_aliases: BTreeMap::new(),
@@ -174,6 +185,7 @@ impl Default for Settings {
             edge_voice_python: String::new(),
             voice_asr_python: String::new(),
             voice_asr_model: String::new(),
+            voice_asr_engine: "auto".into(),
             voice_models: BTreeMap::from([("codex".into(), "gpt-6-luna".into())]),
             ollama_url: String::new(),
             lmstudio_url: String::new(),
@@ -215,6 +227,19 @@ pub fn save(settings: &Settings) -> std::io::Result<()> {
     let dir = config_dir();
     crate::platform::ensure_private_dir(&dir)?;
     save_to(&settings_path(), settings)
+}
+
+/// Serialize a preference change, its durable write and its notification.
+/// Failed writes leave the authoritative in-memory settings unchanged.
+pub(crate) fn update_with(
+    current:&Mutex<Settings>,
+    change:impl FnOnce(&mut Settings),
+    persist:impl FnOnce(&Settings)->std::io::Result<()>,
+    publish:impl FnOnce(&Settings),
+)->std::io::Result<Settings>{
+    let mut current=current.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut next=current.clone();change(&mut next);persist(&next)?;
+    *current=next;publish(&current);Ok(current.clone())
 }
 
 /// How many copies `set_aside` can make within one second before it gives up.
@@ -458,6 +483,8 @@ mod tests {
   "companionMode": true,
   "companionMotion": false,
   "companionBarMode": false,
+  "petControlBar": true,
+  "petSystemCenter": true,
   "companionTopClearance": 80.0,
   "autostart": true,
   "hooksInstalled": true,
@@ -468,6 +495,7 @@ mod tests {
   "chatProvider": "ollama",
   "chatModels": { "ollama": "llama3.2", "openai": "gpt-x" },
   "cliWorkspace": "/tmp/my-project",
+  "cliWorkspaces": {"codex":"/tmp/codex-project"},
   "cliFullAccess": true,
   "voiceIdleSeconds": 45,
   "voicePetAliases": {"codex": ["co dex"]},
@@ -476,6 +504,7 @@ mod tests {
   "voiceModels": {"codex": "gpt-6-luna"},
   "voiceAsrPython": "/tmp/whisper/bin/python",
   "voiceAsrModel": "/tmp/whisper-model",
+  "voiceAsrEngine": "whisper",
   "ollamaUrl": "http://127.0.0.1:11434",
   "lmstudioUrl": "http://127.0.0.1:1234",
   "customUrl": "https://llm.example.com",
@@ -991,6 +1020,8 @@ mod tests {
                 "companionMode",
                 "companionMotion",
                 "companionBarMode",
+                "petControlBar",
+                "petSystemCenter",
                 "companionTopClearance",
                 "autostart",
                 "hooksInstalled",
@@ -1001,6 +1032,7 @@ mod tests {
                 "chatProvider",
                 "chatModels",
                 "cliWorkspace",
+                "cliWorkspaces",
                 "cliFullAccess",
                 "voiceIdleSeconds",
                 "voicePetAliases",
@@ -1008,6 +1040,7 @@ mod tests {
                 "edgeVoicePython",
                 "voiceAsrPython",
                 "voiceAsrModel",
+                "voiceAsrEngine",
                 "voiceModels",
                 "ollamaUrl",
                 "lmstudioUrl",
@@ -1062,5 +1095,36 @@ mod tests {
         assert!(save_to(&file, &Settings::default()).is_err());
         assert_eq!(std::fs::read(&file).unwrap(), CUSTOM.as_bytes());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_preference_commit_keeps_memory_and_does_not_publish(){
+        let current=Mutex::new(Settings::default());let before=shown(&current.lock().unwrap());
+        let result=update_with(&current,|s|s.voice_asr_engine="parakeet".into(),
+            |_|Err(std::io::Error::other("synthetic disk failure")),|_|panic!("failed preference was published"));
+        assert!(result.is_err());assert_eq!(shown(&current.lock().unwrap()),before);
+    }
+
+    #[test]
+    fn preference_writes_and_publication_cannot_overtake_a_slow_older_write(){
+        use std::sync::{Arc,mpsc};use std::time::Duration;
+        let current=Arc::new(Mutex::new(Settings::default()));
+        let published=Arc::new(Mutex::new(Vec::new()));
+        let (entered,waiting)=mpsc::channel();let(release,ready)=mpsc::channel();
+        let (requested,started)=mpsc::channel();let(wrote,writing)=mpsc::channel();
+        let first=current.clone();let first_log=published.clone();
+        let a=std::thread::spawn(move||update_with(&first,|s|{s.chat_models.insert("ollama".into(),"a".into());},
+            |_|{entered.send(()).unwrap();ready.recv().unwrap();Ok(())},
+            |s|first_log.lock().unwrap().push(s.chat_models["ollama"].clone())).unwrap());
+        waiting.recv().unwrap();
+        let second=current.clone();let second_log=published.clone();
+        let b=std::thread::spawn(move||{requested.send(()).unwrap();update_with(&second,
+            |s|{s.chat_models.insert("ollama".into(),"b".into());},
+            |_|{wrote.send(()).unwrap();Ok(())},
+            |s|second_log.lock().unwrap().push(s.chat_models["ollama"].clone())).unwrap()});
+        started.recv().unwrap();assert!(writing.recv_timeout(Duration::from_millis(40)).is_err());
+        release.send(()).unwrap();a.join().unwrap();b.join().unwrap();
+        assert_eq!(current.lock().unwrap().chat_models["ollama"],"b");
+        assert_eq!(*published.lock().unwrap(),vec!["a","b"]);
     }
 }

@@ -26,12 +26,10 @@ def load(device):
 
 
 def recognize(audio):
-    # Fix Portuguese, never translation or language auto-detection on names.
+    # Detect the spoken language per segment; preserve Portuguese/English code switching.
     segments, _ = model.transcribe(
-        audio, language="pt", task="transcribe", beam_size=5,
+        audio, language=None, multilingual=True, task="transcribe", beam_size=5,
         temperature=0, condition_on_previous_text=False,
-        initial_prompt="Transcrição em português de Portugal.",
-        hotwords="Codex, Gravity, Gemini, Claude, Ollama, PostgreSQL, Docker",
         vad_filter=True, vad_parameters={"min_silence_duration_ms": 500},
     )
     return " ".join(s.text.strip() for s in segments

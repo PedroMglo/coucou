@@ -2,6 +2,7 @@
 // the pill see them (src-tauri/src/flow, speech, notes).
 
 import { invoke } from "@tauri-apps/api/core";
+import { flowWrite } from './flow-write';
 
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -54,6 +55,7 @@ export interface ModelsStatus {
 export interface FlowStatus {
   prefs: FlowPrefs;
   models: ModelsStatus;
+  recognition?:{engine:'whisper'|'parakeet';ready:boolean;whisperAvailable:boolean};
   /** "ok", or why the key can't be watched ("wayland", "no-display"). */
   keys: string;
   hasClaudeKey: boolean;
@@ -185,17 +187,17 @@ export type VoiceOutput = "system" | "elevenlabs" | "local" | "edge" | "off";
 
 export const FlowBridge = {
   status: () => call<FlowStatus>("flow_status"),
-  setPrefs: (prefs: FlowPrefs) => call<void>("flow_set_prefs", { prefs }),
+  setPrefs: (prefs: FlowPrefs) => flowWrite("flow_set_prefs", "Preferências", { prefs }),
   history: () => call<FlowEntry[]>("flow_history"),
   deleteEntry: (id: string) => call<void>("flow_delete", { id }),
   clear: (everything: boolean) => call<void>("flow_clear", { everything }),
   stats: () => call<FlowStats>("flow_stats"),
   words: () => call<{ words: string[]; replacements: Replacement[] }>("flow_words"),
-  setWords: (words: { words: string[]; replacements: Replacement[] }) => call<void>("flow_set_words", { words }),
+  setWords: (words: { words: string[]; replacements: Replacement[] }) => flowWrite("flow_set_words", "Dicionário", { words }),
   snippets: () => call<Snippet[]>("flow_snippets"),
-  setSnippets: (snippets: Snippet[]) => call<void>("flow_set_snippets", { snippets }),
+  setSnippets: (snippets: Snippet[]) => flowWrite("flow_set_snippets", "Atalhos de texto", { snippets }),
   styles: () => call<AppStyle[]>("flow_styles"),
-  setStyles: (styles: AppStyle[]) => call<void>("flow_set_styles", { styles }),
+  setStyles: (styles: AppStyle[]) => flowWrite("flow_set_styles", "Estilos", { styles }),
   runningApps: () => call<{ id: string; name: string }[]>("flow_running_apps"),
   copy: (text: string) => call<boolean>("flow_copy", { text }),
   pasteAgain: () => call<void>("flow_paste_again"),

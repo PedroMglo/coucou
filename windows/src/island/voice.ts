@@ -1,3 +1,4 @@
+import {taskPet} from "../mochi/tasks";
 // « OK Coucou » asks the island what only it knows (src-tauri/src/voice): the
 // pills, to add, remove or pick the main one, and the user's own data for
 // Claude to answer from. Port of the Mac's VoiceTools pills and service_info.
@@ -84,7 +85,7 @@ function pills(input: Ask["input"]): string {
     const previousMain = State.mainPillId;
     State.loadIntegrationTasks();
     if (State.mainPillId !== previousMain) State.setFocus(State.mainPillId);
-    void Bridge.saveSettings(State.settings);
+    void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
   }
   return JSON.stringify({ done, failed, now: JSON.parse(describe()) });
 }
@@ -112,7 +113,7 @@ function info(): string {
 export function registerVoiceHandlers() {
   if (!IS_TAURI) return;
   void onEvent<string>("voice-pet", (provider) => {
-    const pill = provider === "codex" ? "agent_codex" : provider === "antigravity" ? "agent_antigravity" : provider === "claude-cli" ? "integration_claude" : provider === "gemini-cli" ? "agent_gemini" : provider === "ollama" ? "ai_ollama" : null;
+    const pill = taskPet(provider) ?? (provider === "ollama" ? "ai_ollama" : null);
     if (!pill) return;
     const definition = pillDefinition(pill);
     if (definition) State.upsertExternalAgent(pill, definition.name, definition.color);

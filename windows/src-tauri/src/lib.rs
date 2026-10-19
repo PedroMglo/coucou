@@ -1,19 +1,43 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
+mod assistant_memory;
+mod assistant_tasks;
+mod pet_management;
+mod pet_model;
+mod pet_usage;
+mod pet_panel;
+mod pet_system;
 mod agent_hooks;
 mod agents;
 mod chat;
 mod claude;
 mod codex_chat;
 mod cli_chat;
+mod copilot_chat;
+#[path="copilot_chat/adapter.rs"]
+mod copilot_adapter;
 mod codex_plan;
 mod config_file;
 mod companions;
+mod pet_control;
+mod pet_chat;
+mod session_chat;
+mod session_bridge;
+mod copilot_session;
+#[path="session_chat/adapter.rs"]
+mod session_chat_adapter;
 mod desktop;
 mod files;
+mod document_text;
+#[cfg(target_os="linux")]mod linux_documents;
+mod document_folder;
+mod pet_files;
+mod pet_documents;
+mod navigation;
 mod flow;
 mod github;
 mod gravity_chat;
+mod gravity_hook;
 mod hooks;
 mod i18n;
 mod identity;
@@ -27,6 +51,7 @@ mod openai_compat;
 mod phone_link;
 mod pipe;
 mod pet_activity;
+mod pet_config;
 mod pet_presence;
 mod platform;
 #[cfg(target_os = "linux")]
@@ -53,7 +78,6 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
 use chat::{Chat, ChatContext, ChatReply, ModelInfo};
-use files::DroppedFile;
 use hooks::{HookPreview, HookStatus};
 use island::{PollGate, ScreenInfo};
 use pipe::Pending;
@@ -94,12 +118,12 @@ fn boot(app: AppHandle, shared: State<Shared>) -> BootInfo {
 }
 
 #[tauri::command]
-fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
-    let (screen_changed, autostart_changed, shortcuts_changed) = {
-        let mut current = shared.settings.lock().unwrap();
-        let screen_changed = current.screen != settings.screen || current.companion_mode != settings.companion_mode;
-        let autostart_changed = current.autostart != settings.autostart;
-        let shortcuts_changed = current.shortcuts != settings.shortcuts;
+fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> Result<(),String> {
+    let (mut screen_changed,mut autostart_changed,mut shortcuts_changed)=(false,false,false);
+    let settings=settings::update_with(&shared.settings,|current|{
+        screen_changed = current.screen != settings.screen || current.companion_mode != settings.companion_mode;
+        autostart_changed = current.autostart != settings.autostart;
+        shortcuts_changed = current.shortcuts != settings.shortcuts;
         // Where Mochi sits on the desktop is desktop.rs's to say, not a webview's.
         let mut settings = settings.clone();
         settings.desktop_mochi = current.desktop_mochi.clone();
@@ -114,13 +138,14 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
         settings.phone_relay = current.phone_relay;
         settings.phone_relay_url = current.phone_relay_url.clone();
         settings.phone_chat_models = current.phone_chat_models.clone();
+        // Ollama choices have their own validated, acknowledged command. A
+        // settings page opened before that choice cannot silently undo it.
+        if let Some(model)=current.chat_models.get("ollama"){
+            settings.chat_models.insert("ollama".into(),model.clone());
+        }else{settings.chat_models.remove("ollama");}
         *current = settings;
-        (screen_changed, autostart_changed, shortcuts_changed)
-    };
-    let settings = shared.settings.lock().unwrap().clone();
-    if let Err(err) = settings::save(&settings) {
-        log::line(format!("could not save settings: {err}"));
-    }
+    },settings::save,|settings|{let _=app.emit("settings-changed",settings);})
+        .map_err(|err|{log::line(format!("could not save settings: {err}"));"Não foi possível guardar as definições. As preferências anteriores foram preservadas.".to_string()})?;
     if autostart_changed {
         let manager = app.autolaunch();
         let result = if settings.autostart { manager.enable() } else { manager.disable() };
@@ -142,7 +167,7 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
     }
     // Keep the other window in step (island ⇄ settings window).
     voice::sync(&app);
-    let _ = app.emit("settings-changed", settings);
+    Ok(())
 }
 
 /// The island reports the system's languages at launch, for "System" in
@@ -167,6 +192,7 @@ fn language_changed(app: &AppHandle) {
 /// cursor poll; anything else → full panel and 60 Hz polling.
 #[tauri::command]
 fn set_collapsed(app: AppHandle, shared: State<Shared>, collapsed: bool) {
+    if collapsed{if let Some(win)=island::window(&app){platform::set_activating(&win,false);}}
     let pref = shared.settings.lock().unwrap().screen.clone();
     shared.gate.collapsed.store(collapsed, Ordering::Relaxed);
     let companion = shared.settings.lock().unwrap().companion_mode;
@@ -346,8 +372,9 @@ fn quit_app(app: AppHandle) {
 /// Tray → Pause. Paused means paused: the pollers stop talking to the network,
 /// not just the island stopping showing things.
 #[tauri::command]
-fn set_paused(paused: bool) {
+fn set_paused(app:AppHandle,paused: bool) {
     integrations::set_paused(paused);
+    if paused{pet_chat::pet_chat_hide(app);}
 }
 
 // ── Claude Code hooks ─────────────────────────────────────────────────────────
@@ -502,11 +529,23 @@ async fn chat_send(
     query: String,
     context: Option<ChatContext>,
     provider: Option<String>,
+    conversation_id:Option<String>,
+    selected_model:Option<String>,
+    document_sequence:Option<u64>,
 ) -> Result<ChatReply, String> {
-    let mut settings = shared.settings.lock().unwrap().clone();
-    if let Some(provider) = provider {
-        if !["anthropic","openai","google","openrouter","codex","antigravity","ollama","lmstudio","custom"].contains(&provider.as_str()) { return Err("Unknown chat provider".into()); }
-        settings.chat_provider = provider;
+    let provider=provider.unwrap_or_else(||shared.settings.lock().unwrap().chat_provider.clone());
+    let provider=if provider.is_empty(){"anthropic".to_string()}else{provider};
+    if !crate::pet_config::service(&provider) && !["anthropic","openai","google","openrouter","codex","copilot","antigravity","gemini-cli","claude-cli","ollama","lmstudio","custom"].contains(&provider.as_str()) { return Err("Unknown chat provider".into()); }
+    // Admission precedes the effective model snapshot. A model ACK that wins
+    // the race is visible here; an admitted turn prevents a later selection.
+    let _conversation=chat.reserve_conversation(&provider,conversation_id.as_deref())?;
+    let mut settings=shared.settings.lock().unwrap().clone();settings.chat_provider=provider;
+    if let Some(ChatContext::File{path,..})=&context{
+        let id=chat.conversation_id(&settings.chat_provider)?;
+        pet_documents::validate(&settings.chat_provider,&id,path,document_sequence.ok_or("Volta a entregar este documento à conversa antes de o enviar.")?)?;
+    }
+    if let Some(model)=selected_model {
+        chat::select_for_turn(&mut settings,model)?;
     }
     chat::send(&app, &chat, &settings, query, context).await
 }
@@ -533,17 +572,48 @@ fn local_set_key(url: String, key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn chat_reset(chat: State<Chat>, provider: Option<String>) {
-    if let Some(provider) = provider { chat.reset_provider(&provider); } else { chat.reset(); }
+async fn chat_reset(app:AppHandle,chat: State<'_,Chat>, provider: Option<String>)->Result<Option<chat::ConversationView>,String> {
+    let chat=chat.inner().clone();tauri::async_runtime::spawn_blocking(move||{
+    if let Some(provider) = provider {
+        chat.reset_provider(&provider)?;
+        pet_documents::invalidate(&app,Some(&provider));
+        let view=chat.conversation(&provider)?;let _=app.emit("assistant-history-changed",&provider);Ok(Some(view))
+    } else { chat.reset_checked()?;pet_documents::invalidate(&app,None);pet_chat::pet_chat_hide(app);Ok(None) }
+    }).await.map_err(|_|"Não foi possível criar a conversa.".to_string())?
 }
 
 #[tauri::command]
-fn chat_cancel(chat: State<Chat>) { chat.cancel(); }
+async fn chat_cancel(chat: State<'_,Chat>, provider: Option<String>,conversation_id:Option<String>,turn:Option<u64>)->Result<bool,String> {
+    let chat=chat.inner().clone();tauri::async_runtime::spawn_blocking(move||{
+    if let Some(provider)=provider {chat.cancel_conversation(&provider,conversation_id.as_deref(),turn)} else {chat.cancel();true}
+    }).await.map_err(|_|"Não foi possível confirmar a interrupção.".to_string())
+}
+
+#[tauri::command]
+async fn chat_history(chat: State<'_,Chat>, provider:String)->Result<Vec<serde_json::Value>,String> {let chat=chat.inner().clone();tauri::async_runtime::spawn_blocking(move||chat.history(&provider)).await.map_err(|_|"Não foi possível consultar o histórico.".to_string())}
+
+#[tauri::command]
+async fn chat_conversation(chat:State<'_,Chat>,provider:String)->Result<chat::ConversationView,String> {let chat=chat.inner().clone();tauri::async_runtime::spawn_blocking(move||chat.conversation(&provider)).await.map_err(|_|"Não foi possível consultar a conversa.".to_string())?}
+
+#[tauri::command]
+async fn chat_read_conversation(chat:State<'_,Chat>,provider:String,id:String)->Result<chat::ConversationView,String> {let chat=chat.inner().clone();tauri::async_runtime::spawn_blocking(move||chat.read_conversation(&provider,&id)).await.map_err(|_|"Não foi possível consultar a conversa.".to_string())?}
+
+#[tauri::command]
+async fn chat_conversations(chat:State<'_,Chat>,provider:String,query:Option<String>)->Result<Vec<chat::ConversationSummary>,String> {let chat=chat.inner().clone();tauri::async_runtime::spawn_blocking(move||chat.conversations(&provider,query.as_deref().unwrap_or(""))).await.map_err(|_|"Não foi possível consultar as conversas.".to_string())?}
+
+#[tauri::command]
+async fn chat_restore_conversation(app:AppHandle,chat:State<'_,Chat>,provider:String,id:String)->Result<chat::ConversationView,String> {
+    let chat=chat.inner().clone();tauri::async_runtime::spawn_blocking(move||{
+    let view=chat.restore_conversation(&provider,&id)?;pet_documents::invalidate(&app,Some(&provider));let _=app.emit("assistant-history-changed",provider);Ok(view)
+    }).await.map_err(|_|"Não foi possível retomar a conversa.".to_string())?
+}
 
 /// Copies a dropped file into the inbox and reports its name back.
 #[tauri::command]
-fn ingest_file(path: String) -> Result<DroppedFile, String> {
-    files::ingest(&path)
+async fn ingest_file(app:AppHandle,window:tauri::WebviewWindow,path: String,provider:Option<String>,conversation_id:Option<String>,drop_id:Option<String>) -> Result<pet_documents::Attachment, String> {
+    if ![island::WINDOW_LABEL,companions::LABEL,pet_chat::LABEL,pet_control::LABEL].contains(&window.label()){return Err("Entrega o documento diretamente ao pet.".into());}
+    let provider=provider.unwrap_or_else(||app.state::<Shared>().settings.lock().unwrap().chat_provider.clone());
+    pet_documents::ingest(&app,provider,path,conversation_id,drop_id.ok_or("O documento não tem uma entrega ativa. Volta a arrastá-lo para o pet.")?).await
 }
 
 /// The island may only ask whether a key exists — never read it.
@@ -725,12 +795,15 @@ fn voice_request(args: &[String]) -> bool {
 }
 
 pub fn run() {
+    if gravity_hook::maybe_run() {return;}
+    if agents::gravity_config_cli() {return;}
     platform::prepare_environment();
     let loaded = settings::load();
     i18n::set_picked(&loaded.language);
     let gate = Arc::new(PollGate::new());
 
     let mut builder = tauri::Builder::default()
+        .plugin(navigation::plugin())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if argv.iter().any(|arg| arg == "--voice-preview") {
                 let app = app.clone();
@@ -758,12 +831,14 @@ pub fn run() {
             gate: gate.clone(),
         })
         .manage(Pending::default())
-        .manage(Chat::default())
+        .manage(Chat::persistent(platform::local_dir().join("assistant").join("conversations.json")))
         .manage(shortcuts::Registry::default())
         .manage(recap::load())
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
+            pet_model::pet_model_select,
+            pet_usage::pet_usage,
             set_system_languages,
             set_collapsed,
             set_island_rect,
@@ -794,12 +869,34 @@ pub fn run() {
             log_line,
             chat_send,
             chat_models,
+            cli_chat::assistant_set_workspace,
             cli_chat::cli_agent_answer,
+            cli_chat::cli_agent_pending,
             local_connect,
             local_set_key,
             chat_reset,
             chat_cancel,
+            chat_history,
+            chat_conversation,
+            chat_read_conversation,
+            chat_conversations,
+            chat_restore_conversation,
+            pet_management::pet_management,
+            pet_management::pet_focus_session,
+            pet_panel::pet_panel_open,
+            pet_panel::pet_panel_hide,
+            pet_panel::pet_panel_context,
+            pet_config::pet_configuration,
+            pet_config::pet_roster,
+            pet_config::pet_configuration_save,
+            assistant_tasks::assistant_tasks,
+            assistant_tasks::assistant_cancel_task,
+            assistant_tasks::assistant_resume_task,
             ingest_file,
+            pet_files::pet_mail_draft,
+            pet_documents::pet_document_context,
+            pet_documents::pet_document_clear,
+            pet_documents::pet_document_cancel_drop,
             secret_present,
             secret_set,
             secret_clear,
@@ -845,6 +942,27 @@ pub fn run() {
             recap::recap_save_png,
             recap::recap_reveal_saved,
             companions::companions_configure,
+            pet_control::pet_control_configure,
+            pet_control::pet_control_open,
+            pet_system::pet_system_panel,
+            pet_system::pet_system_status,
+            pet_control::pet_control_input,
+            pet_control::pet_control_context,
+            pet_chat::pet_chat_open,
+            pet_chat::pet_chat_context,
+            pet_chat::pet_chat_hide,
+            pet_chat::pet_chat_layout,
+            pet_chat::pet_chat_rect,
+            pet_chat::pet_chat_pointer,
+            session_chat_adapter::session_chat_list,
+            session_chat_adapter::session_chat_history,
+            session_chat_adapter::session_chat_send,
+            session_chat_adapter::session_chat_cancel,
+            session_chat_adapter::session_chat_managed_create,
+            session_chat_adapter::session_chat_managed_list,
+            session_chat_adapter::session_chat_managed_inspect,
+            session_chat_adapter::session_chat_managed_open,
+            session_chat_adapter::session_chat_managed_release,
             companions::companions_input,
             companions::companions_open,
             companions::companions_anchor,
@@ -904,6 +1022,7 @@ pub fn run() {
             voice::voice_say_native,
             voice::voice_preview,
             voice::session::voice_session_toggle,
+            voice::session::voice_session_start,
             voice::session::voice_learn_alias,
         ])
         .setup(move |app| {
@@ -912,14 +1031,18 @@ pub fn run() {
             tray::build(&handle)?;
             // Before the island: see create_settings_window.
             create_settings_window(&handle);
+            pet_panel::create(&handle);
             // Same rule for Mochi's desktop window and the dictation pill.
             desktop::setup(&handle);
             companions::setup(&handle);
+            pet_control::create(&handle);
+            pet_chat::create(&handle);
             pet_presence::setup(&handle);
             flow::setup(&handle);
             notes::setup(&handle);
 
             if let Some(win) = island::window(&handle) {
+                #[cfg(target_os="linux")]if let Err(error)=linux_documents::install(&win){log::line(error);}
                 // Where Tauri takes the drop itself (Linux), its paths are the
                 // ones ingest_file may copy (files.rs).
                 win.on_window_event(|event| {
@@ -949,7 +1072,11 @@ pub fn run() {
             integrations::start(handle.clone());
             spotify::sync(&handle, &loaded.active_integrations);
             shortcuts::apply(&handle, &loaded.shortcuts);
-            if loaded.autostart {
+            // A Linux debug/QA launch must not replace the installed login
+            // entry with a build-tree executable. Explicit settings changes
+            // still manage autostart through their normal action.
+            let register_autostart = !cfg!(all(target_os="linux",debug_assertions));
+            if loaded.autostart && register_autostart {
                 // Login items written before 0.5 start Coucou without --autostart:
                 // writing it again adds it, so the window stays hidden at login.
                 let _ = handle.autolaunch().enable();

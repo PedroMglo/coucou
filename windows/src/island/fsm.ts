@@ -29,6 +29,10 @@ export class IslandStateMachine {
   greetHoverCollapseDelay = 10;
   /** An alert waiting for an answer stays open, even when the mouse leaves. */
   pinned = false;
+  /** Keyboard editing holds a card independently of a permission or user pin. */
+  private keyboardEditing=false;
+  get editing(){return this.keyboardEditing;}
+  set editing(value:boolean){this.keyboardEditing=value;if(value)this.clear('homeCollapse');}
   /**
    * Hovering opens the island all the way instead of peeking (Settings →
    * General → Open on hover, off by default), as IslandStateMachine.openOnHover.
@@ -160,7 +164,7 @@ export class IslandStateMachine {
     this.clear("petitHide");
     // A card folded away while it waits for an answer keeps the compact island
     // on screen, so it can be reopened (isHeldOpen on macOS).
-    if (this.pinned) return;
+    if (this.pinned || this.editing) return;
     this.petitHide = window.setTimeout(() => {
       this.petitHide = null;
       if (this.state === "petit" && !this.pinned) this.transition("hidden");
@@ -176,7 +180,7 @@ export class IslandStateMachine {
       this.homeCollapse = null;
       this.homeCollapseDueAt = null;
       // An alert pinned while the countdown ran keeps the island open.
-      if (this.state === "home" && !this.pinned) {
+      if (this.state === "home" && !this.pinned && !this.editing) {
         this.byHover = false;
         this.transition("petit");
       }

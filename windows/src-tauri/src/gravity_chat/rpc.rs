@@ -30,6 +30,8 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        #[cfg(target_os="linux")]
+        cmd.env(crate::gravity_hook::OWNED_ENV,if args.contains(&"--input-format") && !args.contains(&"--dangerously-skip-permissions") {"1"} else {"0"});
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -44,6 +46,16 @@ impl Process {
             "Cannot start Antigravity. Run agy in a terminal and sign in first.".to_string()
         })?;
         let input = child.stdin.take();
+        #[cfg(target_os="linux")]
+        if let Some(input)=&input{
+            use std::os::fd::AsRawFd;
+            let fd=input.as_raw_fd();let flags=unsafe{libc::fcntl(fd,libc::F_GETFL)};
+            if flags<0||unsafe{libc::fcntl(fd,libc::F_SETFL,flags|libc::O_NONBLOCK)}<0{
+                // The leader is still unreaped, so this is only our new group.
+                unsafe{libc::kill(-(child.id()as i32),libc::SIGKILL);}let _=child.kill();let _=child.wait();
+                return Err("Cannot prepare cancellable Antigravity input.".into());
+            }
+        }
         let stdout = child
             .stdout
             .take()
@@ -102,18 +114,51 @@ impl Process {
             if left.is_zero() {
                 return Err("Antigravity did not finish in time. Try again.".into());
             }
-            match self.output.recv_timeout(left.min(Duration::from_secs(1))) {
+            match self.output.recv_timeout(left.min(Duration::from_millis(100))) {
                 Ok(line) => return line,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(_) => return Err("Antigravity closed the connection. Run agy in a terminal to check your account and permissions.".into()),
             }
         }
     }
+
+    fn write_message(&mut self,message:&Value)->Result<(),String>{
+        let mut bytes=serde_json::to_vec(message).map_err(|_|"Cannot prepare Antigravity input.")?;
+        if bytes.len()>MAX_LINE{return Err("Antigravity input exceeded the size limit.".into());}
+        bytes.push(b'\n');
+        let deadline=self.deadline.min(Instant::now()+Duration::from_secs(30));
+        let mut offset=0;
+        while offset<bytes.len(){
+            if self.cancel.as_ref().is_some_and(|flag|flag.load(Ordering::Relaxed)){return Err("The CLI request was cancelled.".into());}
+            if Instant::now()>=deadline{return Err("Antigravity did not receive the request in time. Check the native session before sending again.".into());}
+            let input=self.input.as_mut().ok_or("Antigravity did not open stdin.")?;
+            match input.write(&bytes[offset..]){
+                Ok(0)=>return Err("Antigravity closed its input.".into()),
+                Ok(size)=>offset+=size,
+                Err(error)if error.kind()==std::io::ErrorKind::WouldBlock=>std::thread::sleep(Duration::from_millis(10)),
+                Err(error)if error.kind()==std::io::ErrorKind::Interrupted=>{},
+                Err(_)=>return Err("Cannot write to Antigravity.".into()),
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Process {
     fn drop(&mut self) {
         self.input.take();
+        #[cfg(target_os="linux")]
+        {
+            // Leave the leader unreaped until the whole owned group is cleaned.
+            // Reaping first can both orphan tools and allow its PID to be reused.
+            std::thread::sleep(Duration::from_millis(300));
+            unsafe{libc::kill(-(self.child.id()as i32),libc::SIGTERM);}
+            std::thread::sleep(Duration::from_millis(100));
+            unsafe{libc::kill(-(self.child.id()as i32),libc::SIGKILL);}
+            let _=self.child.kill();let _=self.child.wait();return;
+        }
+        #[cfg(not(target_os="linux"))]
+        {
         for _ in 0..50 {
             if self.child.try_wait().ok().flatten().is_some() {
                 return;
@@ -136,6 +181,7 @@ impl Drop for Process {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        }
     }
 }
 
@@ -200,6 +246,7 @@ pub fn answer(
     mut on_delta: impl FnMut(String),
     mut on_event: impl FnMut(&Value),
 ) -> Result<Reply, String> {
+    if cancel.as_ref().is_some_and(|flag|flag.load(Ordering::Relaxed)){return Err("The CLI request was cancelled.".into());}
     let mut args = vec![
         "--input-format",
         "stream-json",
@@ -227,19 +274,7 @@ pub fn answer(
             serde_json::to_string(history).unwrap_or_default()
         )
     };
-    let input = process
-        .input
-        .as_mut()
-        .ok_or("Antigravity did not open stdin.")?;
-    serde_json::to_writer(
-        &mut *input,
-        &json!({ "event": "user", "message": { "content": prompt } }),
-    )
-    .map_err(|_| "Cannot write to Antigravity.")?;
-    input
-        .write_all(b"\n")
-        .and_then(|_| input.flush())
-        .map_err(|_| "Cannot write to Antigravity.")?;
+    process.write_message(&json!({ "event": "user", "message": { "content": prompt } }))?;
     let mut stream = Answer::default();
     loop {
         let line = process.line()?;

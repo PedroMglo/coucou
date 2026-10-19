@@ -4,10 +4,28 @@
 
 import { h, clear } from "../../views/dom";
 import { t } from "../../i18n/i18n";
-import { onEvent } from "../../core/bridge";
+import { Bridge, onEvent } from "../../core/bridge";
 import { FlowBridge, type Edge, type FlowKey, type ModelsStatus } from "../../core/flow";
 import type { HubContext } from "../shell";
 import { button, card, divider, keyKeycap, keycap, label, number, row, segmented, select, toggle } from "../ui";
+
+/** Dictation and pet conversations share this choice; model files stay installed. */
+export async function recognitionControl(ctx:HubContext,onChanged:()=>void):Promise<HTMLElement>{
+  const boot=await Bridge.boot();
+  const active=ctx.status.recognition;
+  const note=h('div',{class:'hub-note',text:`Reconhecimento ativo: ${active?.engine==='whisper'?'Whisper multilingue':'Parakeet multilingue'}${active&&!active.ready?' · modelo indisponível':''}. O áudio é processado neste computador, para ditado e conversa com os pets.`});
+  if(!boot)return note;
+  const feedback=h('div',{class:'hub-note'});
+  const picker=select<'auto'|'whisper'|'parakeet'>([['auto','Automático'],['whisper','Whisper multilingue'],['parakeet','Parakeet multilingue']],boot.settings.voiceAsrEngine??'auto',engine=>{
+    picker.disabled=true;
+    void Bridge.boot().then(async current=>{
+      if(!current)throw Error('Não foi possível ler as definições.');
+      await Bridge.saveSettings({...current.settings,voiceAsrEngine:engine});
+      await ctx.refresh();onChanged();
+    }).catch(error=>{feedback.textContent=String(error).replace(/^Error:\s*/,'');picker.disabled=false;});
+  });
+  return h('div',{},row('Motor de reconhecimento','Automático mantém o Whisper se já estiver configurado; caso contrário usa o Parakeet. Alternar preserva os modelos instalados.',picker),note,feedback);
+}
 
 /** Download / progress / installed, for the voice model. Redraws itself. */
 export function modelsControl(ctx: HubContext, onReady?: () => void): HTMLElement {
@@ -104,8 +122,10 @@ export async function flowSettingsPage(page: HTMLElement, ctx: HubContext) {
   // ── Recognition ──
   page.append(label(t("Recognition")));
   page.append(card(
+    await recognitionControl(ctx,()=>ctx.navigate('flowsettings')),
+    divider(),
     row(t("Parakeet, on your computer"), t("The most accurate, offline, 25 languages. Downloaded once (about {0} MB).", { 0: number(status.models.downloadMb) }), modelsControl(ctx)),
-    h("div", { class: "hub-note", text: t("Your voice never leaves this computer: Parakeet turns it into text here, and the recording is dropped as soon as it is pasted.") }),
+    h("div", { class: "hub-note", text: 'Parakeet reconhece português e inglês localmente. O segundo modelo distingue intervenientes nas gravações; não altera a voz das respostas dos pets.' }),
   ));
 
   // ── Notetaker ──

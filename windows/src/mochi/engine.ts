@@ -198,6 +198,8 @@ export class BotEngine {
   isMini = false;
   /** Solid body colour for mini bots / integration pills (null = Mochi gradient). */
   bodyColor: RGB | null = null;
+  /** Full-size gallery pets keep the original lighting with their own colour. */
+  shadedColor = false;
 
   // Animated state (BotEngine `s`)
   yaw = 0; pitch = 0; roll = 0; tilt = 0; open = 1;
@@ -865,15 +867,15 @@ export class BotEngine {
 
   private drawBody(x: CanvasRenderingContext2D, body: Path2D, R: number, rx: number, ry: number) {
     const pumpkin = this.pumpkinAlpha;
-    if (this.bodyColor) {
+    if (this.bodyColor && !this.shadedColor) {
       // Mini bots: flat solid fill — no gradient, no reflection, no highlight
       x.fillStyle = rgba(this.bodyColor, 1);
       x.fill(body);
       if (pumpkin <= 0.001) return;
     } else {
       const g = x.createLinearGradient(rx * 0.7, -ry * 0.85, -rx * 0.8, ry * 0.9);
-      g.addColorStop(0, rgba(BASE_TOP));
-      g.addColorStop(1, rgba(BASE_BOTTOM));
+      g.addColorStop(0, rgba(this.bodyColor ? mix3(this.bodyColor, [1,1,1], 0.28) : BASE_TOP));
+      g.addColorStop(1, rgba(this.bodyColor ? mix3(this.bodyColor, [0,0,0], 0.12) : BASE_BOTTOM));
       x.fillStyle = g;
       x.fill(body);
     }
@@ -886,7 +888,7 @@ export class BotEngine {
       x.fillStyle = pg;
       x.fill(body);
       // A flat-coloured body only gets the shading while it is a pumpkin.
-      x.globalAlpha = this.bodyColor ? pumpkin : 1;
+      x.globalAlpha = this.bodyColor && !this.shadedColor ? pumpkin : 1;
     }
 
     const effectiveTint = this.tint * (1 - this.morph);

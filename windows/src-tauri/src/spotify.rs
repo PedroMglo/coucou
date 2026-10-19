@@ -935,6 +935,7 @@ mod linux {
             match action {
                 "play" => p.method_call(PLAYER, "Play", ()),
                 "playPause" => p.method_call(PLAYER, "PlayPause", ()),
+                "pause" => p.method_call(PLAYER,"Pause",()),
                 "next" => p.method_call(PLAYER, "Next", ()),
                 "previous" => p.method_call(PLAYER, "Previous", ()),
                 "seek" => {
@@ -1877,6 +1878,7 @@ mod win {
         let done = match action {
             "play" => asked!(session.TryPlayAsync()),
             "playPause" => asked!(session.TryTogglePlayPauseAsync()),
+            "pause" => asked!(session.TryPauseAsync()),
             "next" => asked!(session.TrySkipNextAsync()),
             "previous" => asked!(session.TrySkipPreviousAsync()),
             "seek" => match (seek_to, session.GetTimelineProperties().and_then(|t| t.StartTime())) {

@@ -4,6 +4,7 @@
 // island's settings are drawn here, one Notch page at a time.
 
 import "./settings.css";
+import {OllamaModelSelection} from "../core/ollama-selection";
 import { Bridge, onEvent, type HookPreview, type HookStatus, type ShortcutsReport } from "../core/bridge";
 import { CUSTOM_SERVER_KEY, providerDef, urlExposure, withModel } from "../core/providers";
 import {
@@ -17,12 +18,13 @@ import {
   sanitizeDeclared, toggleDeclared, type PillDefinition,
 } from "../core/pills";
 import { h, clear } from "../views/dom";
-import { startHub, type PageId } from "../hub/shell";
+import { startHub, type PageId,type HubContext } from "../hub/shell";
 import { FLOW_PAGE_RENDERERS } from "../hub/pages";
 import { agentsSection } from "./agents";
 import { phoneSection } from "./phone";
 import { colorDot } from "./colors";
 import { renderDiff, statusDot } from "./parts";
+import {secretControls} from './secret-controls';
 import {
   LANGUAGES, N_, isRtl, onLanguageChange, resolveLanguage, setLanguage, systemLanguages, t, tn,
 } from "../i18n/i18n";
@@ -38,6 +40,7 @@ let version = "";
 const windowRoot = document.getElementById("hub")!;
 /** Where the Notch page being shown draws its sections. */
 let root: HTMLElement = windowRoot;
+let notchContext:HubContext|undefined;
 let hub: { redraw(): void; current(): PageId } | null = null;
 
 async function save() {
@@ -47,7 +50,7 @@ async function save() {
 /** A colour was picked for a pill's Mochi (see ./colors.ts): the island follows. */
 function pickColor(next: Record<string, string>) {
   settings.pillColors = next;
-  void save();
+  void save().catch(Bridge.reportSettingsError);
 }
 
 // ── Reusable bits ─────────────────────────────────────────────────────────────
@@ -57,6 +60,7 @@ function toggle(on: boolean, onChange: (v: boolean) => void): HTMLElement {
   el.addEventListener("click", () => {
     const next = !el.classList.contains("on");
     el.classList.toggle("on", next);
+    el.setAttribute('aria-pressed',String(next));
     onChange(next);
   });
   return el;
@@ -273,16 +277,16 @@ function planSection(status: HookStatus): HTMLElement {
     const sw = toggle(settings.showPlanInNotch, (on) => {
       if (!on) {
         settings.showPlanInNotch = false;
-        void save();
+        void save().catch(Bridge.reportSettingsError);
       } else if (status.planRelayInstalled) {
         settings.showPlanInNotch = true;
-        void save();
+        void save().catch(Bridge.reportSettingsError);
       } else {
         // Turned on before the relay is in: install it first; it stays on once confirmed.
         void reviewChange(body, STATUS_LINE_CHANGE, true, () => void rebuild(), () => {
           settings.planRelayInstalled = true;
           settings.showPlanInNotch = true;
-          void save().then(rebuild);
+          void save().then(rebuild).catch(Bridge.reportSettingsError);
         });
       }
     });
@@ -315,7 +319,7 @@ function planSection(status: HookStatus): HTMLElement {
         h("label", { text: PLAN_SETTINGS_TEXT.showCodex }),
         toggle(settings.showCodexPlanInNotch, (on) => {
           settings.showCodexPlanInNotch = on;
-          void save();
+          void save().catch(Bridge.reportSettingsError);
         }),
       ),
     );
@@ -392,7 +396,7 @@ function apiSection(hasKey: boolean): HTMLElement {
   model.value = settings.model;
   model.addEventListener("change", () => {
     settings.model = model.value;
-    void save();
+    void save().catch(Bridge.reportSettingsError);
   });
 
   clearBtn.style.display = hasKey ? "" : "none";
@@ -451,7 +455,7 @@ function activePillsSection(connected: Record<string, boolean>): HTMLElement {
     }
     const why = hint(def);
     el.append(h("span", { class: "state", text: why ?? "" }));
-    const sw = h("button", { class: on ? "switch on" : "switch" }) as HTMLButtonElement;
+    const sw = h("button", { class: on ? "switch on" : "switch",'aria-label':`${def.name} · Mostrar pet`,'aria-pressed':on }) as HTMLButtonElement;
     sw.disabled = full;
     sw.addEventListener("click", () => {
       const next = toggleDeclared(settings, def.id);
@@ -536,56 +540,17 @@ function chatProvidersSection(
   for (const def of CLOUD) {
     const p = providerDef(def.id);
     const key = p.key!;
-    const input = h("input", {
-      type: "password",
-      placeholder: present[key] ? CHAT_STRINGS.stored : def.placeholder,
-      autocomplete: "off",
-      spellcheck: "false",
-      style: "flex:1 1 auto;min-width:0",
-    }) as HTMLInputElement;
-    const dotEl = statusDot(present[key] ?? false);
-    const saveBtn = h("button", { text: CHAT_STRINGS.save });
-    const removeBtn = h("button", { class: "danger", text: CHAT_STRINGS.remove });
-    const refresh = () => {
-      input.placeholder = present[key] ? CHAT_STRINGS.stored : def.placeholder;
-      dotEl.style.background = present[key] ? "#22c55e" : "#f4505e";
-      removeBtn.style.display = present[key] ? "" : "none";
-    };
-    saveBtn.addEventListener("click", async () => {
-      const value = input.value.trim();
-      if (!value) return;
-      try {
-        await Bridge.secretSet(key, value);
-        present[key] = true;
-        input.value = "";
-        keyChanged(key, true);
-      } catch {
-        dotEl.style.background = "#f5a524";
-        return;
-      }
-      refresh();
-    });
-    removeBtn.addEventListener("click", async () => {
-      try {
-        await Bridge.secretClear(key);
-        present[key] = false;
-        keyChanged(key, false);
-      } catch {
-        dotEl.style.background = "#f5a524";
-        return;
-      }
-      refresh();
-    });
-    refresh();
+    const fields=secretControls(key,present[key]??false,def.placeholder,on=>{present[key]=on;keyChanged(key,on);});
     list.append(
       h("div", { class: "row" },
         h("label", {},
           h("i", { class: "dot", style: `background:${p.accent};margin-right:8px` }),
           h("span", { text: def.name }),
         ),
-        input, saveBtn, removeBtn, dotEl,
+        fields.input, fields.save, fields.remove, fields.dot,
       ),
       h("div", { class: "hint", style: "margin:-4px 0 0 144px", text: t("Key from {site}", { site: def.where }) }),
+      fields.feedback,
     );
   }
   for (const id of ["codex", "antigravity"] as const) {
@@ -608,10 +573,10 @@ function chatProvidersSection(
     list.append(h("div", { class: "row" }, h("label", { text: provider.name }), connect), status);
   }
   const workspace = h("input", { type: "text", value: settings.cliWorkspace, placeholder: t("Home folder"), style: "flex:1" }) as HTMLInputElement;
-  workspace.addEventListener("change", () => { settings.cliWorkspace = workspace.value.trim(); void save(); });
+  workspace.addEventListener("change", () => { settings.cliWorkspace = workspace.value.trim(); void save().catch(Bridge.reportSettingsError); });
   list.append(h("div", { class: "row" }, h("label", { text: t("Working folder") }), workspace));
   const fullAccess = h("input", { type: "checkbox", checked: settings.cliFullAccess }) as HTMLInputElement;
-  fullAccess.addEventListener("change", () => { settings.cliFullAccess = fullAccess.checked; void save(); });
+  fullAccess.addEventListener("change", () => { settings.cliFullAccess = fullAccess.checked; void save().catch(Bridge.reportSettingsError); });
   list.append(h("label", { class: "row" }, fullAccess, h("span", { text: t("Run CLI agents without approval prompts") })),
     h("div", { class: "hint", text: t("Enabled: commands and file changes run with your user account. Disabled: use each CLI's permissions; Antigravity actions that need a prompt must be approved in its terminal.") }));
   return h(
@@ -686,7 +651,7 @@ function localSection(customKey: boolean): HTMLElement {
       use.disabled = inUse;
       use.addEventListener("click", () => {
         settings.chatProvider = id;
-        void save().then(redraw);
+        void save().then(redraw).catch(Bridge.reportSettingsError);
       });
       const disconnect = h("button", { class: "danger", text: CHAT_STRINGS.disconnect });
       disconnect.addEventListener("click", async () => {
@@ -696,8 +661,7 @@ function localSection(customKey: boolean): HTMLElement {
           await Bridge.secretClear(CUSTOM_SERVER_KEY).catch(() => {});
           customKey = false;
         }
-        await save();
-        redraw();
+        try{await save();redraw();}catch(error){Bridge.reportSettingsError(error);}
       });
       block.append(
         h("div", { class: "row" }, label, h("span", { class: "path", text: settings[field] }), statusDot(true), use, disconnect),
@@ -751,10 +715,13 @@ function localSection(customKey: boolean): HTMLElement {
           status.append(h("div", { class: "notice err", text: CHAT_STRINGS.noModels(t(def.name)) }));
         } else {
           settings[field] = server.url;
-          if (!server.models.includes(settings.chatModels[id] ?? "")) {
-            settings.chatModels = { ...settings.chatModels, [id]: server.models[0] };
-          }
+          const model=server.models.includes(settings.chatModels[id]??"")?settings.chatModels[id]:server.models[0];
+          if(id!=="ollama")settings.chatModels={...settings.chatModels,[id]:model};
           await save();
+          if(id==="ollama"){
+            if(!await OllamaModelSelection.select(model))throw new Error('O modelo mudou noutra janela. Volta a escolhê-lo para alterar.');
+            settings.chatModels={...settings.chatModels,ollama:model};
+          }
           redraw();
           return;
         }
@@ -819,7 +786,7 @@ const declaredViews: (() => void)[] = [];
 
 function declaredChanged() {
   for (const redraw of declaredViews) redraw();
-  void save();
+  void save().catch(Bridge.reportSettingsError);
 }
 
 function integrationsSection(present: Record<string, boolean>): HTMLElement {
@@ -835,7 +802,7 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
   const offered = new Set(availablePills().map((p) => p.id));
   for (const def of INTEGRATIONS.filter((d) => offered.has(d.id))) {
     const active = settings.activeIntegrations.includes(def.id);
-    const sw = h("button", { class: active ? "switch on" : "switch" });
+    const sw = h("button", { class: active ? "switch on" : "switch",'aria-label':`${def.name} · Mostrar pet`,'aria-pressed':active });
     sw.addEventListener("click", () => {
       const on = settings.activeIntegrations.includes(def.id);
       if (on) {
@@ -845,37 +812,19 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
         settings.activeIntegrations = [...settings.activeIntegrations, def.id];
       }
       sw.classList.toggle("on", !on);
+      sw.setAttribute('aria-pressed',String(!on));
       declaredChanged();
     });
 
     const rows = h("div", { style: "display:flex;flex-direction:column;gap:6px;flex:1 1 auto;min-width:0" });
     for (const field of def.fields) {
-      const input = h("input", {
-        type: field.secret ? "password" : "text",
-        placeholder: present[field.key] ? CHAT_STRINGS.stored : field.placeholder,
-        autocomplete: "off",
-        spellcheck: "false",
-        style: "flex:1 1 auto;min-width:0",
-      }) as HTMLInputElement;
-      const saveBtn = h("button", { text: t("Save") });
-      const dotEl = statusDot(present[field.key] ?? false);
-      saveBtn.addEventListener("click", async () => {
-        const value = input.value.trim();
-        try {
-          await Bridge.secretSet(field.key, value);
-          present[field.key] = value.length > 0;
-          input.value = "";
-          input.placeholder = value ? CHAT_STRINGS.stored : field.placeholder;
-          dotEl.style.background = value ? "#22c55e" : "#f4505e";
-        } catch {
-          dotEl.style.background = "#f5a524";
-        }
-      });
+      const fields=secretControls(field.key,present[field.key]??false,field.placeholder,on=>{present[field.key]=on;});
+      fields.input.type=field.secret?'password':'text';
       rows.append(
         h("div", { class: "row" },
           h("label", { style: "min-width:104px", text: t(field.label) }),
-          input, saveBtn, dotEl,
-        ),
+          fields.input, fields.save, fields.remove, fields.dot,
+        ),fields.feedback,
       );
     }
 
@@ -914,7 +863,7 @@ function generalSection(): HTMLElement {
   }) as HTMLInputElement;
   volume.addEventListener("input", () => {
     settings.soundVolume = Number(volume.value);
-    void save();
+    void save().catch(Bridge.reportSettingsError);
   });
 
   // Your own sounds: the folder, a reload, and how many are replaced.
@@ -939,7 +888,7 @@ function generalSection(): HTMLElement {
   autoClose.addEventListener("change", () => {
     settings.autoCloseInterval = Math.max(5, Math.min(120, Number(autoClose.value) || 15));
     autoClose.value = String(settings.autoCloseInterval);
-    void save();
+    void save().catch(Bridge.reportSettingsError);
   });
 
   const companionClearance = h("input", {
@@ -950,7 +899,7 @@ function generalSection(): HTMLElement {
     const value = Number(companionClearance.value);
     settings.companionTopClearance = Number.isFinite(value) ? Math.max(0, Math.min(240, value)) : 64;
     companionClearance.value = String(settings.companionTopClearance);
-    void save();
+    void save().catch(Bridge.reportSettingsError);
   });
   const screen = h("select", {}) as HTMLSelectElement;
   screen.append(
@@ -975,7 +924,7 @@ function generalSection(): HTMLElement {
   });
   screen.addEventListener("change", () => {
     settings.screen = screen.value;
-    void save();
+    void save().catch(Bridge.reportSettingsError);
   });
 
   return h(
@@ -984,14 +933,14 @@ function generalSection(): HTMLElement {
     h("h2", {}, h("span", { text: t("General") })),
     h("div", { class: "row" },
       h("label", { text: t("Sound") }),
-      toggle(settings.soundEnabled, (v) => { settings.soundEnabled = v; void save(); }),
+      toggle(settings.soundEnabled, (v) => { settings.soundEnabled = v; void save().catch(Bridge.reportSettingsError); }),
       volume,
     ),
     h("div", { class: "row" }, soundsFolder, reloadSounds, customCount),
     h("div", { class: "hint", text: t("Drop a file named like one of Mochi's sounds (finish.wav, approval.mp3, greet.m4a…) in the sounds folder to replace it, then Reload.") }),
     h("div", { class: "row" },
       h("label", { text: t("Open on hover") }),
-      toggle(settings.openOnHover, (v) => { settings.openOnHover = v; void save(); }),
+      toggle(settings.openOnHover, (v) => { settings.openOnHover = v; void save().catch(Bridge.reportSettingsError); }),
     ),
     h("div", { class: "hint", text: t("Hovering the island opens it; it folds again shortly after the pointer leaves. Click inside to keep it open.") }),
     h("div", { class: "row" },
@@ -1001,16 +950,16 @@ function generalSection(): HTMLElement {
     ),
     h("div", { class: "row" },
       h("label", { text: t("Desktop companion") }),
-      toggle(settings.companionMode, (v) => { settings.companionMode = v; void save(); }),
+      toggle(settings.companionMode, (v) => { settings.companionMode = v; void save().catch(Bridge.reportSettingsError); }),
     ),
     h("div", { class: "hint", text: t("Each active integration has its own companion. Click a pet for its controls; right-click for actions. Restart Coucou after changing companion mode.") }),
     h("div", { class: "row" },
       h("label", { text: t("Companion movement") }),
-      toggle(settings.companionMotion, v => { settings.companionMotion = v; void save(); }),
+      toggle(settings.companionMotion, v => { settings.companionMotion = v; void save().catch(Bridge.reportSettingsError); }),
     ),
     h("div", { class: "row" },
       h("label", { text: t("Use the free space in the top bar") }),
-      toggle(settings.companionBarMode, v => { settings.companionBarMode = v; void save(); }),
+      toggle(settings.companionBarMode, v => { settings.companionBarMode = v; void save().catch(Bridge.reportSettingsError); }),
     ),
     h("div", { class: "hint", text: t("Live bar geometry keeps pets away from controls and windows. Without free space, use the tray or shortcuts.") }),
     h("div", { class: "row", style: settings.companionBarMode ? "display:none" : "" },
@@ -1024,7 +973,7 @@ function generalSection(): HTMLElement {
     ),
     h("div", { class: "row" },
       h("label", { text: t("Launch at startup") }),
-      toggle(settings.autostart, (v) => { settings.autostart = v; void save(); }),
+      toggle(settings.autostart, (v) => { settings.autostart = v; void save().catch(Bridge.reportSettingsError); }),
     ),
     ...recapRows(),
     languageRow(),
@@ -1043,7 +992,7 @@ function languageRow(): HTMLElement {
   select.value = LANGUAGES.some((l) => l.code === settings.language) ? settings.language : "";
   select.addEventListener("change", () => {
     settings.language = select.value;
-    void save();
+    void save().catch(Bridge.reportSettingsError);
     applyLanguage();
   });
   return h("div", { class: "row" }, h("label", { text: t("Language") }), select);
@@ -1085,17 +1034,18 @@ const SHORTCUTS_UI = {
   get refused() { return t("Not set by your desktop"); },
 };
 
-function shortcutsSection(initial: ShortcutsReport | null): HTMLElement {
+function shortcutsSection(initial: ShortcutsReport | null,context?:HubContext): HTMLElement {
   let report = initial;
   const list = h("div", { class: "shortcut-list" });
   const feedback = h("div", {});
   const blockedNote = h("div", {});
 
   let stopRecording: (() => void) | null = null;
+  if(context)context.onLeave=()=>{stopRecording?.();shortcutsListener=null;};
 
   function store(id: string, binding: Binding) {
     settings.shortcuts = { ...settings.shortcuts, [id]: binding };
-    void save();
+    void save().catch(Bridge.reportSettingsError);
   }
 
   function tagFor(id: string, dups: Set<string>): HTMLElement | null {
@@ -1232,7 +1182,7 @@ function shortcutsSection(initial: ShortcutsReport | null): HTMLElement {
       stopRecording?.();
       settings.shortcuts = {};
       clear(feedback);
-      void save();
+      void save().catch(Bridge.reportSettingsError);
       draw();
     },
   });
@@ -1340,9 +1290,10 @@ async function main() {
   hub = await startHub(windowRoot, {
     version,
     flowPages: FLOW_PAGE_RENDERERS,
-    renderNotch: async (page, container) => {
+    renderNotch: async (page, container, context) => {
       notchPage = page;
       root = container;
+      notchContext=context;
       await render();
     },
   });
@@ -1354,7 +1305,7 @@ async function main() {
   void onEvent<ShortcutsReport>("shortcuts-status", (fresh) => shortcutsListener?.report(fresh));
   void onEvent<Settings>("settings-changed", (s) => {
     const before = `${settings.chatProvider}|${settings.ollamaUrl}|${settings.lmstudioUrl}|${settings.customUrl}`;
-    settings = { ...settings, ...s };
+    settings = OllamaModelSelection.applySettings({ ...settings, ...s });
     shortcutsListener?.settingsChanged();
     for (const redraw of declaredViews) redraw();
     const after = `${settings.chatProvider}|${settings.ollamaUrl}|${settings.lmstudioUrl}|${settings.customUrl}`;
@@ -1368,6 +1319,7 @@ let notchPage: PageId = "general";
 
 /** Reads what the sections of the Notch page show and draws them. */
 async function render() {
+  const targetRoot=root,targetPage=notchPage,targetContext=notchContext;
   const status = (await Bridge.hooksStatus()) ?? {
     installed: false, planRelayInstalled: false, settingsPath: "", hookPath: "", hookReady: false,
   };
@@ -1405,6 +1357,9 @@ async function render() {
   }
   const customKey = (await Bridge.secretPresent(CUSTOM_SERVER_KEY)) ?? false;
 
+  // A slow metadata read for a page the user left must never redraw the new
+  // page or discard the fields they have already started editing there.
+  if(root!==targetRoot||notchPage!==targetPage)return;
   declaredViews.length = 0;
   localRedraw = null;
   shortcutsListener = null;
@@ -1416,7 +1371,7 @@ async function render() {
     chat: () => [apiSection(hasKey), chatProvidersSection(chatKeys, keyChanged), localSection(customKey)],
     integrations: () => [integrationsSection(present)],
     phone: () => [phoneSection(settings.phoneLink ?? false, toggle, settings)],
-    shortcuts: () => [shortcutsSection(shortcutReport)],
+    shortcuts: () => [shortcutsSection(shortcutReport,targetContext)],
   };
   root.append(...(sections[notchPage]?.() ?? []));
   if (notchPage === "general") {

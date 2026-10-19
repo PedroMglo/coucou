@@ -344,7 +344,7 @@ export function buildSpotifyCard(): SpotifyCardHost {
   searchInput.addEventListener("input",searchRecent);
   searchInput.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();searchRecent();}e.stopPropagation();});
   const quiet = h("input",{type:"checkbox"}) as HTMLInputElement;
-  quiet.addEventListener("change",()=>{State.settings={...State.settings,spotifyQuietAds:quiet.checked};void Bridge.saveSettings(State.settings);State.notify();});
+  quiet.addEventListener("change",()=>{State.settings={...State.settings,spotifyQuietAds:quiet.checked};void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);State.notify();});
   const extras=h("div",{class:"np-options",style:"margin-top:10px;font-size:12px"},searchInput,matches,h("label",{},quiet,h("span",{text:" Lower the volume during identified ads"})));
   const el = h("div", { class: "np-root" });
   let showing: "playing" | "idle" | null = null;

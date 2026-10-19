@@ -8,6 +8,10 @@ import { h, clear } from "./dom";
 import { State } from "../core/state";
 import type { ViewActions, ViewHost } from "./views";
 import { N_, t, tl } from "../i18n/i18n";
+import {Bridge} from '../core/bridge';
+import {PetPreferences} from '../mochi/pet-preferences';
+import {providerForPill} from '../core/providers';
+import {documentActions} from '../mochi/documents';
 
 /** Dashed rounded rect drawn as SVG so the dashes can march like on macOS. */
 function dashedFrame(): SVGSVGElement {
@@ -87,14 +91,13 @@ export function buildUploading(): ViewHost {
 export function buildChoose(actions: ViewActions): ViewHost {
   const title = h("div", { class: "title" });
   const sub = h("div", { class: "sub", text: tl("What do you want to do with it?") });
+  const email=h('button',{class:'btn secondary',text:'Preparar email',onclick:()=>actions.setView('mail')});
+  const analyze=h('button',{class:'btn primary',text:'Analisar / conversar',onclick:()=>actions.setView('prompt')});
   const row = h(
     "div",
     { class: "actions" },
-    h("button", {
-      class: "btn primary",
-      text: tl("Ask a question"),
-      onclick: () => actions.setView("prompt"),
-    }),
+    analyze,
+    email,
     h("button", {
       class: "btn secondary",
       text: tl("Cancel"),
@@ -114,11 +117,41 @@ export function buildChoose(actions: ViewActions): ViewHost {
   return {
     el,
     sync() {
+      const id=Object.keys(PetPreferences.config?.pets??{}).find(id=>providerForPill(id)===State.chatProvider);
+      const available=documentActions(PetPreferences.config,id??'',State.droppedFile?.kind??'file',State.droppedFile?.name??'');
+      email.hidden=!available.email;analyze.hidden=!available.analysis;
+      sub.textContent=available.email || available.analysis?'Escolhe o que este pet deve fazer.': 'Este pet não tem ações disponíveis para este documento. Revê os seus acessos na gestão dos pets.';
       clear(title);
       title.append(
         h("b", { text: State.droppedFile?.name ?? t("file") }),
-        document.createTextNode(t(" is ready.")),
+        document.createTextNode(State.droppedFile?.kind==='folder'?' está pronta.':' está pronto.'),
       );
     },
   };
+}
+
+/** Explicit draft only: no inference or send action is invoked here. */
+export function buildMail(actions:ViewActions):ViewHost{
+ const drafts=new Map<string,{to:string;subject:string;body:string;status:string}>(),busy=new Set<string>();let owner='';
+ const to=h('input',{placeholder:'Destinatário (podes preencher depois)'});to.setAttribute('aria-label','Destinatário do email');
+ const subject=h('input',{placeholder:'Assunto'});subject.setAttribute('aria-label','Assunto do email');
+ const body=h('textarea',{placeholder:'Mensagem'});body.setAttribute('aria-label','Mensagem do email');
+ const status=h('p',{class:'sub',role:'status'}),attachment=h('p',{class:'sub'});
+ const send=h('button',{class:'btn primary',text:'Abrir rascunho com anexo',onclick:async()=>{
+  const provider=owner,file=State.fileFor(provider);
+  if(!provider||provider!==State.chatProvider||State.pendingApproval?.pillId===State.focusId){status.textContent='Volta ao pet deste documento para continuar o rascunho.';return;}
+  if(!file){status.textContent='O anexo já não está disponível. Entrega novamente o documento a este pet.';return;}
+  if(busy.has(provider))return;busy.add(provider);keep();
+  send.disabled=true;status.textContent='A preparar o rascunho…';
+  let message='';try{message=await Bridge.petMailDraft(provider,file.path,to.value,subject.value,body.value);}catch(error){message=String(error).replace(/^Error:\s*/,'');}finally{busy.delete(provider);const draft=drafts.get(provider);if(draft)draft.status=message;if(owner===provider){status.textContent=message;send.disabled=false;}}
+ }});
+ function keep(){if(owner)drafts.set(owner,{to:to.value,subject:subject.value,body:body.value,status:status.textContent??''});}
+ const el=h('div',{class:'view'},h('div',{class:'card'},h('div',{class:'pet-mail-form'},attachment,to,subject,body,status,h('div',{class:'actions'},send,h('button',{class:'btn secondary',text:'Voltar',onclick:()=>actions.setView('choose')})))));
+ return{el,focus:()=>subject.focus(),sync(){
+  // Hidden views are synced as well. An unrelated approval must not replace
+  // the form's owner or move its private fields to a different pet.
+  if(State.pendingApproval?.pillId===State.focusId||(['approval','question'].includes(State.view)))return;
+  if(owner!==State.chatProvider){keep();owner=State.chatProvider;const draft=drafts.get(owner);to.value=draft?.to??'';subject.value=draft?.subject??'';body.value=draft?.body??'';status.textContent=draft?.status??'';}
+  attachment.textContent=State.droppedFile?`Anexo: ${State.droppedFile.name}`:'Entrega primeiro um documento ao pet.';send.disabled=!State.droppedFile || State.droppedFile.kind==='folder' || busy.has(owner);
+ }};
 }

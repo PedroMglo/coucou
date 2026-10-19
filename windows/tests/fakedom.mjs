@@ -24,6 +24,7 @@ class FakeElement {
     this.listeners = new Map();
     this.className = "";
     this.title = "";
+    this.value = "";
     this.dataset = {};
     this.scrollTop = 0;
     this.scrollHeight = 0;
@@ -81,8 +82,8 @@ class FakeElement {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
   }
   /** Calls the listeners of `type` with a minimal event. */
-  fire(type) {
-    const event = { type, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} };
+  fire(type, properties = {}) {
+    const event = { type, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...properties };
     for (const fn of this.listeners.get(type) ?? []) fn(event);
     return event;
   }
@@ -97,8 +98,24 @@ class FakeElement {
     this.childNodes = [];
     this.append(...nodes);
   }
+  insertBefore(node, reference) {
+    if (node === reference) return node;
+    node.parentNode?.removeChild(node);
+    const index = reference == null ? this.childNodes.length : this.childNodes.indexOf(reference);
+    if (index < 0) throw new Error('Reference is not a child');
+    node.parentNode = this;
+    this.childNodes.splice(index, 0, node);
+    return node;
+  }
+  replaceWith(node) {
+    const parent = this.parentNode;
+    if (!parent) return;
+    parent.insertBefore(node, this);
+    parent.removeChild(this);
+  }
   removeChild(node) {
     this.childNodes = this.childNodes.filter((n) => n !== node);
+    node.parentNode = null;
     return node;
   }
   remove() {

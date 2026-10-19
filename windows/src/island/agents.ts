@@ -22,8 +22,8 @@ export const KNOWN_AGENTS: Record<string, KnownAgent> = {
 
 /**
  * Agents whose permission requests get an Allow / Deny card, as on the Mac.
- * Must match `takes_decisions` in the relay (hook/src/reply.rs): any other
- * agent's request is handed straight back to its terminal.
+ * Matches the official relay's `takes_decisions`. The app-owned Gravity
+ * pre-tool bridge is checked separately against its trusted owner metadata.
  */
 export const APPROVAL_AGENTS = new Set(["codex", "copilot", "muse"]);
 

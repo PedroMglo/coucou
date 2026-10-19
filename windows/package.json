@@ -1,7 +1,7 @@
 {
   "name": "coucou-windows",
   "private": true,
-  "version": "0.5.1-mochi.6",
+  "version": "0.5.1-mochi.14",
   "type": "module",
   "scripts": {
     "dev": "vite",

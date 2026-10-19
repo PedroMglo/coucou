@@ -18,6 +18,17 @@ afterEach(() => mock.timers.reset());
 
 const seconds = (n) => mock.timers.tick(n * 1000);
 
+test('editing holds a card past a countdown without changing the approval pin',()=>{
+ fsm.forceHome();fsm.mouseLeft();seconds(2);fsm.editing=true;
+ assert.equal(fsm.homeCollapseDueAt,null);seconds(60);assert.equal(fsm.state,'home');assert.equal(fsm.pinned,false);
+ fsm.mouseLeft();seconds(60);assert.equal(fsm.state,'home');
+ fsm.editing=false;fsm.mouseLeft();seconds(15);assert.equal(fsm.state,'petit');
+});
+test('leaving an editor cannot release a permission pin and explicit close still works',()=>{
+ fsm.forceHome();fsm.pinned=true;fsm.editing=true;fsm.editing=false;fsm.mouseLeft();seconds(60);assert.equal(fsm.state,'home');
+ fsm.forceHidden();assert.equal(fsm.state,'hidden');assert.equal(fsm.pinned,true);
+});
+
 test("starts hidden and opens on the greeting at launch", () => {
   assert.equal(fsm.state, "hidden");
   fsm.launch();

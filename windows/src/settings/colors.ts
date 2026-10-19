@@ -34,7 +34,9 @@ export function colorDot(
     closeOpen?.();
     const palette = h("div", { class: "palette", role: "group", "aria-label": t("Color") });
 
+    const detached = new MutationObserver(() => { if (!dot.isConnected) close(); });
     const close = () => {
+      detached.disconnect();
       palette.remove();
       document.removeEventListener("mousedown", outside, true);
       document.removeEventListener("keydown", onKey, true);
@@ -77,6 +79,7 @@ export function colorDot(
     }
 
     document.body.append(palette);
+    detached.observe(document.body, { childList: true, subtree: true });
     // Under the dot, kept inside the window whichever way the text runs.
     const at = dot.getBoundingClientRect();
     const left = Math.max(8, Math.min(at.left - 10, window.innerWidth - palette.offsetWidth - 8));

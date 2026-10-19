@@ -5,6 +5,8 @@ import type { AgentTask, ApprovalInfo } from "../core/state";
 import type { Outfit } from "./wardrobe";
 import { SPOTIFY_ID } from "../core/spotify";
 import { pillDefinition } from "../core/pills";
+import type { ManagedUsage } from "./management";
+import { quotaForPet, type PetQuota } from "./quota-notices";
 
 export const PET_SIZE = 64;
 export const PET_SPACING = 76;
@@ -12,6 +14,7 @@ export const PET_IDLE_SECONDS = 60;
 export const PET_TRANSITION_SECONDS = 0.35;
 export const PET_EVENTS = {
   state: "companions-state", ready: "companions-ready", open: "companions-open", action: "companions-action",
+  delegate:"companions-delegate",summon:"companions-summon",
 } as const;
 
 export interface PetIdentity {
@@ -29,15 +32,27 @@ export interface PetIdentity {
   activity: string;
   outfit: Outfit;
   message?: string;
+  quota?: PetQuota;
+  session?: {id:string;cwd:string;result:string;backend?:string;owned?:boolean;title?:string;decisionInTerminal?:boolean};
+  sessions?:number;
+}
+
+export interface CompanionQuotaContext {
+  usage?: ManagedUsage;
+  configuredPets: ReadonlySet<string>;
+  now?: number;
 }
 
 export interface CompanionsSnapshot {
+  control?:{enabled?:boolean;systemCenter?:boolean;autoCloseInterval:number;openOnHover:boolean;tasks?:AgentTask[];focusId?:string|null;
+    integrations?:Record<string,import('../core/state').IntegrationInfo>;spotify?:import('../core/spotify').SpotifyState};
   enabled: boolean;
   paused: boolean;
   presented?: string | null;
   motion: boolean;
   language?: string;
   pets: PetIdentity[];
+  catalog?: PetIdentity[];
   band?: { height: number; lanes: [number, number][] } | null;
   sheltered?: boolean;
 }
@@ -47,10 +62,12 @@ export function companionIdentities(
   tasks: readonly AgentTask[], pending: ApprovalInfo | null, music: boolean, outfit: Outfit,
   running: ReadonlySet<string> = new Set(),
   activity: ReadonlyMap<string, string> = new Map(),
+  quotas?: CompanionQuotaContext,
 ): PetIdentity[] {
   const seen = new Set<string>();
   return tasks.filter(t => !seen.has(t.id) && !!seen.add(t.id)).map(t => {
     const state = pending?.pillId === t.id ? (pending.questions ? "question" : "approval") : t.state;
+    const quota=quotas?.configuredPets.has(t.id)?quotaForPet(t.id,quotas.usage,quotas.now):undefined;
     return {
       id: t.id, name: pillDefinition(t.id)?.name ?? t.name,
       color: /^#[0-9a-f]{6}$/i.test(t.color) ? t.color : "#94A3B8", state, outfit,
@@ -60,6 +77,8 @@ export function companionIdentities(
       attention: ["approval", "question", "error", "ratelimit"].includes(state),
       dancing: t.id === SPOTIFY_ID && music && !["approval", "question", "error", "sleeping"].includes(state),
       message: state === "finished" ? t.finalLine ?? undefined : undefined,
+      ...(quota?{quota}:{}),
+      session: t.sessionId ? {id:t.sessionId,cwd:t.sessionCwd??"",result:t.finalLine??"",backend:t.sessionBackend,owned:t.sessionOwned,title:t.sessionTitle,decisionInTerminal:!!t.decisionInTerminal&&!(pending?.pillId===t.id&&pending.sessionId===t.sessionId)}:undefined,
     };
   });
 }

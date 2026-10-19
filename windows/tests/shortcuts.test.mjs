@@ -303,6 +303,7 @@ beforeEach(() => {
   State.isPinned = false;
   State.pendingApproval = null;
   State.stateOverride = null;
+  State.chatBusyProviders.clear();State.chatResettingProviders.clear();State.chatFeedback.clear();
   State.chatHistory = [];
   State.settings = { ...DEFAULT_SETTINGS };
   State.mochiOnDesktop = false;
@@ -477,7 +478,7 @@ test("actions that aren't the island's do nothing here", () => {
   assert.deepEqual(calls, []);
 });
 
-test("island keys: pills by number, new chat, settings, pin", () => {
+test("island keys: pills by number, new chat, settings, pin", async () => {
   const ids = State.tasks.map((t) => t.id);
   runIslandKey(host, { kind: "pill", number: 2 });
   assert.equal(State.focusId, ids[1]);
@@ -487,11 +488,12 @@ test("island keys: pills by number, new chat, settings, pin", () => {
   assert.equal(State.focusId, ids[2 % ids.length]);
 
   State.chatHistory = [{ id: 1, role: "user", content: "hi" }];
-  State.stateOverride = "thinking";
+  State.chatBusyProviders.add(State.chatProvider);
   runIslandKey(host, { kind: "newChat" });
   assert.equal(State.chatHistory.length, 1, "not while an answer is on its way");
-  State.stateOverride = null;
+  State.chatBusyProviders.clear();
   runIslandKey(host, { kind: "newChat" });
+  await new Promise(resolve=>setTimeout(resolve,0));
   assert.deepEqual(State.chatHistory, []);
   assert.equal(sent("chat_reset").length, 1);
 

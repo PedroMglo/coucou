@@ -27,3 +27,9 @@ NotchBuddy/Sources/App/Voice/GitHash.generated.swift
 # Local Linux build/test caches (never station configuration).
 windows/.npm/
 windows/.cargo/
+/.npm/
+/.local/
+/windows/.local/
+
+/windows/.npm-cache/
+/linux/__pycache__/

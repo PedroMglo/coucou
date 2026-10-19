@@ -570,12 +570,7 @@ async fn fly(app: &AppHandle, d: &Desktop, to: (f64, f64), ms: u64, ease: fn(f64
 /// Saves what changed about him in the preferences.
 fn remember(app: &AppHandle, change: impl FnOnce(&mut settings::DesktopMochiPref)) {
     let Some(shared) = app.try_state::<crate::Shared>() else { return };
-    let snapshot = {
-        let mut s = shared.settings.lock().unwrap();
-        change(&mut s.desktop_mochi);
-        s.clone()
-    };
-    if let Err(err) = settings::save(&snapshot) {
+    if let Err(err) = settings::update_with(&shared.settings,|s|change(&mut s.desktop_mochi),settings::save,|_|{}) {
         crate::log::line(format!("could not save settings: {err}"));
     }
 }

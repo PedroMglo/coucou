@@ -320,17 +320,6 @@
    "ru": "Отменено",
    "id": "Dibatalkan"
   },
-  "Cannot copy: {error}": {
-   "zh-Hans": "无法复制：{error}",
-   "hi": "कॉपी नहीं हो सका: {error}",
-   "es": "No se puede copiar: {error}",
-   "ar": "تعذّر النسخ: {error}",
-   "fr": "Copie impossible : {error}",
-   "bn": "কপি করা যায়নি: {error}",
-   "pt-BR": "Não é possível copiar: {error}",
-   "ru": "Не удаётся скопировать: {error}",
-   "id": "Tidak dapat menyalin: {error}"
-  },
   "Cannot reach {url}. Is the server running?": {
    "zh-Hans": "无法连接到 {url}。服务器在运行吗？",
    "hi": "{url} तक नहीं पहुँचा जा सका। क्या सर्वर चल रहा है?",
@@ -341,17 +330,6 @@
    "pt-BR": "Não foi possível alcançar {url}. O servidor está rodando?",
    "ru": "Не удаётся подключиться к {url}. Сервер запущен?",
    "id": "Tidak dapat menjangkau {url}. Apakah servernya berjalan?"
-  },
-  "Cannot read {path}: {error}": {
-   "zh-Hans": "无法读取 {path}：{error}",
-   "hi": "{path} पढ़ा नहीं जा सकता: {error}",
-   "es": "No se puede leer {path}: {error}",
-   "ar": "تعذّرت قراءة {path}: {error}",
-   "fr": "Impossible de lire {path} : {error}",
-   "bn": "{path} পড়া যাচ্ছে না: {error}",
-   "pt-BR": "Não é possível ler {path}: {error}",
-   "ru": "Не удаётся прочитать {path}: {error}",
-   "id": "Tidak dapat membaca {path}: {error}"
   },
   "Chat providers": {
    "zh-Hans": "聊天服务商",
@@ -836,17 +814,6 @@
    "pt-BR": "Arquivo",
    "ru": "Файл",
    "id": "File"
-  },
-  "Folders can't be dropped yet.": {
-   "zh-Hans": "暂时还不能拖放文件夹。",
-   "hi": "फ़ोल्डर अभी नहीं छोड़े जा सकते।",
-   "es": "Todavía no se pueden soltar carpetas.",
-   "ar": "لا يمكن إفلات المجلدات بعد.",
-   "fr": "On ne peut pas encore déposer de dossiers.",
-   "bn": "এখনো ফোল্ডার ড্রপ করা যায় না।",
-   "pt-BR": "Ainda não é possível soltar pastas.",
-   "ru": "Папки пока перетаскивать нельзя.",
-   "id": "Folder belum bisa diletakkan."
   },
   "Friday": {
    "zh-Hans": "星期五",
@@ -1958,17 +1925,6 @@
    "pt-BR": "Enviar a mensagem",
    "ru": "Отправить сообщение",
    "id": "Kirim pesan"
-  },
-  "Sending by email isn't in this version.": {
-   "zh-Hans": "此版本暂不支持通过邮件发送。",
-   "hi": "ईमेल से भेजना इस संस्करण में नहीं है।",
-   "es": "El envío por correo no está en esta versión.",
-   "ar": "الإرسال بالبريد الإلكتروني غير متاح في هذا الإصدار.",
-   "fr": "L'envoi par e-mail n'est pas dans cette version.",
-   "bn": "ইমেলে পাঠানো এই সংস্করণে নেই।",
-   "pt-BR": "O envio por e-mail não está nesta versão.",
-   "ru": "Отправки по почте в этой версии нет.",
-   "id": "Mengirim lewat email belum ada di versi ini."
   },
   "Services": {
    "zh-Hans": "服务",
@@ -3966,17 +3922,6 @@
    "ru": "Тот, который Coucou слушает для диктовки и звонков.",
    "id": "Yang didengarkan Coucou untuk dikte dan panggilan."
   },
-  "Your voice never leaves this computer: Parakeet turns it into text here, and the recording is dropped as soon as it is pasted.": {
-   "zh-Hans": "你的声音不会离开这台电脑：Parakeet 在本机把它转成文字，粘贴后录音即被丢弃。",
-   "hi": "आपकी आवाज़ इस कंप्यूटर से बाहर नहीं जाती: Parakeet उसे यहीं टेक्स्ट में बदलता है, और पेस्ट होते ही रिकॉर्डिंग हटा दी जाती है।",
-   "es": "Tu voz nunca sale de este ordenador: Parakeet la convierte en texto aquí y la grabación se descarta en cuanto se pega.",
-   "ar": "لا يغادر صوتك هذا الحاسوب أبدًا: يحوّله Parakeet إلى نص هنا، ويُحذف التسجيل فور لصقه.",
-   "fr": "Ta voix ne quitte jamais cet ordinateur : Parakeet la transforme en texte ici, et l'enregistrement est jeté dès qu'il est collé.",
-   "bn": "আপনার কণ্ঠ এই কম্পিউটার ছেড়ে যায় না: Parakeet এখানেই এটিকে লেখায় রূপান্তর করে, আর পেস্ট হওয়ামাত্র রেকর্ডিং মুছে যায়।",
-   "pt-BR": "Sua voz nunca sai deste computador: o Parakeet a transforma em texto aqui, e a gravação é descartada assim que é colada.",
-   "ru": "Ваш голос не покидает этот компьютер: Parakeet превращает его в текст здесь, а запись удаляется сразу после вставки.",
-   "id": "Suaramu tidak pernah meninggalkan komputer ini: Parakeet mengubahnya menjadi teks di sini, dan rekamannya dibuang begitu ditempel."
-  },
   "With Claude, the transcript (never the audio) goes to Anthropic with your key from Notch → Chat.": {
    "zh-Hans": "使用 Claude 时，文字记录（绝不包括音频）会通过你在“Notch → 聊天”中设置的密钥发送给 Anthropic。",
    "hi": "Claude के साथ, ट्रांसक्रिप्ट (ऑडियो कभी नहीं) Notch → चैट में दी गई आपकी कुंजी के साथ Anthropic को जाता है।",
@@ -4251,17 +4196,6 @@
    "pt-BR": "O microfone fica aberto; só o que vem depois de « OK Coucou » vai adiante.",
    "ru": "Микрофон остаётся включённым; дальше уходит только то, что сказано после « OK Coucou ».",
    "id": "Mikrofon tetap terbuka; hanya yang diucapkan setelah « OK Coucou » yang diteruskan."
-  },
-  "Hears « OK Coucou » here, without the internet.": {
-   "zh-Hans": "在这台电脑上听到「OK Coucou」，无需联网。",
-   "hi": "« OK Coucou » यहीं सुनता है, इंटरनेट के बिना।",
-   "es": "Oye « OK Coucou » aquí, sin internet.",
-   "ar": "يسمع « OK Coucou » هنا، دون إنترنت.",
-   "fr": "Entend « OK Coucou » ici, sans internet.",
-   "bn": "« OK Coucou » এখানেই শোনে, ইন্টারনেট ছাড়াই।",
-   "pt-BR": "Ouve « OK Coucou » aqui, sem internet.",
-   "ru": "Слышит « OK Coucou » прямо здесь, без интернета.",
-   "id": "Mendengar « OK Coucou » di sini, tanpa internet."
   },
   "Download the voice model so Coucou can hear you.": {
    "zh-Hans": "下载语音模型，Coucou 才能听到你。",
@@ -5022,17 +4956,6 @@
    "ru": "Raquel недоступна. Проверьте интернет и среду голоса. Ответ остаётся в виде текста.",
    "id": "Raquel tidak tersedia. Periksa koneksi internet dan lingkungan suara. Jawaban tetap tersedia sebagai teks."
   },
-  "Parakeet transcribes your voice locally. Your transcript and requested tool results go through the selected CLI account. Replies also go to ElevenLabs if you selected it.": {
-   "zh-Hans": "Parakeet 在本地转录语音。转录文本和所请求的工具结果通过所选 CLI 账户发送。若选择了 ElevenLabs，回复也会发送给它。",
-   "hi": "Parakeet आपकी आवाज़ को स्थानीय रूप से लिखता है। प्रतिलेख और अनुरोधित टूल के परिणाम चुने गए CLI खाते से जाते हैं। ElevenLabs चुनने पर उत्तर उसे भी भेजे जाते हैं।",
-   "es": "Parakeet transcribe tu voz localmente. La transcripción y los resultados solicitados pasan por la cuenta CLI seleccionada. Las respuestas también van a ElevenLabs si lo elegiste.",
-   "ar": "يحوّل Parakeet صوتك إلى نص محليًا. يُرسل النص ونتائج الأدوات المطلوبة عبر حساب CLI المحدد. تُرسل الردود أيضًا إلى ElevenLabs إذا اخترته.",
-   "fr": "Parakeet transcrit votre voix localement. La transcription et les résultats des outils demandés passent par le compte CLI choisi. Les réponses sont aussi envoyées à ElevenLabs si vous l’avez choisi.",
-   "bn": "Parakeet স্থানীয়ভাবে আপনার কণ্ঠ লিখে নেয়। প্রতিলিপি ও অনুরোধ করা টুলের ফলাফল নির্বাচিত CLI অ্যাকাউন্ট দিয়ে যায়। ElevenLabs বেছে নিলে উত্তর সেখানেও যায়।",
-   "pt-BR": "O Parakeet transcreve a voz localmente. A transcrição e os resultados das ferramentas solicitadas passam pela conta CLI selecionada. As respostas também seguem para o ElevenLabs se o selecionaste.",
-   "ru": "Parakeet расшифровывает голос локально. Текст и результаты запрошенных инструментов передаются через выбранный аккаунт CLI. Ответы также отправляются в ElevenLabs, если он выбран.",
-   "id": "Parakeet mentranskripsikan suara secara lokal. Transkrip dan hasil alat yang diminta dikirim melalui akun CLI terpilih. Balasan juga dikirim ke ElevenLabs jika dipilih."
-  },
   "The CLI agent could not answer. Check its connection in Settings → Chat.": {
    "zh-Hans": "CLI 代理无法回答。请在设置 → 聊天中检查连接。",
    "hi": "CLI एजेंट उत्तर नहीं दे सका। सेटिंग्स → चैट में उसका कनेक्शन जाँचें।",
@@ -5043,6 +4966,50 @@
    "pt-BR": "O agente CLI não conseguiu responder. Verifica a ligação em Definições → Chat.",
    "ru": "CLI-агент не смог ответить. Проверьте подключение в Настройки → Чат.",
    "id": "Agen CLI tidak dapat menjawab. Periksa koneksinya di Pengaturan → Chat."
+  },
+  "Could not load phone services.": {
+   "zh-Hans": "无法加载手机服务。",
+   "hi": "फ़ोन सेवाएँ लोड नहीं हो सकीं।",
+   "es": "No se pudieron cargar los servicios del teléfono.",
+   "ar": "تعذر تحميل خدمات الهاتف.",
+   "fr": "Impossible de charger les services du téléphone.",
+   "bn": "ফোনের পরিষেবাগুলি লোড করা যায়নি।",
+   "pt-BR": "Não foi possível carregar os serviços do telefone.",
+   "ru": "Не удалось загрузить службы телефона.",
+   "id": "Tidak dapat memuat layanan ponsel."
+  },
+  "Pairing link": {
+   "zh-Hans": "配对链接",
+   "hi": "पेयरिंग लिंक",
+   "es": "Enlace de vinculación",
+   "ar": "رابط الاقتران",
+   "fr": "Lien d’association",
+   "bn": "পেয়ারিং লিঙ্ক",
+   "pt-BR": "Link de emparelhamento",
+   "ru": "Ссылка для сопряжения",
+   "id": "Tautan penyandingan"
+  },
+  "Clipboard unavailable": {
+   "zh-Hans": "剪贴板不可用",
+   "hi": "क्लिपबोर्ड उपलब्ध नहीं है",
+   "es": "Portapapeles no disponible",
+   "ar": "الحافظة غير متاحة",
+   "fr": "Presse-papiers indisponible",
+   "bn": "ক্লিপবোর্ড উপলব্ধ নেই",
+   "pt-BR": "Área de transferência indisponível",
+   "ru": "Буфер обмена недоступен",
+   "id": "Papan klip tidak tersedia"
+  },
+  "Could not copy. Select the link and copy it manually. {error}": {
+   "zh-Hans": "无法复制。请选择链接并手动复制。{error}",
+   "hi": "कॉपी नहीं हो सका। लिंक चुनें और उसे मैन्युअल रूप से कॉपी करें। {error}",
+   "es": "No se pudo copiar. Selecciona el enlace y cópialo manualmente. {error}",
+   "ar": "تعذر النسخ. حدد الرابط وانسخه يدويًا. {error}",
+   "fr": "Copie impossible. Sélectionnez le lien et copiez-le manuellement. {error}",
+   "bn": "কপি করা যায়নি। লিঙ্কটি নির্বাচন করে নিজে কপি করুন। {error}",
+   "pt-BR": "Não foi possível copiar. Selecione o link e copie-o manualmente. {error}",
+   "ru": "Не удалось скопировать. Выделите ссылку и скопируйте её вручную. {error}",
+   "id": "Tidak dapat menyalin. Pilih tautan dan salin secara manual. {error}"
   }
  }
 }

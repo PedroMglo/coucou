@@ -128,13 +128,16 @@ full card anchored to the owning pet. A permission retains its command and
 Allow/Deny controls. The habitat never grants a decision on a pet click.
 Missing owners wait briefly for their snapshot; no other pet is substituted.
 
-The Close button and a second click on the same pet hide its card immediately.
+The Close button and a second click on an ordinary pet hide its card immediately.
+A pet waiting for a decision reopens its approval or question instead of its home.
 Closing a permission keeps the request pending and its pet marked. Switching
 cards restarts the configured leave countdown. Companion mode closes straight
 to the habitat instead of showing an intermediate compact island.
-Answering a permission preserves that pet's focus; it no longer restores a
-previously selected integration (such as Gravity after a Codex approval).
-If the user manually selects another pet, completion preserves that choice.
+Answering a permission restores the pet selected before the interruption.
+If the user manually selects another pet meanwhile, completion preserves that
+choice. A request handed back to the terminal remains marked as waiting there;
+reviewing it focuses that exact session. Native chat decisions carry their full
+target and request ID into the corresponding conversation, including after reload.
 
 The island webview owns event handlers even while no card is visible. On Linux
 it must remain mapped as a transparent, zero-input strip: hiding its GTK window
@@ -171,3 +174,67 @@ actual 42-pixel band and free interval: thinking has no text card, speech stays
 inside that band, six residents remain accessible, and selecting Gravity routes
 only to Gravity. These checks do not execute a model or an application command.
 Login mapping and actual compositor stacking are separately checked at delivery.
+
+## Assistant architecture and delivery status
+
+The current implementation, per-pet roles, model defaults, conversation gaps,
+voice validation and remaining acceptance work are tracked in
+[PETS-ARCHITECTURE.md](PETS-ARCHITECTURE.md). This replaces the chronological
+implementation notes for mochi.7 through mochi.11. Earlier sections above describe
+the habitat baseline; the architecture guide is authoritative for newer provider,
+model-profile and service-assistant behavior.
+
+## Current UX review and deferred audio work
+
+The October 2026 review covers every chat surface, settings route and nested
+control, including drafts, errors, repeated clicks, keyboard navigation, file
+delivery and concurrent requests. Native observation is required separately from
+mocked UI and transport checks. Rendering a button is not functional acceptance.
+The immediate delivery priorities are reviewable help requests and the central
+home combining pets with clock, date, media, weather, notifications and desktop
+panels. The revised home has two primary pages, Pets and System. Pets opens
+on the whole catalogue, including resting pets; individual details are opt-in.
+Its session, task, provider, local-model and profile tools remain available as
+subsections. Horizontal touch/trackpad navigation and page switches preserve
+profile drafts. The gallery uses the original lit bot renderer, animation and
+outfits rather than the small flat pill avatars. Native acceptance confirmed the real approval for its exact session.
+The installed mochi.14 presentation was checked again after login on the laptop
+display at scale 2: all six pets, both primary pages and all five management
+subsections remain accessible. Each system action opened its actual DMS panel;
+calendar, media and weather open from the central entry, as do notifications and
+quick settings. The old clock/media/weather block is absent. The five opening
+acknowledgements took 0.45–0.49 seconds in that run; this measures panel opening,
+not a full audit of the controls inside DMS. Media playback was inactive.
+The local-model controls were also exercised with the installed Gemma model:
+loading produced a real Ollama memory entry, and the confirmed release returned
+it to the initial empty state. No chat inference or model download was needed.
+The system repository owns the versioned host cutover. The follow-up transparency
+repair was also observed on the installed desktop: wallpaper is visible around
+the compact centre while the side controls remain accessible. Native
+file delivery also passed for the island interior, a direct pet drop and a folder
+inside the floating chat, with no inference needed to accept an attachment.
+
+The user explicitly deferred new sound, speech, voice and dictation work until
+the text and task experience is mature. Retain the following for that later phase:
+
+- Device and permission feedback, cancellation and recovery for audio capture.
+- Measured streaming and playback latency, with a reliable text equivalent.
+- Voice selection and language handling per pet, including interruption behavior.
+- Recording and transcription storage acknowledgements, recovery and background
+  writer ordering before accepting that existing audio workflow.
+
+The settings review corrected phone clipboard errors with visible manual recovery,
+and serialised complete service selections so rapid changes preserve every choice.
+Initial loading gates edits; failed saves retain the latest selection for retry.
+The colour palette now closes when its page leaves, including keyboard navigation.
+The centre reserves space for errors instead of covering the pet actions. Browser
+journeys cover these failure and recovery paths. Recap persistence acknowledgements
+remain a reported, deferred backend item.
+
+The installed frontend passed TypeScript, Vite and 607 JavaScript checks before
+packaging. Remaining frontend follow-ups include visible recovery when native
+chat close or resize fails, immediate agreement between gallery selection and
+the detail header, and distinguishing an error from a request awaiting a human
+decision. These follow-ups are not yet present in mochi.14. Weather location and
+freshness were also reported to the backend owner: the current compact weather
+contract does not identify the configured city.

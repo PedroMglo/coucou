@@ -349,6 +349,35 @@ pub fn preview(id: &str, install: bool) -> Result<Plan, String> {
     config_file::preview(&agent.edits(&platform::home_dir(), &Relay::current(), install))
 }
 
+/// Explicit operator maintenance, before the UI starts. Reuses the same strict
+/// reader, fingerprint, mandatory backup and atomic writer as Settings. The
+/// preview exposes only Coucou's generated group, never other hook contents.
+pub fn gravity_config_cli()->bool {
+    let args:Vec<_>=std::env::args().collect();
+    let Some(index)=args.iter().position(|a|a=="--gravity-hook-config") else{return false};
+    let result=(||->Result<Value,String>{
+        if !cfg!(target_os="linux") {return Err("This hook bridge is available on Linux.".into());}
+        let mode=args.get(index+1).map(String::as_str).unwrap_or("");
+        if !["plan","apply","legacy-plan","legacy-apply"].contains(&mode) {return Err("Choose plan, apply, legacy-plan or legacy-apply.".into());}
+        let agent=Agent::Antigravity;let home=platform::home_dir();let relay=Relay::current();
+        if !agent.installed(&home) {return Err("Install Antigravity hooks in Settings before updating them.".into());}
+        let mut block=antigravity_block(&relay);
+        if mode.starts_with("legacy-") {
+            block["PreToolUse"][0]["hooks"][0]=json!({"type":"command","command":relay.command(Shell::Cmd,"--agent antigravity PreToolUse"),"timeout":10});
+        }
+        let replacement=block.clone();let path=agent.files(&home).remove(0);
+        let edits=vec![FileEdit{path,edit:config_file::json_edit("Antigravity hooks".into(),move|root|antigravity_install(root,&block).map(Some))}];
+        let plan=config_file::preview(&edits)?;
+        if mode.ends_with("apply") {
+            let expected=args.get(index+2).ok_or("Supply the fingerprint from plan.")?;
+            let backups=config_file::apply(&edits,expected)?;
+            Ok(json!({"applied":true,"backups":backups}))
+        } else {Ok(json!({"path":plan.path,"fingerprint":plan.fingerprint,"replacement":replacement}))}
+    })();
+    match result {Ok(value)=>println!("{value}"),Err(error)=>{eprintln!("{error}");std::process::exit(1);}}
+    true
+}
+
 /// Only ever called from an explicit click. Returns the backups taken, one per line.
 pub fn apply(id: &str, install: bool, fingerprint: &str) -> Result<String, String> {
     let agent = find(id)?;
@@ -517,18 +546,26 @@ fn gemini_install(root: &Value, commands: &[(String, String, u64)]) -> Result<Va
 // Hooks are named groups at the top level; Coucou's is `coucou`. Tool events
 // take matcher groups, lifecycle events take handlers directly; timeouts are
 // in seconds. Merge and removal come from #298 (kobaltgit). The relay answers
-// PreToolUse with "{}" — no decision — never with an allow: Antigravity's own
-// permission rules stay in charge.
+// The Linux pre-tool helper offers a human shell decision only for an exact
+// app-owned session; ordinary CLI events keep the official relay's policy.
 
 const ANTIGRAVITY_TOOL_EVENTS: &[&str] = &["PreToolUse", "PostToolUse"];
 const ANTIGRAVITY_LIFECYCLE_EVENTS: &[&str] = &["PreInvocation", "PostInvocation", "Stop"];
 
 fn antigravity_block(relay: &Relay) -> Value {
     let handler = |event: &str| {
+        let mut command=relay.command(Shell::Cmd, &format!("--agent antigravity {event}"));
+        let mut timeout=10;
+        if cfg!(target_os="linux") && !relay.windows && event=="PreToolUse" {
+            if let Ok(exe)=std::env::current_exe() {
+                command=format!("{} --gravity-pre-tool --relay {} --agent antigravity PreToolUse",sh_quote(&exe.to_string_lossy()),sh_quote(&relay.exe));
+                timeout=115;
+            }
+        }
         json!({
             "type": "command",
-            "command": relay.command(Shell::Cmd, &format!("--agent antigravity {event}")),
-            "timeout": 10,
+            "command": command,
+            "timeout": timeout,
         })
     };
     let mut block = Map::new();
@@ -1110,6 +1147,7 @@ mod tests {
             assert_eq!(ours[event][0]["matcher"], "*");
             let cmd = ours[event][0]["hooks"][0]["command"].as_str().unwrap();
             assert!(cmd.ends_with(&format!("--agent antigravity {event}")), "{cmd}");
+            if cfg!(target_os="linux") && *event=="PreToolUse" {assert!(cmd.contains("--gravity-pre-tool --relay"));assert_eq!(ours[event][0]["hooks"][0]["timeout"],115);assert!(!cmd.contains("dangerously-skip-permissions"));}
         }
         for event in ANTIGRAVITY_LIFECYCLE_EVENTS {
             assert_eq!(ours[event][0]["timeout"], 10);

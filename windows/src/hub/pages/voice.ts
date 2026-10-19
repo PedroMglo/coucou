@@ -9,7 +9,8 @@ import { FlowBridge } from "../../core/flow";
 import type { VoiceOutput } from "../../core/flow";
 import type { HubContext } from "../shell";
 import { button, card, divider, label, row, segmented, toggle } from "../ui";
-import { modelsControl } from "./flowsettings";
+import { modelsControl, recognitionControl } from "./flowsettings";
+import {PetPreferences,profileProvider,isServiceProvider} from '../../mochi/pet-preferences';
 
 const ELEVEN = "elevenlabs-api-key";
 /** Where secrets.rs keeps the keys on this OS (same words as Notch → Chat). */
@@ -48,7 +49,7 @@ export async function voicePage(page: HTMLElement, ctx: HubContext) {
   const boot = await Bridge.boot();
   page.append(ctx.hero("voice", "OK Coucou", t("Talk to Mochi using the selected voice provider.")));
 
-  const ready = status.models.parakeet.state === "ready";
+  const ready = status.recognition?.ready ?? status.models.parakeet.state === "ready";
   page.append(card(
     row(t("Talk to Mochi"), t("Ctrl+Alt+C starts a turn. Pause to send; Ctrl+Alt+Enter sends now; Ctrl+Alt+Esc cancels. The microphone closes before the answer."),
       button(t("Talk to Mochi"), () => void FlowBridge.pillAction("voice"), "primary")),
@@ -58,7 +59,9 @@ export async function voicePage(page: HTMLElement, ctx: HubContext) {
     row(t("Listen for « OK Coucou »"), t("The microphone stays open; only what follows « OK Coucou » goes further."),
       toggle(prefs.voice, (on) => void ctx.setPrefs((p) => (p.voice = on)).then(() => ctx.navigate("voice")))),
     divider(),
-    row(t("Parakeet, on your computer"), t("Hears « OK Coucou » here, without the internet."), modelsControl(ctx, () => ctx.navigate("voice"))),
+    await recognitionControl(ctx,()=>ctx.navigate('voice')),
+    divider(),
+    row(t("Parakeet, on your computer"), 'Modelo local multilingue disponível para ditado e conversa.', modelsControl(ctx, () => ctx.navigate("voice"))),
   );
   if (!status.voiceProviderReady) {
     main.append(h("div", { class: "hub-warn", text: t("Choose a local Ollama model or configure Claude, and download the voice model first.") }));
@@ -70,7 +73,7 @@ export async function voicePage(page: HTMLElement, ctx: HubContext) {
 
   if (boot) {
     const settings = boot.settings;
-    const save = () => Bridge.saveSettings(settings);
+    const save = () => Bridge.saveSettings(settings).catch(Bridge.reportSettingsError);
     const timeout = h("input", { class: "hub-input", type: "number", min: "15", max: "600", value: String(settings.voiceIdleSeconds), style: "width:90px" }) as HTMLInputElement;
     timeout.addEventListener("change", () => {
       settings.voiceIdleSeconds = Math.min(600, Math.max(15, Number(timeout.value) || 60));
@@ -83,11 +86,13 @@ export async function voicePage(page: HTMLElement, ctx: HubContext) {
       divider(),
       row(t("Inactivity timeout (seconds)"), t("The microphone closes after silence, or when you press Super again."), timeout),
     ));
-    const codexModel = h("input", { class: "hub-input", value: settings.voiceModels.codex ?? "gpt-6-luna", style: "width:240px" }) as HTMLInputElement;
-    codexModel.addEventListener("change", () => { settings.voiceModels.codex = codexModel.value.trim() || "gpt-6-luna"; void save(); });
-    page.append(card(row(`Codex · ${t("Model")}`, null, codexModel)));
+    page.append(card(row('Modelos e nomes dos pets','Personaliza os perfis de resposta e os nomes usados na conversa.',button('Gerir pets',()=>ctx.navigate('pets')))));
     const aliases = card(h("div", { class: "hub-note", text: t("Learn names locally. Recordings are discarded.") }));
-    for (const [provider, name] of [["codex", "Codex"], ["antigravity", "Gravity"], ["claude-cli", "Claude"], ["gemini-cli", "Gemini"], ["ollama", "Ollama"]]) {
+    await PetPreferences.init();
+    const voicePets=Object.entries(PetPreferences.config?.pets??{}).filter(([id,p])=>PetPreferences.active(id)&&profileProvider(p.provider));
+    if(!voicePets.length)aliases.append(h('p',{class:'hub-note',text:'Os nomes aparecem aqui quando os pets estiverem configurados.'}));
+    for (const [id,pet] of voicePets) {
+      const provider=isServiceProvider(id)?id:pet.provider,name=pet.name;
       const input = h("input", { class: "hub-input", value: (settings.voicePetAliases[provider] ?? []).join(", "), placeholder: name, style: "width:170px" }) as HTMLInputElement;
       input.addEventListener("change", () => {
         settings.voicePetAliases[provider] = input.value.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 20);
@@ -121,7 +126,7 @@ export async function voicePage(page: HTMLElement, ctx: HubContext) {
   if (boot && prefs.voiceOutput === "edge") {
     const settings = boot.settings;
     const runtime = h("input", { class: "hub-input", value: settings.edgeVoicePython, style: "width:240px" }) as HTMLInputElement;
-    runtime.addEventListener("change", () => { settings.edgeVoicePython = runtime.value.trim(); void Bridge.saveSettings(settings); });
+    runtime.addEventListener("change", () => { settings.edgeVoicePython = runtime.value.trim(); void Bridge.saveSettings(settings).catch(Bridge.reportSettingsError); });
     answers.append(divider(), h("div", { class: "hub-note", text: t("Raquel reads replies online with Microsoft Read Aloud. No API key is needed. This unofficial service requires internet and may become unavailable.") }),
       divider(), row(t("Voice runtime (Python)"), null, runtime),
       divider(), button(t("Listen"), () => void invoke("voice_preview", { provider: null })));
@@ -131,7 +136,7 @@ export async function voicePage(page: HTMLElement, ctx: HubContext) {
     answers.append(divider(), h("div", { class: "hub-note", text: t("Local pt-PT speech runs without a speech API.") }));
     for (const [provider, name] of [["default", t("Default")], ["codex", "Codex"], ["antigravity", "Gravity"], ["gemini-cli", "Gemini"]]) {
       const input = h("input", { class: "hub-input", value: settings.localVoiceDirs[provider] ?? "", style: "width:240px" }) as HTMLInputElement;
-      input.addEventListener("change", () => { settings.localVoiceDirs[provider] = input.value.trim(); void Bridge.saveSettings(settings); });
+      input.addEventListener("change", () => { settings.localVoiceDirs[provider] = input.value.trim(); void Bridge.saveSettings(settings).catch(Bridge.reportSettingsError); });
       answers.append(divider(), row(name, null, h("div", { style: "display:flex;gap:8px" }, input,
         button(t("Listen"), () => void invoke("voice_preview", { provider: provider === "default" ? null : provider })))));
     }
@@ -150,7 +155,7 @@ export async function voicePage(page: HTMLElement, ctx: HubContext) {
   const privacy = card(
     h("div", { class: "hub-note", text: t("Voice recognition stays on this computer. Ollama voice uses your local model; Claude sends the question text to Anthropic. ElevenLabs is used only if selected.") }),
     divider(),
-    h("div", { class: "hub-note", text: t("Parakeet transcribes your voice locally. Your transcript and requested tool results go through the selected CLI account. Replies also go to ElevenLabs if you selected it.") }),
+    h("div", { class: "hub-note", text: 'O motor de reconhecimento selecionado transcreve a voz localmente. O texto e os resultados das ferramentas seguem para a conta CLI do pet escolhido.' }),
   );
   if (prefs.voiceOutput === "edge") privacy.append(divider(), h("div", { class: "hub-note", text: t("Reply text is sent to Microsoft to generate Raquel's voice. Microphone audio stays on this computer.") }));
   privacy.append(divider(), h("div", { class: "hub-note", text: t("An email is never sent by Coucou: your mail app opens with it written, and you send it.") }));

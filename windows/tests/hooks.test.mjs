@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { calls, emit, sent } from "./tauri.mjs";
 import { registerHookHandlers } from "../src/island/hooks.ts";
 import { DEFAULT_SETTINGS, State } from "../src/core/state.ts";
+import {PetSessions} from '../src/core/pet-sessions.ts';
 
 const CLAUDE = "integration_claude";
 
@@ -25,6 +26,30 @@ const hook = (payload) => emit("hook", payload);
 const task = (id = CLAUDE) => State.tasks.find((t) => t.id === id);
 const seconds = (n) => mock.timers.tick(n * 1000);
 
+test('two Codex terminals keep their own messages, folders and approvals through interleaved events',()=>{
+ State.settings.companionMode=true;
+ const event=(session,name,extra={})=>hook({coucou_agent:'codex',session_id:session,cwd:`/projects/${session}`,hook_event_name:name,...extra});
+ event('a','UserPromptSubmit',{prompt:'Construir a base de dados'});
+ event('b','UserPromptSubmit',{prompt:'Rever a interface'});
+ event('a','PermissionRequest',{request_id:'approval-a',tool_name:'Bash',tool_input:{command:'createdb example'}});
+ const origin={...State.pendingApproval};
+ event('b','Stop',{last_assistant_message:'A interface está revista.'});
+ assert.deepEqual(State.pendingApproval,origin);assert.equal(task('agent_codex').sessionId,'a');assert.equal(task('agent_codex').state,'approval');
+ assert.equal(State.petSessions.list('agent_codex').find(s=>s.sessionId==='b').finalLine,'A interface está revista.');
+ assert.equal(State.pendingApproval.cwd,'/projects/a');assert.equal(State.pendingApproval.sessionTitle,'Construir a base de dados');
+ seconds(6);assert.equal(task('agent_codex').state,'approval');
+ event('b','SessionEnd');assert.equal(State.pendingApproval.requestId,'approval-a');
+ event('a','Stop');assert.equal(State.pendingApproval,null);
+});
+
+test('a second terminal decision returns to that terminal without replacing the first card',()=>{
+ for(const id of ['first','second'])hook({coucou_agent:'copilot',session_id:id,cwd:`/tmp/${id}`,hook_event_name:'PermissionRequest',request_id:`r-${id}`,tool_name:'Write'});
+ assert.equal(State.pendingApproval.sessionId,'first');
+ assert.deepEqual(sent('approval_decline'),[{requestId:'r-second'}]);
+ const second=State.petSessions.list('agent_copilot').find(s=>s.sessionId==='second');
+ assert.equal(second.state,'approval');assert.equal(second.decisionInTerminal,true);
+});
+
 beforeEach(() => {
   mock.timers.enable({ apis: ["setTimeout"] });
   asked = [];
@@ -36,6 +61,7 @@ beforeEach(() => {
   State.paused = false;
   State.isPinned = false;
   State.pendingApproval = null;
+  State.petSessions=new PetSessions();
   State.settings = { ...DEFAULT_SETTINGS };
   State.loadIntegrationTasks();
 });
@@ -287,6 +313,7 @@ test("Codex, Copilot CLI and Muse Code get the card on their own pill", () => {
     const id = `agent_${agent}`;
     assert.deepEqual(State.pendingApproval, {
       requestId: `r-${agent}`, sessionId: "s1", pillId: id, tool: "Bash", command: "Bash · npm publish",
+      backend:agent,cwd:'',owned:false,sessionTitle:'',
     });
     assert.deepEqual(sent("approval_ack"), [{ requestId: `r-${agent}` }]);
     assert.deepEqual(sent("approval_decline"), []);
@@ -432,6 +459,7 @@ test("a permission request puts the card up, says exactly what it authorises, an
   assert.deepEqual(State.pendingApproval, {
     requestId: "r1",
     sessionId: "s1",
+    backend:'claude',cwd:'C:\\Users\\me\\proj',owned:false,sessionTitle:'',
     pillId: CLAUDE,
     tool: "Write",
     command: "Write · C:\\Users\\me\\proj\\.env",
@@ -549,7 +577,8 @@ test("an unanswered card is withdrawn after 110 s", () => {
   seconds(1);
   assert.equal(State.pendingApproval, null);
   assert.equal(State.isPinned, false);
-  assert.equal(task().state, "working");
+  assert.equal(task().state, "approval");
+  assert.equal(task().decisionInTerminal,true);
   assert.equal(task().pillBadge, null);
   assert.deepEqual(asked, ["dropPin", "setView:overview"]);
 });
@@ -738,4 +767,40 @@ test("a completed companion speaks its result without stealing focus or opening 
  assert.equal(State.focusId,"ai_ollama");
  assert.equal(task("agent_codex").finalLine,"The requested change is ready.");
  assert.ok(!asked.includes("alert:finished"));
+});
+
+test("app-owned Gravity session hooks follow the logical pet while unrelated sessions keep Gravity identity",()=>{
+ hook({hook_event_name:"UserPromptSubmit",coucou_agent:"antigravity",coucou_pet_provider:"gemini-cli",session_id:"owned-gemini",cwd:"/tmp/project",prompt:"build"});
+ assert.equal(State.tasks.find(t=>t.id==="agent_gemini").sessionId,"owned-gemini");
+ assert.equal(State.tasks.find(t=>t.id==="agent_gemini").sessionOwned,true);
+ assert.equal(State.tasks.find(t=>t.id==="agent_gemini").sessionBackend,"antigravity");
+ hook({hook_event_name:"UserPromptSubmit",coucou_agent:"antigravity",session_id:"external-gravity",cwd:"/tmp/other",prompt:"other"});
+ assert.equal(State.tasks.find(t=>t.id==="agent_antigravity").sessionId,"external-gravity");
+ assert.equal(State.tasks.find(t=>t.id==="agent_gemini").sessionId,"owned-gemini");
+});
+
+test("only a trusted owned Gravity gate opens the existing decision card for the logical pet",()=>{
+ const request={hook_event_name:"PermissionRequest",request_id:"owned-gravity-gate",session_id:"owned-gemini",coucou_agent:"antigravity",coucou_pet_provider:"gemini-cli",coucou_assistant_gate:true,tool_name:"Bash",tool_input:{command:"pwd"}};
+ hook(request);assert.equal(State.pendingApproval.pillId,"agent_gemini");assert.equal(State.pendingApproval.command,"Bash · pwd");assert.equal(State.focusId,"agent_gemini");
+ assert.deepEqual(sent("approval_ack"),[{requestId:"owned-gravity-gate"}]);assert.deepEqual(sent("approval_decide"),[]);
+ State.endApproval();calls.length=0;hook({...request,coucou_assistant_gate:false,request_id:"not-a-gate"});
+ assert.deepEqual(sent("approval_decline"),[{requestId:"not-a-gate"}]);assert.equal(State.pendingApproval,null);
+});
+
+test('terminal handoff removes only the exact answerable hook card and preserves its waiting session',()=>{
+ State.settings.companionMode=true;
+ hook({coucou_agent:'codex',session_id:'handoff-session',cwd:'/fixture',hook_event_name:'PermissionRequest',request_id:'handoff-request',tool_name:'Write'});
+ const before=sent('approval_decline').length;
+ emit('approval-handoff',{requestId:'handoff-request',sessionId:'wrong-session',agent:'codex',provider:null,reason:'timeout'});
+ assert.equal(State.pendingApproval.requestId,'handoff-request');
+ emit('approval-handoff',{requestId:'handoff-request',sessionId:'handoff-session',agent:'codex',provider:null,reason:'timeout'});
+ assert.equal(State.pendingApproval,null);const session=State.petSessions.list('agent_codex').find(s=>s.sessionId==='handoff-session');
+ assert.equal(session.state,'approval');assert.equal(session.decisionInTerminal,true);
+ assert.equal(sent('approval_decline').length,before);assert.deepEqual(sent('approval_decision'),[]);
+});
+test('a late terminal handoff cannot close a newer request from the same session',()=>{
+ const payload={coucou_agent:'codex',session_id:'same-session',cwd:'/fixture',hook_event_name:'PermissionRequest',tool_name:'Write'};
+ hook({...payload,request_id:'new-request'});
+ emit('approval-handoff',{requestId:'old-request',sessionId:'same-session',agent:'codex',provider:null,reason:'timeout'});
+ assert.equal(State.pendingApproval.requestId,'new-request');assert.notEqual(State.petSessions.list('agent_codex')[0].decisionInTerminal,true);
 });

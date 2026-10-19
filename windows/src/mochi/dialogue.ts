@@ -1,15 +1,15 @@
 import type { BotStateName } from "../core/layout";
 /** Transient public progress, independent of approval cards and chat history. */
-export interface PetActivity { pet: string; turn: number; phase: string; message: string }
+export interface PetActivity { pet: string; turn: number; phase: string; message: string; origin?:string }
 export interface Dialogue extends PetActivity { changedAt: number; messageAt: number }
-export const BUSY = new Set(["preparing", "thinking", "working", "searching", "message", "speaking"]);
+export const BUSY = new Set(["preparing", "transcribing", "received", "thinking", "working", "searching", "message", "speaking"]);
 export const ATTENTION = new Set(["approval", "question", "error", "ratelimit"]);
 export function phaseFor(activity: Dialogue | undefined, native: string): string {
   if (ATTENTION.has(native)) return native;
   return activity?.phase ?? native;
 }
 export function animationFor(phase: string, fallback: BotStateName): BotStateName {
-  if (phase === "preparing") return "thinking";
+  if (["preparing","transcribing","received"].includes(phase)) return "thinking";
   if (phase === "message" || phase === "speaking") return "working";
   if (["thinking", "working", "searching", "approval", "question", "error", "ratelimit"].includes(phase)) return phase as BotStateName;
   return fallback;
