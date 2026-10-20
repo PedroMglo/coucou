@@ -2,7 +2,8 @@
 use serde::{Deserialize,Serialize};
 use std::{collections::{BTreeMap},hash::{Hash,Hasher},io::{Read,Write},path::{Path,PathBuf},sync::Mutex};
 use tauri::{AppHandle,Emitter};
-const DEFAULTS:&str=include_str!("../pets.default.json");
+#[path="pet_factory.rs"]
+mod factory;
 const MAX_BYTES:u64=256*1024;
 static EDIT:Mutex<()>=Mutex::new(());
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
@@ -55,7 +56,7 @@ pub struct Configuration {pub version:u32,pub reasoning_terms:Vec<String>,pub re
 pub struct Document {pub config:Configuration,pub path:String,pub revision:String}
 #[derive(Clone,Debug,PartialEq)]
 pub struct Selection {pub model:String,pub effort:String,pub mode:String}
-pub fn defaults()->Configuration {serde_json::from_str(DEFAULTS).expect("bundled pet configuration")}
+pub fn defaults()->Configuration {factory::bundled()}
 pub fn path()->PathBuf {crate::settings::config_dir().join("pets.json")}
 pub const SERVICE_PETS:&[&str]=&["integration_resend","integration_n8n","integration_vercel","integration_github","integration_notion","integration_calcom","integration_stripe","integration_spotify"];
 pub fn service(id:&str)->bool {SERVICE_PETS.contains(&id)}

@@ -396,6 +396,7 @@ export const Bridge = {
   petSystemNetworkRead:(request:import('./control-contract').NetworkReadRequest)=>callOrThrow<import('./control-contract').NetworkTicket>('pet_system_network_read',{request}),
   petSystemNetworkView:(request:import('./control-contract').ContextPrecondition)=>callOrThrow<import('./control-contract').NetworkView>('pet_system_network_view',{request}),
   petSystemNetworkScan:(request:import('./control-contract').NetworkScanRequest)=>callOrThrow<import('./control-contract').NetworkTicket>('pet_system_network_scan',{request}),
+  petSystemNetworkEnableWifi:(request:import('./control-contract').NetworkEnableWifiRequest)=>callOrThrow<import('./control-contract').NetworkTicket>('pet_system_network_enable_wifi',{request}),
   petSystemNetworkTicket:(request:import('./control-contract').NetworkTicketRequest)=>callOrThrow<import('./control-contract').NetworkTicket>('pet_system_network_ticket',{request}),
   petSystemNetworkCancel:(request:import('./control-contract').NetworkTicketRequest)=>callOrThrow<import('./control-contract').NetworkTicket>('pet_system_network_cancel',{request}),
   petControlContext:()=>call<{pet?:string;section?:string}>("pet_control_context"),

@@ -23,6 +23,11 @@ pub(crate) async fn pet_system_network_scan(app:AppHandle,window:WebviewWindow,r
     client.enqueue_prepared_scan(p,request.0.scope.as_str(),request.0.intent_id.as_str()).map_err(Failure::network)?.wait().await.map_err(Failure::network)
 }
 #[tauri::command]
+pub(crate) async fn pet_system_network_enable_wifi(app:AppHandle,window:WebviewWindow,request:Checked<EnableWifiRequest>)->Result<lifecycle::Ticket,Failure>{
+    let(client,p)=prepared(&app,&window,request.0.expected_revision).await?;
+    client.enqueue_prepared_enable_wifi(p,request.0.scope.as_str(),request.0.intent_id.as_str()).map_err(Failure::network)?.wait().await.map_err(Failure::network)
+}
+#[tauri::command]
 pub(crate) async fn pet_system_network_ticket(app:AppHandle,window:WebviewWindow,request:Checked<TicketRequest>)->Result<lifecycle::Ticket,Failure>{
     let(client,p)=prepared(&app,&window,request.0.expected_revision).await?;
     client.enqueue_prepared_ticket(p,request.0.ticket_id.as_str()).map_err(Failure::network)?.wait().await.map_err(Failure::network)

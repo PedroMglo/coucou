@@ -14,6 +14,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+#[path="timing.rs"]
+pub(crate) mod timing;
+use timing::{Stage, Trace};
+
 const MAX_LINE: usize = 1024 * 1024;
 const MAX_TOTAL: usize = 32 * 1024 * 1024;
 const MAX_ANSWER: usize = 4 * 1024 * 1024;
@@ -51,6 +55,7 @@ pub struct Client {
     active_turn: Option<(String, String)>,
     observer: Option<Box<dyn FnMut(&Value) + Send>>,
     write_incomplete: bool,
+    timing: Option<Trace>,
 }
 
 impl Client {
@@ -64,6 +69,14 @@ impl Client {
     }
 
     fn start_inner(exe: &Path, cwd: &Path, timeout: Duration, voice: bool, cancel: Option<Arc<AtomicBool>>, initialize_timeout: Duration) -> Result<Self, String> {
+        Self::start_inner_timed(exe, cwd, timeout, voice, cancel, initialize_timeout, None)
+    }
+
+    pub(crate) fn start_with_cancel_timed(exe: &Path, cwd: &Path, timeout: Duration, voice: bool, cancel: Arc<AtomicBool>, trace: Trace) -> Result<Self, String> {
+        Self::start_inner_timed(exe, cwd, timeout, voice, Some(cancel), INITIALIZE_TIMEOUT, Some(trace))
+    }
+
+    fn start_inner_timed(exe: &Path, cwd: &Path, timeout: Duration, voice: bool, cancel: Option<Arc<AtomicBool>>, initialize_timeout: Duration, timing: Option<Trace>) -> Result<Self, String> {
         if cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return Err("The CLI request was cancelled.".into());
         }
@@ -103,21 +116,23 @@ impl Client {
         if cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return Err("The CLI request was cancelled.".into());
         }
-        let mut child = cmd.spawn().map_err(|err| {
+        let spawn = timing::Span::new(timing.as_ref(), Stage::Spawn);
+        let child = cmd.spawn().map_err(|err| {
             format!("Cannot start Codex. Install Codex CLI and sign in with codex login: {err}")
-        })?;
+        });
+        spawn.finish(&child);
+        let mut child = child?;
         let input = child.stdin.take();
         #[cfg(target_os="linux")]
         if let Some(input)=&input {
             use std::os::fd::AsRawFd;
             let fd=input.as_raw_fd();let flags=unsafe{libc::fcntl(fd,libc::F_GETFL)};
             if flags<0||unsafe{libc::fcntl(fd,libc::F_SETFL,flags|libc::O_NONBLOCK)}<0{
-                let _=child.kill();let _=child.wait();return Err("Cannot prepare bounded Codex input.".into());
+                reap_failed_start(&mut child, timing.as_ref());return Err("Cannot prepare bounded Codex input.".into());
             }
         }
         let Some(stdout) = child.stdout.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
+            reap_failed_start(&mut child, timing.as_ref());
             return Err("Codex did not open stdout.".into());
         };
         let (tx, output) = mpsc::sync_channel(32);
@@ -132,8 +147,7 @@ impl Client {
                 }
             }
         }).map_err(|_| {
-            let _ = child.kill();
-            let _ = child.wait();
+            reap_failed_start(&mut child, timing.as_ref());
             "Cannot start the Codex response reader.".to_string()
         })?;
         let mut client = Self {
@@ -147,12 +161,16 @@ impl Client {
             active_turn: None,
             observer: None,
             write_incomplete: false,
+            timing,
         };
         client.request("initialize", json!({
             "clientInfo": { "name": "coucou_mochi", "title": "Coucou — Mochi", "version": env!("CARGO_PKG_VERSION") },
             "capabilities": { "experimentalApi": voice }
         }))?;
-        client.write(json!({ "method": "initialized" }))?;
+        let initialized = timing::Span::new(client.timing.as_ref(), Stage::Initialized);
+        let result = client.write(json!({ "method": "initialized" }));
+        initialized.finish(&result);
+        result?;
         // The handshake limit must not become the deadline of a long task.
         client.deadline = deadline;
         Ok(client)
@@ -227,9 +245,17 @@ impl Client {
     }
 
     pub fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let span = timing::Span::rpc(self.timing.as_ref(), method);
+        let result = self.request_inner(method, params);
+        span.finish(&result);
+        result
+    }
+
+    fn request_inner(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
         self.write(json!({ "id": id, "method": method, "params": params }))?;
+        timing::written(self.timing.as_ref(), method);
         loop {
             let message = self.read_raw()?;
             if message["id"] == id && message.get("method").is_none() {
@@ -296,6 +322,20 @@ impl Client {
     }
 
     pub fn answer(
+        &mut self,
+        options: TurnOptions<'_>,
+        on_tool: impl FnMut(&str, &Value) -> (String, bool),
+        on_request: impl FnMut(&str, &Value) -> Option<Value>,
+        on_session: impl FnMut(&str),
+        on_delta: impl FnMut(String),
+    ) -> Result<Reply, String> {
+        let span = timing::Span::new(self.timing.as_ref(), Stage::Answer);
+        let result = self.answer_inner(options, on_tool, on_request, on_session, on_delta);
+        span.finish(&result);
+        result
+    }
+
+    fn answer_inner(
         &mut self,
         options: TurnOptions<'_>,
         mut on_tool: impl FnMut(&str, &Value) -> (String, bool),
@@ -374,6 +414,8 @@ impl Client {
         let mut answer = Answer::default();
         let mut acted = false;
         let mut tool_calls = 0;
+        let mut first_event = true;
+        let mut first_text = true;
         loop {
             let message = self.read()?;
             let params = &message["params"];
@@ -386,7 +428,10 @@ impl Client {
                 let name = params["tool"].as_str().unwrap_or("");
                 let allowed = tool_calls <= 100 && tools.iter().any(|t| t["name"] == name);
                 let (text, did) = if allowed {
-                    on_tool(name, &params["arguments"])
+                    let callback = timing::Span::new(self.timing.as_ref(), Stage::DynamicToolCallback);
+                    let result = on_tool(name, &params["arguments"]);
+                    callback.returned();
+                    result
                 } else {
                     ("This tool is unavailable.".into(), false)
                 };
@@ -398,7 +443,10 @@ impl Client {
             }
             if message.get("id").is_some() && message.get("method").is_some() {
                 let method = message["method"].as_str().unwrap_or("");
-                if let Some(result) = on_request(method, params) {
+                let callback = timing::Span::new(self.timing.as_ref(), Stage::NativeRequestCallback);
+                let result = on_request(method, params);
+                callback.returned();
+                if let Some(result) = result {
                     self.write(json!({ "id": message["id"], "result": result }))?;
                 } else {
                     self.reject_request(&message)?;
@@ -411,6 +459,10 @@ impl Client {
             if params.get("turnId").is_some() && params["turnId"] != turn_id {
                 continue;
             }
+            if first_event {
+                timing::mark(self.timing.as_ref(), Stage::FirstAcceptedEvent);
+                first_event = false;
+            }
             if let Some(observer) = &mut self.observer { observer(&message); }
             let before = answer.text();
             if message["method"] == "item/completed"
@@ -422,6 +474,7 @@ impl Client {
                 acted = true;
             }
             if let Some(result) = answer.event(&message)? {
+                timing::mark(self.timing.as_ref(), Stage::AcceptedTurnCompletion);
                 self.active_turn = None;
                 return Ok(Reply {
                     text: result,
@@ -431,6 +484,10 @@ impl Client {
             }
             let text = answer.text();
             if text != before {
+                if first_text && !text.is_empty() {
+                    timing::mark(self.timing.as_ref(), Stage::FirstPublicText);
+                    first_text = false;
+                }
                 on_delta(text);
             }
         }
@@ -439,12 +496,15 @@ impl Client {
 
 impl Drop for Client {
     fn drop(&mut self) {
+        let cleanup = timing::Span::new(self.timing.as_ref(), Stage::Cleanup);
         if let Some((thread, turn)) = self.active_turn.take().filter(|_|!self.write_incomplete) {
             let _ = self.write_message(json!({ "id": self.next_id + 1, "method": "turn/interrupt", "params": { "threadId": thread, "turnId": turn } }));
         }
         self.input.take();
         for _ in 0..50 {
             if self.child.try_wait().ok().flatten().is_some() {
+                timing::mark(self.timing.as_ref(), Stage::ChildReaped);
+                cleanup.returned();
                 return;
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -464,8 +524,18 @@ impl Drop for Client {
                 .status();
         }
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        let result = self.child.wait();
+        if result.is_ok() { timing::mark(self.timing.as_ref(), Stage::ChildReaped); }
+        cleanup.finish(&result);
     }
+}
+
+fn reap_failed_start(child: &mut Child, trace: Option<&Trace>) {
+    let cleanup = timing::Span::new(trace, Stage::Cleanup);
+    let _ = child.kill();
+    let result = child.wait();
+    if result.is_ok() { timing::mark(trace, Stage::ChildReaped); }
+    cleanup.finish(&result);
 }
 
 fn read_message(reader: &mut impl BufRead, total: &mut usize) -> Result<Value, String> {
@@ -1006,3 +1076,7 @@ for line in sys.stdin:
         assert!(attempt.finish()<Duration::from_secs(2));assert_reaped(pid);
     }
 }
+
+#[cfg(test)]
+#[path="rpc_timing_tests.rs"]
+mod timing_tests;

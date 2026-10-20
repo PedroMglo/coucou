@@ -1,5 +1,6 @@
 import {Bridge,emitToWindowOrThrow} from '../core/bridge';
 import {PetPreferences,profileProvider,type PetDocument,type PetPreference,type PetPermissions} from '../mochi/pet-preferences';
+import {petBlueprint,taskProviderForPet} from '../core/pet-factory';
 import {OllamaModelSelection} from '../core/ollama-selection';
 const element=<K extends keyof HTMLElementTagNameMap>(tag:K,text?:string)=>{const el=document.createElement(tag);if(text)el.textContent=text;return el;};
 /** Edits preferences only. Opening, listing models or saving never starts a task. */
@@ -42,7 +43,7 @@ export class PetSettings {
      try{const applied=await OllamaModelSelection.select('@default');if(current())this.status.textContent=applied?'Perfil aplicado ao chat':'Perfil guardado; foi mantida uma escolha de modelo mais recente.';}
      catch(error){if(current()){this.status.textContent='Perfil guardado; não foi aplicado ao chat.';this.failure(error);}}
     }else{
-     try{await emitToWindowOrThrow('island','pet-use-profile',{provider:({agent_codex:'codex',agent_copilot:'copilot',agent_antigravity:'antigravity',agent_gemini:'gemini-cli',integration_claude:'claude-cli'} as Record<string,string>)[selected]??selected});if(current())this.status.textContent='Perfil guardado; pedido de aplicação enviado ao chat.';}
+     try{await emitToWindowOrThrow('island','pet-use-profile',{provider:taskProviderForPet(selected)??selected});if(current())this.status.textContent='Perfil guardado; pedido de aplicação enviado ao chat.';}
      catch{if(current()){this.status.textContent='Perfil guardado; não foi possível enviar o pedido ao chat.';this.failure('O chat não confirmou a receção do pedido. Podes voltar a tentar.');}}
     }
    }finally{this.applying=false;use.disabled=this.loading||this.saving||!this.document;}
@@ -51,7 +52,7 @@ export class PetSettings {
   this.profiles.append(modelActions,this.choices,element('p','Automático escolhe entre rapidez e raciocínio conforme o pedido. O chat usa este perfil, a menos que escolhas outro modelo nessa conversa.'));
   const learn=element('button','Aprender nome por voz');learn.onclick=async()=>{
    this.keep();const id=this.selected,p=this.document?.config.pets[id];if(!p || !profileProvider(p.provider))return;
-   const provider=({agent_codex:'codex',agent_copilot:'copilot',agent_antigravity:'antigravity',agent_gemini:'gemini-cli',integration_claude:'claude-cli',ai_ollama:'ollama'} as Record<string,string>)[id]??id;
+   const provider=taskProviderForPet(id)??id;
    learn.disabled=true;this.error.hidden=true;
    try{const spelling=await Bridge.voiceLearnAlias(provider);if(spelling){p.aliases=[...new Set([...p.aliases,spelling])];if(this.selected===id)this.aliases.value=p.aliases.join(', ');this.dirty();}}
    catch(error){this.failure(error);}finally{learn.disabled=false;}
@@ -96,8 +97,10 @@ export class PetSettings {
   const p=this.document?.config.pets[id];if(!p)return;this.intent++;this.closeDiscard();this.status.textContent=this.el.dataset.dirty==='true'?'Alterações por guardar':'';this.error.hidden=true;this.requested=id;this.selected=id;this.pet.value=id;this.name.value=p.name;this.aliases.value=p.aliases.join(', ');this.mode.value=p.mode;
   this.models[0].value=p.fast.model;this.models[1].value=p.reasoning.model;this.efforts[0].value=p.fast.effort;this.efforts[1].value=p.reasoning.effort;this.executionGroup.hidden=p.provider!=='ollama';this.execution.value=p.localExecution?.mode??'disabled';
   for(const [key,input]of this.grants)input.checked=p.permissions?.[key]??false;
-  this.profiles.hidden=id==='integration_spotify'||!profileProvider(p.provider);
-  for(const[key,input]of this.grants){input.parentElement!.hidden=id==='integration_spotify'&&key!=='music'&&key!=='openApps';if(key==='music'){input.setAttribute('aria-label',id==='integration_spotify'?'Controlar música e som do PC':'Controlar música');input.parentElement!.firstElementChild!.textContent=id==='integration_spotify'?'Controlar música e som do PC':'Controlar música';}}for(const effort of this.efforts)effort.parentElement!.hidden=!['codex','copilot'].includes(p.provider);this.choices.replaceChildren();this.ticket++;this.catalog.disabled=false;
+  const presentation=petBlueprint(id)?.presentation;
+  this.el.dataset.petMold=petBlueprint(id)?.mold??'unknown';
+  this.profiles.hidden=!presentation?.profiles||!profileProvider(p.provider);
+  for(const[key,input]of this.grants){input.parentElement!.hidden=!(presentation?.permissions.includes(key)??true);if(key==='music'){const label=presentation?.musicLabel??'Controlar música';input.setAttribute('aria-label',label);input.parentElement!.firstElementChild!.textContent=label;}}for(const effort of this.efforts)effort.parentElement!.hidden=!['codex','copilot'].includes(p.provider);this.choices.replaceChildren();this.ticket++;this.catalog.disabled=false;
  }
  private failure(error:unknown){this.error.textContent=String(error).replace(/^Error:\s*/,'');this.error.hidden=false;}
  private async loadModels(){

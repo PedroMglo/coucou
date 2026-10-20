@@ -103,6 +103,9 @@ pub(crate) struct ReadRequest {pub(crate) expected_revision:Revision,pub(crate) 
 pub(crate) struct ScanRequest {pub(crate) expected_revision:Revision,pub(crate) scope:Text<128>,pub(crate) intent_id:IntentId}
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(crate) struct EnableWifiRequest {pub(crate) expected_revision:Revision,pub(crate) scope:Text<128>,pub(crate) intent_id:IntentId}
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct TicketRequest {pub(crate) expected_revision:Revision,pub(crate) ticket_id:Text<128>}
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]

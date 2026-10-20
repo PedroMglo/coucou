@@ -234,7 +234,7 @@ async fn partially_written_frame_is_never_reported_as_not_started() {
 async fn already_ready_late_ack_is_rejected_by_actual_final_gate() {
     let(mut client,mut server)=UnixStream::pair().unwrap();server.write_all(b"{\"id\":321,\"result\":{\"success\":true,\"message\":\"scanning\"}}\n").await.unwrap();
     client.readable().await.unwrap();let deadline=Instant::now()+Duration::from_millis(20);std::thread::sleep(Duration::from_millis(50));
-    let mut reader=ScanReader::default();let ready=timeout_at(deadline,reader.ack(&mut client,321)).await.unwrap();assert!(ready.is_ok());
+    let mut reader=ScanReader::default();let ready=timeout_at(deadline,reader.ack(&mut client,321,Rpc::Scan)).await.unwrap();assert!(ready.is_ok());
     let result=finish_result(ready.map_err(|e|failure::<()>(e,WriteState::MayHaveStarted)),deadline,WriteState::MayHaveStarted);
     assert_eq!(result,Err(Failure::Native{reason:Error::Timeout,write:WriteState::MayHaveStarted}));
 }
@@ -267,3 +267,5 @@ async fn composed_window_revoked_during_greeting_is_denied_at_actual_writer() {
     let result=scan_wifi(&f.config,&origin,|_|work.begin_dispatch(producer,std::time::Instant::now()).map(|_|())).await;
     assert!(matches!(result,Err(Failure::Guard(l::Reason::Unauthorized))));drop(work);assert_eq!(f.scans().await,0);
 }
+
+include!("enable_transport_tests.rs");

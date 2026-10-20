@@ -1,4 +1,4 @@
-//! Private Linux transport proposal: guarded metadata read and typed global scan.
+//! Guarded metadata read, global scan and NetworkManager software Wi-Fi enable.
 //! No Tauri command is registered. Native IO runs only when a backend calls it.
 use serde_json::{json, Value};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -9,6 +9,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::io::AsyncWrite;
 use tokio::net::UnixStream;
 use tokio::time::{timeout_at, Instant};
+
+#[path="strict_json.rs"]
+mod strict_json;
 
 const MAX_BYTES: usize = 512 * 1024;
 const MAX_FRAMES: usize = 8;
@@ -75,7 +78,7 @@ struct Source { peer: Incarnation, uid: u32, socket: PathBuf, endpoint: Endpoint
 /// Only minted by this transport from one authenticated, completed RPC stream.
 /// No public fields/constructor, serde, Debug, process/endpoint getters or UI ID.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct Origin { source: Source, scan_proven: bool }
+pub(crate) struct Origin { source: Source, scan_proven: bool, enable_wifi_proven: bool }
 
 pub(crate) struct Reply {
     pub api_version: Option<u64>,
@@ -86,9 +89,12 @@ pub(crate) struct Reply {
 impl Reply {
     pub(crate) fn origin(&self) -> &Origin { &self.origin }
     pub(crate) fn supports_scan(&self) -> bool { self.origin.scan_proven }
+    pub(crate) fn supports_enable_wifi(&self) -> bool { self.origin.enable_wifi_proven }
 }
 pub(crate) struct ScanAck { origin: Origin }
 impl ScanAck { pub(crate) fn origin(&self) -> &Origin { &self.origin } }
+pub(crate) struct EnableWifiAck { origin: Origin }
+impl EnableWifiAck { pub(crate) fn origin(&self) -> &Origin { &self.origin } }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WriteState { NotStarted, MayHaveStarted }
@@ -163,7 +169,7 @@ impl ScanReader {
                 if bytes.len() == 1 { continue; }
                 self.frames += 1;
                 if self.frames > MAX_FRAMES { return Err(Error::Protocol); }
-                return serde_json::from_slice(&bytes).map_err(|_| Error::Protocol);
+                return strict_json::decode(&bytes).map_err(|_| Error::Protocol);
             }
             let remaining = MAX_BYTES.checked_sub(self.received).filter(|n| *n > 0).ok_or(Error::Protocol)?;
             let mut bytes = [0u8; 8192];
@@ -185,7 +191,7 @@ impl ScanReader {
         if self.pending.iter().any(|b| !b.is_ascii_whitespace()) { return Err(Error::Protocol); }
         Ok((version, capabilities))
     }
-    async fn ack(&mut self, stream: &mut UnixStream, id: u64) -> Result<(), Error> {
+    async fn ack(&mut self, stream: &mut UnixStream, id: u64, rpc: Rpc) -> Result<(), Error> {
         loop {
             let frame = self.frame(stream).await?;
             // This RPC stream never subscribes, so changing handshakes/events
@@ -193,16 +199,23 @@ impl ScanReader {
             if frame.get("apiVersion").is_some() { return Err(Error::Protocol); }
             if frame.get("id") != Some(&json!(id)) { continue; }
             if frame.get("error").is_some_and(|v| !v.is_null()) { return Err(Error::NativeFailure); }
-            if frame.get("result") != Some(&json!({"success":true,"message":"scanning"})) {
-                return Err(Error::Protocol);
-            }
+            let expected = match rpc {
+                Rpc::Scan => json!({"success":true,"message":"scanning"}),
+                Rpc::EnableWifi => {
+                    let fields=frame.as_object().ok_or(Error::Protocol)?;
+                    if fields.len()!=2||!fields.contains_key("id")||!fields.contains_key("result"){return Err(Error::Protocol);}
+                    json!({"enabled":true})
+                },
+                Rpc::Read => return Err(Error::Protocol),
+            };
+            if frame.get("result") != Some(&expected) { return Err(Error::Protocol); }
             return Ok(());
         }
     }
 }
 
 #[derive(Clone, Copy)]
-enum Rpc { Read, Scan }
+enum Rpc { Read, Scan, EnableWifi }
 
 async fn request<E, F>(config: &Config, rpc: Rpc, expected: Option<&Origin>, guard: F) -> Result<Reply, Failure<E>>
 where F: FnOnce(&Origin) -> Result<(), E> {
@@ -212,15 +225,16 @@ where F: FnOnce(&Origin) -> Result<(), E> {
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
         let (mut stream, source) = connect(config).await.map_err(|e| failure(e, write))?;
         if let Some(origin) = expected {
-            if !origin.scan_proven { return Err(failure(Error::Unsupported, write)); }
+            let proven=match rpc {Rpc::Scan=>origin.scan_proven,Rpc::EnableWifi=>origin.enable_wifi_proven,Rpc::Read=>false};
+            if !proven { return Err(failure(Error::Unsupported, write)); }
             if source != origin.source { return Err(failure(Error::OriginChanged, write)); }
         }
         let mut scanner = ScanReader::default();
-        let handshake = if matches!(rpc, Rpc::Scan) {
+        let handshake = if matches!(rpc, Rpc::Scan | Rpc::EnableWifi) {
             Some(scanner.handshake(&mut stream).await.map_err(|e| failure(e, write))?)
         } else { None };
         let id = next_request_id(&NEXT_ID).map_err(|e| failure(e, write))?;
-        let method = match rpc { Rpc::Read => "network.getState", Rpc::Scan => "network.wifi.scan" };
+        let method = match rpc { Rpc::Read => "network.getState", Rpc::Scan => "network.wifi.scan", Rpc::EnableWifi=>"network.wifi.enable" };
         let mut bytes = serde_json::to_vec(&json!({"id":id,"method":method})).map_err(|_| failure(Error::Protocol, write))?;
         bytes.push(b'\n');
         // Wait before the final authority checks. The guard never precedes an
@@ -228,18 +242,23 @@ where F: FnOnce(&Origin) -> Result<(), E> {
         stream.writable().await.map_err(|_| failure(Error::Unavailable, write))?;
         verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
-        let candidate = Origin { source: source.clone(), scan_proven: handshake.is_some() };
+        let candidate = Origin { source: source.clone(), scan_proven: handshake.is_some(),
+            enable_wifi_proven: expected.is_some_and(|o|o.enable_wifi_proven) };
         guard(&candidate).map_err(Failure::Guard)?;
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
         write_frame(&mut stream, &bytes, &mut write).await.map_err(|e| failure(e, write))?;
         let raw = if let Some((version, capabilities)) = handshake {
-            scanner.ack(&mut stream, id).await.map_err(|e| failure(e, write))?;
+            scanner.ack(&mut stream, id, rpc).await.map_err(|e| failure(e, write))?;
             WireReply { api_version: Some(version), capabilities, result: Value::Null }
         } else {
             read_reply(&mut stream, id).await.map_err(|e| failure(e, write))?
         };
         verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
-        let origin = Origin { source, scan_proven: scan_supported(raw.api_version, &raw.capabilities) };
+        let origin = match rpc {
+            Rpc::Read=>Origin {source,scan_proven:scan_supported(raw.api_version,&raw.capabilities),
+                enable_wifi_proven:crate::lifecycle::enable_wifi_supported(&raw.result,raw.api_version,&raw.capabilities)},
+            Rpc::Scan|Rpc::EnableWifi=>candidate,
+        };
         Ok(Reply { api_version: raw.api_version, capabilities: raw.capabilities, result: raw.result, origin })
     };
     let result = timeout_at(deadline, operation).await;
@@ -255,13 +274,22 @@ where F: FnOnce() -> Result<(), E> {
     request(config, Rpc::Read, None, |_| guard()).await
 }
 
-/// Only a global scan exists. There is no per-device argument or fallback.
+/// This client intentionally uses the no-device scan form; API34 also supports
+/// optional device upstream. There is no targeted argument/fallback in this client.
 /// The callback is synchronous at the writer after current native authentication.
 pub(crate) async fn scan_wifi<E, F>(config: &Config, expected: &Origin, guard: F) -> Result<ScanAck, Failure<E>>
 where F: FnOnce(&Origin) -> Result<(), E> {
     if !expected.scan_proven { return Err(failure(Error::Unsupported, WriteState::NotStarted)); }
     let reply = request(config, Rpc::Scan, Some(expected), guard).await?;
     Ok(ScanAck { origin: reply.origin })
+}
+
+/// NetworkManager's global SOFTWARE property, never a device selector or RF proof.
+pub(crate) async fn enable_wifi<E,F>(config:&Config,expected:&Origin,guard:F)->Result<EnableWifiAck,Failure<E>>
+where F:FnOnce(&Origin)->Result<(),E>{
+    if !expected.enable_wifi_proven{return Err(failure(Error::Unsupported,WriteState::NotStarted));}
+    let reply=request(config,Rpc::EnableWifi,Some(expected),guard).await?;
+    Ok(EnableWifiAck {origin:reply.origin})
 }
 
 // The unguarded compatibility helper is fixture-only; production must supply a
@@ -344,7 +372,7 @@ async fn read_reply(stream: &mut UnixStream, id: u64) -> Result<WireReply, Error
             if bytes.len() == 1 { continue; }
             frames += 1;
             if frames > MAX_FRAMES { return Err(Error::Protocol); }
-            let frame: Value = serde_json::from_slice(&bytes).map_err(|_| Error::Protocol)?;
+            let frame: Value = strict_json::decode(&bytes).map_err(|_| Error::Protocol)?;
             if frame.get("id") == Some(&json!(id)) {
                 if frame.get("error").is_some_and(|v| !v.is_null()) { return Err(Error::NativeFailure); }
                 let result = frame.get("result").cloned().ok_or(Error::Protocol)?;

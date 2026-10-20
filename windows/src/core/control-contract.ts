@@ -1,4 +1,4 @@
-/** Native binding R1 IPC contract, mirrored for the frontend; no caller identity in payloads. */
+/** Native binding R2 with additive network View2 consumer; mirrored for the frontend; no caller identity in payloads. */
 export type Revision = string; // canonical bounded u64 decimal, never authority
 export type Route = 'home' | 'system' | 'tasks' | 'sessions' | 'providers' | 'models' | 'profiles';
 export type AcceptedMode = { kind: 'inactive' } | { kind: 'compact' } | { kind: 'expanded'; route: Route };
@@ -38,6 +38,10 @@ export interface NetworkScanRequest extends ContextPrecondition {
   scope: string; // existing opaque current global source scope; max128
   intentId: string; // existing lifecycle idempotence; max64
 }
+export interface NetworkEnableWifiRequest extends ContextPrecondition {
+  scope: string; // enableWifiScope only, never scanScope; max128
+  intentId: string; // explicit enable-only gesture id; ASCII1..64, not authority
+}
 export interface NetworkTicketRequest extends ContextPrecondition { ticketId: string } // max128
 export interface NewCommands {
   pet_control_navigation_context: { args: Record<string,never>; result: ControlContext; error: BindingFailure };
@@ -45,13 +49,14 @@ export interface NewCommands {
   pet_system_network_read: { args: { request: NetworkReadRequest }; result: NetworkTicket; error: SystemFailure };
   pet_system_network_view: { args: { request: ContextPrecondition }; result: NetworkView; error: SystemFailure };
   pet_system_network_scan: { args: { request: NetworkScanRequest }; result: NetworkTicket; error: SystemFailure };
+  pet_system_network_enable_wifi: { args: { request: NetworkEnableWifiRequest }; result: NetworkTicket; error: SystemFailure };
   pet_system_network_ticket: { args: { request: NetworkTicketRequest }; result: NetworkTicket; error: SystemFailure };
   pet_system_network_cancel: { args: { request: NetworkTicketRequest }; result: NetworkTicket; error: SystemFailure };
 }
 // Caller WebviewWindow is injected by Tauri, never an args label/window/PID/token.
 // New Rust request DTOs reject unknown fields and bound every string before copies.
-// Existing Ticket/View schemas remain the frozen lifecycle DTOs. Their revision is
-// source generation, distinct from this backend navigation context revision.
+// Network View2 is additive; View1 read/scan remains supported. Snapshot/context
+// versions are unchanged. Source generation is not a navigation-context revision.
 // GTK identity/accepted intent is not DOM, physical click or rendered System proof.
 
 export interface BindingFailure { kind: 'binding'; code: BindingError; context: ControlContext | null }
@@ -65,14 +70,13 @@ export type NetworkReason = 'unauthorized' | 'hidden' | 'systemDisabled' | 'clos
   | 'invalidObservation' | 'nativeUnavailable' | 'nativeRejected' | 'unsupported';
 export interface NetworkTicket {
   id: string;
-  kind: 'read' | 'scan';
+  kind: 'read' | 'scan' | 'enableWifi';
   phase: 'queued' | 'running' | 'observed' | 'acknowledged' | 'cancelled' | 'unknown' | 'failed';
   reason: NetworkReason | null;
   effectConfirmed: false;
   refreshRecommended: boolean;
 }
-export interface NetworkView {
-  schemaVersion: 1;
+interface NetworkViewBase {
   source: 'dmsNetwork';
   generation: string | null;
   stale: boolean;
@@ -83,6 +87,15 @@ export interface NetworkView {
   capabilities: { read: boolean; scan: boolean; connect: false; radio: false; credentials: false };
   reason: NetworkReason | null;
 }
+export interface NetworkView1 extends NetworkViewBase {schemaVersion:1}
+export interface NetworkView2 extends NetworkViewBase {
+  schemaVersion:2;
+  enableWifiScope:string|null;
+  capabilities:NetworkViewBase['capabilities']&{enableWifi:boolean};
+}
+export type NetworkView=NetworkView1|NetworkView2;
+// View1 remains read/scan-only. Snapshot and native ControlContext stay schema1.
+// Public capabilities/scopes never replace the native producer/Prepared fence.
 export interface NetworkCollection<T> {
   entries: T[]; complete: boolean; observedRows: number; rejectedRows: number;
 }

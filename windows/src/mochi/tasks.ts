@@ -1,4 +1,5 @@
 import {isServiceProvider,petName} from "./pet-preferences";
+import {petBlueprint,petForTaskProvider,taskProviderForPet} from "../core/pet-factory";
 export interface LocalStepReceipt {
  stepId:string;ordinal:number;state:'proposed'|'starting'|'exited'|'denied'|'expired'|'failedToStart'|'timedOut'|'outputLimit'|'cancelled'|'skipped'|'unknown';
  cause?:string;trigger?:string;startedAt?:number;finishedAt?:number;exitCode?:number;signal?:number;stdoutBytes:number;stderrBytes:number;truncated:boolean;
@@ -10,9 +11,9 @@ export interface AssistantTask {
   sessionId?:string|null;origin?:"external";petId?:string;petName?:string;
   localExecution?:LocalStepReceipt[];localReasoningEffort?:string;
 }
-export const taskPet=(provider:string)=>isServiceProvider(provider)?provider:({ollama:"ai_ollama",codex:"agent_codex",copilot:"agent_copilot",antigravity:"agent_antigravity","gemini-cli":"agent_gemini","claude-cli":"integration_claude"}[provider]??null);
-export const taskProvider=(pet:string)=>isServiceProvider(pet)?pet:({ai_ollama:"ollama",agent_codex:"codex",agent_copilot:"copilot",agent_antigravity:"antigravity",agent_gemini:"gemini-cli",integration_claude:"claude-cli"}[pet]??null);
-export const taskName=(provider:string)=>isServiceProvider(provider)?petName(provider,provider.replace("integration_","")):({ollama:"Ollama",codex:"Codex",copilot:"Copilot",antigravity:"Gravity","gemini-cli":"Gemini","claude-cli":"Claude"}[provider]??provider);
+export const taskPet=petForTaskProvider;
+export const taskProvider=taskProviderForPet;
+export const taskName=(provider:string)=>isServiceProvider(provider)?petName(provider,provider.replace("integration_","")):petBlueprint(taskPet(provider)??'')?.routing.taskName??provider;
 export const taskLabel=(phase:string)=>({thinking:"A pensar",working:"A executar",searching:"A pesquisar",message:"A responder",approval:"À espera da tua aprovação",question:"À espera da tua resposta",stopping:"A interromper",done:"Resposta pronta",failed:"Não concluída",stopped:"Interrompida",interrupted:"Estado anterior por confirmar",resumed:"Retomada numa nova execução",idle:"Em espera no terminal",finished:"Concluída no terminal"}[phase]??"Estado por confirmar");
 export const taskRunning=(task:AssistantTask)=>["thinking","working","searching","message","approval","question","stopping"].includes(task.phase);
 export const taskRecoverable=(task:AssistantTask)=>task.origin!=="external" && ["failed","stopped","interrupted"].includes(task.phase);

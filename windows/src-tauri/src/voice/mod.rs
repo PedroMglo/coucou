@@ -329,6 +329,29 @@ fn preload_asr(app: &AppHandle, stop: std::sync::Arc<AtomicBool>) {
     let app=app.clone(); std::thread::spawn(move || { let _=transcribe(&app,&[],Some(&stop)); });
 }
 
+const ASR_TECHNICAL_TERMS:&[&str]=&["Docker Compose","unit tests","pull requests","issues","next steps"];
+/// Canonical identities only. Aliases and learned voice forms remain parser data,
+/// never ASR hints. This function does not change config, grants or recognized text.
+fn asr_vocabulary(config:&crate::pet_config::Configuration,settings:&crate::settings::Settings)->Vec<String>{
+    let mut terms=Vec::new();let mut seen=std::collections::BTreeSet::new();
+    let names=dialogue::Pet::ALL.into_iter()
+        .filter(|pet|!matches!(pet,dialogue::Pet::Claude|dialogue::Pet::Gemini))
+        .map(dialogue::Pet::pill)
+        .filter(|id|settings.main_pill==*id||settings.active_integrations.iter().any(|active|active.as_str()==*id))
+        .filter_map(|id|config.pets.get(id).map(|pet|pet.name.as_str()));
+    for name in names.chain(ASR_TECHNICAL_TERMS.iter().copied()){
+        let name=name.trim();let key:String=name.chars().map(|c|if c.is_ascii(){c.to_ascii_lowercase()}else{c}).collect();
+        if name.is_empty()||name.len()>crate::speech::whisper::MAX_VOCABULARY_TERM_BYTES||name.chars().any(char::is_control)||wake::normalize(name)=="ola"{continue;}
+        if seen.insert(key){terms.push(name.to_string());}
+    }
+    // Only configured static voice routes; no executable/auth/capability query.
+    // Claude/Gemini are retired routes (session::available always false).
+    terms
+}
+fn current_asr_vocabulary(settings:&crate::settings::Settings)->Vec<String>{
+    let config=crate::pet_config::read_existing().unwrap_or_else(|_|crate::pet_config::defaults());
+    asr_vocabulary(&config,settings)
+}
 pub(crate) fn transcribe(app: &AppHandle, samples: &[f32], stop: Option<&AtomicBool>) -> Option<crate::speech::Transcript> {
     let settings=app.state::<crate::Shared>().settings.lock().unwrap().clone();
     if stop.is_some_and(|s|s.load(Ordering::Relaxed)){return None;}
@@ -340,9 +363,10 @@ pub(crate) fn transcribe(app: &AppHandle, samples: &[f32], stop: Option<&AtomicB
     let expand=|path: &str|path.strip_prefix("~/").map(|p|crate::platform::home_dir().join(p)).unwrap_or_else(||path.into());
     let python=expand(&settings.voice_asr_python); let model=expand(&settings.voice_asr_model);
     if samples.is_empty() { return crate::speech::whisper::transcribe(&python,&model,samples,stop); }
+    let vocabulary=current_asr_vocabulary(&settings);
     let mut result=crate::speech::Transcript::default();
     for (_,chunk) in crate::speech::audio::split_for_model(samples,crate::speech::SAMPLE_RATE,28.0) {
-        let part=crate::speech::whisper::transcribe(&python,&model,chunk,stop)?;
+        let part=crate::speech::whisper::transcribe_with_vocabulary(&python,&model,chunk,stop,&vocabulary)?;
         if !part.text.is_empty() { if !result.text.is_empty() { result.text.push(' '); } result.text.push_str(&part.text); }
     }
     Some(result)
@@ -748,3 +772,7 @@ mod with_models {
         assert!(heard.iter().any(|h| h.as_deref().is_some_and(|q| !q.is_empty())));
     }
 }
+
+#[cfg(test)]
+#[path="vocabulary_tests.rs"]
+mod vocabulary_tests;

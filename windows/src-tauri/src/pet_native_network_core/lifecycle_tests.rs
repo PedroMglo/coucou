@@ -473,3 +473,5 @@ fn native_scan_errors_before_dispatch_keep_typed_reason_without_unknown_action()
         assert!(s.state.lock().unwrap().flight.is_none());
     }
 }
+
+include!("enable_lifecycle_tests.rs");

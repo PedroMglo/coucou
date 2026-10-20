@@ -22,7 +22,7 @@ import type { ViewHost } from "./views";
 import { N_, t, tl } from "../i18n/i18n";
 import {petCapabilities} from "../mochi/capabilities";
 import {dialogueId,rememberDialogue,resetDialogue,restoreDialogue} from "../core/chat-dialogue";
-import {SessionChat,sessionTargetKey,sessionOrigin} from "../core/session-chat";
+import {SessionChat,sessionTargetKey,sessionOrigin,type SessionTarget} from "../core/session-chat";
 import {buildAgentRequests} from './agent-requests';
 import {OllamaModelSelection} from '../core/ollama-selection';
 import {commandReview} from './command-review';
@@ -271,9 +271,10 @@ function buildPicker(onChange: () => void,onSelect?:(provider:string,model:strin
 
 // ── View ──────────────────────────────────────────────────────────────────────
 
-export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDocumentActions?:()=>void): ViewHost {
+export interface DraftPromptHost extends ViewHost {restoreDraft?:(target:SessionTarget,text:string,previous:string)=>boolean}
+export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDocumentActions?:()=>void,draftStatus?:HTMLElement): DraftPromptHost {
   watchCapabilities();
-  if(session)return buildSessionPrompt(onHeightChange,session);
+  if(session)return buildSessionPrompt(onHeightChange,session,draftStatus);
   const chipRow = h("div", { class: "chip-row" });
   let documentActionsButton:HTMLButtonElement|null=null;
   const log = h("div", { class: "chat-log" });
@@ -723,7 +724,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
 /** The same chat surface with an explicit session binding. It deliberately
  * shares the pet's bubbles, Markdown, cards and composer rather than showing a
  * terminal activity log in place of a conversation. */
-function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat):ViewHost {
+function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftStatus?:HTMLElement):DraftPromptHost {
   const log=h('div',{class:'chat-log','aria-label':'Conversa da sessão','aria-live':'off'});
   const feedback=h('p',{class:'chat-feedback','role':'status','aria-live':'polite'});
   const input=h('textarea',{rows:1,class:'chat-input',placeholder:t(STRINGS.placeholderNext),spellcheck:'false','aria-label':'Mensagem para esta sessão','aria-describedby':'session-composer-hint'});
@@ -742,7 +743,7 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat):ViewHos
   const decisions=buildAgentRequests(()=>session.target,onHeightChange);
   const picker=buildPicker(()=>{body.classList.toggle('picking',picker.isOpen);onHeightChange();},(provider,model)=>{if(provider!=='ollama')session.chooseModel(model);},()=>session.target?.origin==='external',()=>session.model||session.snapshot?.model||'');
   const hint=h('p',{id:'session-composer-hint',class:'composer-hint',text:'Enter para enviar · Shift + Enter para mudar de linha'});
-  const body=h('div',{class:'chat-body'},attachments,log,taskStatus.el,decisions.el,picker.el,modelRow,executionBadge,feedback,failedReview,h('div',{class:'chat-bar'},input,send),hint);
+  const body=h('div',{class:'chat-body'},attachments,log,taskStatus.el,decisions.el,picker.el,modelRow,executionBadge,feedback,failedReview,...(draftStatus?[draftStatus]:[]),h('div',{class:'chat-bar'},input,send),hint);
   modelButton.addEventListener('click',()=>{if(picker.isOpen)picker.close();else picker.open();});
   const el=h('div',{class:'view'},h('div',{class:'card wash chat-card'},body));
   (el.querySelector('.card') as HTMLElement).style.setProperty('--wash','rgba(99,102,241,0.5)');
@@ -828,5 +829,8 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat):ViewHos
   if(typeof ResizeObserver!=='undefined'){
     let width=0;new ResizeObserver(entries=>{const next=entries[0]?.contentRect.width;if(next!==undefined&&next!==width){width=next;fitInput();}}).observe(input);
   }
-  return {el,sync,focus:()=>{fitInput();input.focus();}};
+  return {el,sync,focus:()=>{fitInput();input.focus();},restoreDraft:(target,text,previous)=>{
+    const key=sessionTargetKey(target);if(key!==owner||!session.target||sessionTargetKey(session.target)!==key||input.value!==previous)return false;
+    session.drafts.set(key,text);input.value=text;fitInput();sync();return true;
+  }};
 }

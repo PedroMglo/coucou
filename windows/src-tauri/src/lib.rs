@@ -1017,6 +1017,7 @@ pub fn run() {
             pet_native_network::pet_system_network_read,
             pet_native_network::pet_system_network_view,
             pet_native_network::pet_system_network_scan,
+            pet_native_network::pet_system_network_enable_wifi,
             pet_native_network::pet_system_network_ticket,
             pet_native_network::pet_system_network_cancel,
             pet_chat::pet_chat_open,

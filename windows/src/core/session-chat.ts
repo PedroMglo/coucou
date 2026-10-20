@@ -40,12 +40,12 @@ export class SessionChat {
   private readKey='';
   private again=false;
   private pending=new Map<string,{query:string;messageIds:Set<string>;acknowledged:boolean}>();
-  readonly drafts=new Map<string,string>();
+  readonly drafts:Map<string,string>;
   readonly models=new Map<string,string>();
   readonly failures=new Map<string,{query:string;message:string}>();
   private transport:SessionTransport;
   private changed:()=>void;
-  constructor(transport:SessionTransport,changed:()=>void){this.transport=transport;this.changed=changed;}
+  constructor(transport:SessionTransport,changed:()=>void,drafts:Map<string,string>=new Map()){this.transport=transport;this.changed=changed;this.drafts=drafts;}
   get sending(){return !!this.target&&this.pending.has(sessionTargetKey(this.target));}
   get query(){const pending=this.target&&this.pending.get(sessionTargetKey(this.target));return pending&&!pending.acknowledged?pending.query:'';}
   get model(){return this.target?this.models.get(sessionTargetKey(this.target)):undefined;}

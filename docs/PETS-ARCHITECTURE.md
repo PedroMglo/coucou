@@ -12,32 +12,67 @@ bloqueantes necessárias à entrega nem elimina os requisitos já registados.
 Não iniciar novas melhorias visuais por iniciativa. Os incrementos funcionais
 já preparados conservam a sua revisão e o seu critério de aceitação.
 
+### Divisão de trabalho por grupos completos
+
+Por correção expressa do utilizador, trabalham apenas dois agentes, com
+responsabilidade exclusiva por unidades completas: o integrador assume todo o
+**Sistema** (rede/Wi-Fi, Bluetooth, som, energia/sessão), instalação, sysworkspace
+e este guia; o outro agente assume todo o **backend dos pets LLM** (sessões,
+execução, conversa, memória e utilização). Não dividir Wi-Fi e Bluetooth entre
+os dois. Alterações comuns de registo/protocolo só são conciliadas na integração;
+as features novas são desenvolvidas em áreas privadas sobre a fonte .23.
+
+O trabalho seguinte do grupo Sistema reúne a leitura Bluetooth própria e a
+operação explícita de desativação Wi-Fi. A leitura Bluetooth passou 1368 testes
+Rust, dez ignorados e cargo check; o conjunto com a desativação passou **1400
+testes Rust, dez ignorados e cargo check**, com 569 inputs inalterados. O delta
+fechado contém 12 ficheiros existentes e sete novos, ainda privado.
+A leitura usa o contexto original de Sistema e o transporte autenticado existente,
+com limites de dados/tempo e uma consulta de cada vez; não publica endereços,
+caminhos nativos, tokens de emparelhamento ou alvos de comandos. Desativar Wi-Fi
+reutiliza o mesmo ator, autoridade e slot físico da rede, com scope e ACK próprios.
+Nenhum destes dois incrementos está instalado ou foi usado para alterar a rede.
+
+No grupo LLM está em desenvolvimento a correlação obrigatória do `turn.id`
+aninhado no evento final do Codex. Os testes devem provar que uma notificação de
+outro turno da mesma thread não conclui a resposta atual. A revisão dos outros
+providers e a desativação temporária do pet GitHub, preservando histórico e sem
+ensaios reais de CLI que gastem quota, fazem parte do mesmo grupo.
+
 ## Estado da entrega
 
-A **0.5.1-mochi.22 está instalada e ativa permanentemente**, RPM
-`121e538672f6…`, com 544 fontes congeladas e prefixo
-`~/.local/opt/coucou/0.5.1-mochi.22`. Executável, dono do socket, XDG e ambiente
-DMS do processo real foram confirmados. Passaram **1300 testes Rust, zero
-falhas e dez ignorados**, **953 JavaScript**, TypeScript e Vite. Os 13 ficheiros
-do pacote, incluindo os sete da ponte Copilot e o relay original, foram
-verificados. A troca preservou 26 mensagens, oito conversas, tarefas, seleção
-e preferências. Os cinco rascunhos atuais foram capturados antes da troca e
-confirmados no chat próprio, ao fechar e reabrir, com dono/CID e texto exatos.
-O Ollama conservou os seus 73 caracteres e os outros quatro continuaram vazios.
-Não foram enviadas mensagens nem respondidas aprovações. A .20 permanece para
-recuperação. A aceitação de apresentação/pedidos e mudança real de ecrã continua
-parcial; os testes simulados não substituem esse ensaio.
+A **0.5.1-mochi.23 está instalada e ativa permanentemente**, RPM
+`62d2bd67e39c…`, com 562 fontes congeladas e prefixo
+`~/.local/opt/coucou/0.5.1-mochi.23`. Passaram **1356 testes Rust, zero falhas e
+dez ignorados**, cargo check, **1007 JavaScript**, TypeScript, Vite e quatro
+Python. Os 562 inputs permaneceram iguais durante testes e empacotamento; os
+13 ficheiros do pacote, incluindo os sete da ponte Copilot e o relay original,
+foram verificados. Executável, socket, XDG e ambiente DMS do processo real foram
+confirmados. A .22 permanece para recuperação.
 
-A **.23 está composta apenas numa área privada**, sobre a fonte exata da .22:
-562 ficheiros congelados e 50 caminhos funcionais adotados por hash, sem
-sobreposições. Reúne vocabulário de voz, persistência de rascunhos por sessão,
-medições internas de latência desligadas por defeito, a fábrica de pets e a
-ativação Wi-Fi explícita. O gerador confirmou os defaults sem os reescrever;
-a composição passou **1356 testes Rust, zero falhas e dez ignorados**, cargo
-check, **1007 JavaScript**, TypeScript, Vite e quatro testes Python. Os 562
-inputs permaneceram iguais antes e depois dos sete checks. Ainda não há RPM,
-promoção para fontes partilhadas ou instalação .23. Não foram ativadas redes,
-executados modelos ou migradas preferências locais por estes testes.
+A troca preservou 26 mensagens, oito conversas, tarefas, seleção e preferências.
+Os cinco rascunhos atuais passaram abrir/fechar/reabrir com dono/CID e texto
+exatos: Ollama com 73 caracteres, restantes quatro vazios. Depois de reiniciar
+o mesmo executável .23, o Ollama **recuperou automaticamente os 73 caracteres**
+na conversa correta, sem qualquer escrita após o reinício, apresentando o estado
+«Rascunho recuperado neste dispositivo». Journal e preferências ficaram iguais.
+Não foram enviadas mensagens nem respondidas aprovações nesses ensaios.
+
+A .23 integra os 50 caminhos funcionais revistos sobre a fonte exata da .22:
+vocabulário PT/EN por pedido, rascunhos persistentes por sessão, medições internas
+de latência desligadas por defeito, fábrica de pets e ativação Wi-Fi explícita.
+Os 25 defaults de pets foram confirmados sem reescrever preferências do utilizador.
+A qualidade humana com Bluetooth, a latência audível da Raquel e o ensaio real
+de ativação Wi-Fi ainda não estão aceites. O novo backend Bluetooth, a desativação
+Wi-Fi e a correção de turnos Codex ficam fora deste pacote congelado.
+
+A **.22 foi a versão ativa anterior**, RPM `121e538672f6…`, fonte544,
+1300 Rust (dez ignorados), 953 JS/TypeScript/Vite. As suas correções de geometria
+e projeção/encaminhamento de pedidos continuam preservadas na .23. A aceitação
+de apresentação/pedidos e mudança real de ecrã permanece parcial; o primeiro
+hover .22 foi inválido porque o cursor terminou fora do pet em movimento. Estes
+ensaios pendentes não são apresentados como concluídos nem como regressões
+provadas e acompanham a entrega funcional seguinte.
 
 A **.19 foi a versão ativa anterior**, RPM
 `0880f34f74ff…`, com 507 ficheiros de fonte congelados e prefixo imutável
@@ -211,15 +246,15 @@ aprovações conservam os checks nativos de dono, sessão, pedido e prazo.
 
 | Área | Estado e próximo critério de conclusão |
 | --- | --- |
-| Barra e ilha | .22 ativa; blocos e sete widgets direitos preservados. Só retirar controlCenterButton após paridade própria completa. |
+| Barra e ilha | .23 ativa; blocos e sete widgets direitos preservados. Só retirar controlCenterButton após paridade própria completa. |
 | Som próprio | Leitura/navegação e silenciar/repor saída de teste aceites. Faltam volume/balanço/portas/perfis/microfone e regressão Spoty no executável novo. |
-| Rede, Bluetooth e energia | Ligação GTK/Tauri R2 revista e integrada na .20 ativa, com UI de leitura/pesquisa Wi-Fi; aceitação nativa em curso. O incremento privado de ativação Wi-Fi tem backend e UI revistos, sem instalação. Bluetooth/energia/ligações e restantes controlos próprios precisam de implementação e aceitação. |
+| Rede, Bluetooth e energia | Ligação GTK/Tauri R2 revista e integrada na .20 ativa, com UI de leitura/pesquisa Wi-Fi; aceitação nativa em curso. A .23 inclui ativação Wi-Fi explícita, ainda sem ensaio real da ação. A leitura Bluetooth própria e a desativação Wi-Fi estão no sucessor privado do grupo Sistema; energia/ligações e restantes controlos próprios precisam de implementação e aceitação. |
 | Sessões e consumo | Contagens com fontes reais disponíveis. .22 ativa inclui atividade da conta Codex, revista e compilada; falta completar a leitura/aceitação pela UI. Falta identidade inequívoca para controlo das sessões CLI, ledger de tokens e matriz completa de retoma/interação em background. |
 | Execução pelos pets | CLIs conservam capacidades/permissões nativas. Ollama recebeu política de propostas com aprovação por ação, preservando o modelo atual; falta escolher modelo com ferramentas e aceitar o percurso completo. |
 | Definições | .19 inclui FE41 e backend Recap + FE46; arranque/rascunho aceites, mutadores Recap testados apenas em dados sintéticos. Reconciliar definições gerais/Chat44 e completar ensaios nativos de perfis. |
 | Voz e documentos | Qualidade PT/EN com o microfone efetivo, pronúncia e latência Raquel ainda pendentes. Preservar email só Ollama e repetir regressões de documentos por capacidade ao fechar a entrega. |
 | Interação prioritária | Resolver cartão invisível após hotplug e integrar/aceitar os candidatos 52-r2 e 57; nenhum deles concede autorização. |
-| Fábrica de pets | Candidato privado fechado e revisto com moldes LLM/aplicação e extensão de serviço; integração e aceitação pendentes. Identidade, provider, grants e execução local não são herdáveis. Não entra no hotfix de apresentação. |
+| Fábrica de pets | Integrada na .23, com moldes LLM/aplicação e extensão de serviço; os 25 defaults ficaram iguais. Identidade, provider, grants e execução local não são herdáveis. Novos pets e mudanças de permissões continuam explícitos. |
 | Aceitação final | Completar monitores/hotplug/foco/tarefas por provider e alterações de permissões; rever fontes e realizar os commits assinados no fim pedido. |
 
 Os nomes, aliases, permissões e perfis `fast`/`reasoning` já pertencem ao ficheiro

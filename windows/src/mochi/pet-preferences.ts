@@ -1,15 +1,16 @@
 import {Bridge,onEvent} from '../core/bridge';
+import {PetFactory,petForTaskProvider,factoryProfileProvider} from '../core/pet-factory';
 export interface ModelProfile {model:string;effort:string}
 export interface PetPermissions {documents:boolean;emailDrafts:boolean;music:boolean;openApps:boolean}
 export interface LocalExecutionPolicy {mode:'ask'|'disabled';taskTimeoutMs?:number;approvalTimeoutMs?:number;commandTimeoutMs?:number;maxCalls?:number;maxOutputBytes?:number;allowedPrograms?:string[]}
 export interface PetPreference {name:string;aliases:string[];provider:string;mode:'auto'|'fast'|'reasoning';fast:ModelProfile;reasoning:ModelProfile;permissions?:PetPermissions;localExecution?:LocalExecutionPolicy}
 export interface PetConfiguration {version:number;reasoningTerms:string[];reasoningLength:number;pets:Record<string,PetPreference>}
 export interface PetDocument {config:PetConfiguration;path:string;revision:string}
-export const SERVICE_PETS=["integration_resend", "integration_n8n", "integration_vercel", "integration_github", "integration_notion", "integration_calcom", "integration_stripe", "integration_spotify"] as const;
-export type ServiceProvider=typeof SERVICE_PETS[number];
+export type ServiceProvider='integration_resend'|'integration_n8n'|'integration_vercel'|'integration_github'|'integration_notion'|'integration_calcom'|'integration_stripe'|'integration_spotify';
+export const SERVICE_PETS=PetFactory.services as readonly ServiceProvider[];
 export const isServiceProvider=(id:string):id is ServiceProvider=>(SERVICE_PETS as readonly string[]).includes(id);
 export const profileModels=[{id:'@default',label:'Perfil definido para o pet'},{id:'@auto',label:'Automático · rápido ou raciocínio'},{id:'@fast',label:'Rápido · conversa e dia a dia'},{id:'@reasoning',label:'Raciocínio elevado'}];
-export const profileProvider=(provider:string)=>provider!=='integration_spotify'&&(isServiceProvider(provider) || ['codex','copilot','antigravity','gemini-cli','claude-cli','ollama'].includes(provider));
+export const profileProvider=factoryProfileProvider;
 let config:PetConfiguration|null=null,initialized=false;
 let roster:readonly string[]|null=null;
 const listeners=new Set<()=>void>();
@@ -30,7 +31,7 @@ export const PetPreferences={
 /** Show the actual profile models/effort, including when automatic selection is enabled. */
 export function profileSummary(provider:string,selected:string){
  if(!selected.startsWith('@'))return selected;
- const id=({codex:'agent_codex',copilot:'agent_copilot',antigravity:'agent_antigravity','gemini-cli':'agent_gemini','claude-cli':'integration_claude',ollama:'ai_ollama'} as Record<string,string>)[provider]??provider;
+ const id=petForTaskProvider(provider)??provider;
  const p=config?.pets[id];if(!p)return profileLabel(selected);
  const mode=selected==='@default'?p.mode:selected.slice(1);
  const describe=(profile:ModelProfile)=>[profile.model,profile.effort].filter(Boolean).join(' · ');

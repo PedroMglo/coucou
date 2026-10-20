@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter,Manager};
 
 use crate::chat::{Chat, ChatContext, ChatReply};
 use crate::settings::Settings;
+use crate::codex_chat::rpc::timing::{self, Entry, Report, Stage, Trace};
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
 enum RequestPolicy {NativeLegacy,LocalOnce{deadline:Instant,cancel:Arc<AtomicBool>}}
@@ -283,6 +284,29 @@ pub async fn send(
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
+    send_inner(app, chat, settings, provider, model, query, context, None).await
+}
+
+/// Explicit in-memory diagnostic seam. Existing callers remain untraced.
+/// No UI/IPC/config/environment switch and no automatic report logging.
+pub(crate) async fn send_with_timing(
+    app: &AppHandle, chat: &Chat, settings: &Settings, provider: &str,
+    model: &str, query: String, context: Option<ChatContext>,
+) -> (Result<ChatReply, String>, Report) {
+    if backend(provider) != Some("codex") {
+        return (Err("Timing diagnostics are available only for Mochi Codex conversations.".into()), Report::disabled(Entry::Text));
+    }
+    let trace = Trace::new(Entry::Text);
+    let result = send_inner(app, chat, settings, provider, model, query, context, Some(trace.clone())).await;
+    trace.finish(&result);
+    (result, trace.report())
+}
+
+async fn send_inner(
+    app: &AppHandle, chat: &Chat, settings: &Settings, provider: &str,
+    model: &str, query: String, context: Option<ChatContext>, timing: Option<Trace>,
+) -> Result<ChatReply, String> {
+    timing::mark(timing.as_ref(), Stage::CliEntry);
     chat.check_admission(provider)?;
     let model=resolve_model(settings,provider,model).await?;
     chat.check_admission(provider)?;
@@ -294,8 +318,10 @@ pub async fn send(
         provider.to_string(),
         model.to_string(),
     );
+    timing::mark(timing.as_ref(), Stage::Queued);
     tauri::async_runtime::spawn_blocking(move || {
-        after_admission(&chat, &provider, || run(
+        timing::mark(timing.as_ref(), Stage::WorkerStarted);
+        after_admission(&chat, &provider, || run_inner(
             &app,
             &chat,
             &settings,
@@ -309,6 +335,7 @@ pub async fn send(
             None,
             None,
             |_| {},
+            timing,
         ))
         .map(|(text, _)| ChatReply { text })
     })
@@ -336,11 +363,38 @@ pub fn run(
     tools: &[Value],
     cancel: Option<std::sync::Arc<AtomicBool>>,
     resume_from: Option<&str>,
-    mut on_delta: impl FnMut(String),
+    on_delta: impl FnMut(String),
 ) -> Result<(String, bool), String> {
+    run_inner(app, chat, settings, provider, pet_provider, model, query, context, voice, tools, cancel, resume_from, on_delta, None)
+}
+
+/// Direct/voice diagnostic entry; does not include ASR, TTS or caller queue time.
+pub(crate) fn run_with_timing(
+    app: &AppHandle, chat: &Chat, settings: &Settings, provider: &str,
+    pet_provider: &str, model: &str, query: &str, context: Option<&ChatContext>,
+    voice: bool, tools: &[Value], cancel: Option<Arc<AtomicBool>>,
+    resume_from: Option<&str>, on_delta: impl FnMut(String),
+) -> (Result<(String, bool), String>, Report) {
+    if provider != "codex" || backend(pet_provider) != Some("codex") {
+        return (Err("Timing diagnostics are available only for Mochi Codex conversations.".into()), Report::disabled(Entry::Direct));
+    }
+    let trace = Trace::new(Entry::Direct);
+    let result = run_inner(app, chat, settings, provider, pet_provider, model, query, context, voice, tools, cancel, resume_from, on_delta, Some(trace.clone()));
+    trace.finish(&result);
+    (result, trace.report())
+}
+
+fn run_inner(
+    app: &AppHandle, chat: &Chat, settings: &Settings, provider: &str,
+    pet_provider: &str, model: &str, query: &str, context: Option<&ChatContext>,
+    voice: bool, tools: &[Value], cancel: Option<Arc<AtomicBool>>,
+    resume_from: Option<&str>, mut on_delta: impl FnMut(String), timing: Option<Trace>,
+) -> Result<(String, bool), String> {
+    timing::mark(timing.as_ref(), Stage::RunEntry);
     let selection=crate::pet_config::select(pet_provider,model,query)?;
     let model=selection.model.as_str();
     if !model_matches(pet_provider,model) {return Err("O modelo configurado não pertence a este pet.".into());}
+    timing::mark(timing.as_ref(), Stage::SelectionReady);
     let turn = chat.begin_cli(pet_provider, cancel.unwrap_or_default())?;
     let _lease = chat.lease(&turn).broadcast(app,query);
     if let Some(ChatContext::File{path,..})=context {
@@ -383,8 +437,11 @@ pub fn run(
                 .into_iter()
                 .next()
                 .ok_or("Codex CLI was not found. Run codex login after installing it.")?;
-            let mut client =
-                crate::codex_chat::rpc::Client::start_with_cancel(&exe, &cwd, Duration::from_secs(1800), true,turn.cancel.clone())?;
+            timing::mark(timing.as_ref(), Stage::ContextReady);
+            let mut client = match timing.as_ref() {
+                Some(trace) => crate::codex_chat::rpc::Client::start_with_cancel_timed(&exe, &cwd, Duration::from_secs(1800), true, turn.cancel.clone(), trace.clone())?,
+                None => crate::codex_chat::rpc::Client::start_with_cancel(&exe, &cwd, Duration::from_secs(1800), true, turn.cancel.clone())?,
+            };
             let observer = activity.clone();
             client.observe(move |event| { if let Some((phase,text)) = crate::pet_activity::codex_progress(event) { observer.update(phase,&text); } });
             let reply = client.answer(
@@ -436,13 +493,16 @@ pub fn run(
         "copilot" => crate::copilot_adapter::answer(app,chat,&turn,&activity,&cwd,model,&selection.effort,&system,&user_text,session,|text|on_delta(text))?,
         _ => return Err("Unknown CLI agent.".into()),
     };
-    let origin=chat.commit_task_reply(
+    let commit = timing::Span::new(timing.as_ref(), Stage::Commit);
+    let result=chat.commit_task_reply(
         &turn,
         json!({"role":"user","content":user_text}),
         json!({"role":"assistant","content":text}),
         &user_text,
         &text,
-    )?;
+    );
+    commit.finish(&result);
+    let origin = result?;
     activity.finish_committed(&text,origin);
     let _ = app.emit_to(crate::island::WINDOW_LABEL, "assistant-history-changed", pet_provider);
     Ok((text, acted))

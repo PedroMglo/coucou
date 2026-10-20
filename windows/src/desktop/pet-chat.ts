@@ -1,3 +1,4 @@
+import {IndexedDraftStorage,SessionDrafts,draftBroadcast,DRAFT_LIMITS} from '../core/session-drafts';
 import {requestHistoryFor,containsPendingRequest} from '../core/request-history';
 import '../style.css';import './pet-chat.css';
 import {invoke} from '@tauri-apps/api/core';
@@ -36,6 +37,16 @@ function fromLocal(target:SessionTarget,value:ConversationView):SessionSnapshot 
  if(value.busy&&value.stream)messages.push({id:`${value.id}:stream`,role:'assistant',content:value.stream});
  return {target,messages,notice:value.notice,taskNotice:value.taskNotice,requestHistory:value.requestHistory,localExecution:value.localExecution,busy:!!value.busy,turn:value.turn===undefined?undefined:String(value.turn),capabilities:{history:true,send:true,cancel:true}};
 }
+const draftStatus=node('section');draftStatus.id='draft-persistence';draftStatus.className='composer-hint';draftStatus.setAttribute('aria-label','Estado do rascunho desta conversa');draftStatus.hidden=true;
+const draftMessage=node('p');draftMessage.setAttribute('role','status');
+const draftActions=node('div');draftActions.className='chip-row';
+const draftRetry=node('button','Tentar guardar novamente'),draftUse=node('button','Usar o guardado'),draftKeep=node('button','Guardar este texto');
+for(const b of [draftRetry,draftUse,draftKeep]){b.type='button';b.className='picker-link';draftActions.append(b);}
+const draftPreview=node('details');draftPreview.className='failed-request-review';const draftSummary=node('summary','Rever rascunho guardado'),draftText=node('pre');draftText.className='failed-request-text';draftPreview.append(draftSummary,draftText);draftStatus.append(draftMessage,draftActions,draftPreview);
+let draftChannel:{publish:(key:string)=>void;close:()=>void}|null=null;
+const draftStorage=new IndexedDraftStorage();
+const drafts=new SessionDrafts(draftStorage,{changed:()=>drawDraftStatus(),restore:(target,text,previous)=>chat.restoreDraft?.(target,text,previous)??false,published:key=>draftChannel?.publish(key)});
+draftChannel=draftBroadcast(drafts);
 const session=new SessionChat({
  history:async target=>{
   if(target.origin==='external')return invoke<SessionSnapshot>('session_chat_history',{target});
@@ -60,9 +71,22 @@ const session=new SessionChat({
   const value=Number(turn);if(!Number.isSafeInteger(value)||value<0)throw new Error('Turno inválido.');
   return Bridge.chatCancel(target.provider,target.sessionId,value);
  },
-},()=>{chat?.sync();drawIdentity();});
-const chat=buildPrompt(()=>{},session);chat.el.classList.add('on');document.getElementById('conversation')!.append(chat.el);
+},()=>{chat?.sync();drafts.activate(session.target,selectionIntent);drawDraftStatus();drawIdentity();},drafts.map);
+const chat=buildPrompt(()=>{},session,undefined,draftStatus);chat.el.classList.add('on');document.getElementById('conversation')!.append(chat.el);
 function report(text:string){info.textContent=text;info.hidden=!text;}
+function drawDraftStatus(){
+ const target=session?.target,status=drafts.status(target);draftStatus.hidden=!target||!status;if(!target||!status)return;
+ draftStatus.dataset.phase=status.phase;draftStatus.setAttribute('aria-busy',String(status.busy||status.phase==='saving'));
+ draftMessage.textContent=status.phase==='loading'?'A recuperar o rascunho…':status.phase==='saving'?'A guardar o rascunho…':status.phase==='restored'?'Rascunho recuperado neste dispositivo. Revê a conversa antes de enviar.':status.phase==='saved'?status.localText?'Rascunho guardado neste dispositivo.':'Sem rascunho guardado.':status.phase==='conflict'?'Há outro rascunho guardado para esta conversa. O texto desta janela foi preservado.':status.error==='limit'?status.localText.length>DRAFT_LIMITS.text?'O texto excede o limite do rascunho guardado. O texto completo mantém-se nesta janela.':'O limite do armazenamento de rascunhos foi atingido. O texto mantém-se nesta janela.':status.error==='blocked'?'O armazenamento de rascunhos está ocupado. O texto mantém-se nesta janela.':'Não foi possível guardar o rascunho. O texto mantém-se nesta janela.';
+ draftRetry.hidden=status.phase!=='error';draftUse.hidden=draftKeep.hidden=status.phase!=='conflict';
+ draftUse.disabled=draftKeep.disabled=status.busy;
+ if(status.phase==='conflict'&&status.error)draftMessage.textContent+=' Não foi possível reler o rascunho guardado. Tenta novamente.';
+ draftPreview.hidden=status.phase!=='conflict';draftText.textContent=status.storedText||'O rascunho guardado está vazio.';
+ const exact=Object.freeze({...target}),intent=selectionIntent,ticket=opening,revision=status.revision;
+ const current=()=>intent===selectionIntent&&ticket===opening&&sameSession(exact,session.target);
+ draftRetry.onclick=()=>{if(current())void drafts.retry(exact);};draftUse.onclick=()=>{if(current())void drafts.useStored(exact,revision);};draftKeep.onclick=()=>{if(current())drafts.keepLocal(exact,revision);};
+}
+
 function drawIdentity(){
  const target=session.target;if(!target)return;
  const summary=summaries.find(s=>sameSession(s.target,target));
@@ -228,7 +252,7 @@ document.getElementById('sessions-toggle')!.onclick=()=>{
 };
 newCodex.onclick=()=>{
  const c=context;if(c?.pet!=='agent_codex'||c.provider!=='codex'||creatingCodex)return;
- const intent=++selectionIntent;creatingCodex=true;newCodex.disabled=true;report('A criar a sessão Codex…');
+ const intent=++selectionIntent;drafts.activate(session.target,intent);creatingCodex=true;newCodex.disabled=true;report('A criar a sessão Codex…');
  void invoke<ManagedCodexSession>('session_chat_managed_create',{query:null,openTerminal:false}).then(async receipt=>{
   if(context!==c)return;if(receipt.target.petId!==c.pet||receipt.target.provider!==c.provider||receipt.target.origin!=='external')throw Error('A sessão criada não pertence a este pet.');sessionLists.managedReceipt(receipt);if(intent===selectionIntent){report(receipt.notice??'');await choose(receipt.target);}refreshSessions();
  }).catch(error=>{if(context===c&&intent===selectionIntent)report(String(error).replace(/^Error:\s*/,''));}).finally(()=>{creatingCodex=false;newCodex.disabled=false;});
@@ -256,7 +280,7 @@ list.onkeydown=e=>{
  e.preventDefault();if(e.key==='ArrowUp'&&index===0)search.focus();else buttons[Math.min(buttons.length-1,index+(e.key==='ArrowDown'?1:-1))]?.focus();
 };
 newSession.onclick=()=>{
- const c=context;if(!c?.provider||newSession.disabled)return;const intent=++selectionIntent;newSession.disabled=true;report('');
+ const c=context;if(!c?.provider||newSession.disabled)return;const intent=++selectionIntent;drafts.activate(session.target,intent);newSession.disabled=true;report('');
  void Bridge.chatReset(c.provider).then(async view=>{if(context!==c)return;if(!view)throw new Error('Não foi possível criar a conversa.');if(intent===selectionIntent)await choose(local(c,view.id));refreshSessions(true);})
   .catch(e=>{if(context===c&&intent===selectionIntent)report(String(e).replace(/^Error:\s*/,''));}).finally(()=>{if(context===c)newSession.disabled=false;});
 };
@@ -299,4 +323,5 @@ document.addEventListener('pointerup',stopDrag,true);window.addEventListener('bl
 document.getElementById('terminal')!.onclick=()=>{const target=session.target;if(target?.origin==='external')void Bridge.petFocusSession(target.provider,target.sessionId).catch(e=>report(String(e).replace(/^Error:\s*/,'')));};
 setInterval(()=>{if(!document.hidden&&session.target&&!session.loading)void session.refresh();},2000);
 setInterval(()=>{if(!document.hidden)void refreshSessions();},30000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){invalidate();void refreshSessions();}});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){invalidate();void refreshSessions();drafts.hint(session.target?sessionTargetKey(session.target):'');}else if(session.target)void drafts.flush(session.target);});
+window.addEventListener('pagehide',()=>{if(session.target)void drafts.flush(session.target);});
