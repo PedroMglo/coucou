@@ -165,7 +165,11 @@ pub async fn session_chat_list(app:AppHandle,window:tauri::WebviewWindow,pet_id:
     let config=crate::pet_config::read()?;let owners=owners(&config);
     {let shared=app.state::<crate::Shared>();let settings=shared.settings.lock().unwrap();if pet_id!=settings.main_pill&&!settings.active_integrations.contains(&pet_id){return Err("Este pet não está configurado.".into());}}
     let rows=match pet_id.as_str(){
-        "agent_codex" if config.pets.get(&pet_id).is_some_and(|p|p.provider=="codex")=>{let client=client(&app).await?;codex::list(&client).await?},
+        "agent_codex" if config.pets.get(&pet_id).is_some_and(|p|p.provider=="codex")=>{
+            // One deadline includes waiting for the client lock and connection.
+            let deadline=tokio::time::Instant::now()+codex::LIST_TIMEOUT;
+            codex::list_before(deadline,async { let client=client(&app).await?;codex::list(&client).await }).await?
+        },
         "agent_copilot" if config.pets.get(&pet_id).is_some_and(|p|p.provider=="copilot")=>crate::copilot_session::list().await,
         _=>return Ok(Vec::new()),
     };let mut out=Vec::new();
@@ -427,4 +431,50 @@ pub async fn session_chat_managed_release(window:tauri::WebviewWindow,reference:
     // Forget provenance only. No interrupt, unsubscribe, terminal close or
     // daemon stop; ordinary external-history controls remain independent.
     backend().managed.lock().unwrap().release(&reference.handle,&reference.target,reference.generation)
+}
+
+/// Capture an already-connected observer for metadata queries.
+/// The mutex is released before checking the pinned socket identity.
+fn existing_observability_client() -> Result<Arc<rpc::Client>, String> {
+    let client = {
+        let current = backend().client.try_lock()
+            .map_err(|_| "codexObservabilityBusy".to_string())?;
+        current.as_ref().filter(|client| client.connected()).cloned()
+    }.ok_or_else(|| "codexObservabilityUnavailable".to_string())?;
+    client.verified_endpoint()
+        .map_err(|_| "codexObservabilityUnavailable".to_string())?;
+    Ok(client)
+}
+
+// Integration snippet: append inside session_chat/adapter.rs after review.
+// This is metadata collection only: no resume, subscription, native UI launch,
+// managed-session creation, turn execution, approval response or model request.
+pub(crate) async fn observability_inventory(
+    app: &AppHandle,
+    provider: &str,
+    observed_at: u64,
+) -> Result<crate::pet_observability::core::InventoryInput, String> {
+    let pet_id = match provider {
+        "codex" => "agent_codex", "copilot" => "agent_copilot",
+        _ => return Err("Este fornecedor não tem inventário nativo.".into()),
+    };
+    // Recheck current authorization at actual collection time.
+    {
+        let shared = app.state::<crate::Shared>();
+        let settings = shared.settings.lock().map_err(|_| "As definições estão indisponíveis.".to_string())?;
+        if pet_id != settings.main_pill && !settings.active_integrations.iter().any(|id| id == pet_id) {
+            return Err("O pet nativo foi desativado.".into());
+        }
+    }
+    if crate::pet_config::read_existing()?.pets.get(pet_id).map(|pet| pet.provider.as_str()) != Some(provider) {
+        return Err("A identidade nativa mudou.".into());
+    }
+    match provider {
+        "codex" => {
+            let client = existing_observability_client()?;
+            crate::pet_observability::native::codex_inventory(&client, observed_at).await
+        },
+        "copilot" => crate::pet_observability::native::copilot_inventory(observed_at).await,
+        _ => unreachable!(),
+    }
 }

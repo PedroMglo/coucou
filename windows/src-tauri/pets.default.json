@@ -336,6 +336,9 @@
         "ollama"
       ],
       "provider": "ollama",
+      "localExecution": {
+        "mode": "ask"
+      },
       "mode": "auto",
       "fast": {
         "model": "gemma3:4b",
@@ -553,9 +556,10 @@
     "integration_spotify": {
       "name": "Spotify",
       "aliases": [
-        "spotify"
+        "spotify",
+        "spoty"
       ],
-      "provider": "codex",
+      "provider": "",
       "mode": "auto",
       "fast": {
         "model": "gpt-6-luna",
@@ -566,7 +570,7 @@
         "effort": "high"
       },
       "permissions": {
-        "documents": true,
+        "documents": false,
         "emailDrafts": false,
         "music": true,
         "openApps": true

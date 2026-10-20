@@ -188,7 +188,10 @@ fn validate_paths(paths: &[String]) -> Result<(), String> {
 }
 
 fn configured_providers(settings: &crate::settings::Settings) -> Vec<String> {
-    if !settings.companion_mode {
+    // The Linux card controller always addresses a configured pet explicitly,
+    // even when the wandering companions or the System presentation are off.
+    // Presentation preferences must never redirect a document to a global chat.
+    if !cfg!(target_os = "linux") && !settings.companion_mode {
         let provider = if settings.chat_provider.is_empty() { crate::chat::ANTHROPIC } else { settings.chat_provider.as_str() };
         return crate::pet_config::integration_pet(provider).map(|_| vec![provider.into()]).unwrap_or_default();
     }
@@ -557,8 +560,19 @@ mod tests {
         assert_eq!(configured_providers(&settings), vec!["codex", "openai", "integration_spotify"]);
         settings.companion_mode = false;
         settings.chat_provider.clear();
+        #[cfg(target_os="linux")]{
+            assert_eq!(configured_providers(&settings), vec!["codex", "openai", "integration_spotify"]);
+            settings.pet_system_center=false;
+            settings.pet_control_bar=false;
+            settings.chat_provider="unknown".into();
+            assert_eq!(configured_providers(&settings), vec!["codex", "openai", "integration_spotify"]);
+            settings.main_pill="unknown".into();settings.active_integrations.clear();
+            assert!(configured_providers(&settings).is_empty());
+        }
+        #[cfg(not(target_os="linux"))]{
         assert_eq!(configured_providers(&settings), vec!["anthropic"]);
         settings.chat_provider = "unknown".into();
         assert!(configured_providers(&settings).is_empty());
+        }
     }
 }

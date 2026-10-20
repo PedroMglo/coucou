@@ -21,7 +21,7 @@ const WINDOW = "mochi";
 export interface DesktopHost {
   /** Shows the island (compact) if it is hidden. */
   reveal(): void;
-  openFromDesktop(id?: string, view?: string): void;
+  openFromDesktop(id?: string, view?: string, manual?: boolean): void;
   /** Right-click on the desktop Mochi: the wardrobe, or back. */
   wardrobeFromDesktop(): void;
   /** Three pokes on the desktop Mochi. */
@@ -30,7 +30,7 @@ export interface DesktopHost {
 
 export class DesktopLink {
   mode: DesktopMode = "off";
-  readonly controller: DesktopMochiController;
+  readonly controller!: DesktopMochiController;
 
   /** The pointer is dragging Mochi out of the island. */
   carrying = false;
@@ -44,8 +44,11 @@ export class DesktopLink {
 
   constructor(host: DesktopHost) {
     this.host = host;
-    this.companions = new CompanionsLink((id, view) => this.host.openFromDesktop(id, view),
+    this.companions = new CompanionsLink((id, view, manual) => this.host.openFromDesktop(id, view, manual),
       () => State.wardrobePreview ?? this.seasons.get(parseOutfit(State.settings.mochiOutfit)));
+    // This entry owns pet cards and shared infrastructure, never the retired
+    // singleton's controller, desktop listeners, snapshot publisher or fallback.
+    if (State.petCardsOnly) return;
     this.controller = new DesktopMochiController({
       flyOut: async (anywhere) => (await Bridge.desktopFlyOut(anywhere)) ?? false,
       flyHome: async (forget) => (await Bridge.desktopFlyHome(forget)) ?? true,
@@ -67,11 +70,15 @@ export class DesktopLink {
   /** False where windows can't be placed (GNOME on Wayland): he stays in the island. */
   get companionsActive(): boolean { return this.companions.active; }
 
+  /** Surface capability, including while both pet and System presentation are off. */
+  get centerSupported(): boolean { return this.companions.supported; }
+
   get supported(): boolean {
     return this.mode !== "off";
   }
 
   async init() {
+    if (State.petCardsOnly) { await this.companions.init(); return; }
     const info = await Bridge.desktopInfo();
     if (!info || info.mode === "off") return;
     this.mode = info.mode;
@@ -98,6 +105,12 @@ export class DesktopLink {
   /** The launch greeting is over: back to his spot if that is where he lives. */
   async launch() {
     await this.companions.launch();
+    if (State.petCardsOnly) {
+      if (this.companions.active) { State.mochiOnDesktop = true; State.notify(); }
+      return;
+    }
+    // Configuring the shared System centre must not revive the singleton pet.
+    if (!State.settings.companionMode) return;
     if (this.companions.active) {
       State.mochiOnDesktop = true;
       State.notify();
@@ -113,6 +126,7 @@ export class DesktopLink {
    */
   flyOutOrHome() {
     if (this.companions.active) { State.paused = !State.paused; State.notify(); return; }
+    if (State.petCardsOnly) return;
     if (!this.supported || this.carrying) return;
     void this.controller.flyOutOrHome();
   }
@@ -121,7 +135,7 @@ export class DesktopLink {
 
   /** Whether Mochi can be picked up from the island right now. */
   canPickUp(): boolean {
-    return this.supported && !State.paused && !State.mochiOnDesktop && this.controller.phase === "home";
+    return !State.petCardsOnly && this.supported && !State.paused && !State.mochiOnDesktop && this.controller.phase === "home";
   }
 
   /** (x, y): the pointer, island-window coordinates. */

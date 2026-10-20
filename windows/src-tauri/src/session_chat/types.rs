@@ -87,6 +87,10 @@ pub struct Snapshot {
     pub target: Target,
     pub messages: Vec<Message>,
     pub busy: bool,
+    /// Backend-only barrier: live events cannot grant control over ambiguous
+    /// turns in an otherwise valid public history. Never accepted from IPC.
+    #[serde(skip)]
+    pub(crate) control_conflict: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<String>,
     pub capabilities: Capabilities,

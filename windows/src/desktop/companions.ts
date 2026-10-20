@@ -1,5 +1,5 @@
 import {taskPet} from "../mochi/tasks";
-import {sessionLabel} from '../core/pet-sessions';
+import {NativePetSpeech,nativeSpeechTarget,petDialogueOrigin,type NativeSpeech} from '../mochi/native-speech';
 import { shelterLayout, speechPlacement, speechText } from "../mochi/shelter";
 import {voiceFeedback,type VoiceView} from "../mochi/voice-feedback";
 import {TaskBoard} from "./task-board";
@@ -48,6 +48,7 @@ function showNextNotice() {
   const review=document.createElement("button");review.textContent=t("Review");
   review.onclick=()=>{
     const view=next.view;dismissNotice();
+    if(next.pet===SPOTIFY_ID){open(p,"overview");return;}
     if(next.session&&view==='floating')void Bridge.petChatOpen(next.pet,{id:next.session.id,backend:next.session.backend,cwd:next.session.cwd??'',title:next.session.title??'',steps:[],finalLine:''});
     else if(next.session)void emitToWindow('island','pet-session-select',{pet:next.pet,backend:next.session.backend,id:next.session.id,cwd:next.session.cwd,title:next.session.title,owned:next.session.owned,view});
     else open(p,view);
@@ -72,16 +73,19 @@ const tasksButton=document.createElement("button");tasksButton.type="button";tas
 const taskBoard=new TaskBoard(pet=>{const p=world.pets.get(pet);if(p&&!reviewChatDecision(pet))open(p,[...decisions.values()].some(d=>d.pet===pet)?"prompt":undefined);},()=>{refreshShelter();input(performance.now()/1000,true);wake();});
 function showTasks(pet?:string,section="tasks") {
   if(shelterOpen)setShelter(false);closeMenu();
-  const room=shelterLayout(snapshot.band,(snapshot.catalog??snapshot.pets).length,false);
+  const room=snapshot.control?null:shelterLayout(snapshot.band,(snapshot.catalog??snapshot.pets).length,false);
   taskBoard.position(room?room.left+16:world.width/2,(snapshot.band?.height??64)+8,world.width);
   void Bridge.petPanelOpen(room?room.left+16:world.width/2,(snapshot.band?.height??40)+8,pet,section);input(performance.now()/1000,true);wake();
 }
 tasksButton.onclick=()=>showTasks();
 residents.addEventListener("wheel",event=>{if(residents.scrollWidth>residents.clientWidth){event.preventDefault();residents.scrollLeft+=event.deltaY||event.deltaX;}},{passive:false});
-shelter.append(home,residents);document.body.append(shelter);
+shelter.append(home,residents);
 let shelterOpen=false,shelterKey="";
 function refreshShelter() {
-  if(snapshot.control?.enabled){shelterOpen=false;shelter.hidden=true;return;}
+  // Availability is independent of the two centre preferences. Turning them
+  // off must never resurrect the retired shelter or its input region.
+  if(snapshot.control){shelterOpen=false;shelter.hidden=true;shelter.remove();residents.replaceChildren();shelterKey='';return;}
+  if(!shelter.isConnected)document.body.append(shelter);
   const layout=shelterLayout(snapshot.band,(snapshot.catalog??snapshot.pets).length,shelterOpen);
   shelter.hidden=!layout || !snapshot.enabled || !nativeVisible;
   if(!layout)return;
@@ -107,6 +111,7 @@ function refreshShelter() {
   }
 }
 function setShelter(open:boolean) {
+  if(snapshot.control){refreshShelter();return;}
   if(open&&snapshot.presented)void emitToWindow('island','companions-hide-popup');
   shelterOpen=open;refreshShelter();
   world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented,motion:world.motion},window.innerWidth,performance.now()/1000);
@@ -114,14 +119,34 @@ function setShelter(open:boolean) {
 }
 home.onclick=()=>showTasks(undefined,"sessions");
 home.addEventListener("contextmenu",event=>{event.preventDefault();setShelter(!shelterOpen);});
-const nativeSpeech=new Map<string,{text:string;at:number;key:string;origin:string}>();
+const nativeMessages=new NativePetSpeech();
+const nativeSpeech=nativeMessages.entries;
+const locatingSpeech=new WeakSet<NativeSpeech>();
+const speechTargets=new WeakMap<NativeSpeech,import('../core/session-chat').SessionTarget>();
+const unavailableSpeech=new WeakSet<NativeSpeech>();
+function locateSpeech(speech:NativeSpeech){
+  if(!speech.session?.id||!speech.session.backend||speech.session.owned){unavailableSpeech.add(speech);return;}
+  locatingSpeech.add(speech);
+  void Bridge.sessionChatList(speech.pet).then(rows=>{
+    if(!nativeMessages.current(speech,performance.now()))return;
+    const target=nativeSpeechTarget(speech,rows);
+    if(target)speechTargets.set(speech,target);else unavailableSpeech.add(speech);
+  }).catch(error=>{
+    if(nativeMessages.current(speech,performance.now()))unavailableSpeech.add(speech);
+    console.error('Não foi possível localizar a sessão da mensagem.',error);
+  }).finally(()=>{locatingSpeech.delete(speech);refreshDialogue();input(performance.now()/1000,true);wake();});
+}
 const dialogues = new PetDialogues();
 const decisions = new Map<string,{pet:string;phase:string;target?:import('../core/session-chat').SessionTarget}>();
 const endedDecisions=new Set<string>();
 function reviewChatDecision(pet:string){
- const target=[...decisions.values()].find(d=>d.pet===pet)?.target;
- if(!target)return false;
- void Bridge.petChatOpen(pet,undefined,false,target).catch(error=>{noticeQueue.push({key:`decision-open:${Date.now()}`,pet,text:String(error).replace(/^Error:\s*/,''),urgent:false});showNextNotice();});return true;
+ const entry=[...decisions].find(([,d])=>d.pet===pet&&d.target);
+ if(!entry)return false;
+ const[id,decision]=entry;
+ void Bridge.petChatOpen(pet,undefined,false,decision.target,id).catch(error=>{
+  if(decisions.get(id)!==decision)return;
+  noticeQueue.push({key:`decision-open:${id}`,pet,text:String(error).replace(/^Error:\s*/,''),urgent:false});showNextNotice();
+ });return true;
 }
 let pendingFold: {pet:string;until:number}|null = null;
 function decisionPhase(pet:string) { return [...decisions.values()].find(d=>d.pet===pet)?.phase; }
@@ -148,7 +173,7 @@ let liveVoice: VoiceView | null = null;
 let voiceReceivedAt=0;
 const phaseLabel = (phase: string) => ({preparing:"A ligar o microfone",thinking:"A pensar",working:"A trabalhar",searching:"A pesquisar",message:"A responder",speaking:"A falar",listening:"A ouvir",approval:"Precisa da tua aprovação",question:"Precisa de uma resposta tua",error:"Precisa de atenção",ratelimit:"Limite atingido",done:"Resposta pronta",stopped:"Interrompido",failed:"Não conseguiu terminar"}[phase] ?? "Disponível");
 function activeSnapshot(s: CompanionsSnapshot): CompanionsSnapshot {
-  const room=s.control?.enabled?null:shelterLayout(s.band,(s.catalog??s.pets).length,shelterOpen);
+  const room=s.control?null:shelterLayout(s.band,(s.catalog??s.pets).length,shelterOpen);
   return {...s,sheltered:!!room,band:room && s.band ? {...s.band,lanes:room.lanes}:s.band,pets:s.pets.map(identity=>{
     const phase=decisionPhase(identity.id) ?? phaseFor(dialogues.current(identity.id,performance.now()),identity.state);
     const busy=BUSY.has(phase),attention=ATTENTION.has(phase);
@@ -172,7 +197,7 @@ function positionDialogue() {
   if(!placement){dialogue.style.visibility="hidden";return;}
   dialogue.style.visibility="visible";
   Object.assign(dialogue.style,{left:`${placement.left}px`,top:`${placement.top}px`,width:`${placement.width}px`});
-  dialogue.dataset.side=placement.side;dialogue.dataset.compact=String(!!world.band);
+  dialogue.dataset.side=placement.side;dialogue.dataset.compact=String('height'in placement);
   dialogue.style.setProperty("--speech-height",`${"height" in placement?placement.height:38}px`);
   dialogue.style.setProperty("--tip",`${placement.tip}px`);
 }
@@ -188,19 +213,22 @@ function refreshDialogue() {
   const phase = activityPhase(p);
   const voiced = voicePet === p.identity.id ? liveVoice : null;
   const native=nativeSpeech.get(p.identity.id);
-  const message = voiced?.phase === "speaking" ? voiced.answer : value?.message ?? native?.text ?? "";
+  const message = voiced?.phase === "speaking" ? voiced.answer : ATTENTION.has(phase)?'':value?.message ?? native?.text ?? "";
   const feedback=voiced ? voiceFeedback(voiced,dialogues.current(p.identity.id,now),p.identity.name,voiceReceivedAt) : null;
-  const text=feedback?.text ?? (p.identity.session?.decisionInTerminal&&['approval','question'].includes(phase)?'Este pedido precisa da tua resposta no terminal desta sessão.':speechText(phase,message,value?.messageAt??native?.at??now,now));
+  const unavailable=!voiced&&!value&&!ATTENTION.has(phase)&&native&&unavailableSpeech.has(native);
+  const text=feedback?.text ?? (unavailable?'A sessão desta mensagem não está disponível para abrir. Podes procurá-la na lista de sessões.':p.identity.session?.decisionInTerminal&&['approval','question'].includes(phase)?'Este pedido precisa da tua resposta no terminal desta sessão.':speechText(phase,message,value?.messageAt??native?.at??now,now));
   if(!text)return;
   dialoguePet = p.identity.id; dialogue.hidden = false;
   dialogue.dataset.phase = phase; dialogue.style.setProperty("--pet-color",p.identity.color);
   dialogue.dataset.voice=String(!!voiced);
-  const origin=value?.origin??native?.origin??(p.identity.session?sessionLabel({sessionId:p.identity.session.id,sessionCwd:p.identity.session.cwd,sessionTitle:p.identity.session.title,sessionOwned:p.identity.session.owned}):'');
+  const decision=[...decisions.values()].find(d=>d.pet===p.identity.id&&d.target);
+  const origin=petDialogueOrigin(ATTENTION.has(phase),p.identity.session,decision?.target,value?.origin,native);
   dialogueTitle.textContent = feedback?.title ?? `${p.identity.name}${origin?' · '+origin:''}`;
   if (dialogueText.textContent !== text) { dialogueText.textContent = text; dialogueText.classList.remove("arriving");void dialogueText.offsetWidth;dialogueText.classList.add("arriving"); }
   dialogue.title=feedback ? `${feedback.title}\n${voiced?.heard ? "Ouvi: "+voiced.heard+"\n" : ""}${text}` : text;dialogueText.hidden=false;dialogueHeard.hidden=true;
   dialogueAction.hidden = !world.band && !ATTENTION.has(phase);
-  dialogueAction.textContent=voiced ? `Abrir conversa do Mochi com ${p.identity.name}` : p.identity.session?.decisionInTerminal&&ATTENTION.has(phase)?'Responder no terminal':ATTENTION.has(phase)?"Rever pedido":`Ler mensagem de ${p.identity.name}`;
+  dialogueAction.textContent=p.identity.id===SPOTIFY_ID?"Abrir música e som":voiced ? `Abrir conversa do Mochi com ${p.identity.name}` : p.identity.session?.decisionInTerminal&&ATTENTION.has(phase)?'Responder no terminal':ATTENTION.has(phase)?"Rever pedido":unavailable?`Ver sessões de ${p.identity.name}`:!value&&native&&locatingSpeech.has(native)?'A localizar a sessão…':`Ler mensagem de ${p.identity.name}`;
+  dialogueAction.disabled=!!native&&locatingSpeech.has(native)&&!value&&!ATTENTION.has(phase)&&!voiced;
   dialogueAction.setAttribute("aria-label",dialogueAction.textContent);
   dialogue.setAttribute("aria-busy",String(BUSY.has(phase)));
   positionDialogue();
@@ -208,13 +236,34 @@ function refreshDialogue() {
   const remaining=voiced ? 1000 : phase==="speaking" || ATTENTION.has(phase) ? 9500 : Math.max(50,9001-(now-(value?.messageAt??native?.at??now)));
   dialogueTimer = window.setTimeout(()=>{dialogueTimer=null;world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented,motion:world.motion},window.innerWidth,performance.now()/1000);refreshDialogue();input(performance.now()/1000,true);wake();},remaining);
 }
-dialogueAction.onclick = () => {
+dialogueAction.onclick = async () => {
   const p=dialoguePet && world.pets.get(dialoguePet);if(!p)return;
+  if(p.identity.id===SPOTIFY_ID){open(p,"overview");return;}
   if(reviewChatDecision(p.identity.id))return;
   if(liveVoice && voicePet===p.identity.id){open(p,"prompt");return;}
+  if(ATTENTION.has(activityPhase(p))){open(p);return;}
+  const value=dialogues.visible(p.identity.id,performance.now(),false);
+  if(value?.target){
+    const pet=p.identity.id,target=value.target;
+    void Bridge.petChatOpen(pet,undefined,false,target).catch(error=>{
+      if(dialogues.entries.get(pet)!==value)return;
+      noticeQueue.push({key:`message-open:${pet}:${value.turn}`,pet,text:String(error).replace(/^Error:\s*/,''),urgent:false});showNextNotice();
+    });return;
+  }
   const final=nativeSpeech.get(p.identity.id);
-  const native=final && performance.now()-final.at<=9000 && !dialogues.visible(p.identity.id,performance.now(),false);
-  open(p,ATTENTION.has(activityPhase(p))?undefined:native?"finished":"prompt");
+  if(final&&nativeMessages.current(final,performance.now())&&!value){
+    if(unavailableSpeech.has(final)){showTasks(p.identity.id,'sessions');return;}
+    const target=speechTargets.get(final);if(!target)return;
+    const stillReading=()=>{const current=world.pets.get(final.pet);return !!current&&current.shown&&nativeMessages.current(final,performance.now())&&dialoguePet===final.pet&&!ATTENTION.has(activityPhase(current))&&!dialogues.visible(final.pet,performance.now(),false);};
+    try{
+      // No asynchronous lookup may precede this user intent. The canonical
+      // target is already known; the native opening guard owns ordering now.
+      if(await Bridge.petChatOpen(final.pet,undefined,false,target)!==true&&stillReading())unavailableSpeech.add(final);
+    }catch(error){if(stillReading()){unavailableSpeech.add(final);console.error('Não foi possível localizar a sessão da mensagem.',error);}}
+    finally{refreshDialogue();input(performance.now()/1000,true);wake();}
+    return;
+  }
+  open(p,"prompt");
 };
 let voicePet: string | null = null;
 let voiceActive = false;
@@ -238,7 +287,7 @@ function voiceBubble(view: VoiceView | null, dictation = false) {
       for(const identity of snapshot.catalog??snapshot.pets){const capabilities=petCapabilities(identity.id);if(!capabilities.voice)continue;const b=document.createElement("button");b.textContent=identity.name;b.onclick=()=>void Bridge.voiceSessionStart(capabilities.voice!).catch(error=>{prompt.textContent=String(error);});choices.append(b);}
       const stop=document.createElement("button");stop.textContent="Terminar escuta";stop.onclick=()=>void Bridge.voiceSessionToggle();
       voice.replaceChildren(title,heard,prompt,choices,stop);voice.hidden=false;
-      const layout=shelterLayout(snapshot.band,(snapshot.catalog??snapshot.pets).length,false);
+      const layout=snapshot.control?null:shelterLayout(snapshot.band,(snapshot.catalog??snapshot.pets).length,false);
       const left=Math.max(8,Math.min(world.width-348,layout?.left??world.width/2));
       voice.style.left=`${left}px`;voice.style.top=`${(snapshot.band?.height??40)+8}px`;voice.style.setProperty("--tip","18px");
       if(starting && snapshot.presented && !decisions.size){const current=snapshot.pets.find(p=>p.id===snapshot.presented);if(!current?.attention && !ATTENTION.has(current?.state??""))void emitToWindow("island","companions-hide-popup");}
@@ -299,30 +348,130 @@ Sound.setEnabled(false);
 
 // Events can precede the snapshot that introduces their owner. Keep that
 // exact identity briefly; never substitute a different integration's pet.
-let pendingPresentation: { id: string; view?: string; until: number } | null = null;
+let pendingPresentation: { id: string; view?: string; manual?:boolean; until: number } | null = null;
+let petPointerSequence=0,hoverOpened:string|null=null;
+const petPointers=new Map<string,{context:number;inside:boolean}>();
+const POINTER_PAIR_MS=100;
+let nativePetInside:boolean|null=null,outsideObserved=false,hoverRecoveryArmed=false;
+let hoverMove:{id:string;at:number}|null=null,nativePetPoint:{id:string;at:number}|null=null;
+let recoveredHover:{id:string;context:number}|null=null;
+let hoverEntry:{id:string;context:number}|null=null;
+let pointerPosition:{x:number;y:number;sx:number;sy:number}|null=null;
+const pointerMoves=new WeakSet<MouseEvent>();
+// Surface entry can synthesize a trusted zero-motion mousemove in WebKit too.
+// Compare positions within one continuous visit, never across native exits:
+// Wayland can expose local or zero screen coordinates. A first observation only
+// establishes a position, regardless of cached deltas. Explicit actions need no movement.
+document.addEventListener('mousemove',event=>{
+ if(!event.isTrusted||![event.clientX,event.clientY,event.screenX,event.screenY].every(Number.isFinite))return;
+ const prior=pointerPosition;pointerPosition={x:event.clientX,y:event.clientY,sx:event.screenX,sy:event.screenY};
+ const changed=prior&&(prior.x!==event.clientX||prior.y!==event.clientY);
+ const screenChanged=prior&&(prior.sx!==event.screenX||prior.sy!==event.screenY);
+ const noScreen=prior&&prior.sx===0&&prior.sy===0&&event.screenX===0&&event.screenY===0;
+ if(changed&&(screenChanged||noScreen))pointerMoves.add(event);
+},true);
+document.addEventListener('pointerleave',event=>{
+ if(event.target!==document.documentElement&&event.target!==document)return;
+ if(event.isTrusted)pointerPosition=null;
+},true);
+document.addEventListener('pointerenter',event=>{
+ if(event.isTrusted&&(event.target===document.documentElement||event.target===document))pointerPosition=null;
+},true);
+function clearHoverEvidence(){hoverMove=nativePetPoint=null;hoverEntry=null;}
+function resetHoverRecovery(){nativePetInside=null;outsideObserved=hoverRecoveryArmed=false;recoveredHover=null;pointerPosition=null;clearHoverEvidence();}
+function armHoverRecovery(){
+ clearHoverEvidence();
+ hoverRecoveryArmed=outsideObserved&&nativePetInside===false&&nativeVisible&&!document.hidden&&snapshot.enabled&&!snapshot.presented;
+}
+function canHoverOpen(pet:string){
+ // A pending decision must remain reachable from its own pet. Keep unrelated
+ // hover cards out of the way; opening still uses the exact request target.
+ const ownRequest=[...decisions.values()].some(decision=>decision.pet===pet&&decision.target);
+ return menu.hidden&&!dragging&&!fileTarget&&!snapshot.presented&&(!decisions.size||ownRequest)&&!voicePet&&snapshot.enabled&&!snapshot.paused&&nativeVisible&&!document.hidden;
+}
+function consumeHoverRecovery(){hoverRecoveryArmed=outsideObserved=false;clearHoverEvidence();}
+function tryRecoverHover(){
+ const move=hoverMove,point=nativePetPoint,now=performance.now();
+ if(!hoverRecoveryArmed||nativePetInside!==true||!move||!point||move.id!==point.id||now-move.at>POINTER_PAIR_MS||now-point.at>POINTER_PAIR_MS||!canHoverOpen(move.id))return;
+ const pet=world.pets.get(move.id);if(!pet?.shown||pet.visibility==='leaving'||pet.opacity<=0.05)return;
+ consumeHoverRecovery();reportPetPointer(move.id,true);
+ const context=petPointers.get(move.id)!.context;
+ recoveredHover={id:move.id,context};hoverOpened=move.id;
+ void open(pet,undefined,true,context);
+}
+function rememberPetMove(pet:PetLife,event:MouseEvent){
+ if(!pointerMoves.has(event)||!canHoverOpen(pet.identity.id)||petAtPointer({x:event.clientX,y:event.clientY})!==pet)return;
+ const id=pet.identity.id,pointer=petPointers.get(id);
+ if(nativePetInside!==false&&hoverEntry?.id===id&&pointer?.inside&&hoverEntry.context===pointer.context){
+  const context=pointer.context;consumeHoverRecovery();hoverOpened=id;
+  void open(pet,undefined,true,context);return;
+ }
+ if(!hoverRecoveryArmed)return;
+ hoverMove={id:pet.identity.id,at:performance.now()};tryRecoverHover();
+}
+function reportPetPointer(pillId:string,inside:boolean){
+ if(inside&&(!nativeVisible||document.hidden||!snapshot.enabled))return;
+ if(inside)for(const [other,pointer]of petPointers)if(other!==pillId&&pointer.inside)reportPetPointer(other,false);
+ const prior=petPointers.get(pillId);if(!inside&&!prior)return;
+ if(!inside&&recoveredHover?.id===pillId)recoveredHover=null;
+ const value={context:inside?++petPointerSequence:prior!.context,inside};petPointers.set(pillId,value);
+ void emitToWindow('island','pet-card-pointer',{pillId,...value});
+}
+/** GDK can report a real surface exit without a WebKit DOM pointerleave. */
+function releasePetPointers(){
+ for(const [pillId,pointer]of petPointers)if(pointer.inside)reportPetPointer(pillId,false);
+ hoverOpened=null;
+ if(menu.hidden&&!dragging)world.hovered=null;
+ wake();
+}
+/** Native and trusted DOM coordinates must resolve to a real, visible pet view. */
+function petAtPointer(position:{x:number;y:number}):PetLife|undefined{
+ if(!position||!Number.isFinite(position.x)||!Number.isFinite(position.y)||!nativeVisible||document.hidden||!snapshot.enabled)return;
+ const button=document.elementFromPoint(position.x,position.y)?.closest<HTMLButtonElement>('.pet');
+ if(!button||!root.contains(button)||button.hidden||button.disabled||!button.getClientRects().length)return;
+ const id=button.dataset.petId;if(!id||views.get(id)?.button!==button)return;
+ const pet=world.pets.get(id);
+ if(!pet?.shown||pet.visibility==='leaving'||pet.opacity<=0.05)return;
+ return pet;
+}
+function recoverPetPointer(position:{x:number;y:number}){
+ if(nativePetInside!==true)return;
+ const pet=petAtPointer(position);if(!pet){clearHoverEvidence();return;}
+ const id=pet.identity.id,pointer=petPointers.get(id);
+ if(snapshot.presented===id&&pointer&&!pointer.inside)reportPetPointer(id,true);
+ if(hoverRecoveryArmed&&nativePetInside===true&&canHoverOpen(id)){
+  nativePetPoint={id,at:performance.now()};tryRecoverHover();
+ }
+}
 function presentPending() {
   const e = pendingPresentation;
   if (!e) return;
   if (performance.now() > e.until) { pendingPresentation = null; return; }
   const p = world.pets.get(e.id);
   if(p && !p.retired) world.touch(e.id,performance.now()/1000);
-  if (p?.shown && nativeVisible) open(p, e.view);
+  if (p?.shown && nativeVisible) open(p, e.view,e.manual===true);
 }
 
-function open(p: PetLife, view?: string) {
+async function open(p: PetLife, view?: string, manual=true,hoverContext?:number) {
+  if(p.identity.id===SPOTIFY_ID&&view==="prompt")view="overview";
   pendingPresentation = null;
+  // A native request has its own exact destination; a projected terminal
+  // marker may belong to another session of this pet. Resolve the request first.
+  if((!view||view==='overview')&&reviewChatDecision(p.identity.id))return;
   if((!view||['overview','approval','question'].includes(view))&&['approval','question'].includes(activityPhase(p))&&p.identity.session?.decisionInTerminal){
     const session=p.identity.session;
     if(session.backend)void Bridge.petFocusSession(session.backend,session.id).catch(error=>{noticeQueue.push({key:`decision-terminal:${session.id}:${Date.now()}`,pet:p.identity.id,text:String(error).replace(/^Error:\s*/,''),urgent:false});showNextNotice();});
     return;
   }
-  if((!view||view==='overview')&&reviewChatDecision(p.identity.id))return;
   if(shelterOpen){shelterOpen=false;refreshShelter();}
   if(shownNotice) { if(noticeTimer!=null)window.clearTimeout(noticeTimer);noticeTimer=null;shownNotice=null;notice.hidden=true; }
   closeMenu();
   world.touch(p.identity.id, performance.now() / 1000);
   world.sync({...activeSnapshot(snapshot),presented:p.identity.id,motion:world.motion},window.innerWidth,performance.now()/1000);
-  void Bridge.companionsOpen(p.identity.id, p.x, p.y, petOpenView(activityPhase(p),view,!!decisionPhase(p.identity.id)));
+  const pointer=petPointers.get(p.identity.id);
+  if(manual&&pointer)await emitToWindow('island','pet-card-pointer',{pillId:p.identity.id,...pointer});
+  if(hoverContext!==undefined){const latest=petPointers.get(p.identity.id);if(!latest?.inside||latest.context!==hoverContext)return;}
+  void Bridge.companionsOpen(p.identity.id, p.x, p.y, petOpenView(activityPhase(p),view,!!decisionPhase(p.identity.id)),manual);
 }
 
 function closeMenu() {
@@ -346,14 +495,14 @@ function showMenu(p: PetLife) {
   };
   add(t("Open"), () => open(p));
   if(capabilities.chat)add(t("Chat"),()=>open(p,"prompt"));
-  if(capabilities.voice)add("Conversar por voz",()=>{
+  if(capabilities.voice)add(p.identity.id===SPOTIFY_ID?"Comando de música ou som":"Conversar por voz",()=>{
     if(shelterOpen)setShelter(false);
     void Bridge.voiceSessionStart(capabilities.voice!).catch(error=>{
-      noticeQueue.push({key:`voice-error:${p.identity.id}`,pet:p.identity.id,text:String(error).replace(/^Error:\s*/,""),urgent:true,view:"prompt"});showNextNotice();
+      noticeQueue.push({key:`voice-error:${p.identity.id}`,pet:p.identity.id,text:String(error).replace(/^Error:\s*/,""),urgent:true,view:p.identity.id===SPOTIFY_ID?"overview":"prompt"});showNextNotice();
     });
   });
   if(taskBoard.supports(p.identity.id))add("Ver tarefas",()=>showTasks(p.identity.id));
-  if(p.identity.sessions||taskBoard.supports(p.identity.id))add(`Ver sessões${p.identity.sessions?' · '+p.identity.sessions:''}`,()=>showTasks(p.identity.id,'sessions'));
+  if(p.identity.id!==SPOTIFY_ID&&(p.identity.sessions||taskBoard.supports(p.identity.id)))add(`Ver sessões${p.identity.sessions?' · '+p.identity.sessions:''}`,()=>showTasks(p.identity.id,'sessions'));
   if(delegatedRequest(p.identity.id))add("Preparar pedido no Codex",()=>void emitToWindow("island",PET_EVENTS.delegate,{pet:p.identity.id}));
   if (p.identity.id === "ai_ollama") {
     add(t("Dictation"), () => void FlowBridge.pillAction("dictate"));
@@ -363,7 +512,7 @@ function showMenu(p: PetLife) {
   add(snapshot.paused ? t("Resume companions") : t("Pause companions"), () => {
     void emitToWindow("island", PET_EVENTS.action, { action: "pause" });
   });
-  add("Gerir pet e modelos", () => void Bridge.petPanelOpen(p.x,(snapshot.band?.height??40)+8,p.identity.id,"providers"));
+  add(p.identity.id===SPOTIFY_ID?"Configurar Spoty":"Gerir pet e modelos", () => void Bridge.petPanelOpen(p.x,(snapshot.band?.height??40)+8,p.identity.id,p.identity.id===SPOTIFY_ID?"profiles":"providers"));
   menu.style.left = `${Math.max(0, Math.min(world.width - 170, p.x - 76))}px`;
   menu.style.top = `${p.y + 40}px`;
   menu.hidden = false;
@@ -387,13 +536,24 @@ function create(p: PetLife): PetView {
   button.addEventListener("click", () => {
     if (suppressClick) { suppressClick = false; return; }
     if(['approval','question'].includes(activityPhase(p))){open(p);return;}
+    if(hoverOpened===p.identity.id&&petPointers.get(p.identity.id)?.inside){hoverOpened=null;return;}
     if (snapshot.presented === p.identity.id) {
       pendingPresentation = null;
+      consumeHoverRecovery();
       void emitToWindow("island", "companions-hide-popup");
     } else open(p);
   });
-  button.addEventListener("pointerenter", () => { world.hovered = p.identity.id; wake(); });
-  button.addEventListener("pointerleave", () => { if (menu.hidden && !dragging) { world.hovered = null; wake(); } });
+  button.addEventListener("pointerenter", event => {
+    if(nativePetInside===false)return;
+    const pointer=petPointers.get(p.identity.id);
+    if(recoveredHover?.id===p.identity.id&&pointer?.inside&&pointer.context===recoveredHover.context){world.hovered=p.identity.id;wake();return;}
+    reportPetPointer(p.identity.id,true);world.hovered=p.identity.id;wake();
+    // WebKit also sends trusted boundary events when a moving pet passes under
+    // a stationary (or stale) pointer. Only a trusted move on this entry opens.
+    hoverEntry=event.isTrusted&&canHoverOpen(p.identity.id)?{id:p.identity.id,context:petPointers.get(p.identity.id)!.context}:null;
+  });
+  button.addEventListener('mousemove',event=>rememberPetMove(p,event));
+  button.addEventListener("pointerleave", () => { clearHoverEvidence();reportPetPointer(p.identity.id,false);if (menu.hidden && !dragging) { world.hovered = null; wake(); } });
   button.addEventListener("contextmenu", e => { e.preventDefault(); showMenu(p); });
   button.addEventListener("pointerdown", e => {
     if (e.button !== 0) return;
@@ -436,10 +596,11 @@ void onDragDrop(event=>{
   fileTarget=element?.closest<HTMLElement>('[data-pet-id]')?.dataset.petId??null;
  }
  for(const [id,view]of views)view.button.dataset.fileOver=String(id===fileTarget && event.type!=='leave' && event.type!=='drop');
- if(event.type==='leave'){fileTarget=null;receivingPet=null;world.hovered=null;wake();return;}
+ if(event.type==='leave'){if(receivingPet)reportPetPointer(receivingPet,false);fileTarget=null;receivingPet=null;world.hovered=null;wake();return;}
  if(fileTarget){world.hovered=fileTarget;world.touch(fileTarget,performance.now()/1000);wake();}
  if((event.type==='over'||event.type==='enter')&&fileTarget&&receivingPet!==fileTarget){
-  receivingPet=fileTarget;const p=world.pets.get(fileTarget);
+  if(receivingPet&&receivingPet!==fileTarget)reportPetPointer(receivingPet,false);
+  receivingPet=fileTarget;reportPetPointer(fileTarget,true);const p=world.pets.get(fileTarget);
   if(p&&petCapabilities(fileTarget).chat)open(p,'upload');
  }
  if(event.type!=='drop')return;
@@ -449,11 +610,16 @@ void onDragDrop(event=>{
  const provider=petCapabilities(pet).chat;
  if(!provider){feedback('Este pet acompanha a aplicação, mas ainda não recebe documentos. Escolhe um pet com conversa.');return;}
  if(event.paths?.length!==1){feedback('Entrega um ficheiro de cada vez ao pet.');return;}
- void Bridge.ingestFile(event.paths[0],provider,undefined,event.dropId).then(async file=>{
+ const context=event.dropId??crypto.randomUUID();
+ void (async()=>{
+ await emitToWindow('island','pet-card-document-hold',{pillId:pet,context,holding:true});
+ try{const file=await Bridge.ingestFile(event.paths![0],provider,undefined,event.dropId);
   const p=world.pets.get(pet);if(p)world.touch(pet,performance.now()/1000);
   await emitToWindow('island','pet-document',{pet,file});
   feedback(`${file.name} recebido. Escolhe o que este pet deve fazer com o documento.`,'choose');
- }).catch(error=>feedback(String(error).replace(/^Error:\s*/,'')));
+ }catch(error){feedback(String(error).replace(/^Error:\s*/,''));}
+ finally{await emitToWindow('island','pet-card-document-hold',{pillId:pet,context,holding:false});}
+ })();
 });
 
 function input(now: number, force = false) {
@@ -572,7 +738,9 @@ function draw(p: PetLife, v: PetView, dt: number, now: number) {
   button.dataset.attention = String(p.identity.attention||quotaWarning);
   button.dataset.quota=quota?.status??'unknown';
   const description = `${p.identity.name} · ${p.identity.session?.decisionInTerminal&&['approval','question'].includes(phase)?'À espera da tua resposta no terminal':phaseLabel(phase)}${quota?' · '+quota.text:''}`;
-  if (button.title !== description) { button.title = description; button.setAttribute("aria-label", description); }
+  const hint=`${p.identity.name} · ${phaseLabel(phase)}`;
+  if(button.title!==hint)button.title=hint;
+  if(button.getAttribute('aria-label')!==description)button.setAttribute("aria-label",description);
   if (label.textContent !== p.identity.name) label.textContent = p.identity.name;
 }
 
@@ -608,17 +776,26 @@ function frame() {
 async function start() {
   await taskBoard.init();
   await registerVoiceSpeech("companions");
+  const projectDecisions=()=>{
+    const now=performance.now()/1000;
+    // Native requests arrive independently of the periodic habitat snapshot.
+    // Project their current phase before choosing the pet's dialogue owner.
+    world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented??shownNotice?.pet,motion:world.motion},window.innerWidth,now);
+    refreshDialogue();input(now,true);
+    if(timer!==null)window.clearTimeout(timer);
+    timer=null;wake();
+  };
   const rememberDecision=(request:{id:string;provider:string;kind:string;target?:import('../core/session-chat').SessionTarget})=>{
     if(endedDecisions.has(request.id))return;
     const pet=request.target?.petId??taskPet(request.provider.toLowerCase())??({copilot:"agent_copilot"} as Record<string,string>)[request.provider.toLowerCase()];
-    if(pet)decisions.set(request.id,{pet,phase:request.kind==="question"?"question":"approval",target:request.target});
-    refreshDialogue();wake();
+    if(pet&&!decisions.has(request.id))decisions.set(request.id,{pet,phase:request.kind==="question"?"question":"approval",target:request.target?Object.freeze({...request.target}):undefined});
+    projectDecisions();
   };
   await onEvent("agent-request",rememberDecision);
   await onEvent<{id:string}>("agent-request-ended", request=>{
     const decision=decisions.get(request.id);decisions.delete(request.id);endedDecisions.add(request.id);if(endedDecisions.size>256)endedDecisions.delete(endedDecisions.values().next().value!);
     if(decision)pendingFold={pet:decision.pet,until:performance.now()+3000};
-    refreshDialogue();wake();
+    projectDecisions();
   });
   void Bridge.cliAgentPending().then(requests=>requests.forEach(rememberDecision)).catch(error=>console.error('Não foi possível recuperar os pedidos pendentes.',error));
   await onEvent<PetActivity>("pet-activity", value => {
@@ -643,30 +820,37 @@ async function start() {
         (state.phase === "thinking" ? t("Thinking…") : state.noteStartedAt ? t("Notetaker") : t("Listening"))}, true);
     } else voiceBubble(null, true);
   });
-  await onEvent<{ id: string; view?: string }>("companions-present", e => {
+  await onEvent<{ id: string; view?: string; manual?:boolean }>("companions-present", e => {
     if (!e.id) return;
     pendingPresentation = { ...e, until: performance.now() + 10000 };
     presentPending();
   });
+  await onEvent<boolean>("companions-pointer-inside",inside=>{
+    nativePetInside=inside;
+    if(!inside){pointerPosition=null;outsideObserved=nativeVisible&&!document.hidden&&snapshot.enabled;recoveredHover=null;armHoverRecovery();releasePetPointers();}
+  });
+  await onEvent<{x:number;y:number}>("companions-pointer-position",recoverPetPointer);
   await onEvent<boolean>("companions-visible", visible => {
-    nativeVisible = visible;
+    resetHoverRecovery();
+    nativeVisible = visible;if(!visible)releasePetPointers();
     taskBoard.setVisible(visible && snapshot.enabled);
     if (!visible && timer != null) { window.clearTimeout(timer); timer = null; }
     if (visible) { void emitToWindow("island",PET_EVENTS.ready);presentPending();showNextNotice();wake(); }
-    refreshShelter();
+    refreshShelter();refreshDialogue();input(performance.now()/1000,true);
   });
   await onEvent<CompanionsSnapshot>(PET_EVENTS.state, s => {
     const previousPresentation=snapshot.presented;
+    const previousEnabled=snapshot.enabled,previousPaused=snapshot.paused;
     snapshot = s;
+    if(previousEnabled!==s.enabled)resetHoverRecovery();
+    if(previousPresentation!==s.presented||previousPaused!==s.paused)armHoverRecovery();
+    if(s.paused){hoverRecoveryArmed=false;clearHoverEvidence();}
     taskBoard.setExternal(s.pets);
     taskBoard.setVisible(s.enabled && nativeVisible);
     if(s.presented)taskBoard.hide();
-    const room=shelterLayout(s.band,(s.catalog??s.pets).length,false);taskBoard.position(room?room.left+16:world.width/2,(s.band?.height??64)+8,window.innerWidth);
+    const room=s.control?null:shelterLayout(s.band,(s.catalog??s.pets).length,false);taskBoard.position(room?room.left+16:world.width/2,(s.band?.height??64)+8,window.innerWidth);
     if(s.presented&&s.presented!==previousPresentation)shelterOpen=false;
-    for(const pet of s.pets) if(pet.message) {
-      const key=JSON.stringify([pet.message,pet.activity]);
-      if(nativeSpeech.get(pet.id)?.key!==key)nativeSpeech.set(pet.id,{text:pet.message,at:performance.now(),key,origin:pet.session?sessionLabel({sessionId:pet.session.id,sessionCwd:pet.session.cwd,sessionTitle:pet.session.title,sessionOwned:pet.session.owned}):''});
-    }
+    for(const pet of s.pets){const before=nativeSpeech.get(pet.id);nativeMessages.observe(pet,performance.now());const speech=nativeSpeech.get(pet.id);if(speech&&speech!==before)locateSpeech(speech);}
     refreshShelter();
     setLanguage(resolveLanguage(s.language ?? "", systemLanguages()));
     if (!s.enabled || (menuPet && !s.pets.some(p=>p.id===menuPet))) closeMenu();
@@ -687,11 +871,13 @@ async function start() {
     }
     if (timer != null) window.clearTimeout(timer);
     timer = null;
-    if (!s.enabled) { root.hidden = true; input(performance.now() / 1000, true); }
+    if (!s.enabled) { releasePetPointers();root.hidden = true; input(performance.now() / 1000, true); }
     else { root.hidden = false; last = performance.now() / 1000; wake(); }
   });
   document.addEventListener("visibilitychange", () => {
+    resetHoverRecovery();
     if (document.hidden) {
+      releasePetPointers();
       if (timer != null) window.clearTimeout(timer);
       timer = null;
     } else wake();
@@ -699,6 +885,7 @@ async function start() {
   document.addEventListener("pointerdown", e => { if (e.target === document.body) { closeMenu(); wake(); } });
   reducedMotion.addEventListener("change", () => { world.motion = snapshot.motion && !reducedMotion.matches; wake(); });
   window.addEventListener("resize", () => {
+    pointerPosition=null;clearHoverEvidence();
     world.sync({ ...activeSnapshot(snapshot), motion: snapshot.motion && !reducedMotion.matches }, window.innerWidth, performance.now() / 1000);
     wake();
   });

@@ -3,8 +3,9 @@ import {PetPreferences,petName} from "../mochi/pet-preferences";
 import {Bridge,onEvent} from "../core/bridge";
 import {mergeTasks,orderedTasks,taskCanStop,taskLabel,taskName,taskPet,taskProvider,taskRecoverable,taskRunning,type AssistantTask} from "../mochi/tasks";
 import type {PetIdentity} from "../mochi/companions";
+import {taskExecution} from '../views/task-execution';
 
-interface Row {el:HTMLElement;title:HTMLElement;status:HTMLElement;context:HTMLElement;progress:HTMLElement;result:HTMLElement;stop:HTMLButtonElement;resume:HTMLButtonElement;review:HTMLButtonElement;terminal:HTMLButtonElement;folder:HTMLElement;folderToggle:HTMLButtonElement;folderApply:HTMLButtonElement}
+interface Row {el:HTMLElement;title:HTMLElement;status:HTMLElement;context:HTMLElement;progress:HTMLElement;result:HTMLElement;stop:HTMLButtonElement;resume:HTMLButtonElement;review:HTMLButtonElement;terminal:HTMLButtonElement;folder:HTMLElement;folderToggle:HTMLButtonElement;folderApply:HTMLButtonElement;execution:ReturnType<typeof taskExecution>}
 /** Explicit supervision surface. No model is started by opening or refreshing it. */
 export class TaskBoard {
   readonly el=document.createElement("aside");
@@ -41,7 +42,7 @@ export class TaskBoard {
   get hidden(){return this.el.hidden;}
   get activeCount(){return this.allTasks.filter(taskRunning).length;}
   get needsAttention(){return this.allTasks.some(t=>["approval","question","interrupted","failed","error","ratelimit"].includes(t.phase));}
-  supports(pet:string){return !!taskProvider(pet) || this.external.some(t=>t.petId===pet);}
+  supports(pet:string){return pet!=='integration_spotify'&&(!!taskProvider(pet) || this.external.some(t=>t.petId===pet));}
   setExternal(pets:readonly PetIdentity[]) {
     const previous=new Map(this.external.map(t=>[t.id,t]));
     this.external=pets.filter(p=>p.session && !p.session.owned).map(p=>{
@@ -100,8 +101,8 @@ export class TaskBoard {
       terminal.disabled=true;this.error.hidden=true;
       void Bridge.petFocusSession(task.backend,task.sessionId).catch(error=>{this.error.textContent=String(error).replace(/^Error:\s*/,'');this.error.hidden=false;}).finally(()=>terminal.disabled=false);
     };
-    actions.append(stop,resume,folderToggle,review,terminal);el.append(title,status,context,progress,details,actions,folder);
-    return {el,title,status,context,progress,result,stop,resume,review,terminal,folder,folderToggle,folderApply};
+    const execution=taskExecution();actions.append(stop,resume,folderToggle,review,terminal);el.append(title,status,context,progress,execution.el,details,actions,folder);
+    return {el,title,status,context,progress,result,stop,resume,review,terminal,folder,folderToggle,folderApply,execution};
   }
   private draw() {
     this.title.textContent=this.filter?`Tarefas · ${taskName(this.filter)}`:"Centro de tarefas";
@@ -117,6 +118,7 @@ export class TaskBoard {
       const folder=task.cwd.split(/[\\/]/).filter(Boolean).at(-1)??task.cwd;
       row.context.textContent=[folder,task.origin==="external"?"CLI externo":task.backend!==task.provider?`via ${taskName(task.backend)}`:"",task.origin!=="external"?(task.model||"modelo definido na CLI"):""].filter(Boolean).join(" · ");row.context.title=task.cwd;
       row.progress.textContent=task.progress;row.progress.hidden=!task.progress || task.phase==="done";
+      row.execution.sync(task);
       row.result.textContent=task.result;row.result.parentElement!.hidden=!task.result;
       row.stop.hidden=!taskCanStop(task);row.stop.disabled=task.phase==="stopping";
       row.terminal.hidden=task.origin!=="external";

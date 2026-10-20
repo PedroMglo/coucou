@@ -30,4 +30,9 @@ export function sessionTree(sessions:ManagedSession[],providers:ManagedProvider[
  }
  return result;
 }
-export const inventoryProvider=(pet:string)=>({agent_codex:'codex',agent_copilot:'copilot',agent_gemini:'gemini',integration_claude:'claude',ai_ollama:'ollama',agent_opencode:'opencode',ai_lmstudio:'lmstudio'} as Record<string,string>)[pet]??(pet.startsWith('integration_')?'codex':'');
+/** A logical service owner does not identify its physical provider. Unknown
+ * selections stay explicit rather than becoming Codex or All providers. */
+export function inventoryProvider(pet:string,binding?:string|null):string {
+ if(binding&&/^[a-z0-9_-]{1,64}$/.test(binding))return ({'gemini-cli':'gemini','claude-cli':'claude'} as Record<string,string>)[binding]??binding;
+ return ({agent_codex:'codex',agent_copilot:'copilot',agent_antigravity:'antigravity',agent_gemini:'gemini',integration_claude:'claude',ai_ollama:'ollama',agent_opencode:'opencode',ai_lmstudio:'lmstudio'} as Record<string,string>)[pet]??pet;
+}

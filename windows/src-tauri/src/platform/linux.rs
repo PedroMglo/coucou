@@ -18,7 +18,7 @@ use std::sync::Mutex;
 
 use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
-use tauri::{AppHandle, WebviewWindow};
+use tauri::{WebviewWindow,Manager as _};
 
 use super::{home_dir, LocalTime};
 
@@ -327,6 +327,7 @@ mod layer {
     #[link(name = "gtk-layer-shell")]
     extern "C" {
         pub fn gtk_layer_is_supported() -> c_int;
+        pub fn gtk_layer_is_layer_window(window: *mut GtkWindow) -> c_int;
         pub fn gtk_layer_init_for_window(window: *mut GtkWindow);
         pub fn gtk_layer_set_namespace(window: *mut GtkWindow, name_space: *const c_char);
         pub fn gtk_layer_set_layer(window: *mut GtkWindow, layer: c_int);
@@ -356,9 +357,6 @@ fn gtk_window_ptr(win: &gtk::ApplicationWindow) -> *mut gtk::ffi::GtkWindow {
     let w: &gtk::Window = win.upcast_ref();
     w.to_glib_none().0
 }
-
-/// WebKitGTK has no competing drop target to remove.
-pub fn unblock_webview_drops(_app: &AppHandle) {}
 
 /// Turns the island into an overlay surface on the top edge that never takes
 /// the keyboard. Must run before the window is first shown: a layer surface
@@ -462,7 +460,7 @@ thread_local! {
 /// for good, and GTK's leave-notify fires spuriously while the pointer is still
 /// over the island (each followed by a re-enter), so neither tells "really
 /// gone". GDK's pointer focus does: it follows the compositor's wl_pointer
-/// enter/leave. It is read every 100 ms while the island is shown; both edges go
+/// enter/leave. It is read every 33 ms while the island is shown; both edges go
 /// to the page as `pointer-inside`, and leaving also emits the far-away cursor
 /// the page uses. While the island is hidden the timer is removed altogether
 /// (set_pointer_watch), so a hidden island costs nothing.
@@ -495,7 +493,7 @@ fn start_pointer_watch() {
         return;
     };
     let inside = std::cell::Cell::new(false);
-    gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+    gtk::glib::timeout_add_local(std::time::Duration::from_millis(33), move || {
         if !WATCH_WANTED.load(Ordering::Relaxed) {
             WATCH_RUNNING.store(false, Ordering::Relaxed);
             return gtk::glib::ControlFlow::Break;
@@ -530,10 +528,15 @@ fn start_pointer_watch() {
 /// to the other every time it was remapped. A no-op for a regular window, which
 /// `set_position` already places.
 pub fn pin_to_monitor(win: &WebviewWindow, x: i32, y: i32) {
-    if !LAYER_SURFACE.load(Ordering::Relaxed) {
-        return;
-    }
-    let Ok(gw) = win.gtk_window() else { return };
+    let _=pin_layer_to_monitor(win,x,y);
+}
+
+/// Select this layer's output by the requested logical origin. A child pet
+/// surface must not inherit the output of the hidden card window: that card
+/// can still be on the previous display while its geometry is parked.
+pub fn pin_layer_to_monitor(win:&WebviewWindow,x:i32,y:i32)->bool {
+    let Ok(gw) = win.gtk_window() else { return false };
+    if unsafe{layer::gtk_layer_is_layer_window(gtk_window_ptr(&gw))}==0{return false;}
     let display = gw.display();
     let monitor = (0..display.n_monitors())
         .filter_map(|i| display.monitor(i))
@@ -541,9 +544,10 @@ pub fn pin_to_monitor(win: &WebviewWindow, x: i32, y: i32) {
             let g = m.geometry();
             g.x() == x && g.y() == y
         });
-    let Some(monitor) = monitor else { return };
+    let Some(monitor) = monitor else { return false };
     let mon_ptr: *mut gtk::gdk::ffi::GdkMonitor = monitor.to_glib_none().0;
     unsafe { layer::gtk_layer_set_monitor(gtk_window_ptr(&gw), mon_ptr) };
+    true
 }
 
 /// Temporarily allow keyboard focus so a text field inside the island can be
@@ -553,7 +557,7 @@ pub fn set_activating(win: &WebviewWindow, activating: bool) {
     // The island is created `focusable: false` (tauri.linux.conf.json), so GTK
     // refuses focus until we say otherwise — on a layer surface too.
     gw.set_accept_focus(activating);
-    if LAYER_SURFACE.load(Ordering::Relaxed) {
+    if unsafe { layer::gtk_layer_is_layer_window(gtk_window_ptr(&gw)) } != 0 {
         let mode = if activating { layer::KEYBOARD_ON_DEMAND } else { layer::KEYBOARD_NONE };
         unsafe { layer::gtk_layer_set_keyboard_mode(gtk_window_ptr(&gw), mode) };
     }
@@ -565,6 +569,80 @@ pub fn set_input_region(win: &WebviewWindow, rect: Region) {
     *INPUT_REGION.lock().unwrap() = rect;
     let Ok(gw) = win.gtk_window() else { return };
     apply_input_region(&gw, rect);
+}
+
+/// Reset a card's native logical allocation after output/scale changes. This
+/// touches only the actual captured island objects, with no show/remap/focus.
+/// Each write checks the current geometry and native owner; no old mask is kept.
+pub(crate) fn resize_island_native_view(win:&WebviewWindow,width:f64,height:f64,stamp:crate::island::GeometryStamp){
+    if win.label()!=crate::island::WINDOW_LABEL{return;}
+    let Some((width,height))=crate::island::native_logical_size(width,height)else{return;};
+    let app=win.app_handle().clone();
+    let _=win.with_webview(move|platform|{
+        let view=platform.inner().upcast::<gtk::Widget>();
+        let Some(gw)=view.toplevel().and_then(|w|w.downcast::<gtk::ApplicationWindow>().ok())else{return;};
+        let current=||{
+            !gw.in_destruction()&&!view.in_destruction()
+                &&ISLAND_GTK.with(|slot|slot.borrow().as_ref().is_some_and(|registered|registered==&gw))
+                &&view.toplevel().is_some_and(|top|top==gw.clone().upcast::<gtk::Widget>())
+                &&stamp.current(&app)
+        };
+        if !current(){return;}view.set_size_request(width,height);
+        if !current(){return;}gw.set_resizable(true);
+        if !current(){return;}gw.set_default_size(width,height);
+        if !current(){return;}gw.resize(width,height);
+        if !current(){return;}view.queue_resize();
+        if !current(){return;}view.queue_draw();
+        if !current(){return;}gw.queue_draw();
+        // Resize may invalidate the GDK shape. Reapply only CURRENT input, with
+        // no region mutex across native writes or synchronous callbacks.
+        refresh_island_region(current,||*INPUT_REGION.lock().unwrap(),|region|apply_input_region(&gw,region));
+    });
+}
+
+fn refresh_island_region(mut current:impl FnMut()->bool,mut read:impl FnMut()->Region,mut apply:impl FnMut(Region)){
+    for _ in 0..8{
+        if !current(){return;}let region=read();
+        if !current(){return;}apply(region);
+        if !current(){return;}if read()==region{return;}
+    }
+    // Nonconvergent callbacks cannot leave an old expanded mask behind. Clear
+    // this actual current surface only; never hide/show it or grant focus.
+    if current(){apply(Some((0.,0.,0.,0.)));}
+}
+
+#[cfg(test)]mod island_resize_tests{
+    use super::*;
+    use std::cell::{Cell,RefCell};
+    #[test]fn resize_shape_repair_uses_latest_policy_after_a_causal_close(){
+        let expanded=Some((10.,10.,600.,500.));let closed=Some((0.,0.,0.,0.));
+        let policy=Cell::new(expanded);let writes=RefCell::new(Vec::new());
+        refresh_island_region(||true,||policy.get(),|r|{writes.borrow_mut().push(r);policy.set(closed);});
+        assert_eq!(*writes.borrow(),vec![expanded,closed]);
+    }
+    #[test]fn resize_shape_repair_never_writes_after_owner_or_geometry_is_lost(){
+        let valid=Cell::new(true);let writes=Cell::new(0);
+        refresh_island_region(||false,||panic!("read after loss"),|_|panic!("write after loss"));
+        refresh_island_region(||valid.get(),||Some((1.,1.,2.,2.)),|_|{writes.set(writes.get()+1);valid.set(false);});
+        assert_eq!(writes.get(),1);assert!(!valid.get());
+    }
+    #[test]fn resize_shape_repair_revalidates_after_policy_read_before_native_write(){
+        let valid=Cell::new(true);let reads=Cell::new(0);let writes=Cell::new(0);
+        refresh_island_region(||valid.get(),||{
+            reads.set(reads.get()+1);valid.set(false);Some((10.,10.,600.,500.))
+        },|_|writes.set(writes.get()+1));
+        assert_eq!(reads.get(),1);assert_eq!(writes.get(),0);
+    }
+    #[test]fn resize_shape_repair_keeps_closed_input_and_does_not_reveal_a_card(){
+        let closed=Some((0.,0.,0.,0.));let writes=RefCell::new(Vec::new());
+        refresh_island_region(||true,||closed,|r|writes.borrow_mut().push(r));
+        assert_eq!(*writes.borrow(),vec![closed]);
+    }
+    #[test]fn resize_shape_repair_bounds_churn_and_clears_only_current_surface(){
+        let policy=Cell::new(Some((1.,1.,2.,2.)));let writes=RefCell::new(Vec::new());
+        refresh_island_region(||true,||policy.get(),|r|{writes.borrow_mut().push(r);let mut next=r.unwrap();next.0+=1.;policy.set(Some(next));});
+        let writes=writes.borrow();assert_eq!(writes.len(),9);assert_eq!(writes.last(),Some(&Some((0.,0.,0.,0.))));
+    }
 }
 
 fn apply_input_region(gw: &impl IsA<gtk::Widget>, rect: Region) {
@@ -954,6 +1032,65 @@ fn apply_rects(gw: &impl IsA<gtk::Widget>, rects: &[(f64, f64, f64, f64)]) {
 // The companions habitat has its own shape; never share the microphone pill's
 // region or the single desktop Mochi's region with this surface.
 static COMPANIONS_SHAPE: Mutex<Vec<(f64, f64, f64, f64)>> = Mutex::new(Vec::new());
+thread_local! {static COMPANIONS_POINTER_WATCH:std::cell::RefCell<Option<gtk::glib::SourceId>>=const{std::cell::RefCell::new(None)};}
+
+/// A Wayland input mask can lose DOM pointerleave entirely. Report native
+/// pointer ownership while the habitat has visible hit regions, and park the
+/// observer when hidden/empty. This carries no keyboard or pet authority.
+fn companions_pointer_coordinates(ours:&gtk::gdk::Window,mut under:gtk::gdk::Window,mut x:f64,mut y:f64)->Option<(f64,f64)>{
+    // Follow GDK's child/embedder transforms; coordinates are already logical.
+    // A malformed or unexpectedly detached hierarchy cannot keep us looping.
+    for _ in 0..64 {
+        if &under==ours{return Some((x,y));}
+        (x,y)=under.coords_to_parent(x,y);
+        under=under.effective_parent()?;
+    }
+    None
+}
+
+fn watch_companions_pointer(win:&WebviewWindow,gw:&gtk::ApplicationWindow,active:bool){
+    use tauri::Emitter;
+    COMPANIONS_POINTER_WATCH.with(|slot|{
+        if !active {
+            if let Some(source)=slot.borrow_mut().take(){
+                source.remove();
+                let _=win.emit("companions-pointer-inside",false);
+            }
+            return;
+        }
+        if slot.borrow().is_some(){return;}
+        let win=win.clone();let gw=gw.clone();let inside=std::cell::Cell::new(None);
+        let source=gtk::glib::timeout_add_local(std::time::Duration::from_millis(33),move||{
+            let position=(||{
+                let ours=gw.window()?;let pointer=gw.display().default_seat()?.pointer()?;
+                // Query the pointer's actual window, not the queried habitat's
+                // child hit-test. On Wayland the latter can be None even when
+                // the pointer focus is the habitat toplevel itself.
+                let(under,x,y)=pointer.window_at_position_double();
+                let under=under?;
+                if !gw.is_visible()||under.toplevel()!=ours.toplevel(){return None;}
+                // GDK may return a WebKit child with child-relative coordinates.
+                // Keep ownership even if its transform cannot reach our window;
+                // unusable coordinates must never recover a pet's pointer hold.
+                Some(companions_pointer_coordinates(&ours,under,x,y)
+                    .map(|(x,y)|(x,y,ours.width(),ours.height())))
+            })();
+            let now_inside=position.is_some();
+            if inside.replace(Some(now_inside))!=Some(now_inside){
+                let _=win.emit("companions-pointer-inside",now_inside);
+                // This observation alone cannot open a pet. A fresh opening
+                // also requires the page's matching trusted pointer movement.
+                if let Some(Some((x,y,width,height)))=position{
+                    if x.is_finite()&&y.is_finite()&&x>=0.0&&y>=0.0&&x<f64::from(width)&&y<f64::from(height){
+                        let _=win.emit("companions-pointer-position",crate::island::CursorPayload{x,y});
+                    }
+                }
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+        *slot.borrow_mut()=Some(source);
+    });
+}
 
 pub fn prepare_companions_window(win: &WebviewWindow, mode: super::DesktopMode) -> bool {
     use tauri::Emitter;
@@ -980,9 +1117,9 @@ pub fn prepare_companions_window(win: &WebviewWindow, mode: super::DesktopMode) 
         gw.set_keep_above(true);
     } else { return false; }
     let hidden = win.clone();
-    gw.connect_hide(move |_| { let _ = hidden.emit("companions-visible", false); });
+    gw.connect_hide(move |w| { watch_companions_pointer(&hidden,w,false);let _ = hidden.emit("companions-visible", false); });
     let shown = win.clone();
-    gw.connect_show(move |_| { let _ = shown.emit("companions-visible", true); });
+    gw.connect_show(move |w| { watch_companions_pointer(&shown,w,!COMPANIONS_SHAPE.lock().unwrap().is_empty());let _ = shown.emit("companions-visible", true); });
     let remapped = std::cell::Cell::new(false);
     gw.connect_map_event(move |w, _| {
         apply_rects(w, &COMPANIONS_SHAPE.lock().unwrap());
@@ -1001,12 +1138,15 @@ pub fn prepare_companions_window(win: &WebviewWindow, mode: super::DesktopMode) 
 
 pub fn set_companions_input(win: &WebviewWindow, rects: Vec<(f64, f64, f64, f64)>) {
     *COMPANIONS_SHAPE.lock().unwrap() = rects.clone();
-    if let Ok(gw) = win.gtk_window() { apply_rects(&gw, &rects); }
+    if let Ok(gw) = win.gtk_window() {
+        apply_rects(&gw, &rects);
+        watch_companions_pointer(win,&gw,gw.is_visible()&&!rects.is_empty());
+    }
 }
 
 /// An explicitly opened shelter popout can take keyboard focus for search.
 static PET_CONTROL_SHAPE:Mutex<Vec<(f64,f64,f64,f64)>>=Mutex::new(Vec::new());
-static PET_CONTROL_EXPANDED:AtomicBool=AtomicBool::new(false);
+static PET_CONTROL_KEYBOARD:AtomicBool=AtomicBool::new(false);
 thread_local! {static PET_CONTROL_POINTER_WATCH:std::cell::RefCell<Option<gtk::glib::SourceId>>=const{std::cell::RefCell::new(None)};}
 /// WebKitGTK loses DOM pointerleave when a Wayland input region is left.
 /// Observe compositor focus only while expanded; compact/hidden uses no timer.
@@ -1026,34 +1166,60 @@ fn watch_pet_control_pointer(win:&WebviewWindow,gw:&gtk::ApplicationWindow,expan
   *slot.borrow_mut()=Some(source);
  });
 }
-pub fn set_pet_control_input(win:&WebviewWindow,rects:Vec<(f64,f64,f64,f64)>,expanded:bool){
- *PET_CONTROL_SHAPE.lock().unwrap()=rects.clone();
- if let Ok(gw)=win.gtk_window(){
-  apply_rects(&gw,&rects);
-  watch_pet_control_pointer(win,&gw,expanded);
-  if PET_CONTROL_EXPANDED.swap(expanded,Ordering::Relaxed)!=expanded {
-   gw.set_accept_focus(expanded);
-   if desktop_mode()==super::DesktopMode::Layer {unsafe{layer::gtk_layer_set_keyboard_mode(gtk_window_ptr(&gw),if expanded{layer::KEYBOARD_ON_DEMAND}else{layer::KEYBOARD_NONE});}}
-   if expanded{let _=win.set_focus();}
-  }
+thread_local! {static PET_CONTROL_NATIVE_WINDOW:std::cell::RefCell<Option<gtk::glib::WeakRef<gtk::ApplicationWindow>>>=const{std::cell::RefCell::new(None)};}
+fn pet_control_current_native(gw:&gtk::ApplicationWindow)->bool{
+ PET_CONTROL_NATIVE_WINDOW.with(|s|s.borrow().as_ref().and_then(|w|w.upgrade()).is_some_and(|w|w==*gw))
+}
+pub fn set_pet_control_input(win:&WebviewWindow,rects:Vec<(f64,f64,f64,f64)>,expanded:bool,keyboard:bool){
+ if let Ok(gw)=win.gtk_window(){set_pet_control_native_input(win,&gw,rects,expanded,keyboard);}
+}
+/// Scoped actual GTK target; a late callback cannot retarget a same-label window.
+/// The binding sequencer resamples policy after this unlocked native operation.
+pub fn set_pet_control_native_input(win:&WebviewWindow,gw:&gtk::ApplicationWindow,rects:Vec<(f64,f64,f64,f64)>,expanded:bool,keyboard:bool){
+ if !pet_control_current_native(gw){return;}
+ *PET_CONTROL_SHAPE.lock().unwrap()=rects.clone();apply_rects(gw,&rects);
+ if !pet_control_current_native(gw){return;}
+ watch_pet_control_pointer(win,gw,expanded&&gw.is_visible()&&gw.is_mapped());
+ if !pet_control_current_native(gw){return;}
+ let activating=expanded&&keyboard&&gw.is_visible()&&gw.is_mapped()&&rects.iter().any(|r|r.2>0.0&&r.3>0.0);
+ if PET_CONTROL_KEYBOARD.swap(activating,Ordering::Relaxed)!=activating {
+  gw.set_accept_focus(activating);
+  if !pet_control_current_native(gw){return;}
+  if desktop_mode()==super::DesktopMode::Layer{unsafe{layer::gtk_layer_set_keyboard_mode(gtk_window_ptr(gw),if activating{layer::KEYBOARD_ON_DEMAND}else{layer::KEYBOARD_NONE});}}
+  if activating&&pet_control_current_native(gw){gw.present();}
  }
 }
+/// Synchronous native loss notification. No Tauri lookup and no Core lock.
+fn revoke_pet_control_activity(gw:&gtk::ApplicationWindow){
+ if !pet_control_current_native(gw){return;}
+ PET_CONTROL_POINTER_WATCH.with(|slot|{if let Some(source)=slot.borrow_mut().take(){source.remove();}});
+ PET_CONTROL_KEYBOARD.store(false,Ordering::Relaxed);gw.set_accept_focus(false);
+ if pet_control_current_native(gw)&&desktop_mode()==super::DesktopMode::Layer{unsafe{layer::gtk_layer_set_keyboard_mode(gtk_window_ptr(gw),layer::KEYBOARD_NONE);}}
+}
 pub fn prepare_pet_control(win:&WebviewWindow)->bool {
- let Ok(gw)=win.gtk_window() else{return false};gw.set_accept_focus(false);
+ let Ok(gw)=win.gtk_window() else{return false};
+ let old=PET_CONTROL_NATIVE_WINDOW.with(|s|s.borrow().as_ref().and_then(|w|w.upgrade()));if let Some(old)=old{revoke_pet_control_activity(&old);}
+ PET_CONTROL_NATIVE_WINDOW.with(|s|*s.borrow_mut()=Some(gw.downgrade()));
+ *PET_CONTROL_SHAPE.lock().unwrap()=Vec::new();PET_CONTROL_KEYBOARD.store(false,Ordering::Relaxed);gw.set_accept_focus(false);
+ gw.connect_hide(revoke_pet_control_activity);gw.connect_unmap(revoke_pet_control_activity);gw.connect_destroy(|w|{
+  if pet_control_current_native(w){revoke_pet_control_activity(w);PET_CONTROL_NATIVE_WINDOW.with(|s|{s.borrow_mut().take();});}
+ });
  if desktop_mode()==super::DesktopMode::Layer {
   if gw.is_realized(){return false;}
   gw.set_titlebar(None::<&gtk::Widget>);let ptr=gtk_window_ptr(&gw);
   unsafe{layer::gtk_layer_init_for_window(ptr);layer::gtk_layer_set_namespace(ptr,c"coucou-pet-control".as_ptr());layer::gtk_layer_set_layer(ptr,layer::LAYER_OVERLAY);layer::gtk_layer_set_anchor(ptr,layer::EDGE_TOP,1);layer::gtk_layer_set_anchor(ptr,layer::EDGE_LEFT,1);layer::gtk_layer_set_exclusive_zone(ptr,-1);layer::gtk_layer_set_keyboard_mode(ptr,layer::KEYBOARD_NONE);}
-  let remapped=std::cell::Cell::new(false);
-  gw.connect_map_event(move|w,_|{apply_rects(w,&PET_CONTROL_SHAPE.lock().unwrap());if !remapped.replace(true){let w=w.clone();gtk::glib::idle_add_local_once(move||{w.hide();w.show_all();apply_rects(&w,&PET_CONTROL_SHAPE.lock().unwrap());});}gtk::glib::Propagation::Proceed});
+  // Initial layer remap is sequenced by the native binding after construction,
+  // with actual-object ownership and current Core policy at every native step.
  }else{gw.set_type_hint(gtk::gdk::WindowTypeHint::Dock);gw.set_keep_above(true);}
  true
 }
-pub fn prepare_pet_panel(win:&WebviewWindow)->bool {
- prepare_pet_popup(win,c"coucou-pets-panel")
-}
+#[path="linux_chat.rs"]mod chat_window;
+static PET_CHAT_NORMAL:AtomicBool=AtomicBool::new(false);
+pub fn pet_chat_normal_window()->bool { PET_CHAT_NORMAL.load(Ordering::Relaxed) }
+pub fn place_pet_chat(x:f64,y:f64,width:f64,height:f64){chat_window::place(x,y,width,height);}
 pub fn prepare_pet_chat(win:&WebviewWindow)->bool {
- prepare_pet_popup(win,c"coucou-pet-chat")
+ let normal=chat_window::supported();PET_CHAT_NORMAL.store(normal,Ordering::Relaxed);
+ if normal{chat_window::prepare(win)}else{prepare_pet_popup(win,c"coucou-pet-chat")}
 }
 fn prepare_pet_popup(win:&WebviewWindow,namespace:&std::ffi::CStr)->bool {
  let Ok(gw)=win.gtk_window() else{return false};

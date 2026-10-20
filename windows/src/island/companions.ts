@@ -5,6 +5,8 @@ import {PILL_CATALOG,pillDefinition} from "../core/pills";
 import type {ManagedInventory,ManagedUsage} from '../mochi/management';
 import {QuotaNotices,quotaForPet} from '../mochi/quota-notices';
 import {OllamaModelSelection} from '../core/ollama-selection';
+import {refreshRequestDestinations,requestDestinations} from '../core/request-destinations';
+import {presentRequest} from './request-routing';
 // Island-side adapter. The island still owns every integration and permission;
 // the habitat receives a small presentation snapshot and explicit user clicks.
 import { Bridge, emitToWindow, onEvent } from "../core/bridge";
@@ -19,6 +21,7 @@ export class CompanionsLink {
   private launched = false;
   private key = "";
   private configuration = "";
+  private configurationEpoch = 0;
   private pending = false;
   private dirty = false;
   private showing = false;
@@ -28,10 +31,10 @@ export class CompanionsLink {
   private quotaUsage:ManagedUsage|undefined;
   private quotaNotices=new QuotaNotices();
 
-  private open: (id: string, view?: string) => void;
+  private open: (id: string, view?: string, manual?: boolean) => void;
   private outfit: () => Outfit;
 
-  constructor(open: (id: string, view?: string) => void, outfit: () => Outfit) {
+  constructor(open: (id: string, view?: string, manual?: boolean) => void, outfit: () => Outfit) {
     this.open = open;
     this.outfit = outfit;
   }
@@ -44,7 +47,7 @@ export class CompanionsLink {
     this.supported = await Bridge.companionsConfigure(false, 0) != null;
     if (!this.supported) return;
     const inventory=async()=>{
-      if(this.inventoryPending||!State.settings.companionMode)return;this.inventoryPending=true;
+      if(this.inventoryPending||(!State.settings.companionMode&&!State.petCardsOnly))return;this.inventoryPending=true;
       try{
         const [value,tasks]=await Promise.all([Bridge.petManagement<ManagedInventory>('list'),Bridge.assistantTasks()]);
         if(!value?.sessions)return;
@@ -66,30 +69,41 @@ export class CompanionsLink {
         const task=State.tasks.find(t=>t.id===def.id)!;
         const s=State.petSessions.observe(task,value.backend,value.id,value.cwd??'',!!value.owned);s.sessionTitle=value.title??'';s.hookAt=undefined;
       }
-      if(State.petSessions.choose(value.pet,value.backend,value.id)){State.projectSessions(value.pet);this.open(value.pet,value.view==='finished'?'finished':'overview');}
+      if(State.petSessions.choose(value.pet,value.backend,value.id)){State.projectSessions(value.pet);this.open(value.pet,value.view==='finished'?'finished':'overview',true);}
     });
-    await onEvent<{pillId:string;view?:string}>(PET_EVENTS.summon,value=>{
+    await onEvent<{pillId:string;view?:string}>(PET_EVENTS.summon,async value=>{
       const def=pillDefinition(value.pillId);
-      if(!State.settings.companionMode || !def || !State.isKept(def.id))return;
+      if((!State.settings.companionMode&&!State.petCardsOnly) || !def || !State.isKept(def.id))return;
+      const pending=State.petCardsOnly&&value.view!=='upload'?requestDestinations.forPet(def.id):null;
+      if(pending){void presentRequest(pending);return;}
       State.upsertExternalAgent(def.id,petName(def.id,def.name),def.color);State.notify();
-      this.open(def.id,['upload','prompt','overview'].includes(value.view??'')?value.view:undefined);
+      const task=State.tasks.find(t=>t.id===def.id);
+      if(State.petCardsOnly&&value.view!=='upload'&&task&&['approval','question'].includes(task.state)&&State.pendingApproval?.pillId!==def.id){
+        await refreshRequestDestinations();
+        const destination=requestDestinations.forPet(def.id);
+        if(destination)void presentRequest(destination);
+        else if(task.decisionInTerminal&&task.sessionId&&task.sessionBackend)void Bridge.petFocusSession(task.sessionBackend,task.sessionId).catch(()=>Bridge.petPanelOpen(360,50,def.id,'sessions'));
+        else void Bridge.petPanelOpen(360,50,def.id,'sessions');
+        return;
+      }
+      this.open(def.id,['upload','prompt','overview'].includes(value.view??'')?value.view:undefined,true);
       // Wake the actual pet as well as its card. A dormant catalog entry has
       // no position until the new snapshot reaches the habitat.
-      void emitToWindow('companions','companions-present',{id:def.id,view:value.view??'overview'});
+      if(State.settings.companionMode)void emitToWindow('companions','companions-present',{id:def.id,view:value.view??'overview',manual:true});
     });
     await onEvent<{pet:string;file:DroppedFile}>('pet-document',async value=>{
       const def=pillDefinition(value.pet),provider=providerForPill(value.pet);
-      if(!State.settings.companionMode || !def || !provider || !value.file?.path || !value.file.name)return;
+      if((!State.settings.companionMode&&!State.petCardsOnly) || !def || !provider || !value.file?.path || !value.file.name)return;
       if(value.file.conversationId){const current=await Bridge.chatConversation(provider);if(current.id!==value.file.conversationId)return;}
       const previous=State.fileFor(provider);if(previous?.sequence!==undefined&&value.file.sequence!==undefined&&previous.sequence>value.file.sequence)return;
       State.setFileContext(provider,value.file);
       State.chatFeedback.set(provider,`${value.file.name} recebido por ${petName(def.id,def.name)}.`);
       State.upsertExternalAgent(def.id,petName(def.id,def.name),def.color);
       if(State.pendingApproval?.pillId!==value.pet){
-        this.open(def.id,'choose');
+        this.open(def.id,'choose',true);
         // Replace any older summon still waiting for this pet to appear, and
         // anchor the document actions to its actual current position.
-        void emitToWindow('companions','companions-present',{id:def.id,view:'choose'});
+        if(State.settings.companionMode)void emitToWindow('companions','companions-present',{id:def.id,view:'choose',manual:true});
       }
       State.notify();
     });
@@ -103,9 +117,9 @@ export class CompanionsLink {
       State.settings={...State.settings,chatModels:{...State.settings.chatModels,[providerDef(value.provider).id]:"@default"}};void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);State.notify();
     });
     await onEvent(PET_EVENTS.ready, () => { this.key = ""; void this.sync(); });
-    await onEvent<{ pillId: string; view?: string }>(PET_EVENTS.open, e => {
-      if (!State.settings.companionMode || !State.tasks.some(t => t.id === e.pillId)) return;
-      this.open(e.pillId, e.view);
+    await onEvent<{ pillId: string; view?: string; manual?:boolean }>(PET_EVENTS.open, e => {
+      if ((!State.settings.companionMode&&!State.petCardsOnly) || !State.tasks.some(t => t.id === e.pillId)) return;
+      this.open(e.pillId, e.view,e.manual===true);
     });
     await onEvent<{ action: string }>(PET_EVENTS.action, e => {
       if (e.action !== "pause" || !State.settings.companionMode) return;
@@ -116,10 +130,10 @@ export class CompanionsLink {
       if(!State.settings.companionMode || !State.tasks.some(t=>t.id===e.pet))return;
       const draft=delegatedRequest(e.pet),codex=pillDefinition("agent_codex");if(!draft || !codex)return;
       State.preparedChat={provider:"codex",...draft};State.upsertExternalAgent(codex.id,codex.name,codex.color);
-      this.open(codex.id,"prompt");State.notify();
+      this.open(codex.id,"prompt",true);State.notify();
     });
-    await onEvent("companions-layout-changed", () => { this.configuration = ""; void this.sync(); });
-    await onEvent("screen-changed", () => { this.configuration = ""; void this.sync(); });
+    await onEvent("companions-layout-changed", () => this.invalidateConfiguration());
+    await onEvent("screen-changed", () => this.invalidateConfiguration());
     await onEvent<typeof this.presence>("companions-presence", value => {
       const closed=this.presence.running.filter(id=>!value.running.includes(id));
       this.presence=value;
@@ -139,6 +153,12 @@ export class CompanionsLink {
   async launch() { this.launched = true; await this.sync(); }
   private get enabled() { return this.supported && this.launched && State.settings.companionMode; }
   get active() { return this.enabled && this.showing; }
+
+  private invalidateConfiguration() {
+    this.configurationEpoch++;
+    this.configuration = "";
+    void this.sync();
+  }
 
   async sync() {
     if (!this.supported || !this.launched) return;
@@ -172,8 +192,13 @@ export class CompanionsLink {
         };
         const configuration = JSON.stringify([snapshot.enabled, snapshot.pets.length, State.settings.screen, State.settings.companionTopClearance, State.settings.companionBarMode, State.settings.petControlBar,State.settings.petSystemCenter]);
         if (configuration !== this.configuration) {
+          const epoch = this.configurationEpoch;
           await Bridge.petControlConfigure();
+          if (epoch !== this.configurationEpoch) { this.dirty = true; continue; }
           const configured = await Bridge.companionsConfigure(snapshot.enabled, snapshot.pets.length);
+          // A display/bar event can arrive while GTK is placing the previous
+          // surface. Only its own generation may commit geometry or a failure.
+          if (epoch !== this.configurationEpoch) { this.dirty = true; continue; }
           if (!configured) {
             // Keep the singleton fallback for this launch. Retrying later could
             // leave both renderers on screen after the singleton has flown out.

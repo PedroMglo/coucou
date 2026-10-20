@@ -167,7 +167,7 @@ pub fn parse(text: &str) -> Command {
         ("claude", _) => (Pet::Claude, 1),
         ("gemini", _) => (Pet::Gemini, 1),
         ("ollama" | "olama", _) => (Pet::Ollama, 1),
-        ("spotify", _) => (Pet::Spotify,1),
+        ("spotify" | "spoty", _) => (Pet::Spotify,1),
         ("github", _) => (Pet::GitHub,1),
         ("notion", _) => (Pet::Notion,1),
         ("vercel", _) => (Pet::Vercel,1),

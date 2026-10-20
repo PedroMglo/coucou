@@ -10,7 +10,40 @@ static EDIT:Mutex<()>=Mutex::new(());
 pub struct Profile {pub model:String,pub effort:String}
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct Pet {pub name:String,pub aliases:Vec<String>,pub provider:String,pub mode:String,pub fast:Profile,pub reasoning:Profile,#[serde(default,skip_serializing_if="Option::is_none")]pub permissions:Option<Permissions>}
+pub struct Pet {pub name:String,pub aliases:Vec<String>,pub provider:String,pub mode:String,pub fast:Profile,pub reasoning:Profile,#[serde(default,skip_serializing_if="Option::is_none")]pub permissions:Option<Permissions>,#[serde(default,skip_serializing_if="Option::is_none")]pub local_execution:Option<LocalExecution>}
+/// Missing in an older configuration means disabled. New bundled identities may
+/// explicitly opt into proposals; every actual command still needs approval.
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct LocalExecution {
+ pub mode:LocalExecutionMode,
+ #[serde(default="task_timeout")]pub task_timeout_ms:u64,
+ #[serde(default="approval_timeout")]pub approval_timeout_ms:u64,
+ #[serde(default="command_timeout")]pub command_timeout_ms:u64,
+ #[serde(default="max_calls")]pub max_calls:usize,
+ #[serde(default="max_output")]pub max_output_bytes:usize,
+ #[serde(default,skip_serializing_if="Option::is_none")]pub allowed_programs:Option<Vec<String>>,
+}
+#[derive(Clone,Copy,Debug,Serialize,Deserialize,PartialEq,Eq)]
+#[serde(rename_all="camelCase")]
+pub enum LocalExecutionMode {Disabled,Ask}
+fn task_timeout()->u64{300_000} fn approval_timeout()->u64{120_000}
+fn command_timeout()->u64{60_000} fn max_calls()->usize{8} fn max_output()->usize{512*1024}
+impl Default for LocalExecution {
+ fn default()->Self{Self{mode:LocalExecutionMode::Disabled,task_timeout_ms:task_timeout(),approval_timeout_ms:approval_timeout(),command_timeout_ms:command_timeout(),max_calls:max_calls(),max_output_bytes:max_output(),allowed_programs:None}}
+}
+impl LocalExecution {
+ pub fn validate(&self)->Result<(),String>{
+  if !(100..=300_000).contains(&self.task_timeout_ms)||!(100..=120_000).contains(&self.approval_timeout_ms)||!(100..=60_000).contains(&self.command_timeout_ms)||!(1..=8).contains(&self.max_calls)||!(1024..=512*1024).contains(&self.max_output_bytes){return Err("Limites de execução local inválidos.".into());}
+  if self.allowed_programs.as_ref().is_some_and(|ps|ps.len()>64||ps.iter().any(|p|p.len()>4096||!std::path::Path::new(p).is_absolute()||p.chars().any(char::is_control))){return Err("Os programas permitidos devem ter caminhos absolutos.".into());}Ok(())
+ }
+}
+#[cfg(test)]mod local_execution_tests{
+ use super::*;
+ #[test]fn new_default_asks_but_missing_legacy_policy_stays_disabled(){let c=defaults();assert_eq!(c.local_execution().mode,LocalExecutionMode::Ask);let mut legacy=serde_json::to_value(c).unwrap();legacy["pets"]["ai_ollama"].as_object_mut().unwrap().remove("localExecution");let old:Configuration=serde_json::from_value(legacy).unwrap();assert_eq!(old.local_execution().mode,LocalExecutionMode::Disabled);validate(&old).unwrap();assert!(serde_json::to_value(old).unwrap()["pets"]["ai_ollama"].get("localExecution").is_none());}
+ #[test]fn no_autoapprove_unknown_grant_or_excess_limit_is_accepted(){assert!(serde_json::from_value::<LocalExecution>(serde_json::json!({"mode":"always"})).is_err());assert!(serde_json::from_value::<LocalExecution>(serde_json::json!({"mode":"ask","fullAccess":true})).is_err());let mut p=LocalExecution::default();p.task_timeout_ms=300_001;assert!(p.validate().is_err());p=LocalExecution::default();p.max_calls=9;assert!(p.validate().is_err());p=LocalExecution::default();p.allowed_programs=Some(vec!["relative".into()]);assert!(p.validate().is_err());}
+ #[test]fn another_pet_cannot_borrow_the_local_execution_grant(){let mut c=defaults();c.pets.get_mut("agent_codex").unwrap().local_execution=Some(LocalExecution::default());assert!(validate(&c).is_err());}
+}
 #[derive(Clone,Debug,Default,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Permissions {pub documents:bool,pub email_drafts:bool,pub music:bool,pub open_apps:bool}
@@ -29,6 +62,7 @@ pub fn service(id:&str)->bool {SERVICE_PETS.contains(&id)}
 pub fn pet_id(provider:&str)->Option<&'static str> {match provider {"codex"=>Some("agent_codex"),"copilot"=>Some("agent_copilot"),"antigravity"=>Some("agent_antigravity"),"gemini-cli"=>Some("agent_gemini"),"claude-cli"=>Some("integration_claude"),"ollama"=>Some("ai_ollama"),"integration_resend"=>Some("integration_resend"),"integration_n8n"=>Some("integration_n8n"),"integration_vercel"=>Some("integration_vercel"),"integration_github"=>Some("integration_github"),"integration_notion"=>Some("integration_notion"),"integration_calcom"=>Some("integration_calcom"),"integration_stripe"=>Some("integration_stripe"),"integration_spotify"=>Some("integration_spotify"),_=>None}}
 pub fn integration_pet(provider:&str)->Option<&'static str>{pet_id(provider).or(match provider{"anthropic"=>Some("ai_anthropic"),"openai"=>Some("ai_openai"),"google"=>Some("ai_google"),"lmstudio"=>Some("ai_lmstudio"),_=>None})}
 impl Configuration {
+ pub fn local_execution(&self)->LocalExecution{self.pets.get("ai_ollama").and_then(|p|p.local_execution.clone()).unwrap_or_default()}
  pub fn permissions(&self,id:&str)->Result<Permissions,String>{
   let pet=self.pets.get(id).ok_or("Pet desconhecido.")?;
   Ok(pet.permissions.clone().unwrap_or_else(||defaults().pets[id].permissions.clone().unwrap_or_default()))
@@ -57,10 +91,11 @@ fn validate(c:&Configuration)->Result<(),String> {
    if let Some(owner)=names.insert(key,id.clone()) {if owner!=*id {return Err(format!("Dois pets reconhecem o nome {name}. Escolhe nomes diferentes."));}}
   }
   for profile in [&p.fast,&p.reasoning] {
-   if profile.model.starts_with('@') || (!matches!(p.provider.as_str(),"codex"|"copilot") && !profile.effort.is_empty()) || profile.model.len()>256 || profile.model.chars().any(char::is_control) || !["","low","medium","high","xhigh","max"].contains(&profile.effort.as_str()) {return Err(format!("Modelo ou esforço inválido em {id}."));}
+   if profile.model.starts_with('@') || (id!="integration_spotify" && !matches!(p.provider.as_str(),"codex"|"copilot") && !profile.effort.is_empty()) || profile.model.len()>256 || profile.model.chars().any(char::is_control) || !["","low","medium","high","xhigh","max"].contains(&profile.effort.as_str()) {return Err(format!("Modelo ou esforço inválido em {id}."));}
    if !profile.model.is_empty() && !crate::cli_chat::model_matches(&p.provider,&profile.model) {return Err(format!("O modelo de {id} não pertence à sua conta/família."));}
    if p.provider=="ollama" && (profile.model.ends_with(":cloud") || profile.model.ends_with("-cloud")) {return Err("O pet Ollama usa apenas os modelos locais.".into());}
   }
+  if let Some(policy)=&p.local_execution {if id!="ai_ollama" {return Err("A execução local só está disponível no pet Ollama.".into());}policy.validate()?;}
  }
  if c.reasoning_terms.iter().any(|s|!short_text(s,100)) {return Err("Termo de raciocínio inválido.".into());}
  Ok(())
@@ -89,11 +124,14 @@ fn write(path:&Path,c:&Configuration)->Result<(),String> {
   std::fs::rename(&temp,path).map_err(|e|e.to_string())?;Ok(())
  })();if result.is_err(){let _=std::fs::remove_file(temp);}result
 }
-fn read_at(path:&Path)->Result<Document,String> {
- if !path.exists() {write(path,&defaults())?;}
+fn read_at(path:&Path)->Result<Document,String> {read_at_policy(path,true)}
+fn read_at_policy(path:&Path,create_defaults:bool)->Result<Document,String> {
+ if create_defaults && !path.exists() {write(path,&defaults())?;}
  let data=bytes(path)?;let mut c:Configuration=serde_json::from_slice(&data).map_err(|e|format!("Corrige pets.json: {e}"))?;
  // Upgrade the existing Copilot identity without replacing names, aliases or grants.
  if let Some(p)=c.pets.get_mut("agent_copilot") {if p.provider.is_empty(){let base=defaults();p.provider="copilot".into();if p.fast.model.is_empty(){p.fast=base.pets["agent_copilot"].fast.clone();}if p.reasoning.model.is_empty(){p.reasoning=base.pets["agent_copilot"].reasoning.clone();}}}
+ // Spoty is an audio owner. Preserve its ID, names, grants and old profiles/history.
+ if let Some(p)=c.pets.get_mut("integration_spotify"){if p.provider=="codex"{p.provider.clear();}}
  // Retain stable IDs/history while retiring the duplicated Gravity model pets.
  for(id,legacy)in[("agent_gemini","gemini-cli"),("integration_claude","claude-cli")]{if let Some(p)=c.pets.get_mut(id){if p.provider==legacy{p.provider.clear();}}}
  validate(&c)?;
@@ -101,9 +139,18 @@ fn read_at(path:&Path)->Result<Document,String> {
  Ok(Document{config:c,path:path.to_string_lossy().to_string(),revision:revision(&data)})
 }
 pub fn read()->Result<Configuration,String> {let _edit=EDIT.lock().unwrap();Ok(read_at(&path())?.config)}
+/// Read existing identities with the same in-memory upgrades/validation, without
+/// creating defaults, directories or files when configuration is unavailable.
+pub(crate) fn read_existing()->Result<Configuration,String> {
+ let _edit=EDIT.lock().map_err(|_|"As identidades dos pets estão indisponíveis.".to_string())?;
+ Ok(read_at_policy(&path(),false)?.config)
+}
+#[cfg(test)]
+#[path = "pet_config_read_tests.rs"]
+mod read_existing_tests;
 pub fn identity_name(id:&str)->String {read().ok().and_then(|c|c.pets.get(id).map(|p|p.name.clone())).or_else(||defaults().pets.get(id).map(|p|p.name.clone())).unwrap_or_else(||id.into())}
 pub fn aliases()->Result<BTreeMap<String,Vec<String>>,String> {
- let config=read()?;Ok(config.pets.into_iter().filter(|(_,p)|!p.provider.is_empty()).map(|(id,mut p)|{p.aliases.push(p.name);(if service(&id){id}else{p.provider},p.aliases)}).collect())
+ let config=read()?;Ok(config.pets.into_iter().filter(|(id,p)|id.as_str()=="integration_spotify"||!p.provider.is_empty()).map(|(id,mut p)|{p.aliases.push(p.name);(if service(&id){id}else{p.provider},p.aliases)}).collect())
 }
 impl Configuration {
  /// An explicitly addressed monitor/API pet must never borrow the selected CLI.
@@ -118,6 +165,7 @@ impl Configuration {
  }
  pub fn select(&self,provider:&str,requested:&str,query:&str)->Result<Selection,String> {
   let id=pet_id(provider).ok_or("Este pet não tem perfil de modelos.")?;let p=self.pets.get(id).ok_or("Falta o perfil deste pet.")?;
+  if id=="integration_spotify"{return Err("O Spoty controla música e som e não tem perfil de modelos.".into());}
   if p.provider.is_empty(){return Err("Os modelos Gemini e Claude da conta Gravity estão no pet Gravity. Escolhe o modelo nesse pet.".into());}
   if !requested.is_empty() && !requested.starts_with('@') {return Ok(Selection{model:requested.into(),effort:String::new(),mode:"manual".into()});}
   let requested=if requested=="@default" || requested.is_empty(){p.mode.as_str()}else{requested.strip_prefix('@').unwrap_or(&p.mode)};
@@ -169,7 +217,7 @@ pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revisi
   assert_eq!(c.select("codex","chosen-model","olá").unwrap().mode,"manual");
  }
  #[test]fn every_callable_pet_has_two_profiles_and_keeps_its_own_spoken_owner(){
-  let c=defaults();let aliases:BTreeMap<_,_>=c.pets.iter().filter(|(_,p)|!p.provider.is_empty()).map(|(id,p)|(if service(id){id.clone()}else{p.provider.clone()},p.aliases.clone())).collect();
+  let c=defaults();let aliases:BTreeMap<_,_>=c.pets.iter().filter(|(id,p)|id.as_str()=="integration_spotify"||!p.provider.is_empty()).map(|(id,p)|(if service(id){id.clone()}else{p.provider.clone()},p.aliases.clone())).collect();
   for pet in crate::voice::dialogue::Pet::ALL {
    let owner=pet.provider();let id=pet_id(owner).unwrap();
    if c.pets[id].provider.is_empty(){continue;}
@@ -202,5 +250,21 @@ pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revisi
   let changed=bytes(&path).unwrap();assert!(save_at(&path,&defaults(),&first.revision).is_err());assert_eq!(bytes(&path).unwrap(),changed);
   let mut invalid=serde_json::to_value(&second.config).unwrap();invalid["approvalPolicy"]=serde_json::json!("never");assert!(serde_json::from_value::<Configuration>(invalid).is_err());
   std::fs::remove_dir_all(root).unwrap();
+ }
+}
+
+#[cfg(test)]mod spoty_audio_tests{
+ use super::*;
+ #[test]fn spoty_retains_identity_and_profiles_without_an_llm_backend(){
+  let config=defaults();let pet=&config.pets["integration_spotify"];assert!(pet.provider.is_empty());assert!(pet.aliases.iter().any(|a|a=="spoty"));
+  validate(&config).unwrap();assert!(config.select("integration_spotify","@fast","pausa").is_err());assert_eq!(crate::cli_chat::backend("integration_spotify"),None);
+  assert!(matches!(crate::voice::dialogue::parse("Spoty, silenciar sistema"),crate::voice::dialogue::Command::Select(crate::voice::dialogue::Pet::Spotify,ref query)if query=="silenciar sistema"));
+ }
+ #[test]fn legacy_spotify_config_is_upgraded_in_memory_without_overwriting_private_file(){
+  let dir=std::env::temp_dir().join(format!("coucou-spoty-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+  std::fs::create_dir(&dir).unwrap();let path=dir.join("pets.json");let mut config=defaults();let p=config.pets.get_mut("integration_spotify").unwrap();p.provider="codex".into();p.name="Som pessoal".into();p.aliases.push("audio pessoal".into());let fast=p.fast.clone();let grants=p.permissions.clone();
+  let bytes=serde_json::to_vec(&config).unwrap();std::fs::write(&path,&bytes).unwrap();let doc=read_at(&path).unwrap();let pet=&doc.config.pets["integration_spotify"];
+  assert!(pet.provider.is_empty());assert_eq!(pet.name,"Som pessoal");assert!(pet.aliases.iter().any(|a|a=="audio pessoal"));assert_eq!(pet.fast,fast);assert_eq!(pet.permissions,grants);assert_eq!(std::fs::read(&path).unwrap(),bytes);
+  std::fs::remove_dir_all(dir).unwrap();
  }
 }

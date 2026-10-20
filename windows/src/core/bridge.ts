@@ -10,7 +10,12 @@ import type { RecapHistory, RecapPrefs } from "../recap/summary";
 import type { SpotifyState } from "./spotify";
 import type {PetConfiguration,PetDocument} from "../mochi/pet-preferences";
 import {reportSettingsError} from './settings-feedback';
+import {cardPresentation} from './card-presentation';
 import type { AssistantTask } from "../mochi/tasks";
+export interface RecapPersistenceReceipt {
+ prefs:RecapPrefs;persisted:boolean;historyCleared:boolean;
+ errorCode:null|'writeFailed'|'invalidWeek';
+}
 
 export const IS_TAURI =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -35,7 +40,7 @@ export interface BootInfo {
   cursorPoll: boolean;
 }
 
-export interface ConversationView {id:string;messages:{role:"user"|"assistant";content:string}[];busy?:boolean;turn?:number;stream?:string;query?:string;notice?:string}
+export interface ConversationView {id:string;messages:{role:"user"|"assistant";content:string}[];busy?:boolean;turn?:number;stream?:string;query?:string;notice?:string;taskNotice?:import('./task-notice').TaskNotice;requestHistory?:import('./request-history').RequestRecord[];localExecution?:import('./local-capabilities').LocalExecutionCapability}
 export interface ChatTurnState {provider:string;conversationId:string;turn:number;busy:boolean;query:string}
 export interface AgentRequest {
   id:string;provider:string;kind:string;detail:string;origin?:string;
@@ -200,6 +205,7 @@ export const Bridge = {
   setSystemLanguages: (languages: string[]) => call<void>("set_system_languages", { languages }),
 
   saveSettings: (settings: Settings) => callOrThrow<void>("save_settings", { settings }),
+  petCenterSettingsPatch:(request:import('./island-availability').IslandAvailabilityPatch)=>callOrThrow<import('./island-availability').IslandAvailabilityValues>('pet_center_settings_patch',{request:{...(request.petControlBar!==undefined?{petControlBar:request.petControlBar}:{}),...(request.petSystemCenter!==undefined?{petSystemCenter:request.petSystemCenter}:{})}}),
   reportSettingsError,
 
   cliAgentAnswer: (id: string, answer: Record<string, unknown>,target?:import('./session-chat').SessionTarget) => invoke<void>("cli_agent_answer", { id, answer,...(target?{target}:{}) }),
@@ -296,12 +302,21 @@ export const Bridge = {
   codexPlanUsage: () => call<unknown>("codex_plan_usage"),
 
   approvalDecision: (requestId: string, decision: "allow" | "deny") =>
-    call<void>("approval_decision", { requestId, decision }),
+    callOrThrow<boolean>("approval_decision", { requestId, decision }),
+  approvalPresented:({requestId,sessionId,petId}:import('./approval-presentation').ApprovalContext)=>callOrThrow<boolean>('approval_presented',{requestId,sessionId,petId}),
+  prepareApprovalSurface:async(rect:{x:number;y:number;w:number;h:number},current:()=>boolean)=>{
+    if(!current())return false;
+    await callOrThrow<void>('set_island_rect',{x:rect.x,y:rect.y,width:rect.w,height:rect.h});
+    if(!current())return false;
+    await callOrThrow<void>('set_collapsed',{collapsed:false});
+    return current();
+  },
+  approvalHandoff:(requestId:string)=>callOrThrow<void>('approval_decline',{requestId}),
   /** "The card is up" — until this lands the relay only waits a moment. */
   approvalAck: (requestId: string) => call<void>("approval_ack", { requestId }),
   /** Answers a question Claude Code asked: question text → chosen label. */
   approvalAnswer: (requestId: string, answers: Record<string, string | string[]>) =>
-    call<void>("approval_answer", { requestId, answers }),
+    callOrThrow<boolean>("approval_answer", { requestId, answers }),
 
   /** "Nobody can act on this" — Claude Code asks in the terminal right away. */
   approvalDecline: (requestId: string) => call<void>("approval_decline", { requestId }),
@@ -357,20 +372,42 @@ export const Bridge = {
   chatConversation:(provider:string)=>callOrThrow<ConversationView>("chat_conversation",{provider}),
   chatReadConversation:(provider:string,id:string)=>callOrThrow<ConversationView>("chat_read_conversation",{provider,id}),
   chatConversations:(provider:string,query="")=>callOrThrow<ConversationSummary[]>("chat_conversations",{provider,query}),
+  sessionChatList:(petId:string)=>callOrThrow<import('./session-chat').SessionSummary[]>('session_chat_list',{petId}),
+  petObservability:()=>callOrThrow<import('./pet-observability-contract').PetObservabilitySnapshot>('pet_observability'),
+  petSessionLookup:(request:import('./session-lookup-contract').SessionLookupRequest)=>callOrThrow<import('./session-lookup-contract').SessionLookupResult>('pet_session_lookup',{request:{provider:request.provider,nativeSessionId:request.nativeSessionId}}),
+  petCachedUsage:()=>invoke<import('./pet-cached-usage-contract').PetCachedUsage>('pet_cached_usage'),
+  petStationHistory:(force=false)=>invoke<import('./station-history-contract').StationHistorySnapshot>('pet_station_history',{force}),
   petUsage:(provider:string,conversationId?:string)=>callOrThrow<import('./pet-usage').PetUsage|null>('pet_usage',{provider,...(conversationId?{conversationId}:{})}),
   chatRestoreConversation:(provider:string,id:string)=>callOrThrow<ConversationView>("chat_restore_conversation",{provider,id}),
   assistantTasks: () => call<AssistantTask[]>("assistant_tasks"),
   voiceLearnAlias: (provider:string) => callOrThrow<string>("voice_learn_alias",{provider}),
   voiceSessionToggle: () => callOrThrow<void>("voice_session_toggle"),
-  petChatOpen:async(pet:string,session?:{id:string;backend:string;title:string;cwd:string;steps:string[];finalLine:string},showSessions=false,target?:import('./session-chat').SessionTarget)=>{
-    await callOrThrow<void>("pet_chat_open",{request:{pet,session,showSessions,...(target?{target:{...target}}:{})}});
-    await emitToWindow('island','pet-chat-presented',{pet});
+  petChatOpen:async(pet:string,session?:{id:string;backend:string;title:string;cwd:string;steps:string[];finalLine:string},showSessions=false,target?:import('./session-chat').SessionTarget,requestId?:string)=>{
+    const sourceContext=cardPresentation();
+    const shown=await callOrThrow<boolean>("pet_chat_open",{request:{pet,session,showSessions,...(target?{target:{...target}}:{}),...(requestId?{requestId}:{})}});
+    if(shown!==true)return false;
+    await emitToWindow('island','pet-chat-presented',{pet,...(target?{target:{...target}}:{}),...(requestId?{requestId}:{}),...(sourceContext?{sourceContext}:{})});
+    return true;
   },
+  petAccountUsage:()=>callOrThrow<import('./account-usage-contract').CodexAccountUsage>('pet_account_usage',{}),
+  petAccountUsageRefresh:()=>callOrThrow<import('./account-usage-contract').CodexAccountUsage>('pet_account_usage_refresh',{}),
+  petControlNavigationContext:()=>callOrThrow<import('./control-contract').ControlContext>('pet_control_navigation_context',{}),
+  petControlNavigate:(request:import('./control-contract').NavigationRequest)=>callOrThrow<import('./control-contract').NavigationReceipt>('pet_control_navigate',{request}),
+  petSystemNetworkRead:(request:import('./control-contract').NetworkReadRequest)=>callOrThrow<import('./control-contract').NetworkTicket>('pet_system_network_read',{request}),
+  petSystemNetworkView:(request:import('./control-contract').ContextPrecondition)=>callOrThrow<import('./control-contract').NetworkView>('pet_system_network_view',{request}),
+  petSystemNetworkScan:(request:import('./control-contract').NetworkScanRequest)=>callOrThrow<import('./control-contract').NetworkTicket>('pet_system_network_scan',{request}),
+  petSystemNetworkTicket:(request:import('./control-contract').NetworkTicketRequest)=>callOrThrow<import('./control-contract').NetworkTicket>('pet_system_network_ticket',{request}),
+  petSystemNetworkCancel:(request:import('./control-contract').NetworkTicketRequest)=>callOrThrow<import('./control-contract').NetworkTicket>('pet_system_network_cancel',{request}),
   petControlContext:()=>call<{pet?:string;section?:string}>("pet_control_context"),
-  petControlInput:(rect:{x:number;y:number;w:number;h:number},expanded:boolean)=>call<void>("pet_control_input",{rect,expanded}),
+  petControlInput:(rect:{x:number;y:number;w:number;h:number},expanded:boolean,keyboard=false)=>call<void>("pet_control_input",{rect,expanded,keyboard}),
   petControlConfigure:()=>call<void>("pet_control_configure"),
-  petSystemPanel:(panel:'calendar'|'media'|'weather'|'notifications'|'quick-settings')=>callOrThrow<void>('pet_system_panel',{panel}),
-  petSystemStatus:()=>callOrThrow<import('../desktop/system-center').SystemCenterStatus>('pet_system_status'),
+  petSystemPanel:(panel:import('./system-center').SystemPanel)=>callOrThrow<void>('pet_system_panel',{panel}),
+  petAudioSnapshot:()=>callOrThrow<import('./system-audio').AudioSnapshot>('pet_audio_snapshot'),
+  petAudioControl:(request:import('./system-audio').AudioRequest)=>callOrThrow<import('./system-audio').AudioReceipt>('pet_audio_control',{request}),
+  petSystemAudioSnapshot:()=>callOrThrow<import('./system-audio').SystemAudioSnapshot>('pet_system_audio_snapshot'),
+  petSystemAudioControl:(request:import('./system-audio').AudioRequest)=>callOrThrow<import('./system-audio').AudioReceipt<import('./system-audio').SystemAudioSnapshot>>('pet_system_audio_control',{request}),
+  petSystemStatus:()=>callOrThrow<import('./system-center').SystemCenterStatus>('pet_system_status'),
+  petSystemTray:(id:string,action:'activate'|'menu')=>callOrThrow<void>('pet_system_tray',{id,action}),
   petControlOpen:(pet?:string)=>callOrThrow<void>("pet_control_open",{pet}),
   petPanelOpen:(x:number,y:number,pet?:string,section?:string)=>callOrThrow<void>("pet_panel_open",{x,y,pet,section}),
   petPanelHide:()=>callOrThrow<void>("pet_panel_hide"),
@@ -419,12 +456,12 @@ export const Bridge = {
   // ── Weekly recap ──────────────────────────────────────────────────────────
   /** Turns and decisions from `since` (Unix seconds) on, plus the recap prefs. */
   recapHistory: (since: number) => call<RecapHistory>("recap_history", { since: Math.floor(since) }),
-  recapPrefs: () => call<RecapPrefs>("recap_prefs"),
-  recapSetEnabled: (enabled: boolean) => call<void>("recap_set_enabled", { enabled }),
-  recapSetHideProjects: (hide: boolean) => call<void>("recap_set_hide_projects", { hide }),
+  recapPrefs: () => callOrThrow<RecapPrefs>("recap_prefs"),
+  recapSetEnabled: (enabled: boolean) => callOrThrow<RecapPersistenceReceipt>("recap_set_enabled", { enabled }),
+  recapSetHideProjects: (hide: boolean) => callOrThrow<RecapPersistenceReceipt>("recap_set_hide_projects", { hide }),
   /** `week` is the Monday (YYYY-MM-DD) the recap opened on its own for. */
-  recapMarkShown: (week: string) => call<void>("recap_mark_shown", { week }),
-  recapClear: () => call<void>("recap_clear"),
+  recapMarkShown: (week: string) => callOrThrow<RecapPersistenceReceipt>("recap_mark_shown", { week }),
+  recapClear: () => callOrThrow<RecapPersistenceReceipt>("recap_clear"),
   /** Writes the PNG (a data URL) into Pictures or Downloads; returns its path. */
   recapSavePng: (data: string, week: string) => callOrThrow<string>("recap_save_png", { data, week }),
   /** Opens the folder of the image saved last. */
@@ -437,7 +474,7 @@ export const Bridge = {
   petConfiguration: () => callOrThrow<PetDocument>("pet_configuration"),
   petRoster:()=>callOrThrow<string[]>("pet_roster"),
   petConfigurationSave: (config:PetConfiguration,expectedRevision:string) => callOrThrow<PetDocument>("pet_configuration_save",{config,expectedRevision}),
-  companionsOpen: (pillId: string, x: number, y: number, view?: string) => call<void>("companions_open", { pillId, x, y, view }),
+  companionsOpen: (pillId: string, x: number, y: number, view?: string, manual=false) => call<void>("companions_open", { pillId, x, y, view, manual }),
   desktopInfo: () => call<DesktopInfo>("desktop_mochi_info"),
   /** Dragged out of the island: (x, y) is the pointer in island-window coordinates. */
   desktopPickUp: (x: number, y: number) => call<boolean>("desktop_mochi_pick_up", { x, y }),
@@ -506,6 +543,11 @@ export async function emitToWindow(label: string, event: string, payload?: unkno
   } catch (err) {
     console.error(`[coucou] emit ${event} failed`, err);
   }
+}
+
+/** Required deliveries must retain their receipt until the transport accepts it. */
+export async function emitToWindowOrThrow(label:string,event:string,payload?:unknown){
+  if(IS_TAURI)await emitTo(label,event,payload);
 }
 
 export interface IntegrationUpdate {

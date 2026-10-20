@@ -55,7 +55,7 @@ impl Store {
 
     pub fn merge(&mut self,mut snapshot:Snapshot)->Snapshot{
         let Some(stream)=self.threads.get_mut(&snapshot.target.session_id)else{
-            if self.limited{snapshot.notice=Some("O limite de respostas simultâneas em direto foi atingido. O histórico nativo final continua disponível.".into());}return snapshot;
+            if self.limited&&!snapshot.control_conflict{snapshot.notice=Some("O limite de respostas simultâneas em direto foi atingido. O histórico nativo final continua disponível.".into());}return snapshot;
         };
         let mut partial=false;
         stream.items.retain(|item|{
@@ -68,10 +68,10 @@ impl Store {
             true
         });
         if snapshot.busy{
-            if let Some(turn)=&stream.turn{snapshot.turn=Some(turn.clone());snapshot.capabilities.cancel=snapshot.capabilities.history;}
+            if !snapshot.control_conflict{if let Some(turn)=&stream.turn{snapshot.turn=Some(turn.clone());snapshot.capabilities.cancel=snapshot.capabilities.history;}}
         }else{stream.turn=None;}
-        if partial{snapshot.notice=Some("Ligação iniciada a meio de uma mensagem: o trecho inicial aparecerá quando o Codex concluir essa mensagem.".into());}
-        if let Some(notice)=&stream.notice{snapshot.notice=Some(notice.clone());}
+        if partial&&!snapshot.control_conflict{snapshot.notice=Some("Ligação iniciada a meio de uma mensagem: o trecho inicial aparecerá quando o Codex concluir essa mensagem.".into());}
+        if !snapshot.control_conflict{if let Some(notice)=&stream.notice{snapshot.notice=Some(notice.clone());}}
         if stream.items.is_empty(){stream.notice=None;}
         if stream.items.is_empty()&&stream.turn.is_none(){self.threads.remove(&snapshot.target.session_id);self.limited=false;}
         snapshot

@@ -19,6 +19,8 @@ use tauri::AppHandle;
 
 use crate::chat::{self, Chat, ChatContext, ChatReply, ModelInfo};
 use crate::settings::Settings;
+use crate::pet_observability::capture::{Capture, Origin as CaptureOrigin};
+use crate::pet_observability::usage::AttemptOutcome;
 use crate::i18n::{t, tf};
 use crate::{net, secrets};
 
@@ -124,7 +126,7 @@ fn unreachable(url: &Url) -> String {
     tf("Cannot reach {url}. Is the server running?", &[("url", url.as_str().trim_end_matches('/'))])
 }
 
-fn base_url(server: &Server) -> Result<Url, String> {
+pub(crate) fn base_url(server: &Server) -> Result<Url, String> {
     if server.url.trim().is_empty() {
         return Err(tf("Connect {name} in Settings → Local models first.", &[("name", &t(server.name))]));
     }
@@ -268,12 +270,18 @@ fn request_body(model: &str, system: &str, history: &[Value], user: &Value) -> V
 pub async fn send(
     app: &AppHandle,
     chat: &Chat,
+    settings:&Settings,
     server: &Server,
     model: &str,
+    selection:Option<&crate::pet_config::Selection>,
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
-    send_inner(chat,server,model,query,context,Some(app),|_|{}).await
+    if server.id=="ollama"&&cfg!(target_os="linux"){
+        let policy=crate::pet_config::read()?.local_execution();
+        if policy.mode==crate::pet_config::LocalExecutionMode::Ask{return crate::local_tasks::respond(app,chat,settings,server,model,selection,query,context,policy,None).await;}
+    }
+    send_inner(chat,server,model,query,context,Some(app),selection,|_|{}).await
 }
 
 /// The same turn, with the streamed text handed to `on_delta` instead (the phone link uses this).
@@ -285,34 +293,77 @@ pub async fn send_with(
     context: Option<ChatContext>,
     on_delta: impl FnMut(String),
 ) -> Result<ChatReply, String> {
-    send_inner(chat,server,model,query,context,None,on_delta).await
+    send_inner(chat,server,model,query,context,None,None,on_delta).await
 }
 
 async fn send_inner(
-    chat:&Chat,server:&Server,model:&str,query:String,context:Option<ChatContext>,app:Option<&AppHandle>,mut on_delta:impl FnMut(String),
+    chat:&Chat,server:&Server,model:&str,query:String,context:Option<ChatContext>,app:Option<&AppHandle>,selection:Option<&crate::pet_config::Selection>,mut on_delta:impl FnMut(String),
 )->Result<ChatReply,String> {
     let base = base_url(server)?;
     if model.is_empty() {
         return Err(t("Pick a model above the chat box first."));
     }
     let turn = chat.begin_cli(server.id,std::sync::Arc::default())?;
+    let capture_origin = chat.usage_capture_origin(&turn);
     let lease=chat.lease(&turn);
     let _lease=if let Some(app)=app{lease.broadcast(app,&query)}else{lease};
+    let identity = if server.id == "ollama" {
+        let config = crate::pet_config::read_existing()?;
+        Some(chat.capture_local_identity(&turn, &config, "ai_ollama")?)
+    } else { None };
+    let activity=app.map(|app|crate::pet_activity::Reporter::new(app,server.id,Some(turn.cancel.clone())).observe(chat.clone(),turn.clone()));
     let user = json!({ "role": "user", "content": user_text(turn.first, context.as_ref(), &query) });
-    let mut body = request_body(model, &chat::system_prompt(false), &turn.history, &user);
+    let system = identity.as_ref().map(|identity| chat::system_prompt_for_pet(identity, false))
+        .unwrap_or_else(|| chat::system_prompt(false));
+    let mut body = request_body(model, &system, &turn.history, &user);
     if server.id=="ollama"{body["stream_options"]=json!({"include_usage":true});}
+    if server.id=="ollama"&&selection.is_some(){
+        let caps=tokio::select!{caps=crate::local_tasks::protocol::capabilities(&base,model)=>caps,_=async{while !turn.cancel.load(std::sync::atomic::Ordering::Acquire){tokio::time::sleep(Duration::from_millis(25)).await;}}=>return Err("A tarefa foi interrompida.".into())};
+        if caps.tools==crate::local_tasks::protocol::ToolsSupport::Remote{return Err("Escolhe um modelo local Ollama instalado.".into());}
+        crate::local_tasks::protocol::apply_effort(&mut body,caps.effort(selection).as_deref());
+    }
 
-    let answer = tokio::select! {
-        result=stream_measured(&base, server.key.as_deref(), model, &body, |text|{if let Some(app)=app {chat.publish_delta(app,&turn,&text);}on_delta(text);})=>result?,
-        _=async {while !turn.cancel.load(std::sync::atomic::Ordering::Relaxed) {tokio::time::sleep(Duration::from_millis(50)).await;}}=>return Err("The CLI request was cancelled.".into()),
+    // Retain the accounting guard outside the cancellable stream future. Its
+    // captured owner/CID never changes when Stop or another window intervenes.
+    // Metadata discovery above is not an inference attempt.
+    let mut capture = None;
+    let streamed = tokio::select! {
+        result=stream_measured_captured(&base, server.key.as_deref(), model, &body, capture_origin.as_ref(), &mut capture, |text|{if let Some(app)=app {chat.publish_delta(app,&turn,&text);}if let Some(activity)=&activity{activity.update("message",text.rsplit("\n\n").next().unwrap_or(&text));}on_delta(text);})=>Some(result),
+        _=async {while !turn.cancel.load(std::sync::atomic::Ordering::Relaxed) {tokio::time::sleep(Duration::from_millis(50)).await;}}=>None,
     };
-    if !chat.is_current(&turn) {return Err("The CLI request was cancelled.".into());}
+    // The select futures have been dropped before accessing capture again.
+    let answer = match streamed {
+        Some(Ok(answer)) => answer,
+        Some(Err(error)) => {
+            finish_text_capture(&mut capture, AttemptOutcome::Failed);
+            return Err(error);
+        }
+        None => {
+            finish_text_capture(&mut capture, AttemptOutcome::Cancelled);
+            return Err("The CLI request was cancelled.".into());
+        }
+    };
+    if !chat.is_current(&turn) {
+        finish_text_capture(&mut capture, AttemptOutcome::Cancelled);
+        return Err("The CLI request was cancelled.".into());
+    }
     let usage=answer.usage;let answer=answer.text;
     if answer.is_empty() {
+        finish_text_capture(&mut capture, AttemptOutcome::Failed);
         return Err(t("No response text."));
     }
     let plain = chat::plain_question(turn.first, context.as_ref(), &query);
-    chat.commit_reply(&turn, user, json!({ "role": "assistant", "content": answer }), &plain, &answer)?;
+    let notice = match chat.commit_observed_reply(&turn, user, json!({ "role": "assistant", "content": answer }), &plain, &answer) {
+        Ok(notice) => notice,
+        Err(error) => {
+            let outcome = if chat.is_current(&turn) { AttemptOutcome::Failed } else { AttemptOutcome::Cancelled };
+            finish_text_capture(&mut capture, outcome);
+            return Err(error);
+        }
+    };
+    // Saving public chat text and showing it do not own the usage record.
+    finish_text_capture(&mut capture, AttemptOutcome::Completed);
+    if let Some(activity)=&activity{activity.finish_observed(&answer,notice.as_deref());}
     crate::pet_usage::record(app,chat,&turn,usage);
     Ok(ChatReply { text: answer })
 }
@@ -349,7 +400,7 @@ fn filter_thinking_blocks(text: &str) -> String {
 
 /// For the text shown while streaming: finished blocks go, and so does
 /// everything after a block that has not been closed yet.
-fn progressive_filter(text: &str) -> String {
+pub(crate) fn progressive_filter(text: &str) -> String {
     let cleaned = filter_thinking_blocks(text);
     match cleaned.find("<think>") {
         Some(at) => cleaned[..at].trim().to_string(),
@@ -367,21 +418,82 @@ async fn stream(base:&Url,key:Option<&str>,model:&str,body:&Value,on_delta:impl 
     stream_measured(base,key,model,body,on_delta).await.map(|reply|reply.text)
 }
 
+// Compatibility wrapper for existing internal callers and offline fixtures.
+// No captured origin means no registered ledger attempt, even if a service runs.
+#[allow(dead_code)]
 async fn stream_measured(
     base: &Url,
     key: Option<&str>,
     model: &str,
     body: &Value,
+    on_delta: impl FnMut(String),
+) -> Result<MeasuredReply, String> {
+    let mut capture = None;
+    let result = stream_measured_captured(base, key, model, body, None, &mut capture, on_delta).await;
+    let outcome = if result.is_ok() { AttemptOutcome::Completed } else { AttemptOutcome::Failed };
+    finish_text_capture(&mut capture, outcome);
+    result
+}
+
+fn finish_text_capture(capture: &mut Option<Capture>, outcome: AttemptOutcome) {
+    if let Some(capture) = capture { capture.finish(outcome); }
+}
+
+/// Observe server counters before text/error validation. Accounting is stricter
+/// about protocol-end evidence than the legacy text renderer, whose behavior is
+/// unchanged. A lossy UTF-8 frame can still render as before but is not proof.
+/// Valid DONE seals capture only; legacy usage/rendering continue unchanged.
+fn observe_stream_usage(line: &[u8], usage: &mut crate::pet_usage::Usage, capture: &mut Option<Capture>, protocol_ended: &mut bool) {
+    let text = String::from_utf8_lossy(line);
+    let Some(payload) = text.strip_prefix("data:") else { return; };
+    let framed = payload.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\r' | '\n'));
+    let payload = payload.trim();
+    let valid_frame = std::str::from_utf8(line).is_ok() && framed == payload;
+    if payload == "[DONE]" {
+        if valid_frame && !*protocol_ended {
+            *protocol_ended = true;
+            if let Some(capture) = capture { capture.transport_complete(); }
+        }
+        return;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(payload) else { return; };
+    usage.observe_oai(&value);
+    if !valid_frame || *protocol_ended { return; }
+    let Some(capture) = capture else { return; };
+    capture.observe_oai(&value);
+    // A well-shaped single-choice completion marker proves this request ended.
+    // Known terminal reasons include truncated/filtered/tool responses: token
+    // completion is independent of whether the public answer is acceptable.
+    let finished = value.get("error").is_none() && value["choices"].as_array().is_some_and(|choices| {
+        choices.len() == 1 && choices[0]["index"].as_u64() == Some(0)
+            && choices[0]["delta"].is_object()
+            && matches!(choices[0]["finish_reason"].as_str(),
+                Some("stop" | "length" | "content_filter" | "tool_calls" | "function_call"))
+    });
+    if finished { capture.transport_complete(); }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn stream_measured_captured(
+    base: &Url,
+    key: Option<&str>,
+    model: &str,
+    body: &Value,
+    origin: Option<&CaptureOrigin>,
+    capture: &mut Option<Capture>,
     mut on_delta: impl FnMut(String),
 ) -> Result<MeasuredReply, String> {
     let began=Instant::now();let mut usage=crate::pet_usage::Usage::default();
-    let mut reply = net::client(base, Duration::from_secs(300))?
-        .post(net::join(base, "v1/chat/completions"))
+    let client = net::client(base, Duration::from_secs(300))?;
+    let request = client.post(net::join(base, "v1/chat/completions"))
         .header("Authorization", bearer(key))
         .json(body)
-        .send()
-        .await
+        .build()
         .map_err(|_| unreachable(base))?;
+    // One guard per actual dispatch attempt, after request construction and
+    // metadata discovery. No credentials, prompts or response bytes are kept.
+    *capture = Some(Capture::begin(origin, model));
+    let mut reply = client.execute(request).await.map_err(|_| unreachable(base))?;
 
     let status = reply.status();
     if status.as_u16() == 404 {
@@ -389,20 +501,26 @@ async fn stream_measured(
     }
     if !status.is_success() {
         let body = net::read_capped(reply, net::MAX_ERROR_BODY).await.unwrap_or_default();
+        // Preserve any counters in the already-read error body, without treating
+        // an HTTP error or its EOF as proof of a completed model response.
+        if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+            if let Some(capture) = capture { capture.observe_oai(&value); }
+        }
         let detail = net::error_detail(&body);
         return Err(if detail.is_empty() { format!("HTTP {}", status.as_u16()) } else { detail });
     }
 
     let mut accumulated = String::new();
     let mut pending = Vec::<u8>::new();
+    let mut protocol_ended = false;
     let mut last = Instant::now().checked_sub(DELTA_INTERVAL).unwrap_or_else(Instant::now);
     while let Some(chunk) = reply.chunk().await.map_err(|_| unreachable(base))? {
         pending.extend_from_slice(&chunk);
         // Whole lines only: a chunk may end in the middle of one, or of a character.
         while let Some(end) = pending.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = pending.drain(..=end).collect();
+            observe_stream_usage(&line, &mut usage, capture, &mut protocol_ended);
             let line = String::from_utf8_lossy(&line);
-            if let Some(payload)=line.strip_prefix("data:"){if let Ok(value)=serde_json::from_str::<Value>(payload.trim()){usage.observe_oai(&value);}}
             match parse_sse_line(line.trim_end()) {
                 Some(Ok(delta)) => accumulated.push_str(&delta),
                 Some(Err(message)) => return Err(message),
@@ -418,8 +536,8 @@ async fn stream_measured(
         }
     }
     // A last line without its newline.
+    observe_stream_usage(&pending, &mut usage, capture, &mut protocol_ended);
     let tail=String::from_utf8_lossy(&pending);
-    if let Some(payload)=tail.strip_prefix("data:"){if let Ok(value)=serde_json::from_str::<Value>(payload.trim()){usage.observe_oai(&value);}}
     match parse_sse_line(tail.trim_end()){Some(Ok(delta))=>accumulated.push_str(&delta),Some(Err(error))=>return Err(error),None=>{}}
     // The last state always goes out, whatever the throttle skipped.
     on_delta(progressive_filter(&accumulated));
@@ -430,6 +548,12 @@ async fn stream_measured(
 mod tests {
     use super::*;
     use crate::net::tests::serve_once;
+
+    #[test]fn selected_fast_mode_reaches_plain_body_while_unselected_phone_body_is_unchanged(){
+        let user=json!({"role":"user","content":"same"});let mut body=request_body("same-model:tag","system",&[],&user);
+        let phone_body=body.clone();let selection=crate::pet_config::Selection{model:"same-model:tag".into(),mode:"fast".into(),effort:String::new()};let caps=crate::local_tasks::protocol::ModelCapabilities::from_show(&json!({"capabilities":["completion","thinking"],"thinking":null}));crate::local_tasks::protocol::apply_effort(&mut body,caps.effort(Some(&selection)).as_deref());
+        assert_eq!(body["reasoning_effort"],"none");assert_eq!(body["model"],phone_body["model"]);assert_eq!(body["messages"],phone_body["messages"]);assert!(body.get("think").is_none());assert!(phone_body.get("reasoning_effort").is_none());assert!(body.get("tools").is_none());
+    }
 
     fn block_on<T>(f: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(f)
@@ -615,5 +739,30 @@ mod tests {
         let local = serde_json::to_string(&BoundKey { url: "http://127.0.0.1:8080".into(), key: "k".into() }).unwrap();
         assert_eq!(key_for(&local, &url("http://127.0.0.1:8080")).as_deref(), Some("k"));
         assert!(!may_carry_key(&url("http://192.168.1.20:8080")));
+    }
+}
+
+
+#[cfg(test)]
+mod ollama_identity_tests {
+    use super::*;
+    #[test]
+    fn query_is_last_exactly_once_with_model_stream_and_history_unchanged() {
+        let history = vec![json!({"role":"user","content":"earlier"}), json!({"role":"assistant","content":"previous response"})];
+        let user = json!({"role":"user","content":"SYNTHETIC-QUERY-ONCE: Please reply in English. `cargo check` and ```rust\nfn main() {}\n```"});
+        let before = history.clone();
+        let generic = request_body("same-model:tag", "old identity", &history, &user);
+        let mut body = request_body("same-model:tag", "captured identity; pt-PT unless another language requested", &history, &user);
+        assert_eq!(body["messages"].as_array().unwrap().len(), 4);
+        assert_eq!(body["messages"][3], user);
+        assert_eq!(body["messages"][1], history[0]);
+        assert_eq!(body["messages"][2], history[1]);
+        assert_eq!(body["messages"].as_array().unwrap().iter().filter(|m|m["content"]==user["content"]).count(), 1);
+        assert_eq!(history, before);
+        assert_eq!(body["model"], "same-model:tag");
+        assert_eq!(body["stream"], true);
+        assert!(body.get("tools").is_none());
+        body["messages"][0]["content"] = json!("old identity");
+        assert_eq!(body, generic);
     }
 }

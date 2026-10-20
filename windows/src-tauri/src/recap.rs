@@ -132,6 +132,17 @@ pub struct HistoryView {
     pub prefs: Prefs,
 }
 
+/// Causal result of an explicit preferences/history mutation. Preferences are
+/// the effective in-process state; a failed save is never a persistence ACK.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationReceipt {
+    pub prefs: Prefs,
+    pub persisted: bool,
+    pub history_cleared: bool,
+    pub error_code: Option<&'static str>,
+}
+
 /// A turn in progress, in memory only. The paths are only there to count
 /// distinct files and are never written anywhere.
 #[derive(Debug)]
@@ -340,35 +351,72 @@ impl Recap {
         &self.history.prefs
     }
 
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.history.prefs.enabled = enabled;
+    fn mutation_receipt(&self, persisted: bool, history_cleared: bool,
+                        error_code: Option<&'static str>) -> MutationReceipt {
+        MutationReceipt { prefs: self.history.prefs.clone(), persisted,
+                          history_cleared, error_code }
+    }
+
+    /// Publish the new durable history before accepting it in memory. The
+    /// caller may already have applied a stricter in-process privacy setting.
+    fn commit_history(&mut self, next: History) -> MutationReceipt {
+        match write_history(&self.path, &next) {
+            Ok(()) => {
+                self.history = next;
+                self.mutation_receipt(true, false, None)
+            }
+            Err(err) => {
+                note(format!("could not save the weekly recap history: {err}"));
+                self.mutation_receipt(false, false, Some("writeFailed"))
+            }
+        }
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) -> MutationReceipt {
         if !enabled {
+            // Stop collecting immediately, even if the preference cannot be
+            // saved for next startup. The receipt makes that distinction clear.
+            self.history.prefs.enabled = false;
             self.drafts.clear();
             self.requests.clear();
         }
-        self.save();
+        let mut next = self.history.clone();
+        next.prefs.enabled = enabled;
+        self.commit_history(next)
     }
 
-    pub fn set_hide_projects(&mut self, hide: bool) {
-        self.history.prefs.hide_projects = hide;
-        self.save();
+    pub fn set_hide_projects(&mut self, hide: bool) -> MutationReceipt {
+        if hide {
+            // Keep project names hidden in this process after a failed save.
+            self.history.prefs.hide_projects = true;
+        }
+        let mut next = self.history.clone();
+        next.prefs.hide_projects = hide;
+        self.commit_history(next)
     }
 
     /// `week` is the Monday the recap was shown for, as YYYY-MM-DD.
-    pub fn mark_shown(&mut self, week: &str) {
+    pub fn mark_shown(&mut self, week: &str) -> MutationReceipt {
         if !is_week_key(week) {
-            return;
+            return self.mutation_receipt(false, false, Some("invalidWeek"));
         }
-        self.history.prefs.last_shown_week = week.to_string();
-        self.save();
+        let mut next = self.history.clone();
+        next.prefs.last_shown_week = week.to_string();
+        self.commit_history(next)
     }
 
-    /// Settings → General → Clear history. The preferences stay.
-    pub fn clear(&mut self) {
-        self.history.turns.clear();
-        self.history.decisions.clear();
-        self.drafts.clear();
-        self.save();
+    /// Settings -> General -> Clear history. Failure preserves the current
+    /// history and drafts, and never acknowledges a successful clear.
+    pub fn clear(&mut self) -> MutationReceipt {
+        let mut next = self.history.clone();
+        next.turns.clear();
+        next.decisions.clear();
+        let mut receipt = self.commit_history(next);
+        if receipt.persisted {
+            self.drafts.clear();
+            receipt.history_cleared = true;
+        }
+        receipt
     }
 
     /// 12-week window, then the hard caps (oldest first out).
@@ -728,23 +776,23 @@ pub fn recap_prefs(store: State<Store>) -> Prefs {
 }
 
 #[tauri::command]
-pub fn recap_set_enabled(store: State<Store>, enabled: bool) {
-    store.lock().set_enabled(enabled);
+pub fn recap_set_enabled(store: State<Store>, enabled: bool) -> MutationReceipt {
+    store.lock().set_enabled(enabled)
 }
 
 #[tauri::command]
-pub fn recap_set_hide_projects(store: State<Store>, hide: bool) {
-    store.lock().set_hide_projects(hide);
+pub fn recap_set_hide_projects(store: State<Store>, hide: bool) -> MutationReceipt {
+    store.lock().set_hide_projects(hide)
 }
 
 #[tauri::command]
-pub fn recap_mark_shown(store: State<Store>, week: String) {
-    store.lock().mark_shown(&week);
+pub fn recap_mark_shown(store: State<Store>, week: String) -> MutationReceipt {
+    store.lock().mark_shown(&week)
 }
 
 #[tauri::command]
-pub fn recap_clear(store: State<Store>) {
-    store.lock().clear();
+pub fn recap_clear(store: State<Store>) -> MutationReceipt {
+    store.lock().clear()
 }
 
 /// `data` is the canvas's PNG as a data URL. Returns where it was written.
@@ -764,6 +812,10 @@ pub fn recap_reveal_saved(store: State<Store>) {
         platform::reveal_folder(&dir.to_string_lossy());
     }
 }
+
+#[cfg(test)]
+#[path="recap_persistence_tests.rs"]
+mod persistence_tests;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

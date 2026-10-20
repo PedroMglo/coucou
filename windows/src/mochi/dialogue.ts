@@ -1,6 +1,7 @@
 import type { BotStateName } from "../core/layout";
+import {sameSession,type SessionTarget} from '../core/session-chat';
 /** Transient public progress, independent of approval cards and chat history. */
-export interface PetActivity { pet: string; turn: number; phase: string; message: string; origin?:string }
+export interface PetActivity { pet: string; turn: number; phase: string; message: string; origin?:string;target?:SessionTarget }
 export interface Dialogue extends PetActivity { changedAt: number; messageAt: number }
 export const BUSY = new Set(["preparing", "transcribing", "received", "thinking", "working", "searching", "message", "speaking"]);
 export const ATTENTION = new Set(["approval", "question", "error", "ratelimit"]);
@@ -20,11 +21,19 @@ export class PetDialogues {
   update(update: PetActivity, now: number): boolean {
     const before = this.entries.get(update.pet);
     if (before && update.turn < before.turn) return false;
+    if(update.target&&update.target.petId!==update.pet)return false;
     const message = update.message.trim().slice(-1200);
     const sameTurn = before?.turn === update.turn;
+    if(sameTurn&&before.target&&update.target&&!sameSession(before.target,update.target))return false;
+    const target=update.target??(sameTurn?before.target:undefined);
+    const content=message || (sameTurn ? before.message : "");
+    if(sameTurn&&before.phase===update.phase&&before.message===content&&before.origin===update.origin&&(!target&&!before.target||sameSession(target,before.target)))return false;
+    // Completion starts the reading window even when the last streamed text
+    // already matches the final response. Duplicate receipts cannot renew it.
+    const completed=sameTurn&&before.phase!==update.phase&&["done","stopped","failed"].includes(update.phase);
     this.entries.set(update.pet, {
-      ...update, message: message || (sameTurn ? before.message : ""),
-      changedAt: now, messageAt: message && message !== before?.message ? now : sameTurn ? before.messageAt : now,
+      ...update, message:content,target:target?Object.freeze({...target}):undefined,
+      changedAt: now, messageAt:completed || message && message !== before?.message ? now : sameTurn ? before.messageAt : now,
     });
     this.selected = update.pet;
     return true;

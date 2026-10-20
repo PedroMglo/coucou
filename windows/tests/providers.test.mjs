@@ -94,8 +94,15 @@ test("Gravity model-family chats never require a separate paid API key",()=>{
 
 
 test("service pets use distinct logical conversations through the native account, without API credentials",()=>{
- for(const id of ["integration_spotify","integration_github","integration_notion","integration_n8n","integration_vercel","integration_resend","integration_calcom","integration_stripe"]){
+ for(const id of ["integration_github","integration_notion","integration_n8n","integration_vercel","integration_resend","integration_calcom","integration_stripe"]){
   assert.equal(providerForPill(id),id);assert.equal(providerDef(id).key,null);assert.match(providerDef(id).name,/via Codex/);
   assert.equal(activeModel(settings({chatProvider:id})),"@default");assert.ok(visibleProviders(settings({chatProvider:id})).some(p=>p.id===id));
  }
+});
+
+test("Spoty has sound commands and no LLM chat provider",async()=>{
+ const {petCapabilities}=await import('../src/mochi/capabilities.ts');
+ const {profileProvider}=await import('../src/mochi/pet-preferences.ts');
+ assert.equal(providerForPill('integration_spotify'),null);assert.equal(profileProvider('integration_spotify'),false);
+ const cap=petCapabilities('integration_spotify');assert.equal(cap.chat,null);assert.equal(cap.voice,'integration_spotify');assert.match(cap.role,/som do PC/);
 });

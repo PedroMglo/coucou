@@ -22,44 +22,100 @@ pub async fn subscribe(client:&Client,target:&Target)->Result<Value,String>{
     checked_thread(client.call("thread/resume",json!({"threadId":target.session_id,"excludeTurns":true})).await.map_err(|e|e.to_string())?,&target.session_id)
 }
 
-pub async fn list(client:&Client)->Result<Vec<Summary>,String>{
-    let mut out=Vec::new();let mut seen=HashSet::new();let mut cursors=HashSet::new();
-    for archived in [false,true]{
-        let mut cursor=Value::Null;
-        loop{
-            let page=client.call("thread/list",json!({"limit":100,"cursor":cursor,"sortKey":"updated_at","sortDirection":"desc","sourceKinds":SOURCES,"archived":archived})).await.map_err(|e|e.to_string())?;
-    let rows=page["data"].as_array().ok_or("O inventário Codex está incompleto.")?;
-            for thread in rows{
-                let id=thread["id"].as_str().ok_or("A sessão Codex não tem ID.")?;
-                let target=Target{pet_id:"agent_codex".into(),provider:"codex".into(),origin:Origin::External,session_id:id.into(),conversation_id:None};
-                target.validate_external("codex","agent_codex")?;
-                if seen.insert(id.to_string()){
-                    let mut summary=history::summary(thread,target)?;
-                    if archived{summary.state="archived".into();summary.capabilities.send=false;summary.capabilities.cancel=false;}
+/// A total async deadline for one listing, including caller-supplied acquisition.
+/// Dropping this read future removes its pending RPC slot; it never interrupts a turn.
+pub(crate) const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const LIST_TIMEOUT_ERROR: &str = "A consulta das sessões externas Codex excedeu o prazo; a lista completa não foi confirmada. As tarefas em curso não foram interrompidas. Atualiza esta origem ou consulta o cliente nativo.";
+const LIST_LIMIT_ERROR: &str = "A consulta das sessões externas Codex excedeu um limite; a lista completa não foi confirmada. As tarefas em curso não foram interrompidas. Atualiza esta origem ou consulta o cliente nativo.";
+
+pub(crate) async fn list_before<T>(deadline: tokio::time::Instant, future: impl std::future::Future<Output = Result<T, String>>) -> Result<T, String> {
+    if tokio::time::Instant::now() >= deadline { return Err(LIST_TIMEOUT_ERROR.into()); }
+    let result = tokio::time::timeout_at(deadline, future).await.map_err(|_| LIST_TIMEOUT_ERROR.to_string())?;
+    // Synchronous work is not preemptible; never label a late completion timely.
+    if tokio::time::Instant::now() >= deadline { return Err(LIST_TIMEOUT_ERROR.into()); }
+    result
+}
+
+#[derive(Clone, Copy)]
+struct ListLimits { pages: usize, rows: usize, cursor_bytes: usize, cursor_size: usize, loaded_reads: usize }
+impl Default for ListLimits {
+    fn default() -> Self { Self { pages: 4096, rows: 100_000, cursor_bytes: 1024 * 1024, cursor_size: 8192, loaded_reads: 1024 } }
+}
+struct ListBudget { limits: ListLimits, pages: usize, rows: usize, cursor_bytes: usize, loaded_reads: usize }
+impl ListBudget {
+    fn new(limits: ListLimits) -> Self { Self { limits, pages: 0, rows: 0, cursor_bytes: 0, loaded_reads: 0 } }
+    fn add(counter: &mut usize, amount: usize, limit: usize) -> Result<(), String> {
+        *counter = counter.checked_add(amount).filter(|n| *n <= limit).ok_or_else(|| LIST_LIMIT_ERROR.to_string())?;
+        Ok(())
+    }
+    fn page(&mut self) -> Result<(), String> { Self::add(&mut self.pages, 1, self.limits.pages) }
+    fn rows(&mut self, count: usize) -> Result<(), String> { Self::add(&mut self.rows, count, self.limits.rows) }
+    fn loaded_read(&mut self) -> Result<(), String> { Self::add(&mut self.loaded_reads, 1, self.limits.loaded_reads) }
+    fn cursor(&mut self, page: &Value, seen: &mut HashSet<String>) -> Result<Option<Value>, String> {
+        let next = match page.get("nextCursor") {
+            None | Some(Value::Null) => return Ok(None),
+            Some(Value::String(next)) if !next.is_empty() => next,
+            _ => return Err("A paginação das sessões externas Codex devolveu um cursor inválido; a lista completa não foi confirmada.".into()),
+        };
+        if next.len() > self.limits.cursor_size { return Err(LIST_LIMIT_ERROR.into()); }
+        Self::add(&mut self.cursor_bytes, next.len(), self.limits.cursor_bytes)?;
+        if !seen.insert(next.clone()) { return Err("A paginação das sessões externas Codex repetiu o cursor; a lista completa não foi confirmada.".into()); }
+        Ok(Some(json!(next)))
+    }
+}
+
+pub async fn list(client: &Client) -> Result<Vec<Summary>, String> {
+    list_before(tokio::time::Instant::now() + LIST_TIMEOUT,
+        list_with(|method, params| async move { client.call(method, params).await.map_err(|e| e.to_string()) }, ListLimits::default())
+    ).await
+}
+
+/// Same pagination path for the real client and fully in-memory offline fixtures.
+async fn list_with<F, Fut>(mut call: F, limits: ListLimits) -> Result<Vec<Summary>, String>
+where F: FnMut(&'static str, Value) -> Fut, Fut: std::future::Future<Output = Result<Value, String>> {
+    let mut budget = ListBudget::new(limits);
+    let mut out = Vec::new(); let mut seen = HashSet::new();
+    for archived in [false, true] {
+        let mut cursor = Value::Null; let mut cursors = HashSet::new();
+        loop {
+            budget.page()?;
+            let page = call("thread/list", json!({"limit":100,"cursor":cursor,"sortKey":"updated_at","sortDirection":"desc","sourceKinds":SOURCES,"archived":archived})).await?;
+            let rows = page["data"].as_array().ok_or("O inventário Codex está incompleto.")?;
+            budget.rows(rows.len())?;
+            for thread in rows {
+                let id = thread["id"].as_str().ok_or("A sessão Codex não tem ID.")?;
+                let target = Target { pet_id:"agent_codex".into(), provider:"codex".into(), origin:Origin::External, session_id:id.into(), conversation_id:None };
+                target.validate_external("codex", "agent_codex")?;
+                if seen.insert(id.to_string()) {
+                    let mut summary = history::summary(thread, target)?;
+                    if archived { summary.state = "archived".into(); summary.capabilities.send = false; summary.capabilities.cancel = false; }
                     out.push(summary);
                 }
-                if out.len()>100_000{return Err("Há demasiadas sessões para este inventário. Usa a gestão nativa para filtrar o arquivo.".into());}
             }
-            let Some(next)=page["nextCursor"].as_str()else{break;};
-            if next.is_empty()||!cursors.insert(format!("{archived}:{next}")){return Err("A paginação do inventário Codex repetiu o cursor; a lista não foi truncada.".into());}
-            cursor=json!(next);
+            match budget.cursor(&page, &mut cursors)? { Some(next) => cursor = next, None => break }
         }
     }
     // Loaded ephemeral threads and new subagents can be absent from stored listings.
-    let mut cursor=Value::Null;let mut pages=HashSet::new();
-    loop{
-        let page=client.call("thread/loaded/list",json!({"limit":100,"cursor":cursor})).await.map_err(|e|e.to_string())?;
-        for id in page["data"].as_array().ok_or("O daemon não listou as sessões carregadas.")?{
-            let id=id.as_str().ok_or("O daemon devolveu um ID de sessão inválido.")?;
-            if seen.insert(id.into()){
-                let thread=read(client,id).await?;
-                out.push(history::summary(&thread,Target{pet_id:"agent_codex".into(),provider:"codex".into(),origin:Origin::External,session_id:id.into(),conversation_id:None})?);
+    let mut cursor = Value::Null; let mut cursors = HashSet::new();
+    loop {
+        budget.page()?;
+        let page = call("thread/loaded/list", json!({"limit":100,"cursor":cursor})).await?;
+        let rows = page["data"].as_array().ok_or("O daemon não listou as sessões carregadas.")?;
+        budget.rows(rows.len())?;
+        for value in rows {
+            let id = value.as_str().ok_or("O daemon devolveu um ID de sessão inválido.")?;
+            let target = Target { pet_id:"agent_codex".into(), provider:"codex".into(), origin:Origin::External, session_id:id.into(), conversation_id:None };
+            target.validate_external("codex", "agent_codex")?;
+            if seen.insert(id.to_string()) {
+                budget.loaded_read()?;
+                let thread = checked_thread(call("thread/read", json!({"threadId":id,"includeTurns":false})).await?, id)?;
+                out.push(history::summary(&thread, target)?);
             }
         }
-        let Some(next)=page["nextCursor"].as_str()else{break;};
-        if next.is_empty()||!pages.insert(next.to_string()){return Err("O inventário carregado repetiu o cursor.".into());}cursor=json!(next);
+        match budget.cursor(&page, &mut cursors)? { Some(next) => cursor = next, None => break }
     }
-    out.sort_by_key(|row|std::cmp::Reverse(row.updated_at));Ok(out)
+    out.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+    Ok(out)
 }
 
 pub async fn turns(client:&Client,thread:&Value)->Result<Vec<Value>,String>{
@@ -100,10 +156,12 @@ pub async fn snapshot(client:&Client,target:&Target)->Result<Snapshot,String>{
 pub async fn send(client:&Client,target:&Target,query:&str,model:Option<&str>)->Result<Value,String>{
     target.validate_external("codex","agent_codex")?;
     if query.trim().is_empty()||query.len()>256*1024{return Err("A mensagem deve ter texto e até256 KiB.".into());}
-    let thread=read(client,&target.session_id).await?;
-    if thread["ephemeral"]==true{return Err("Esta sessão temporária não fornece o histórico necessário para responder por este painel.".into());}
-    if thread["canAcceptDirectInput"]!=true{return Err("Esta sessão não aceita mensagens diretas no daemon. Abre a sessão no cliente nativo.".into());}
-    if thread["status"]["type"]!="idle"{return Err("A sessão está ocupada ou indisponível. Atualiza o histórico antes de enviar.".into());}
+    // Revalidate the complete native snapshot for direct IPC as well as UI.
+    // Metadata alone can say idle while history still has conflicting turns.
+    let current=snapshot(client,target).await?;
+    if current.control_conflict || current.busy || !current.capabilities.send {
+        return Err("A sessão está ocupada ou não confirmou um destino inequívoco para receber mensagens. Atualiza o histórico ou usa o cliente nativo.".into());
+    }
     let mut params=json!({"threadId":target.session_id,"input":[{"type":"text","text":query}],"clientUserMessageId":format!("mochi-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos())});
     if let Some(model)=model.filter(|m|!m.is_empty()){
         if model.len()>512||model.starts_with('@')||model.chars().any(char::is_control){return Err("Modelo nativo inválido.".into());}
@@ -384,4 +442,43 @@ mod managed_tests {
             fixture.only_calls(&["initialize","initialized","thread/read","thread/turns/list"]);
         }
     }
+    #[tokio::test]
+    async fn conflicting_native_turns_keep_history_readable_but_direct_ipc_cannot_start_or_interrupt() {
+        let mut thread=native_thread();
+        thread["turns"]=json!([
+            {"id":"turn-a","status":"inProgress","items":[{"id":"u","type":"userMessage","content":[{"type":"text","text":"Pedido público"}]}]},
+            {"id":"turn-b","status":"inProgress","items":[{"id":"a","type":"agentMessage","text":"Resposta pública"}]}
+        ]);
+        // Deliberately idle + canAcceptDirectInput=true: the direct backend
+        // path must inspect history instead of trusting UI-disabled controls.
+        let fixture=Fixture::new(Replies { read:json!({"thread":thread}),..Replies::default() }).await;
+        let view=snapshot(fixture.client(),&target()).await.unwrap();
+        assert_eq!(view.messages.len(),2); assert!(view.capabilities.history);
+        assert!(view.control_conflict); assert!(view.busy); assert!(view.turn.is_none());
+        assert!(!view.capabilities.send); assert!(!view.capabilities.cancel);
+        assert!(send(fixture.client(),&target(),"must never be transmitted",None).await.is_err());
+        assert!(cancel(fixture.client(),&target(),"turn-a").await.is_err());
+        let calls=fixture.methods();
+        assert_eq!(calls.iter().filter(|m|m.as_str()=="thread/read").count(),9);
+        assert!(!calls.iter().any(|m|m=="turn/start"||m=="turn/interrupt"));
+    }
+
+    #[tokio::test]
+    async fn unambiguous_idle_direct_send_reaches_only_the_requested_native_thread() {
+        let mut thread=native_thread();thread["turns"]=json!([]);
+        let fixture=Fixture::new(Replies { read:json!({"thread":thread}),..Replies::default() }).await;
+        // The fixture deliberately rejects turn/start. Seeing exactly that
+        // request proves admission, without any real model or retry.
+        assert!(send(fixture.client(),&target(),"synthetic text",Some("fixture-model")).await.is_err());
+        fixture.only_calls(&["initialize","initialized","thread/read","thread/read","thread/read","turn/start"]);
+        let calls=fixture.calls();let request=calls.last().unwrap();
+        assert_eq!(request["params"]["threadId"],THREAD);
+        assert_eq!(request["params"]["input"],json!([{"type":"text","text":"synthetic text"}]));
+        assert_eq!(request["params"]["model"],"fixture-model");
+    }
+
 }
+
+#[cfg(test)]
+#[path="list_budget_tests.rs"]
+mod list_budget_tests;

@@ -2,8 +2,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::time::{Duration,Instant};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter,Manager};
@@ -12,10 +12,135 @@ use crate::chat::{Chat, ChatContext, ChatReply};
 use crate::settings::Settings;
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
-struct PendingRequest {reply:mpsc::Sender<Value>,request:Value}
+enum RequestPolicy {NativeLegacy,LocalOnce{deadline:Instant,cancel:Arc<AtomicBool>}}
+struct PendingRequest {reply:mpsc::Sender<Value>,request:Value,policy:RequestPolicy,expires_at:Instant}
+fn validate_decision(request:&PendingRequest,answer:&Value,target:Option<&Value>)->Result<(),String>{
+    if target.is_some_and(|target|target!=&request.request["target"]){return Err("A decisão não pertence à sessão apresentada.".into());}
+    if let RequestPolicy::LocalOnce{deadline,cancel}=&request.policy{
+        if cancel.load(Ordering::Acquire)||Instant::now()>=*deadline{return Err("Este pedido já terminou.".into());}
+        if target!=Some(&request.request["target"]){return Err("A aprovação local exige o destino exato da conversa.".into());}
+        let Some(obj)=answer.as_object()else{return Err("Decisão local inválida.".into())};
+        if !answer["allow"].is_boolean()||obj.keys().any(|k|k!="allow"&&k!="answers")||answer.get("answers").is_some_and(|a|!a.as_object().is_some_and(|o|o.is_empty())){return Err("A decisão local deve autorizar ou recusar apenas este comando.".into());}
+    }Ok(())
+}
 fn pending() -> &'static Mutex<HashMap<String, PendingRequest>> {
     static PENDING: OnceLock<Mutex<HashMap<String, PendingRequest>>> = OnceLock::new();
     PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A Help presentation is neither a decision nor an execution permit. Keep
+/// pending locked through the short GTK effect: ending cannot retire a request
+/// and then have a delayed callback present it. Mochi additionally holds Chat
+/// before pending to order Stop/reset with presentation. External Stop remains
+/// owned by its native bridge; its ACK is not evidence the request has ended.
+pub(crate) fn with_pending_help<T>(chat:&Chat,id:&str,target:&crate::session_chat::types::Target,present:impl FnOnce()->T)->Result<Option<T>,String>{
+    with_pending_help_in(chat,pending(),id,target,present)
+}
+fn with_pending_help_in<T>(chat:&Chat,requests:&Mutex<HashMap<String,PendingRequest>>,id:&str,target:&crate::session_chat::types::Target,present:impl FnOnce()->T)->Result<Option<T>,String>{
+    let expected=serde_json::to_value(target).map_err(|_|"O destino do pedido não é válido.".to_string())?;
+    let guarded=||{
+        let all=requests.try_lock().map_err(|_|"Os pedidos estão a atualizar. Tenta abrir este pedido novamente.".to_string())?;
+        let Some(request)=all.get(id)else{return Ok(None);};
+        if request.request.get("target")!=Some(&expected)||Instant::now()>=request.expires_at{return Ok(None);}
+        if let RequestPolicy::LocalOnce{deadline,cancel}=&request.policy{
+            if cancel.load(Ordering::Acquire)||Instant::now()>=*deadline{return Ok(None);}
+        }
+        Ok(Some(present()))
+    };
+    match target.origin{
+        crate::session_chat::types::Origin::Mochi=>chat.with_live_conversation(&target.provider,&target.session_id,guarded)?.unwrap_or(Ok(None)),
+        crate::session_chat::types::Origin::External=>guarded(),
+    }
+}
+
+#[cfg(test)]mod local_approval_tests{
+ use super::*;
+ fn target()->Value{json!({"petId":"ai_ollama","provider":"ollama","origin":"mochi","sessionId":"synthetic-CID","conversationId":"synthetic-CID"})}
+ fn request(deadline:Instant,cancel:Arc<AtomicBool>)->PendingRequest{let(tx,_rx)=mpsc::channel();PendingRequest{reply:tx,request:json!({"target":target()}),policy:RequestPolicy::LocalOnce{deadline,cancel},expires_at:deadline}}
+ #[test]fn local_approval_requires_exact_target_boolean_and_once_payload(){let r=request(Instant::now()+Duration::from_secs(1),Arc::default());assert!(validate_decision(&r,&json!({"allow":true,"answers":{}}),Some(&target())).is_ok());for answer in [json!({"allow":"true"}),json!({"allow":true,"scope":"turn"}),json!({"allow":true,"answers":{"grant":["always"]}}),json!({"decision":"accept"})]{assert!(validate_decision(&r,&answer,Some(&target())).is_err());}assert!(validate_decision(&r,&json!({"allow":true}),None).is_err());let mut other=target();other["conversationId"]=json!("other");assert!(validate_decision(&r,&json!({"allow":true}),Some(&other)).is_err());}
+ #[test]fn expired_or_cancelled_approval_never_wins_over_its_scope(){let expired=request(Instant::now()-Duration::from_millis(1),Arc::default());assert!(validate_decision(&expired,&json!({"allow":true}),Some(&target())).is_err());let r=request(Instant::now()+Duration::from_secs(1),Arc::new(AtomicBool::new(true)));assert!(validate_decision(&r,&json!({"allow":true}),Some(&target())).is_err());}
+ #[test]fn native_legacy_decision_keeps_optional_target_contract(){let(tx,_rx)=mpsc::channel();let r=PendingRequest{reply:tx,request:json!({"target":target()}),policy:RequestPolicy::NativeLegacy,expires_at:Instant::now()+Duration::from_secs(60)};assert!(validate_decision(&r,&json!({"answers":{"q":["a"]}}),None).is_ok());}
+ #[test]fn valid_answer_consumes_pending_once_and_bad_target_leaves_it_pending(){let id=format!("synthetic-local-test-{}",NEXT.fetch_add(1,Ordering::Relaxed));let(tx,rx)=mpsc::channel();pending().lock().unwrap().insert(id.clone(),PendingRequest{reply:tx,request:json!({"target":target()}),policy:RequestPolicy::LocalOnce{deadline:Instant::now()+Duration::from_secs(2),cancel:Arc::default()},expires_at:Instant::now()+Duration::from_secs(2)});assert!(cli_agent_answer(id.clone(),json!({"allow":true}),None).is_err());cli_agent_answer(id.clone(),json!({"allow":false,"answers":{}}),Some(target())).unwrap();assert_eq!(rx.recv().unwrap()["allow"],false);assert!(cli_agent_answer(id,json!({"allow":true}),Some(target())).is_err());}
+}
+
+#[cfg(test)]
+mod help_presentation_tests {
+    use super::*;
+    use crate::session_chat::types::{Origin,Target};
+    type Requests=Arc<Mutex<HashMap<String,PendingRequest>>>;
+
+    fn fixture(pet:&str,provider:&str,origin:Origin,expires_at:Instant)->(Chat,String,Target,Arc<AtomicBool>,mpsc::Receiver<Value>,Requests){
+        let chat=Chat::default();let cancel=Arc::new(AtomicBool::new(false));
+        let session_id=if origin==Origin::Mochi{
+            chat.begin_cli(provider,cancel.clone()).unwrap();chat.conversation_id(provider).unwrap()
+        }else{"019a734b-0000-7000-8000-000000000001".into()};
+        let target=Target{pet_id:pet.into(),provider:provider.into(),origin:origin.clone(),session_id:session_id.clone(),conversation_id:(origin==Origin::Mochi).then_some(session_id)};
+        let id=format!("synthetic-help-{}",NEXT.fetch_add(1,Ordering::Relaxed));let(tx,rx)=mpsc::channel();
+        let requests=Arc::new(Mutex::new(HashMap::new()));
+        requests.lock().unwrap().insert(id.clone(),PendingRequest{reply:tx,request:json!({"target":target}),policy:RequestPolicy::NativeLegacy,expires_at});
+        (chat,id,target,cancel,rx,requests)
+    }
+    fn live()->Instant{Instant::now()+Duration::from_secs(60)}
+
+    #[test]fn help_reads_exact_logical_owner_without_answering_or_consuming_request(){
+        let(chat,id,target,_cancel,rx,requests)=fixture("integration_github","integration_github",Origin::Mochi,live());
+        assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||"shown").unwrap(),Some("shown"));
+        assert!(matches!(rx.try_recv(),Err(mpsc::TryRecvError::Empty)));
+        let mut backend=target.clone();backend.provider="codex".into();
+        let mut another_pet=target.clone();another_pet.pet_id="agent_codex".into();
+        let mut another_cid=target.clone();another_cid.session_id="another-CID".into();
+        let mut another_binding=target.clone();another_binding.conversation_id=Some("another-CID".into());
+        for wrong in [backend,another_pet,another_cid,another_binding]{assert_eq!(with_pending_help_in(&chat,&requests,&id,&wrong,||panic!("wrong Help effect")).unwrap(),None);}
+        assert!(requests.lock().unwrap().remove(&id).is_some());
+    }
+    #[test]fn ended_between_validation_and_presentation_cannot_run_the_effect(){
+        let(chat,id,target,_cancel,_rx,requests)=fixture("ai_ollama","ollama",Origin::Mochi,live());
+        assert!(with_pending_help_in(&chat,&requests,&id,&target,||()).unwrap().is_some());
+        requests.lock().unwrap().remove(&id);
+        assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||panic!("ended request reopened")).unwrap(),None);
+    }
+    #[test]fn stop_before_presentation_does_not_need_to_wait_for_pending_cleanup(){
+        let(chat,id,target,_cancel,_rx,requests)=fixture("ai_ollama","ollama",Origin::Mochi,live());
+        chat.cancel_provider("ollama");
+        assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||panic!("stopped request reopened")).unwrap(),None);
+        assert!(requests.lock().unwrap().remove(&id).is_some());
+    }
+    #[test]fn expired_requests_and_local_cancellation_never_present(){
+        let(chat,id,target,_cancel,_rx,requests)=fixture("agent_codex","codex",Origin::Mochi,Instant::now()-Duration::from_millis(1));
+        assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||panic!("expired Help")).unwrap(),None);requests.lock().unwrap().remove(&id);
+        let(chat,id,target,_cancel,_rx,requests)=fixture("ai_ollama","ollama",Origin::Mochi,live());
+        requests.lock().unwrap().get_mut(&id).unwrap().policy=RequestPolicy::LocalOnce{deadline:live(),cancel:Arc::new(AtomicBool::new(true))};
+        assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||panic!("cancelled local Help")).unwrap(),None);requests.lock().unwrap().remove(&id);
+    }
+    #[test]fn external_help_requires_live_exact_native_request_without_a_mochi_turn(){
+        let(chat,id,target,_cancel,_rx,requests)=fixture("agent_copilot","copilot",Origin::External,live());
+        assert_eq!(with_pending_help_in(&chat,&requests,"synthetic-missing-request",&target,||panic!("wrong request ID")).unwrap(),None);
+        assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||true).unwrap(),Some(true));
+        requests.lock().unwrap().remove(&id);
+        assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||panic!("retired external Help")).unwrap(),None);
+        let(chat,id,target,_cancel,_rx,requests)=fixture("agent_codex","codex",Origin::External,Instant::now()-Duration::from_millis(1));
+        assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||panic!("expired external Help")).unwrap(),None);requests.lock().unwrap().remove(&id);
+    }
+    #[test]fn contention_is_retryable_error_rather_than_retiring_the_request(){
+        let(chat,id,target,_cancel,_rx,requests)=fixture("ai_ollama","ollama",Origin::Mochi,live());
+        let guard=requests.lock().unwrap();
+        assert!(with_pending_help_in(&chat,&requests,&id,&target,||panic!("contended Help")).is_err());drop(guard);
+        let result=chat.with_live_conversation("ollama",&target.session_id,||with_pending_help_in(&chat,&requests,&id,&target,||panic!("contended Chat"))).unwrap().unwrap();
+        assert!(result.is_err());assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||true).unwrap(),Some(true));requests.lock().unwrap().remove(&id);
+    }
+    #[test]fn presentation_orders_both_stop_and_request_removal_after_the_effect(){
+        let(chat,id,target,_cancel,_rx,requests)=fixture("ai_ollama","ollama",Origin::Mochi,live());
+        let(entered_tx,entered_rx)=mpsc::channel();let(release_tx,release_rx)=mpsc::channel();
+        let c=chat.clone();let i=id.clone();let t=target.clone();let map=requests.clone();
+        let presenter=std::thread::spawn(move||with_pending_help_in(&c,&map,&i,&t,||{entered_tx.send(()).unwrap();release_rx.recv_timeout(Duration::from_secs(5)).unwrap();true}));
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let(stop_tx,stop_rx)=mpsc::channel();let c=chat.clone();let stopper=std::thread::spawn(move||{c.cancel_provider("ollama");stop_tx.send(()).unwrap();});
+        let(end_tx,end_rx)=mpsc::channel();let i=id.clone();let map=requests.clone();let ender=std::thread::spawn(move||{map.lock().unwrap().remove(&i);end_tx.send(()).unwrap();});
+        let early_stop=stop_rx.recv_timeout(Duration::from_millis(30));let early_end=end_rx.recv_timeout(Duration::from_millis(30));
+        release_tx.send(()).unwrap();assert_eq!(presenter.join().unwrap().unwrap(),Some(true));stopper.join().unwrap();ender.join().unwrap();
+        assert!(early_stop.is_err());assert!(early_end.is_err());
+        assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||panic!("late Help effect")).unwrap(),None);
+    }
 }
 
 #[cfg(test)]
@@ -59,7 +184,7 @@ mod voice_model_tests {
 pub fn cli_agent_answer(id: String, answer: Value,target:Option<Value>)->Result<(),String> {
     let mut all=pending().lock().unwrap();
     let request=all.get(&id).ok_or("Este pedido já terminou.")?;
-    if target.as_ref().is_some_and(|target|target!=&request.request["target"]) {return Err("A decisão não pertence à sessão apresentada.".into());}
+    validate_decision(request,&answer,target.as_ref())?;
     let request=all.remove(&id).unwrap();drop(all);
     request.reply.send(answer).map_err(|_|"Este pedido já terminou.".into())
 }
@@ -89,7 +214,7 @@ fn workspace_path(raw:&str)->Result<PathBuf,String> {
 #[tauri::command]
 pub fn assistant_set_workspace(app:AppHandle,provider:String,path:String)->Result<String,String> {
     use tauri::Manager;
-    if backend(&provider).is_none() {return Err("Este pet não executa tarefas através de um CLI.".into());}
+    if backend(&provider).is_none() && provider!="ollama" {return Err("Este pet não tem pasta de execução configurável.".into());}
     let path=if path.trim().is_empty() {String::new()} else {workspace_path(path.trim())?.to_string_lossy().to_string()};
     let shared=app.state::<crate::Shared>();let mut settings=shared.settings.lock().unwrap();let mut next=settings.clone();
     if path.is_empty() {next.cli_workspaces.remove(&provider);} else {next.cli_workspaces.insert(provider,path.clone());}
@@ -130,7 +255,7 @@ pub fn voice_settings(source: &crate::settings::Settings, provider: &str) -> cra
 
 /// The pet owns its conversation; the backend identifies the actual CLI account.
 pub fn backend(provider:&str)->Option<&'static str> {
-    match provider {value if crate::pet_config::service(value)=>Some("codex"),"codex"=>Some("codex"),"copilot"=>Some("copilot"),"antigravity"|"gemini-cli"|"claude-cli"=>Some("antigravity"),_=>None}
+    match provider {"integration_spotify"=>None,value if crate::pet_config::service(value)=>Some("codex"),"codex"=>Some("codex"),"copilot"=>Some("copilot"),"antigravity"|"gemini-cli"|"claude-cli"=>Some("antigravity"),_=>None}
 }
 pub fn model_matches(provider:&str,model:&str)->bool {
     let name=model.to_ascii_lowercase();
@@ -339,19 +464,33 @@ pub(crate) fn ask(
 pub(crate) fn ask_target(
     app:&AppHandle,provider:&str,method:&str,params:&Value,cancel:&AtomicBool,origin:Value,
 )->Option<Value> {
+    ask_with_policy(app,provider,method,params,cancel,origin,RequestPolicy::NativeLegacy)
+}
+
+/// The target is captured by the local runner; no selected-window lookup and
+/// no reusable turn grant or native terminal fallback is involved.
+pub(crate) fn ask_local_once(app:&AppHandle,params:&Value,cancel:Arc<AtomicBool>,origin:Value,deadline:Instant)->Option<Value>{
+    ask_with_policy(app,"ollama","execute_command",params,&cancel,origin,RequestPolicy::LocalOnce{deadline,cancel:cancel.clone()})
+}
+
+fn ask_with_policy(app:&AppHandle,provider:&str,method:&str,params:&Value,cancel:&AtomicBool,origin:Value,policy:RequestPolicy)->Option<Value>{
+    let local=matches!(&policy,RequestPolicy::LocalOnce{..});
+    let deadline=match &policy{RequestPolicy::LocalOnce{deadline,..}=>*deadline,RequestPolicy::NativeLegacy=>Instant::now()+Duration::from_secs(600)};
+    if cancel.load(Ordering::Acquire)||Instant::now()>=deadline{return None;}
     let questions = params["questions"].as_array();
     let kind = if questions.is_some() {
         "question"
     } else {
         "permission"
     };
-    let id = format!("cli-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-    let detail = params
+    static BOOT:OnceLock<String>=OnceLock::new();
+    let id = if local{format!("cli-local-{}-{}",BOOT.get_or_init(||format!("{:x}-{:x}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos())),NEXT.fetch_add(1,Ordering::Relaxed))}else{format!("cli-{}", NEXT.fetch_add(1, Ordering::Relaxed))};
+    let detail = if local{serde_json::to_string_pretty(params).ok()?}else{params
         .get("command")
         .and_then(Value::as_str)
         .or_else(|| params.get("reason").and_then(Value::as_str))
         .map(str::to_string)
-        .unwrap_or_else(|| serde_json::to_string_pretty(params).unwrap_or_default());
+        .unwrap_or_else(|| serde_json::to_string_pretty(params).unwrap_or_default())};
     let (tx, rx) = mpsc::channel();
     let label=origin["label"].as_str().map(str::to_string).unwrap_or_else(||format!("Terminal · {} · #{}",provider,origin["sessionId"].as_str().unwrap_or("").chars().take(8).collect::<String>()));
     let mut target=json!({"petId":origin["petId"],"provider":origin["provider"],"origin":origin["kind"],"sessionId":origin["sessionId"]});
@@ -361,16 +500,15 @@ pub(crate) fn ask_target(
                 "detail": detail, "questions": questions,
                 "origin":label,"target":target,"approvalScope":if method=="item/permissions/requestApproval"{"turn"}else{"once"}
             });
-    pending().lock().unwrap().insert(id.clone(), PendingRequest{reply:tx,request:request.clone()});
+    pending().lock().unwrap().insert(id.clone(), PendingRequest{reply:tx,request:request.clone(),policy,expires_at:deadline});
     let sent=app.emit("agent-request",request).is_ok();
-    let deadline = std::time::Instant::now() + Duration::from_secs(600);
     let answer = if sent {
         loop {
             if cancel.load(Ordering::Relaxed) || std::time::Instant::now() >= deadline {
                 break None;
             }
-            match rx.recv_timeout(Duration::from_secs(1)) {
-                Ok(answer) => break Some(answer),
+            match rx.recv_timeout(deadline.saturating_duration_since(Instant::now()).min(if local{Duration::from_millis(50)}else{Duration::from_secs(1)})) {
+                Ok(answer) => break if cancel.load(Ordering::Acquire)||Instant::now()>=deadline{None}else{Some(answer)},
                 Err(mpsc::RecvTimeoutError::Disconnected) => break None,
                 Err(_) => {}
             }

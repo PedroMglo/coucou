@@ -41,8 +41,11 @@ fn uri(text:&str)->Option<String> {
  (p.len()==3 && p[0]=="spotify" && ["track","album","playlist","episode"].contains(&p[1]) && p[2].len()==22 && p[2].bytes().all(|b|b.is_ascii_alphanumeric())).then_some(value)
 }
 pub fn spotify(app:&AppHandle,query:&str)->Option<Reply> {
- let action=parse(query)?;
  if let Err(text)=crate::pet_config::require("integration_spotify","music"){return Some(Reply{text,acted:false,language:Some("pt-PT".into())});}
+ if let Some(result)=crate::pet_audio::spoken(&super::wake::normalize(query)){
+  return Some(match result{Ok((text,acted))=>Reply{text,acted,language:Some("pt-PT".into())},Err(text)=>Reply{text,acted:false,language:Some("pt-PT".into())}});
+ }
+ let action=parse(query)?;
  let (text,acted)=match action {
   SpotifyAction::Open=>{let ok=tauri::async_runtime::block_on(crate::spotify::spotify_open());(if ok{"Pedi ao Spotify para abrir."}else{"Não consegui abrir o Spotify."}.into(),ok)},
   SpotifyAction::Search(term)=>{
@@ -50,7 +53,7 @@ pub fn spotify(app:&AppHandle,query:&str)->Option<Reply> {
    if opened {
     let encoded=reqwest::Url::parse("https://open.spotify.com").ok().and_then(|mut url|{url.path_segments_mut().ok()?.push("search").push(&term);Some(url.path().trim_start_matches("/search/").to_string())})?;
     crate::platform::open_url(&format!("spotify:search:{encoded}"));
-    (format!("Pedi ao Spotify para pesquisar {term}. Podes escolher a faixa na aplicação ou pedir-me para a selecionar."),true)
+    (format!("Pedi ao Spotify para pesquisar {term}. Escolhe a faixa na aplicação ou usa um link Spotify nos meus controlos."),true)
    }else{("Não consegui abrir a pesquisa do Spotify.".into(),false)}
   },
   SpotifyAction::Item(item)=>{
@@ -78,7 +81,7 @@ pub fn spotify(app:&AppHandle,query:&str)->Option<Reply> {
   for input in ["próxima música","next track","avança"]{assert_eq!(parse(input),Some(SpotifyAction::Next));}
   assert_eq!(parse("volume para 30 por cento"),Some(SpotifyAction::Volume(30.0)));assert_eq!(parse("volume 150"),None);
   assert_eq!(parse("pesquisa Radiohead"),Some(SpotifyAction::Search("Radiohead".into())));
-  assert_eq!(parse("explica como o Spotify funciona"),None,"free-form requests use the owner's own assistant conversation");
+  assert_eq!(parse("explica como o Spotify funciona"),None,"unrecognized commands never become an implicit model turn");
  }
  #[test]fn only_spotify_items_can_be_selected_for_playback(){
   assert_eq!(uri("https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC?si=test"),Some("spotify:track:4uLU6hMCjMI75M1A2tKUQC".into()));

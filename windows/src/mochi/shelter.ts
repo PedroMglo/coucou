@@ -14,14 +14,19 @@ export function shelterLayout(band: Band | null | undefined, count: number, expa
 /** A speech tail stays attached to its moving owner and never crosses bar controls. */
 export function speechPlacement(x:number,y:number,scale:number,band:Band | null | undefined,width:number,others:readonly number[]=[]) {
   if (!band) return {left:Math.max(8,Math.min(width-320,x-150)),top:y+38,width:312,side:"top",tip:150};
+  const belowBar=()=>{
+    const cardWidth=Math.min(312,Math.max(0,width-16));
+    const left=Math.max(8,Math.min(width-cardWidth-8,x-(x>width/2?cardWidth-24:24)));
+    return {left,top:Math.max(band.height+8,y+38*scale),width:cardWidth,side:"top",tip:Math.max(16,Math.min(cardWidth-24,x-left))};
+  };
   const lane=band.lanes.find(([a,b])=>x>=a && x<=b);
-  if(!lane)return null;
+  if(!lane)return belowBar();
   const radius=24*scale;
   const left=Math.max(lane[0],...others.filter(v=>v<x).map(v=>v+radius+4));
   const right=Math.min(lane[1],...others.filter(v=>v>x).map(v=>v-radius-4));
   const a=x-radius-6-left,b=right-x-radius-6;
   const onRight=b>=a,available=Math.min(312,onRight?b:a);
-  if(available<48)return null;
+  if(available<96)return belowBar();
   const height=Math.min(38,band.height-2);
   return {left:onRight?x+radius+6:x-radius-6-available,top:Math.max(1,(band.height-height)/2),width:available,height,side:onRight?"left":"right",tip:Math.min(19,band.height/2)};
 }

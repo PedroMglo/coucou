@@ -20,12 +20,30 @@ test("speech follows its moving pet inside free bar space without covering anoth
  for(let x=125;x<=475;x+=.5){
   const others=[x<300?475:125];
   const r=speechPlacement(x,21,.6,band,900,others);
-  if(!r)continue;
+  assert.ok(r,'Speech must remain reachable when a lane is crowded');
+  if(!('height'in r)){
+   assert.ok(r.top>=height+8);
+   assert.ok(r.left>=8&&r.left+r.width<=892);
+   continue;
+  }
   assert.ok(r.left>=100 && r.left+r.width<=500);
   assert.ok(r.top>=0 && r.top+r.height<=height);
   assert.ok(r.left>=x+14 || r.left+r.width<=x-14);
   assert.ok(others.every(o=>r.left>=o+14 || r.left+r.width<=o-14));
  }
+ }
+});
+
+test('two working pets in a narrow bar retain readable speech below the controls',()=>{
+ for(const width of [320,900,1440]){
+  const band={height:44,lanes:[[width-120,width-20]]};
+  for(const x of [width-100,width-45]){
+   const r=speechPlacement(x,22,.7,band,width,[x===width-100?width-45:width-100]);
+   assert.ok(r);assert.equal('height'in r,false);
+   assert.ok(r.top>=52);assert.ok(r.width>=Math.min(304,width-16));
+   assert.ok(r.left>=8&&r.left+r.width<=width-8);
+   assert.ok(r.tip>=16&&r.tip<=r.width-24);
+  }
  }
 });
 

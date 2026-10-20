@@ -1,7 +1,7 @@
 //! A single non-activating habitat, with an input region only over each pet.
 //! No cursor poll, automatic media actions or permissions.
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex,OnceLock};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -18,8 +18,17 @@ pub struct Surface {
 #[derive(Clone, Default, Serialize)]
 pub struct Band { height: f64, lanes: Vec<(f64, f64)> }
 
+/// The pets-only control surface shares the display with the native clock.
+/// Use the observed bar height rather than guessing from a widget list.
+pub fn native_bar_height(screen:&crate::island::ScreenInfo)->Option<f64>{
+ #[cfg(target_os="linux")]{native::bar_band(screen,false,false).map(|band|band.height)}
+ #[cfg(not(target_os="linux"))]{let _=screen;None}
+}
+
 #[derive(Default)]
 struct Habitat {
+    /// Captured on GTK when this surface is created, never queried on Tokio.
+    mode:OnceLock<crate::platform::DesktopMode>,
     enabled: AtomicBool,
     surface: Mutex<Surface>,
     anchor: Mutex<Option<(f64, f64)>>,
@@ -44,6 +53,10 @@ pub fn center(app: &AppHandle) -> Option<(f64, f64)> {
 
 #[tauri::command]
 pub async fn companions_configure(app: AppHandle, enabled: bool, count: usize) -> Option<Surface> {
+    // Linux habitat presentation never owns an explicitly opened conversation.
+    // Layout changes and turning off the wandering pets must keep its draft,
+    // exact session and any pending native decision available in the float.
+    #[cfg(not(target_os="linux"))]
     if !enabled{crate::pet_chat::pet_chat_hide(app.clone());}
     #[cfg(target_os = "linux")]
     { native::configure(&app, enabled, count.min(64)).await }
@@ -91,10 +104,10 @@ pub fn companions_anchor(app: AppHandle, x: f64, y: f64) {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct OpenPet { pill_id: String, view: Option<String> }
+struct OpenPet { pill_id: String, view: Option<String>, manual: bool }
 
 #[tauri::command]
-pub fn companions_open(app: AppHandle, pill_id: String, x: f64, y: f64, view: Option<String>) {
+pub fn companions_open(app: AppHandle, pill_id: String, x: f64, y: f64, view: Option<String>, manual: Option<bool>) {
     let habitat = app.state::<Habitat>();
     if !habitat.enabled.load(Ordering::Relaxed) || !x.is_finite() || !y.is_finite() { return; }
     let surface = habitat.surface.lock().unwrap().clone();
@@ -103,7 +116,7 @@ pub fn companions_open(app: AppHandle, pill_id: String, x: f64, y: f64, view: Op
     // Wake the receiving webview before routing the click, including recovery
     // from a version that hid it instead of mapping a transparent strip.
     crate::set_collapsed(app.clone(), app.state::<crate::Shared>(), false);
-    let _ = app.emit_to(crate::island::WINDOW_LABEL, "companions-open", OpenPet { pill_id, view: view.filter(|v| v.len() <= 32) });
+    let _ = app.emit_to(crate::island::WINDOW_LABEL, "companions-open", OpenPet { pill_id, view: view.filter(|v| v.len() <= 32), manual: manual.unwrap_or(false) });
 }
 
 #[cfg(target_os = "linux")]
@@ -130,7 +143,7 @@ mod native {
         });
         BAR_WATCH.with(|slot| *slot.borrow_mut() = Some(monitor));
     }
-    fn bar_band(screen: &island::ScreenInfo, control:bool, system_center:bool) -> Option<Band> {
+    pub(super) fn bar_band(screen: &island::ScreenInfo, control:bool, system_center:bool) -> Option<Band> {
         use std::io::Read;
         let mut bytes = Vec::new();
         std::fs::File::open(bar_path()?).ok()?.take(65537).read_to_end(&mut bytes).ok()?;
@@ -165,6 +178,7 @@ mod native {
 
     pub fn create(app: &AppHandle) {
         let mode = platform::desktop_mode();
+        let _=app.state::<Habitat>().mode.set(mode);
         if mode == platform::DesktopMode::Off { return; }
         #[allow(unused_mut)]
         let mut url = WebviewUrl::App("companions.html".into());
@@ -213,7 +227,7 @@ mod native {
         let (pref, clearance, bar_mode, control, system_center) = {
             let shared = app.state::<Shared>();
             let settings = shared.settings.lock().unwrap();
-            (settings.screen.clone(), settings.companion_top_clearance, settings.companion_bar_mode, settings.pet_control_bar, settings.pet_system_center)
+            (settings.screen.clone(), settings.companion_top_clearance, settings.companion_bar_mode, settings.pet_control_bar||settings.pet_system_center, settings.pet_system_center)
         };
         let screen = island::screen_info(app, &pref);
         let band = bar_mode.then(|| bar_band(&screen,control,system_center).unwrap_or(Band { height: 40.0, lanes: Vec::new() }));
@@ -227,13 +241,15 @@ mod native {
             height: if bar_mode { 320.0 } else { (rows as f64 * 76.0 + 180.0).min(screen.height - top).max(88.0) }, top, band,
         };
         *habitat.surface.lock().unwrap() = surface.clone();
-        let mode = app.state::<std::sync::Arc<crate::desktop::Desktop>>().mode;
+        // The habitat owns its platform surface independently of the retired
+        // singleton desktop renderer (whose state is intentionally Off).
+        let mode = *habitat.mode.get()?;
         if mode == platform::DesktopMode::Layer {
-            let island = island::window(app)?;
             let win2 = win.clone();
+            let origin=(screen.x.round() as i32,screen.y.round() as i32);
             let (tx, rx) = tokio::sync::oneshot::channel();
             let _ = app.run_on_main_thread(move || {
-                let ok = platform::layer_display(&island, &win2).is_some();
+                let ok = platform::pin_layer_to_monitor(&win2,origin.0,origin.1);
                 platform::set_layer_margins(&win2, 0.0, top);
                 let _ = tx.send(ok);
             });
@@ -244,7 +260,25 @@ mod native {
                 ((screen.y + top) * screen.scale).round() as i32,
             ));
         }
-        if win.set_size(LogicalSize::new(surface.width, surface.height)).is_err() { return None; }
+        // Moving the GTK layer can preserve the previous WebKit/Fixed minimum
+        // size. Resize the actual webview and its own toplevel together before
+        // reporting this surface to the renderer. These are logical pixels.
+        let (width,height)=(surface.width,surface.height);
+        if ![width,height].iter().all(|v|v.is_finite()&&*v>=1.0&&*v<=f64::from(i32::MAX)){return None;}
+        let (width,height)=(width.round() as i32,height.round() as i32);
+        let resizing=win.clone();
+        let(tx,rx)=tokio::sync::oneshot::channel();
+        if win.with_webview(move|native|{
+            use gtk::prelude::*;
+            let Ok(window)=resizing.gtk_window()else{let _=tx.send(false);return;};
+            native.inner().set_size_request(width,height);
+            window.set_resizable(true);
+            window.set_default_size(width,height);
+            window.resize(width,height);
+            let _=tx.send(true);
+        }).is_err(){return None;}
+        if !rx.await.unwrap_or(false){return None;}
+        if win.set_size(LogicalSize::new(f64::from(width),f64::from(height))).is_err() { return None; }
         habitat.enabled.store(true, Ordering::Relaxed);
         crate::flow::pill::update(app, |_| {});
         // Mapping a blank habitat before the desktop bar exists puts it below

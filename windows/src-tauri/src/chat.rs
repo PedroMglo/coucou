@@ -76,10 +76,17 @@ struct Conversation {
     plain: Vec<Value>,
     session: Option<CliSession>,
     active: Option<Arc<AtomicBool>>,
+    // Runtime proof only; restored/saved native IDs are not current process liveness.
+    session_epoch: Option<u64>,
     turn_cancel:Option<Arc<AtomicBool>>,
     tasks: Vec<crate::assistant_tasks::Task>,
+    task_notice_id: Option<String>,
+    request_history:Vec<RequestRecord>,
     task_saved: Option<std::time::Instant>,
+    // Transient proof that tasks.last belongs to the currently admitted turn.
+    observability_task_epoch: Option<u64>,
     save_error:Option<String>,
+    local_capability:Option<LocalCapability>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -91,6 +98,8 @@ pub struct SavedConversation {
     #[serde(default)] pub updated:u64,
     pub messages: Vec<Value>, pub session: Option<CliSession>,
     #[serde(default)] pub tasks: Vec<crate::assistant_tasks::Task>,
+    #[serde(default,skip_serializing_if="Option::is_none")] pub task_notice_id: Option<String>,
+    #[serde(default,skip_serializing_if="Vec::is_empty")] pub request_history:Vec<RequestRecord>,
 }
 
 #[derive(Serialize)]
@@ -100,7 +109,75 @@ pub struct ConversationSummary {
     pub created:u64,pub updated:u64,pub message_count:usize,pub current:bool,
 }
 #[derive(Serialize)]
-pub struct ConversationView {pub id:String,pub messages:Vec<Value>,pub busy:bool,pub turn:u64,pub stream:String,pub query:String,#[serde(skip_serializing_if="Option::is_none")]pub notice:Option<String>}
+pub struct ConversationView {pub id:String,pub messages:Vec<Value>,pub busy:bool,pub turn:u64,pub stream:String,pub query:String,#[serde(skip_serializing_if="Option::is_none")]pub notice:Option<String>,#[serde(rename="localExecution",skip_serializing_if="Option::is_none")]pub local_execution:Option<LocalCapability>,#[serde(rename="taskNotice",skip_serializing_if="Option::is_none")]pub task_notice:Option<TaskNotice>,#[serde(rename="requestHistory",skip_serializing_if="Vec::is_empty")]pub request_history:Vec<RequestRecord>}
+#[derive(Clone,Debug,Serialize,PartialEq)]
+#[serde(rename_all="camelCase")]
+pub struct TaskNotice {pub task_id:String,pub conversation_id:String,pub provider:String,pub phase:String,pub query:String,pub message:String}
+
+/// Public request provenance, independent of bounded execution receipts. This
+/// is display data, never model context, an assistant answer or a resume permit.
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct RequestRecord {
+    pub task_id:String,pub conversation_id:String,pub provider:String,pub pet_id:String,
+    pub sequence:u64,pub query:String,pub phase:String,pub started:u64,pub updated:u64,
+    pub source:String,
+    #[serde(default,skip_serializing_if="Option::is_none")]pub message_index:Option<usize>,
+    #[serde(default,skip_serializing_if="Option::is_none")]pub messages_added:Option<usize>,
+}
+impl RequestRecord {
+    fn captured(task:&crate::assistant_tasks::Task,cid:&str,sequence:u64,index:usize,query:&str)->Self {
+        Self{task_id:task.id.clone(),conversation_id:cid.into(),provider:task.provider.clone(),
+            pet_id:crate::pet_config::pet_id(&task.provider).unwrap_or("").into(),sequence,query:query.into(),
+            phase:"pending".into(),started:task.started,updated:task.updated,source:"captured".into(),
+            message_index:Some(index),messages_added:Some(0)}
+    }
+    fn recover(&mut self){if self.phase=="pending"{self.phase="interrupted".into();}}
+}
+fn record_terminal(records:&mut [RequestRecord],task:&crate::assistant_tasks::Task,added:Option<usize>){
+    if !matches!(task.phase.as_str(),"done"|"stopped"|"failed"|"interrupted"){return;}
+    if let Some(record)=records.iter_mut().find(|r|r.task_id==task.id&&r.provider==task.provider&&Some(r.conversation_id.as_str())==task.conversation_id.as_deref()){
+        record.phase=task.phase.clone();record.updated=task.updated;
+        if let Some(count)=added{record.messages_added=Some(count);}
+    }
+}
+/// Only an explicit, unique logical CID in the retained journal can seed older
+/// provenance. Its placement among public messages is unknown, never guessed.
+fn seed_legacy_requests(provider:&str,c:&mut SavedConversation,tasks:&[crate::assistant_tasks::Task]){
+    if !c.request_history.is_empty(){return;}
+    for task in tasks.iter().filter(|t|t.provider==provider&&t.conversation_id.as_deref()==Some(c.id.as_str())&&t.valid()&&crate::assistant_memory::valid_id(&t.id)
+        &&matches!(t.phase.as_str(),"done"|"stopped"|"failed"|"interrupted")){
+        if tasks.iter().filter(|t|t.id==task.id).count()!=1{continue;}
+        let mut record=RequestRecord::captured(task,&c.id,c.request_history.len() as u64+1,0,&task.query);
+        record.phase=task.phase.clone();record.source="taskJournal".into();record.message_index=None;record.messages_added=None;
+        c.request_history.push(record);
+    }
+}
+
+/// A journal reference supplies public status only, never an execution permit,
+/// a replacement assistant message, or a guess at the latest task for this pet.
+fn project_task_notice(provider:&str,cid:&str,reference:Option<&str>,tasks:&[crate::assistant_tasks::Task])->Option<TaskNotice>{
+    let id=reference?;
+    let mut matches=tasks.iter().filter(|task|task.id==id);
+    let task=matches.next()?;
+    if matches.next().is_some()||task.provider!=provider||task.conversation_id.as_deref()!=Some(cid)||task.resumed_by.is_some(){return None;}
+    let message=match task.phase.as_str(){
+        "stopped"=>"O pedido foi interrompido. Consulta os passos registados e verifica os efeitos antes de retomar.",
+        "interrupted"=>"A conclusão deste pedido não foi confirmada. Consulta os passos registados e verifica os efeitos antes de retomar.",
+        "failed"=>"A tarefa não terminou. Consulta os passos registados antes de retomar.",
+        _=>return None,
+    };
+    Some(TaskNotice{task_id:task.id.clone(),conversation_id:cid.into(),provider:provider.into(),phase:task.phase.clone(),query:task.query.chars().take(4000).collect(),message:message.into()})
+}
+fn conversation_notice(save_error:Option<&str>,task_notice:Option<&TaskNotice>)->Option<String>{
+    match (save_error,task_notice){
+        (Some(error),Some(task))=>Some(format!("{error}\n\n{}",task.message)),
+        (Some(error),None)=>Some(error.into()),
+        (None,Some(task))=>Some(task.message.clone()),
+        (None,None)=>None,
+    }
+}
+#[derive(Clone,PartialEq,Serialize)]pub struct LocalCapability{pub model:String,pub tools:bool}
 
 /// Pins the channel selected by a writing surface until its send finishes,
 /// including async provider/model discovery before the native turn starts.
@@ -149,18 +226,23 @@ impl Conversation {
         if self.id.is_empty() {self.id=crate::assistant_memory::new_id();}
         if self.created==0 {self.created=crate::assistant_memory::now();self.updated=self.created;}
     }
-    fn saved(&self)->SavedConversation {SavedConversation{id:self.id.clone(),created:self.created,updated:self.updated,messages:self.plain.clone(),session:self.session.clone(),tasks:self.tasks.clone()}}
-    fn from_saved(c:SavedConversation)->Self {Self{id:c.id,created:c.created,updated:c.updated,native:crate::assistant_memory::context(&c.messages),plain:c.messages,session:c.session,tasks:c.tasks,..Default::default()}}
+    fn saved(&self)->SavedConversation {SavedConversation{id:self.id.clone(),created:self.created,updated:self.updated,messages:self.plain.clone(),session:self.session.clone(),tasks:self.tasks.clone(),task_notice_id:self.task_notice_id.clone(),request_history:self.request_history.clone()}}
+    fn from_saved(c:SavedConversation)->Self {Self{id:c.id,created:c.created,updated:c.updated,native:crate::assistant_memory::context(&c.messages),plain:c.messages,session:c.session,tasks:c.tasks,task_notice_id:c.task_notice_id,request_history:c.request_history,..Default::default()}}
     fn busy(&self)->bool {self.active.is_some() || self.pending.is_some()}
-    fn view(&self)->ConversationView {
+    fn view(&self,provider:&str)->ConversationView {
         let busy=self.busy();
-        ConversationView{id:self.id.clone(),messages:self.plain.clone(),busy,turn:self.epoch,stream:if busy{self.live_text.clone()}else{String::new()},query:if busy{self.live_query.clone()}else{String::new()},notice:self.save_error.clone()}
+        let task_notice=if busy{None}else{project_task_notice(provider,&self.id,self.task_notice_id.as_deref(),&self.tasks)};
+        let notice=conversation_notice(self.save_error.as_deref(),task_notice.as_ref());
+        ConversationView{id:self.id.clone(),messages:self.plain.clone(),busy,turn:self.epoch,stream:if busy{self.live_text.clone()}else{String::new()},query:if busy{self.live_query.clone()}else{String::new()},notice,local_execution:self.local_capability.clone(),task_notice,request_history:self.request_history.clone()}
     }
 }
 
 fn summary(provider:&str,c:&SavedConversation,current:bool)->ConversationSummary {
-    let title=c.messages.iter().find(|m|m["role"]=="user").and_then(|m|m["content"].as_str()).unwrap_or("Nova conversa").lines().next().unwrap_or("Nova conversa").chars().take(80).collect();
-    let preview=c.messages.last().and_then(|m|m["content"].as_str()).unwrap_or("").chars().take(160).collect();
+    let first_request=c.request_history.first();
+    let first_message=c.messages.iter().find(|m|m["role"]=="user").and_then(|m|m["content"].as_str());
+    let title=first_request.filter(|r|r.message_index==Some(0)).map(|r|r.query.as_str()).or(first_message).or_else(||first_request.map(|r|r.query.as_str())).unwrap_or("Nova conversa").lines().next().unwrap_or("Nova conversa").chars().take(80).collect();
+    let last_request=c.request_history.last();
+    let preview=last_request.filter(|r|r.message_index==Some(c.messages.len())).map(|r|r.query.as_str()).or_else(||c.messages.last().and_then(|m|m["content"].as_str())).or_else(||last_request.map(|r|r.query.as_str())).unwrap_or("").chars().take(160).collect();
     ConversationSummary{id:c.id.clone(),provider:provider.into(),title,preview,created:c.created,updated:c.updated,message_count:c.messages.len(),current}
 }
 
@@ -173,6 +255,19 @@ pub struct Turn {
     pub session: Option<CliSession>,
     pub cancel: Arc<AtomicBool>,
 }
+/// Immutable prompt metadata for one admitted local turn, not an execution grant.
+#[derive(Clone, Debug)]
+pub(crate) struct LocalIdentity {
+    owner: String,
+    conversation_id: String,
+    name: String,
+}
+impl LocalIdentity {
+    pub(crate) fn owner(&self) -> &str { &self.owner }
+    pub(crate) fn conversation_id(&self) -> &str { &self.conversation_id }
+    pub(crate) fn name(&self) -> &str { &self.name }
+}
+pub(crate) const LOCAL_LANGUAGE_POLICY: &str = "By default, reply in European Portuguese from Portugal (pt-PT), including vocabulary and phrasing. Honor any language explicitly requested by the user. Preserve code blocks and technical names without translating them.";
 pub const BUSY_ERROR:&str="Este pet já está a executar uma tarefa. Abre a tarefa para a acompanhar ou interromper.";
 pub struct TurnLease {chat:Chat,turn:Turn,app:Option<AppHandle>}
 impl TurnLease {
@@ -206,10 +301,19 @@ impl Drop for TurnLease {
 impl Chat {
     pub fn persistent(path: std::path::PathBuf) -> Self {
         let (saved,disk_error)=match crate::assistant_memory::load(&path) {Ok(saved)=>(saved,false),Err(_)=>{crate::log::line("assistant memory: could not read library; keeping disk unchanged");(Default::default(),true)}};
-        let pets=saved.pets.into_iter().map(|(provider,mut c)| {
-            for task in &mut c.tasks {task.recover();}
-            (provider,Conversation::from_saved(c))
-        }).collect();
+        let mut saved=saved;
+        let mut task_ids=HashMap::<String,usize>::new();
+        for task in saved.pets.values().flat_map(|c|c.tasks.iter()){*task_ids.entry(task.id.clone()).or_default()+=1;}
+        for(provider,c)in &mut saved.pets{
+            for task in &mut c.tasks{task.recover();}
+            let tasks=c.tasks.iter().filter(|t|task_ids.get(&t.id)==Some(&1)).cloned().collect::<Vec<_>>();seed_legacy_requests(provider,c,&tasks);
+            for record in &mut c.request_history{record.recover();}
+        }
+        for(provider,archives)in &mut saved.archives{
+            let tasks=saved.pets.get(provider).map(|c|c.tasks.iter().filter(|t|task_ids.get(&t.id)==Some(&1)).cloned().collect::<Vec<_>>()).unwrap_or_default();
+            for c in archives{seed_legacy_requests(provider,c,&tasks);for record in &mut c.request_history{record.recover();}}
+        }
+        let pets=saved.pets.into_iter().map(|(provider,c)|(provider,Conversation::from_saved(c))).collect();
         Self {inner:Arc::new(Mutex::new(Conversations{next:0,pets,archives:saved.archives})),disk:Some(Arc::new(path)),disk_error,admission:None}
     }
 
@@ -240,7 +344,7 @@ impl Chat {
         if self.disk_error {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
         if !crate::assistant_memory::supported(provider) {return Err("Este pet não tem biblioteca de conversas.".into());}
         let mut all=self.inner.lock().unwrap();let c=all.pets.entry(provider.into()).or_default();c.identify();
-        Ok(c.view())
+        Ok(c.view(provider))
     }
 
     /// Capture a document drop's owner without cloning its public archive.
@@ -267,9 +371,12 @@ impl Chat {
         if self.disk_error {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
         if !crate::assistant_memory::supported(provider) || !crate::assistant_memory::valid_id(id) {return Err("Conversa inválida para este pet.".into());}
         let all=self.inner.lock().unwrap();
-        if let Some(c)=all.pets.get(provider).filter(|c|c.id==id) {return Ok(c.view());}
+        if let Some(c)=all.pets.get(provider).filter(|c|c.id==id) {return Ok(c.view(provider));}
         let saved=all.archives.get(provider).and_then(|list|list.iter().find(|c|c.id==id)).ok_or("A conversa não pertence a este pet ou já não existe.")?;
-        Ok(ConversationView{id:saved.id.clone(),messages:saved.messages.clone(),busy:false,turn:0,stream:String::new(),query:String::new(),notice:None})
+        let tasks=all.pets.get(provider).map(|c|c.tasks.as_slice()).unwrap_or(&[]);
+        let task_notice=project_task_notice(provider,&saved.id,saved.task_notice_id.as_deref(),tasks);
+        let notice=conversation_notice(None,task_notice.as_ref());
+        Ok(ConversationView{id:saved.id.clone(),messages:saved.messages.clone(),busy:false,turn:0,stream:String::new(),query:String::new(),notice,local_execution:None,task_notice,request_history:saved.request_history.clone()})
     }
 
     pub fn conversation_for_session(&self,provider:&str,session:&str)->Option<String> {
@@ -373,13 +480,13 @@ impl Chat {
         let mut all=self.inner.lock().unwrap();let query=query.chars().take(256).collect::<String>().to_lowercase();
         let c=all.pets.entry(provider.into()).or_default();c.identify();let current=c.saved();
         let mut result:Vec<_>=std::iter::once((&current,true)).chain(all.archives.get(provider).into_iter().flatten().map(|c|(c,false)))
-            .filter(|(c,_)|query.is_empty() || c.messages.iter().any(|m|m["content"].as_str().is_some_and(|s|s.to_lowercase().contains(&query))))
+            .filter(|(c,_)|query.is_empty() || c.messages.iter().any(|m|m["content"].as_str().is_some_and(|s|s.to_lowercase().contains(&query))) || c.request_history.iter().any(|r|r.query.to_lowercase().contains(&query)))
             .map(|(c,active)|summary(provider,c,active)).collect();
         result.sort_by_key(|c|(std::cmp::Reverse(c.current),std::cmp::Reverse(c.updated)));Ok(result)
     }
 
     fn archive(all:&mut Conversations,provider:&str)->Result<(),String> {
-        if let Some(c)=all.pets.get(provider).filter(|c|!c.plain.is_empty() || c.session.is_some()) {
+        if let Some(c)=all.pets.get(provider).filter(|c|!c.plain.is_empty() || c.session.is_some() || c.task_notice_id.is_some() || !c.request_history.is_empty()) {
             let mut saved=c.saved();saved.tasks.clear();
             let archives=all.archives.entry(provider.into()).or_default();
             if archives.len()>=crate::assistant_memory::MAX_ARCHIVES {return Err("A biblioteca deste pet atingiu 100 conversas arquivadas. A conversa atual foi preservada.".into());}
@@ -393,13 +500,13 @@ impl Chat {
         let mut all=self.inner.lock().unwrap();
         self.flush_pending(&mut all)?;
         if all.pets.get(provider).is_some_and(Conversation::busy) {return Err(BUSY_ERROR.into());}
-        if let Some(c)=all.pets.get(provider).filter(|c|c.id==id) {return Ok(c.view());}
+        if let Some(c)=all.pets.get(provider).filter(|c|c.id==id) {return Ok(c.view(provider));}
         let mut next=all.clone();
         let saved=next.archives.get_mut(provider).and_then(|list|list.iter().position(|c|c.id==id).map(|at|list.remove(at))).ok_or("A conversa não pertence a este pet ou já não existe.")?;
         Self::archive(&mut next,provider)?;
         let tasks=next.pets.get_mut(provider).map(|c|std::mem::take(&mut c.tasks)).unwrap_or_default();
         let mut c=Conversation::from_saved(saved);c.tasks=tasks;next.next+=1;c.epoch=next.next;
-        let view=c.view();next.pets.insert(provider.into(),c);
+        let view=c.view(provider);next.pets.insert(provider.into(),c);
         self.persist_checked(&next)?;*all=next;Ok(view)
     }
 
@@ -438,22 +545,40 @@ impl Chat {
     }
 
     pub fn start_task(&self,turn:&Turn,query:&str,cwd:&str,backend:&str,model:&str,resume_from:Option<&str>)->Result<(),String> {
+        self.start_task_inner(turn,query,cwd,backend,model,resume_from,None)
+    }
+    pub(crate) fn start_local_task(&self,turn:&Turn,query:&str,cwd:&str,model:&str,resume_from:Option<&str>,effort:Option<&str>)->Result<(),String>{
+        self.start_task_inner(turn,query,cwd,"ollama",model,resume_from,effort)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn start_task_inner(&self,turn:&Turn,query:&str,cwd:&str,backend:&str,model:&str,resume_from:Option<&str>,local_effort:Option<&str>)->Result<(),String>{
         let mut all=self.inner.lock().unwrap();let mut next=all.clone();
-        let c=next.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch)
+        let c=next.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch&&!turn.cancel.load(Ordering::Acquire)&&c.turn_cancel.as_ref().is_some_and(|f|Arc::ptr_eq(f,&turn.cancel)))
             .ok_or("O pedido já não pertence ao turno ativo desta conversa.")?;
         c.identify();
         let mut task=crate::assistant_tasks::Task::new(&turn.provider,query,cwd,backend,model,turn.epoch);
         // Record the stable public dialogue before any native startup. Native
         // session identity is confirmed separately by remember_session.
         task.conversation_id=Some(c.id.clone());
+        task.local_reasoning_effort=local_effort.map(str::to_owned);
+        if backend=="ollama"&&!task.valid(){return Err("Perfil de execução local inválido.".into());}
         if let Some(id)=resume_from {
             let parent=c.tasks.iter_mut().find(|t|t.id==id && matches!(t.phase.as_str(),"interrupted"|"stopped"|"failed"))
                 .ok_or("A tarefa original já não está disponível para retomar.")?;
             task.query=parent.query.clone();task.resumes=Some(parent.id.clone());parent.resumed_by=Some(task.id.clone());parent.update("resumed","");
         }
+        let original=resume_from.and_then(|id|c.request_history.iter().find(|r|r.task_id==id)).map(|r|r.query.clone()).unwrap_or_else(||task.query.clone());
+        c.request_history.push(RequestRecord::captured(&task,&c.id,c.request_history.len() as u64+1,c.plain.len(),&original));
+        c.task_notice_id=Some(task.id.clone());
+        c.updated=crate::assistant_memory::now();
         c.tasks.push(task);
+        c.observability_task_epoch=Some(turn.epoch);
         if c.tasks.len()>10 {c.tasks.drain(..c.tasks.len()-10);}
         c.task_saved=Some(std::time::Instant::now());
+        let retained=c.tasks.iter().map(|task|task.id.clone()).collect::<std::collections::HashSet<_>>();
+        if let Some(archives)=next.archives.get_mut(&turn.provider){for saved in archives {
+            if saved.task_notice_id.as_ref().is_some_and(|id|!retained.contains(id)){saved.task_notice_id=None;}
+        }}
         self.persist_checked(&next)?;*all=next;Ok(())
     }
 
@@ -464,8 +589,13 @@ impl Chat {
         let Some(task)=c.tasks.last_mut() else{return false};
         if task.terminal() || (turn.cancel.load(Ordering::Relaxed)&&!matches!(phase,"stopping"|"stopped"|"failed")){return false;}
         let changed=task.phase!=phase;task.update(phase,message);
+        record_terminal(&mut c.request_history,task,None);
+        if task.terminal(){c.updated=task.updated;}
         let urgent=task.terminal() || matches!(phase,"approval"|"question");
-        if flush || urgent {c.task_saved=Some(std::time::Instant::now());self.persist(&all);}
+        if flush || urgent {
+            c.task_saved=Some(std::time::Instant::now());
+            if let Err(error)=self.persist_checked(&all){if let Some(c)=all.pets.get_mut(&turn.provider){c.save_error=Some(format!("{error} O estado do pedido permanece em memória. Corrige a gravação antes de continuar."));}}
+        }
         changed || flush || urgent
     }
 
@@ -532,6 +662,16 @@ impl Chat {
         else if let Some(cancel)=&c.active {cancel.store(true,Ordering::Release);true}else{false}
     }
 
+    /// Admit a short presentation effect only while this exact conversation is
+    /// active. The lock orders the effect against Stop/reset/turn replacement;
+    /// callers must not await, perform disk/network IO or grant execution.
+    pub(crate) fn with_live_conversation<T>(&self,provider:&str,id:&str,present:impl FnOnce()->T)->Result<Option<T>,String>{
+        let all=self.inner.try_lock().map_err(|_|"A conversa está a atualizar. Tenta abrir o pedido novamente.".to_string())?;
+        let Some(c)=all.pets.get(provider)else{return Ok(None);};
+        if c.id!=id||c.active.as_ref().is_none_or(|cancel|cancel.load(Ordering::Acquire)){return Ok(None);}
+        Ok(Some(present()))
+    }
+
     fn start(&self,provider:&str,cancel:Arc<AtomicBool>,exclusive:bool)->Result<Turn,String> {
         if self.disk_error && exclusive {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
         let mut all=self.inner.lock().unwrap();
@@ -591,6 +731,30 @@ impl Chat {
             .map(|c|(c.id.clone(),turn.epoch))
     }
 
+    /// The caller supplies a single already-read configuration snapshot. No IO,
+    /// await, global provider lookup or optional accounting handle is used here.
+    pub(crate) fn capture_local_identity(
+        &self, turn: &Turn, config: &crate::pet_config::Configuration, expected_pet: &str,
+    ) -> Result<LocalIdentity, String> {
+        let unavailable = || "Não foi possível confirmar a identidade deste turno. Atualiza a conversa antes de enviar.".to_string();
+        let all = self.inner.lock().map_err(|_| unavailable())?;
+        let c = all.pets.get(&turn.provider).filter(|c|
+            !turn.cancel.load(Ordering::Acquire) && c.epoch == turn.epoch
+            && c.turn_cancel.as_ref().is_some_and(|flag| Arc::ptr_eq(flag, &turn.cancel))
+            && c.active.as_ref().is_some_and(|flag| Arc::ptr_eq(flag, &turn.cancel))
+            && crate::assistant_memory::valid_id(&c.id)
+        ).ok_or_else(unavailable)?;
+        let pet_id = crate::pet_config::pet_id(&turn.provider).ok_or_else(unavailable)?;
+        if pet_id != expected_pet { return Err(unavailable()); }
+        let pet = config.pets.get(pet_id).filter(|pet|
+            pet.provider == turn.provider && !pet.name.trim().is_empty()
+            && pet.name.chars().count() <= 40 && !pet.name.chars().any(char::is_control)
+        ).ok_or_else(unavailable)?;
+        Ok(LocalIdentity {
+            owner: turn.provider.clone(), conversation_id: c.id.clone(), name: pet.name.clone(),
+        })
+    }
+
     pub fn cancel_provider(&self,provider:&str) {
         if let Some(c)=self.inner.lock().unwrap().pets.get(provider){
             if let Some(active)=&c.active {active.store(true,Ordering::Release);}
@@ -608,7 +772,7 @@ impl Chat {
     pub fn remember_session(&self,turn:&Turn,id:&str,cwd:&str,full_access:bool) {
         let mut all=self.inner.lock().unwrap();
         if let Some(c)=all.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch && !turn.cancel.load(Ordering::Relaxed)) {
-            c.session=Some(CliSession{id:id.into(),cwd:cwd.into(),full_access});
+            c.session=Some(CliSession{id:id.into(),cwd:cwd.into(),full_access});c.session_epoch=Some(turn.epoch);
             if let Some(task)=c.tasks.last_mut(){task.session_id=Some(id.into());}
             self.persist(&all);
         }
@@ -625,10 +789,11 @@ impl Chat {
         let mut all=self.inner.lock().unwrap();
         let Some(c)=all.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch && !turn.cancel.load(Ordering::Relaxed)) else{return Err("Esta resposta já não pertence ao turno ativo da conversa.".into());};
         if finish_task{
-            if let Some(task)=c.tasks.last_mut(){task.update("done",answer);}
+            if let Some(task)=c.tasks.last_mut(){task.update("done",answer);record_terminal(&mut c.request_history,task,Some(2));}
             c.task_saved=Some(std::time::Instant::now());
         }
         let origin=Self::task_origin(c.tasks.last());
+        if !finish_task{c.task_notice_id=None;}
         c.native.extend([user,assistant]);
         c.plain.extend([json!({"role":"user","content":user_text}),json!({"role":"assistant","content":answer})]);
         c.updated=crate::assistant_memory::now();
@@ -650,14 +815,150 @@ impl Chat {
     pub fn commit_reply(&self,turn:&Turn,user:Value,assistant:Value,user_text:&str,answer:&str)->Result<(),String> {
         self.commit_outcome(turn,user,assistant,user_text,answer,false).map(|_|())
     }
+    pub(crate) fn commit_observed_reply(&self,turn:&Turn,user:Value,assistant:Value,user_text:&str,answer:&str)->Result<Option<String>,String> {
+        self.commit_outcome(turn,user,assistant,user_text,answer,false).map(|(_,notice)|notice)
+    }
     /// Cancellation and successful completion share the journal lock. A stop
     /// accepted first cannot subsequently become "done" with a missing reply.
     pub fn commit_task_reply(&self,turn:&Turn,user:Value,assistant:Value,user_text:&str,answer:&str)->Result<String,String>{
         self.commit_outcome(turn,user,assistant,user_text,answer,true).map(|(origin,_)|origin)
     }
+
+    pub(crate) fn local_task_identity(&self,turn:&Turn)->Result<(String,String),String>{
+        let all=self.inner.lock().unwrap();
+        let c=all.pets.get(&turn.provider).filter(|c|c.epoch==turn.epoch&&c.turn_cancel.as_ref().is_some_and(|f|Arc::ptr_eq(f,&turn.cancel))).ok_or("O turno local já terminou.")?;
+        let task=c.tasks.last().filter(|t|t.backend=="ollama"&&!t.terminal()).ok_or("Falta o trabalho local deste turno.")?;
+        Ok((task.id.clone(),c.id.clone()))
+    }
+
+    /// Transient capability notice, once per model/status in this dialogue.
+    /// This is presentation metadata and never an execution grant.
+    pub(crate) fn local_capability_changed(&self,turn:&Turn,model:&str,tools:bool)->bool{
+        let mut all=self.inner.lock().unwrap();
+        let Some(c)=all.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch&&!turn.cancel.load(Ordering::Acquire)&&c.turn_cancel.as_ref().is_some_and(|f|Arc::ptr_eq(f,&turn.cancel)))else{return false};
+        let next=LocalCapability{model:model.to_string(),tools};if c.local_capability.as_ref()==Some(&next){return false;}c.local_capability=Some(next);true
+    }
+
+    /// Admission is atomic with cancellation. Only the durable Starting record
+    /// grants a single native permit; no JSON or old receipt can recreate one.
+    pub(crate) fn admit_local_step(&self,scope:&crate::local_tasks::types::ExecutionScope,command:crate::local_tasks::types::ApprovedCommand,receipt:&crate::local_tasks::types::StepReceipt)->Result<crate::local_tasks::types::RunPermit,String>{
+        use crate::local_tasks::types::{ReceiptState,RunPermit};
+        if !scope.valid_target()||scope.policy.mode!=crate::pet_config::LocalExecutionMode::Ask{return Err("Destino ou permissão de execução local inválidos.".into());}
+        let mut all=self.inner.lock().unwrap();
+        if scope.turn.cancel.load(Ordering::Acquire)||std::time::Instant::now()>=scope.deadline||!command.belongs_to(&scope.task_id,&receipt.step_id){return Err("O comando já não pode ser iniciado.".into());}
+        self.flush_pending(&mut all)?;
+        let mut next=all.clone();let c=next.pets.get_mut("ollama").filter(|c|c.id==scope.target.session_id&&c.epoch==scope.turn.epoch&&c.turn_cancel.as_ref().is_some_and(|f|Arc::ptr_eq(f,&scope.turn.cancel))).ok_or("O destino do comando mudou.")?;
+        let task=c.tasks.last_mut().filter(|t|t.id==scope.task_id&&t.backend=="ollama"&&!t.terminal()).ok_or("O trabalho local já terminou.")?;
+        let old=task.local_execution.iter_mut().find(|r|r.step_id==receipt.step_id&&r.state==ReceiptState::Proposed).ok_or("A proposta já foi consumida.")?;
+        let mut starting=receipt.clone();starting.state=ReceiptState::Starting;starting.started_at=None;*old=starting;
+        self.persist_checked(&next)?;*all=next;
+        if scope.turn.cancel.load(Ordering::Acquire){return Err("O comando foi interrompido antes de iniciar.".into());}
+        Ok(RunPermit::after_checked_admission(command))
+    }
+
+    /// Proposals are saved before RAM changes. Results after possible effects
+    /// remain in RAM on IO failure and block admission of the following step.
+    pub(crate) fn record_local_receipt(&self,scope:&crate::local_tasks::types::ExecutionScope,receipt:crate::local_tasks::types::StepReceipt)->Result<bool,String>{
+        use crate::local_tasks::types::ReceiptState;
+        if !scope.valid_target()||!receipt.valid(){return Err("Registo de execução local inválido.".into());}
+        let mut all=self.inner.lock().unwrap();let mut next=all.clone();
+        let c=next.pets.get_mut("ollama").filter(|c|c.id==scope.target.session_id&&c.epoch==scope.turn.epoch&&c.turn_cancel.as_ref().is_some_and(|f|Arc::ptr_eq(f,&scope.turn.cancel))).ok_or("O turno local já terminou.")?;
+        let task=c.tasks.last_mut().filter(|t|t.id==scope.task_id&&!t.terminal()).ok_or("O trabalho local já terminou.")?;
+        let proposal=receipt.state==ReceiptState::Proposed;
+        if let Some(old)=task.local_execution.iter_mut().find(|r|r.step_id==receipt.step_id){if proposal{return Err("A proposta já existe.".into());}*old=receipt;}else{if !proposal||task.local_execution.len()>=crate::local_tasks::types::MAX_CALLS{return Err("Sequência local inválida.".into());}task.local_execution.push(receipt);}
+        match self.persist_checked(&next){
+            Ok(())=>{for c in next.pets.values_mut(){c.save_error=None;}*all=next;Ok(true)},
+            Err(error) if proposal=>Err(error),
+            Err(error)=>{if let Some(c)=next.pets.get_mut("ollama"){c.save_error=Some(format!("{error} O resultado da execução permanece em memória. Não repitas a operação; corrige a gravação antes de continuar."));}*all=next;Ok(false)}
+        }
+    }
+
+    pub(crate) fn commit_local_terminal(&self,scope:&crate::local_tasks::types::ExecutionScope,phase:crate::local_tasks::types::LocalTerminal,user:Value,plain:&str,text:&str)->Result<crate::local_tasks::types::LocalCommit,String>{
+        use crate::local_tasks::types::{LocalCommit,LocalTerminal};
+        if !scope.valid_target(){return Err("Destino local inválido.".into());}
+        let mut all=self.inner.lock().unwrap();
+        let c=all.pets.get_mut("ollama").filter(|c|c.id==scope.target.session_id&&c.epoch==scope.turn.epoch&&c.turn_cancel.as_ref().is_some_and(|f|Arc::ptr_eq(f,&scope.turn.cancel))).ok_or("O turno local já terminou.")?;
+        let phase=if scope.turn.cancel.load(Ordering::Acquire){LocalTerminal::Stopped}else{phase};
+        let text=if phase==LocalTerminal::Stopped{"A tarefa foi interrompida. Consulta os passos registados e verifica os efeitos antes de a retomar."}else{text};
+        let task=c.tasks.last_mut().filter(|t|t.id==scope.task_id&&!t.terminal()).ok_or("O trabalho local já terminou.")?;
+        for r in &mut task.local_execution{match r.state{crate::local_tasks::types::ReceiptState::Proposed=>r.finish(crate::local_tasks::types::ReceiptState::Skipped,None),crate::local_tasks::types::ReceiptState::Starting=>{r.state=crate::local_tasks::types::ReceiptState::Unknown;r.cause=Some(crate::local_tasks::types::ReceiptCause::CleanupUnconfirmed);},_=>{}}}
+        task.update(phase.phase(),text);task.result=text.chars().take(8000).collect();let origin=Self::task_origin(Some(task));
+        record_terminal(&mut c.request_history,task,Some(if phase==LocalTerminal::Stopped{0}else{2}));
+        c.updated=crate::assistant_memory::now();
+        // A stopped turn keeps its factual status/receipts, without persisting
+        // an interrupted assistant message as a completed public dialogue.
+        if phase!=LocalTerminal::Stopped{
+            c.native.extend([user,json!({"role":"assistant","content":text})]);c.native=crate::assistant_memory::context(&c.native);
+            c.plain.extend([json!({"role":"user","content":plain}),json!({"role":"assistant","content":text})]);c.updated=crate::assistant_memory::now();
+        }
+        c.active=None;
+        let durable=match self.persist_checked(&all){Ok(())=>{for c in all.pets.values_mut(){c.save_error=None;}true},Err(error)=>{all.pets.get_mut("ollama").unwrap().save_error=Some(format!("{error} O resultado permanece em memória. Verifica os efeitos antes de retomar."));false}};
+        Ok(LocalCommit{origin,phase,durable,text:text.into()})
+    }
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────
+
+#[cfg(all(test,target_os="linux"))]
+mod local_task_journal_tests {
+    use super::*;
+    use crate::local_tasks::{approval,types::*};
+    use std::{path::PathBuf,time::{Duration,Instant}};
+
+    fn task(chat:&Chat)->(ExecutionScope,TurnLease){
+        let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let lease=chat.lease(&turn);
+        chat.start_task(&turn,"synthetic local task","/tmp","ollama","synthetic-tools",None).unwrap();
+        let(task_id,cid)=chat.local_task_identity(&turn).unwrap();
+        let mut policy=crate::pet_config::LocalExecution::default();policy.mode=crate::pet_config::LocalExecutionMode::Ask;
+        (ExecutionScope{target:crate::session_chat::types::Target{pet_id:"ai_ollama".into(),provider:"ollama".into(),origin:crate::session_chat::types::Origin::Mochi,session_id:cid.clone(),conversation_id:Some(cid)},turn,task_id,model:"synthetic-tools".into(),base:reqwest::Url::parse("http://127.0.0.1:1/").unwrap(),deadline:Instant::now()+Duration::from_secs(10),policy,reasoning_effort:None},lease)
+    }
+    fn approved(scope:&ExecutionScope,ordinal:u8)->ApprovedCommand{
+        let spec=approval::freeze(CommandInput{program:"/bin/true".into(),args:vec![],reason:"synthetic".into(),timeout_ms:Some(1000)},std::path::Path::new("/tmp"),&scope.policy).unwrap();
+        ApprovedCommand::for_test(spec,&scope.task_id,&format!("step-{ordinal}"))
+    }
+    fn private_path()->PathBuf{std::env::temp_dir().join(format!("coucou-local-journal-{}-{}",std::process::id(),crate::assistant_memory::new_id())).join("library.json")}
+    fn corrupt(path:&std::path::Path){std::fs::remove_file(path).unwrap();std::fs::create_dir(path).unwrap();}
+    fn clean(path:&std::path::Path){let _=std::fs::remove_dir_all(path.parent().unwrap());}
+    fn finish(chat:&Chat,scope:&ExecutionScope,phase:LocalTerminal)->LocalCommit{chat.commit_local_terminal(scope,phase,json!({"role":"user","content":"public question"}),"public question","factual public answer").unwrap()}
+
+    #[test]fn cancelled_admission_and_completion_cannot_mint_success(){
+        let chat=Chat::default();let(scope,_lease)=task(&chat);chat.record_local_receipt(&scope,StepReceipt::proposed(1)).unwrap();
+        assert!(chat.cancel_task(&scope.task_id));assert!(chat.admit_local_step(&scope,approved(&scope,1),&StepReceipt::proposed(1)).is_err());
+        let committed=finish(&chat,&scope,LocalTerminal::Done);assert_eq!(committed.phase,LocalTerminal::Stopped);assert!(committed.text.contains("interrompida"));assert!(chat.history("ollama").is_empty());assert_eq!(chat.tasks()[0].phase,"stopped");assert!(!chat.tasks()[0].result.contains("factual public answer"));
+    }
+    #[test]fn durable_starting_is_required_and_permit_can_only_be_issued_once(){
+        let chat=Chat::default();let(scope,_lease)=task(&chat);let receipt=StepReceipt::proposed(1);
+        assert!(chat.admit_local_step(&scope,approved(&scope,1),&receipt).is_err());chat.record_local_receipt(&scope,receipt.clone()).unwrap();
+        let permit=chat.admit_local_step(&scope,approved(&scope,1),&receipt).unwrap();assert_eq!(chat.tasks()[0].local_execution[0].state,ReceiptState::Starting);assert!(chat.admit_local_step(&scope,approved(&scope,1),&receipt).is_err());drop(permit);
+    }
+    #[test]fn starting_write_failure_grants_no_permit_and_keeps_proposal_in_ram(){
+        let path=private_path();let chat=Chat::persistent(path.clone());let(scope,_lease)=task(&chat);let r=StepReceipt::proposed(1);chat.record_local_receipt(&scope,r.clone()).unwrap();corrupt(&path);
+        assert!(chat.admit_local_step(&scope,approved(&scope,1),&r).is_err());assert_eq!(chat.tasks()[0].local_execution[0].state,ReceiptState::Proposed);clean(&path);
+    }
+    #[test]fn result_write_failure_retains_effects_and_blocks_next_admission(){
+        let path=private_path();let chat=Chat::persistent(path.clone());let(scope,_lease)=task(&chat);let mut r=StepReceipt::proposed(1);chat.record_local_receipt(&scope,r.clone()).unwrap();let _permit=chat.admit_local_step(&scope,approved(&scope,1),&r).unwrap();
+        r.started_at=Some(1);r.finish(ReceiptState::Exited,None);r.exit_code=Some(0);corrupt(&path);
+        assert!(!chat.record_local_receipt(&scope,r).unwrap());assert_eq!(chat.tasks()[0].local_execution[0].state,ReceiptState::Exited);assert!(chat.conversation("ollama").unwrap().notice.is_some());
+        assert!(chat.record_local_receipt(&scope,StepReceipt::proposed(2)).is_err());let committed=finish(&chat,&scope,LocalTerminal::Failed);assert!(!committed.durable);assert_eq!(chat.tasks()[0].phase,"failed");assert!(chat.reserve_task_resume(&scope.task_id).is_err());clean(&path);
+    }
+    #[test]fn restart_preserves_local_receipts_but_never_replays_starting(){
+        let path=private_path();let chat=Chat::persistent(path.clone());let(scope,lease)=task(&chat);let r=StepReceipt::proposed(1);chat.record_local_receipt(&scope,r.clone()).unwrap();let permit=chat.admit_local_step(&scope,approved(&scope,1),&r).unwrap();drop(permit);drop(lease);drop(chat);
+        let restored=Chat::persistent(path.clone());let old=&restored.tasks()[0];assert_eq!(old.backend,"ollama");assert_eq!(old.phase,"interrupted");assert_eq!(old.local_execution[0].state,ReceiptState::Unknown);assert_eq!(old.local_execution[0].cause,Some(ReceiptCause::CrashDuringStart));assert!(old.session_id.is_none());clean(&path);
+    }
+    #[test]fn local_result_and_public_failure_commit_together_without_tool_data(){
+        let chat=Chat::default();let(scope,_lease)=task(&chat);let mut r=StepReceipt::proposed(1);chat.record_local_receipt(&scope,r.clone()).unwrap();r.finish(ReceiptState::Exited,None);r.exit_code=Some(0);chat.record_local_receipt(&scope,r).unwrap();
+        let committed=finish(&chat,&scope,LocalTerminal::Failed);assert!(committed.durable);let task=&chat.tasks()[0];assert_eq!(task.phase,"failed");assert_eq!(task.local_execution[0].state,ReceiptState::Exited);assert_eq!(chat.history("ollama").len(),2);assert!(!serde_json::to_string(task).unwrap().contains("/bin/true"));assert!(!chat.cancel_task(&scope.task_id));
+    }
+    #[test]fn wrong_target_or_epoch_cannot_consume_a_proposal(){
+        let chat=Chat::default();let(mut scope,_lease)=task(&chat);chat.record_local_receipt(&scope,StepReceipt::proposed(1)).unwrap();scope.target.pet_id="agent_codex".into();assert!(chat.admit_local_step(&scope,approved(&scope,1),&StepReceipt::proposed(1)).is_err());scope.target.pet_id="ai_ollama".into();scope.turn.epoch+=1;assert!(chat.record_local_receipt(&scope,StepReceipt::proposed(2)).is_err());
+    }
+    #[test]fn cancelled_turn_cannot_start_or_retire_a_task(){let chat=Chat::default();let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let _lease=chat.lease(&turn);chat.cancel_provider("ollama");assert!(chat.start_task(&turn,"synthetic","/tmp","ollama","synthetic",None).is_err());assert!(chat.tasks().is_empty());}
+    #[test]fn accepted_stop_racing_local_completion_never_becomes_done(){
+        for _ in 0..40{let chat=Chat::default();let(scope,_lease)=task(&chat);let barrier=Arc::new(std::sync::Barrier::new(2));let worker={let chat=chat.clone();let scope=scope.clone();let barrier=barrier.clone();std::thread::spawn(move||{barrier.wait();finish(&chat,&scope,LocalTerminal::Done)})};barrier.wait();let cancelled=chat.cancel_task(&scope.task_id);let completed=worker.join().unwrap();assert_eq!(completed.phase,if cancelled{LocalTerminal::Stopped}else{LocalTerminal::Done});}
+    }
+    #[test]fn capability_metadata_is_transient_and_is_never_an_execution_grant(){let chat=Chat::default();let(scope,_lease)=task(&chat);assert!(chat.local_capability_changed(&scope.turn,"synthetic",false));assert!(!chat.local_capability_changed(&scope.turn,"synthetic",false));let view=serde_json::to_value(chat.conversation("ollama").unwrap()).unwrap();assert_eq!(view["localExecution"]["tools"],false);assert_eq!(view["localExecution"]["model"],"synthetic");assert!(chat.tasks()[0].local_execution.is_empty());}
+    #[test]fn captured_effort_is_saved_in_the_start_transaction_and_survives_restart(){let path=private_path();let chat=Chat::persistent(path.clone());let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let lease=chat.lease(&turn);chat.start_local_task(&turn,"synthetic","/tmp","same-model:tag",None,Some("none")).unwrap();let task=&chat.tasks()[0];assert_eq!(task.model,"same-model:tag");assert_eq!(task.local_reasoning_effort.as_deref(),Some("none"));drop(lease);drop(chat);let restored=Chat::persistent(path.clone());assert_eq!(restored.tasks()[0].local_reasoning_effort.as_deref(),Some("none"));clean(&path);}
+}
 
 /// Mochi's instructions. Greets the user by their first name when the account
 /// has one worth using (identity.rs), and only claims web search where the
@@ -667,18 +968,35 @@ pub fn system_prompt(web_search: bool) -> String {
 }
 
 fn system_prompt_for(first_name: Option<&str>, web_search: bool) -> String {
+    system_prompt_with_identity(first_name, web_search, "Mochi", None)
+}
+
+pub(crate) fn system_prompt_for_pet(identity: &LocalIdentity, web_search: bool) -> String {
+    system_prompt_for_pet_with_user(identity, crate::identity::first_name(), web_search)
+}
+
+fn system_prompt_for_pet_with_user(identity: &LocalIdentity, first_name: Option<&str>, web_search: bool) -> String {
+    let name = json!(identity.name()).to_string();
+    system_prompt_with_identity(first_name, web_search, &name, Some(LOCAL_LANGUAGE_POLICY))
+}
+
+fn system_prompt_with_identity(first_name: Option<&str>, web_search: bool, companion: &str, language_policy: Option<&str>) -> String {
     let opening = match first_name {
-        Some(name) => format!("You are Mochi, {name}'s personal AI assistant living at the top of their screen."),
-        None => "You are Mochi, a personal AI assistant living at the top of the user's screen.".to_string(),
+        Some(name) => format!("You are {companion}, {name}'s personal AI assistant living at the top of their screen."),
+        None => format!("You are {companion}, a personal AI assistant living at the top of the user's screen."),
     };
     let abilities = if web_search {
         "You have web search access and can help with absolutely anything — research, coding, finding places, recommendations, tasks, questions."
     } else {
         "You can help with absolutely anything — research, coding, recommendations, tasks, questions. You have no web access: say so when something needs current information."
     };
+    let language = match language_policy {
+        Some(policy) => policy.to_string(),
+        None => "Respond in the user's language.".to_string(),
+    };
     format!(
         "{opening} {abilities} \
-Respond in the user's language. Be thorough and complete — use as much detail as the task requires. \
+{language} Be thorough and complete — use as much detail as the task requires. \
 Use light Markdown when it helps: short paragraphs, bullet lists, **bold**, `inline code` and fenced code blocks. Avoid tables and big headings: the chat window is small."
     )
 }
@@ -777,8 +1095,9 @@ pub async fn send(
         return openai_compat::send(chat, p, &model, query, context).await;
     }
     if let Some(server) = local_chat::server(settings, provider) {
-        let model=if provider=="ollama" {crate::pet_config::select(provider,&model,&query)?.model}else{model};
-        return local_chat::send(app, chat, &server, &model, query, context).await;
+        let selection=if provider=="ollama"{Some(crate::pet_config::select(provider,&model,&query)?)}else{None};
+        let model=selection.as_ref().map(|s|s.model.as_str()).unwrap_or(&model);
+        return local_chat::send(app, chat, settings, &server, model, selection.as_ref(), query, context).await;
     }
     Err(format!("Unknown chat provider: {provider}"))
 }
@@ -1179,6 +1498,15 @@ mod tests {
         let view=chat.conversation("codex").unwrap();assert_eq!(view.messages.len(),2);assert!(view.notice.is_some());assert_eq!(chat.tasks()[0].phase,"done");
         drop(lease);std::fs::remove_dir_all(directory).unwrap();
     }
+    #[test]fn observed_plain_reply_returns_its_own_persistence_notice_without_creating_a_task(){
+        let directory=std::env::temp_dir().join(format!("coucou-observed-completion-{}",crate::assistant_memory::new_id()));let path=directory.join("conversations.json");
+        let chat=Chat::persistent(path.clone());let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let lease=chat.lease(&turn);
+        std::fs::create_dir_all(&path).unwrap();
+        let notice=chat.commit_observed_reply(&turn,json!({"role":"user","content":"question"}),json!({"role":"assistant","content":"complete reply"}),"question","complete reply").unwrap();
+        assert!(notice.as_ref().unwrap().contains("ainda não foi guardada"));let view=chat.conversation("ollama").unwrap();
+        assert_eq!(view.notice,notice);assert_eq!(view.messages[1]["content"],"complete reply");assert!(chat.tasks().is_empty());
+        drop(lease);std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]fn resuming_archived_task_restores_and_reserves_its_session_without_importing_another_dialogue(){
         let chat=Chat::default();let old=failed_task(&chat,Some("session-b"),"history B");
@@ -1314,7 +1642,7 @@ mod tests {
         let continued=chat.begin_cli("codex",Arc::default()).unwrap();assert_eq!(continued.session.as_ref().unwrap().id,"owned-first");drop(chat.lease(&continued));
         let restored=Chat::persistent(path.clone());assert_eq!(restored.conversation("codex").unwrap().id,original);
         assert_eq!(restored.history("ollama").len(),2);assert_eq!(restored.tasks()[0].id,task);
-        let disk:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();assert_eq!(disk["version"],3);
+        let disk:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();assert_eq!(disk["version"],4);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1391,7 +1719,7 @@ mod tests {
         let messages:Vec<_>=(0..122).map(|n|json!({"role":if n%2==0{"user"}else{"assistant"},"content":format!("mensagem {n}")})).collect();
         std::fs::write(&path,json!({"version":2,"pets":{"ollama":{"messages":messages,"session":null}}}).to_string()).unwrap();
         let chat=Chat::persistent(path.clone());let id=chat.conversation("ollama").unwrap().id;assert_eq!(chat.history("ollama").len(),122);chat.reset_provider("ollama").unwrap();
-        assert_eq!(Chat::persistent(path.clone()).read_conversation("ollama",&id).unwrap().messages.len(),122);assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap()["version"],3);
+        assert_eq!(Chat::persistent(path.clone()).read_conversation("ollama",&id).unwrap().messages.len(),122);assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap()["version"],4);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1679,4 +2007,562 @@ mod tests {
         assert!(preserved.resumed_by.is_none());
     }
 
+}
+
+#[cfg(all(test,target_os="linux"))]
+mod stopped_chat_notice_tests {
+    use super::*;
+    use crate::local_tasks::types::*;
+    use std::{path::PathBuf,time::{Duration,Instant}};
+
+    fn scope(chat:&Chat,query:&str)->(ExecutionScope,TurnLease){
+        let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let lease=chat.lease(&turn);
+        chat.start_task(&turn,query,"/tmp","ollama","synthetic-tools",None).unwrap();
+        let(task_id,cid)=chat.local_task_identity(&turn).unwrap();
+        (ExecutionScope{target:crate::session_chat::types::Target{pet_id:"ai_ollama".into(),provider:"ollama".into(),origin:crate::session_chat::types::Origin::Mochi,session_id:cid.clone(),conversation_id:Some(cid)},turn,task_id,model:"synthetic-tools".into(),base:reqwest::Url::parse("http://127.0.0.1:1/").unwrap(),deadline:Instant::now()+Duration::from_secs(10),policy:crate::pet_config::LocalExecution::default(),reasoning_effort:None},lease)
+    }
+    fn stop(chat:&Chat,scope:&ExecutionScope)->LocalCommit{
+        assert!(chat.cancel_task(&scope.task_id));
+        chat.commit_local_terminal(scope,LocalTerminal::Done,json!({"role":"user","content":"not model-observed"}),"not model-observed","must never be completed").unwrap()
+    }
+    fn path()->PathBuf{std::env::temp_dir().join(format!("coucou-stop-notice-{}",crate::assistant_memory::new_id())).join("library.json")}
+    fn clean(path:&std::path::Path){std::fs::remove_dir_all(path.parent().unwrap()).unwrap();}
+
+    #[test]fn stopped_chat_exposes_original_request_without_minting_a_dialogue_or_success(){
+        let chat=Chat::default();let(s,lease)=scope(&chat,"Preserve this original request");
+        let mut proposed=StepReceipt::proposed(1);chat.record_local_receipt(&s,proposed.clone()).unwrap();
+        let committed=stop(&chat,&s);assert_eq!(committed.phase,LocalTerminal::Stopped);drop(lease);
+        let before=serde_json::to_value(chat.tasks()).unwrap();let view=chat.conversation("ollama").unwrap();
+        let notice=view.task_notice.as_ref().unwrap();
+        assert!(!view.busy);assert_eq!(notice.query,"Preserve this original request");assert_eq!(notice.task_id,s.task_id);
+        assert_eq!(notice.conversation_id,s.target.session_id);assert_eq!(notice.provider,"ollama");assert_eq!(notice.phase,"stopped");
+        assert!(view.notice.as_ref().unwrap().contains("interrompido"));assert!(view.messages.is_empty());assert!(chat.history("ollama").is_empty());
+        assert!(chat.inner.lock().unwrap().pets["ollama"].native.is_empty());
+        let wire=serde_json::to_value(&view).unwrap();assert_eq!(wire["taskNotice"]["taskId"],s.task_id);assert_eq!(wire["taskNotice"]["query"],notice.query);
+        assert_eq!(serde_json::to_value(chat.tasks()).unwrap(),before,"Snapshot projection cannot mutate receipts/tasks");
+        proposed.finish(ReceiptState::Skipped,None);assert_eq!(chat.tasks()[0].local_execution[0].state,proposed.state);
+    }
+    #[test]fn deadline_and_failed_notices_keep_their_canonical_task_phase(){
+        for phase in [LocalTerminal::Interrupted,LocalTerminal::Failed]{
+            let chat=Chat::default();let(s,lease)=scope(&chat,"original question");
+            chat.commit_local_terminal(&s,phase,json!({"role":"user","content":"original question"}),"original question","factual failure notice").unwrap();drop(lease);
+            let view=chat.conversation("ollama").unwrap();let n=view.task_notice.unwrap();
+            assert_eq!(n.phase,phase.phase());assert_eq!(n.query,"original question");assert_ne!(n.phase,"done");
+        }
+    }
+    #[test]fn new_plain_reply_never_inherits_an_older_stopped_task_or_model(){
+        let chat=Chat::default();let(s,lease)=scope(&chat,"old tools request");stop(&chat,&s);drop(lease);
+        let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let lease=chat.lease(&turn);
+        assert!(chat.conversation("ollama").unwrap().task_notice.is_none(),"Old status cannot label a busy plain turn");
+        chat.commit_observed_reply(&turn,json!({"role":"user","content":"new plain request"}),json!({"role":"assistant","content":"new plain answer"}),"new plain request","new plain answer").unwrap();drop(lease);
+        let view=chat.conversation("ollama").unwrap();assert!(view.task_notice.is_none());assert!(view.notice.is_none());
+        assert_eq!(view.messages[0]["content"],"new plain request");assert_eq!(chat.tasks()[0].phase,"stopped");
+    }
+    #[test]fn empty_stopped_dialogue_archives_and_reads_its_own_status_without_selecting_it(){
+        let chat=Chat::default();let(s,lease)=scope(&chat,"request A");stop(&chat,&s);drop(lease);
+        let a=s.target.session_id;chat.reset_provider("ollama").unwrap();let b=chat.conversation_id("ollama").unwrap();assert_ne!(a,b);
+        assert!(chat.conversation("ollama").unwrap().task_notice.is_none());
+        let archived=chat.read_conversation("ollama",&a).unwrap();assert_eq!(archived.task_notice.unwrap().query,"request A");
+        assert_eq!(chat.conversation_id("ollama").unwrap(),b,"Reading the notice cannot restore A");
+        let restored=chat.restore_conversation("ollama",&a).unwrap();assert_eq!(restored.task_notice.unwrap().task_id,s.task_id);
+    }
+    #[test]fn task_notice_and_empty_archive_survive_disk_reload_without_replay(){
+        let path=path();let chat=Chat::persistent(path.clone());let(s,lease)=scope(&chat,"saved stopped request");stop(&chat,&s);drop(lease);
+        let a=s.target.session_id;chat.reset_provider("ollama").unwrap();let b=chat.conversation_id("ollama").unwrap();drop(chat);
+        let restored=Chat::persistent(path.clone());assert_eq!(restored.conversation_id("ollama").unwrap(),b);
+        let view=restored.read_conversation("ollama",&a).unwrap();assert!(!view.busy);assert!(view.messages.is_empty());
+        assert_eq!(view.task_notice.unwrap().query,"saved stopped request");assert_eq!(restored.tasks()[0].phase,"stopped");
+        clean(&path);
+    }
+    #[test]fn save_failure_keeps_both_the_stop_status_and_the_persistence_warning(){
+        let path=path();let chat=Chat::persistent(path.clone());let(s,lease)=scope(&chat,"request survives blocked disk");
+        std::fs::remove_file(&path).unwrap();std::fs::create_dir(&path).unwrap();
+        let committed=stop(&chat,&s);assert!(!committed.durable);drop(lease);
+        let view=chat.conversation("ollama").unwrap();let notice=view.notice.unwrap();
+        assert!(notice.contains("interrompido"));assert!(notice.contains("guardar"));assert_eq!(view.task_notice.unwrap().query,"request survives blocked disk");
+        assert!(view.messages.is_empty());assert_eq!(chat.tasks()[0].phase,"stopped");clean(&path);
+    }
+    #[test]fn failed_new_task_write_does_not_replace_the_previous_canonical_reference(){
+        let path=path();let chat=Chat::persistent(path.clone());let(s,lease)=scope(&chat,"previous stored request");stop(&chat,&s);drop(lease);
+        let before=chat.inner.lock().unwrap().pets["ollama"].task_notice_id.clone();
+        let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let lease=chat.lease(&turn);
+        std::fs::remove_file(&path).unwrap();std::fs::create_dir(&path).unwrap();
+        assert!(chat.start_task(&turn,"new unpersisted task","/tmp","ollama","different-model",None).is_err());
+        assert_eq!(chat.inner.lock().unwrap().pets["ollama"].task_notice_id,before);assert_eq!(chat.tasks().len(),1);
+        drop(lease);assert_eq!(chat.conversation("ollama").unwrap().task_notice.unwrap().task_id,s.task_id);clean(&path);
+    }
+    #[test]fn foreign_missing_duplicate_and_completed_task_references_cannot_supply_a_notice(){
+        let chat=Chat::default();let(s,lease)=scope(&chat,"only this request");stop(&chat,&s);drop(lease);
+        let tasks=chat.tasks();let id=Some(s.task_id.as_str());let cid=&s.target.session_id;
+        assert!(project_task_notice("codex",cid,id,&tasks).is_none());
+        assert!(project_task_notice("ollama","another-cid",id,&tasks).is_none());
+        assert!(project_task_notice("ollama",cid,Some("missing"),&tasks).is_none());
+        assert!(project_task_notice("ollama",cid,None,&tasks).is_none());
+        assert!(project_task_notice("ollama",cid,id,&[tasks[0].clone(),tasks[0].clone()]).is_none());
+        let mut done=tasks.clone();done[0].phase="done".into();assert!(project_task_notice("ollama",cid,id,&done).is_none());
+        done[0].phase="stopped".into();done[0].resumed_by=Some("new-task".into());assert!(project_task_notice("ollama",cid,id,&done).is_none());
+    }
+    #[test]fn legacy_library_without_a_reference_does_not_guess_its_last_task(){
+        let chat=Chat::default();let(s,lease)=scope(&chat,"old journal request");stop(&chat,&s);drop(lease);
+        let mut saved=chat.inner.lock().unwrap().pets["ollama"].saved();saved.task_notice_id=None;
+        let legacy=serde_json::to_value(&saved).unwrap();assert!(legacy.get("task_notice_id").is_none());
+        let restored:SavedConversation=serde_json::from_value(legacy).unwrap();assert!(Conversation::from_saved(restored).view("ollama").task_notice.is_none());
+    }
+    #[test]fn recovery_projects_only_the_referenced_interrupted_task(){
+        let path=path();let chat=Chat::persistent(path.clone());let(s,_lease)=scope(&chat,"in-flight original request");
+        let recovered=Chat::persistent(path.clone());let view=recovered.conversation("ollama").unwrap();
+        assert!(!view.busy);let n=view.task_notice.unwrap();assert_eq!(n.task_id,s.task_id);assert_eq!(n.phase,"interrupted");assert_eq!(n.query,"in-flight original request");clean(&path);
+    }
+    #[test]fn journal_retention_clears_archived_dangling_references_without_rebinding(){
+        let chat=Chat::default();let(s,lease)=scope(&chat,"old archived request");stop(&chat,&s);drop(lease);let a=s.target.session_id;chat.reset_provider("ollama").unwrap();
+        for _ in 0..10{
+            let(s,lease)=scope(&chat,"new bounded task");
+            chat.commit_local_terminal(&s,LocalTerminal::Done,json!({"role":"user","content":"q"}),"q","a").unwrap();drop(lease);
+        }
+        assert_eq!(chat.tasks().len(),10);assert!(chat.read_conversation("ollama",&a).unwrap().task_notice.is_none());
+        assert!(chat.inner.lock().unwrap().archives["ollama"].iter().find(|c|c.id==a).unwrap().task_notice_id.is_none());
+    }
+}
+
+#[cfg(test)]
+mod durable_request_history_tests {
+    use super::*;
+    use std::path::{Path,PathBuf};
+    fn path()->PathBuf{std::env::temp_dir().join(format!("coucou-request-history-{}",crate::assistant_memory::new_id())).join("library.json")}
+    fn clean(path:&Path){std::fs::remove_dir_all(path.parent().unwrap()).unwrap();}
+    fn stopped(chat:&Chat,provider:&str,backend:&str,query:&str)->(String,String){
+        let turn=chat.begin_cli(provider,Arc::default()).unwrap();let lease=chat.lease(&turn);
+        chat.start_task(&turn,query,"/tmp",backend,"synthetic-fixture",None).unwrap();
+        let c=chat.inner.lock().unwrap().pets[provider].saved();let id=c.tasks.last().unwrap().id.clone();
+        assert!(chat.task_update(&turn,"stopped","factual lifecycle only"));drop(lease);(c.id,id)
+    }
+    fn plain(chat:&Chat,provider:&str){
+        let turn=chat.begin_cli(provider,Arc::default()).unwrap();let lease=chat.lease(&turn);
+        chat.commit_observed_reply(&turn,json!({"role":"user","content":"plain request"}),json!({"role":"assistant","content":"real synthetic model reply"}),"plain request","real synthetic model reply").unwrap();drop(lease);
+    }
+    #[test]fn full_original_request_roundtrips_without_an_assistant_or_model_context(){
+        let path=path();let chat=Chat::persistent(path.clone());let query=format!("Original PT/中文\n{}","á".repeat(6500));
+        let(cid,id)=stopped(&chat,"ollama","ollama",&query);drop(chat);
+        let chat=Chat::persistent(path.clone());let view=chat.read_conversation("ollama",&cid).unwrap();
+        assert!(view.messages.is_empty());assert!(chat.history("ollama").is_empty());
+        let event=&view.request_history[0];assert_eq!(event.query,query);assert_eq!(event.task_id,id);assert_eq!(event.phase,"stopped");
+        assert_eq!(event.pet_id,"ai_ollama");assert_eq!(event.source,"captured");assert_eq!(event.message_index,Some(0));assert_eq!(event.messages_added,Some(0));
+        assert_eq!(chat.tasks()[0].query.chars().count(),4000,"Bounded receipts keep their existing contract");
+        let turn=chat.begin_cli("ollama",Arc::default()).unwrap();assert!(turn.history.is_empty());drop(chat.lease(&turn));
+        assert_eq!(serde_json::to_value(view).unwrap()["requestHistory"][0]["query"],query);
+        clean(&path);
+    }
+    #[test]fn sixteen_stops_survive_plain_success_and_ten_receipt_retention_in_order(){
+        let path=path();let chat=Chat::persistent(path.clone());
+        for i in 0..16{stopped(&chat,"ollama","ollama",&format!("interrupted original {i}"));if i==5{plain(&chat,"ollama");}}
+        let before=chat.conversation("ollama").unwrap();assert_eq!(before.request_history.len(),16);assert_eq!(chat.tasks().len(),10);
+        assert_eq!(before.messages.len(),2);assert!(chat.inner.lock().unwrap().pets["ollama"].native.len()==2);
+        for(i,event)in before.request_history.iter().enumerate(){assert_eq!(event.sequence,i as u64+1);assert_eq!(event.query,format!("interrupted original {i}"));assert_eq!(event.message_index,Some(if i<=5{0}else{2}));assert_eq!(event.phase,"stopped");}
+        plain(&chat,"ollama");assert!(chat.conversation("ollama").unwrap().task_notice.is_none());drop(chat);
+        let restored=Chat::persistent(path.clone());let after=restored.conversation("ollama").unwrap();assert_eq!(after.request_history,before.request_history);assert_eq!(after.messages.len(),4);clean(&path);
+    }
+    #[test]fn archived_request_outlives_pruned_task_and_reading_it_never_selects_or_replays_it(){
+        let chat=Chat::default();let(cid,old)=stopped(&chat,"codex","codex","archived original");chat.reset_provider("codex").unwrap();
+        for i in 0..11{stopped(&chat,"codex","codex",&format!("new {i}"));}
+        assert!(!chat.tasks().iter().any(|t|t.id==old));let current=chat.conversation_id("codex").unwrap();
+        let before=serde_json::to_value(chat.tasks()).unwrap();let archived=chat.read_conversation("codex",&cid).unwrap();
+        assert!(archived.task_notice.is_none());assert_eq!(archived.request_history[0].query,"archived original");assert!(archived.messages.is_empty());
+        assert_eq!(chat.conversation_id("codex").unwrap(),current);assert_eq!(serde_json::to_value(chat.tasks()).unwrap(),before);
+        assert_eq!(chat.restore_conversation("codex",&cid).unwrap().request_history,archived.request_history);
+    }
+    #[test]fn logical_pet_ownership_is_kept_separate_from_its_codex_engine(){
+        let chat=Chat::default();let(cid,_)=stopped(&chat,"integration_github","codex","github origin");stopped(&chat,"codex","codex","codex origin");
+        let view=chat.read_conversation("integration_github",&cid).unwrap();let event=&view.request_history[0];
+        assert_eq!(event.provider,"integration_github");assert_eq!(event.pet_id,"integration_github");assert_eq!(event.conversation_id,cid);
+        assert!(chat.read_conversation("codex",&cid).is_err());assert_eq!(chat.conversation("codex").unwrap().request_history[0].query,"codex origin");
+    }
+    #[test]fn late_terminal_callback_from_a_cannot_relabel_b(){
+        let chat=Chat::default();let a=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&a);
+        chat.start_task(&a,"A","/tmp","codex","fixture",None).unwrap();chat.task_update(&a,"stopped","");drop(lease);
+        let b=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&b);chat.start_task(&b,"B","/tmp","codex","fixture",None).unwrap();
+        let before=chat.conversation("codex").unwrap().request_history;
+        assert!(!chat.task_update(&a,"failed","late A"));assert_eq!(chat.conversation("codex").unwrap().request_history,before);drop(lease);
+    }
+    #[test]fn failed_start_write_does_not_publish_an_unstarted_request(){
+        let path=path();let chat=Chat::persistent(path.clone());stopped(&chat,"ollama","ollama","stored original");
+        let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let lease=chat.lease(&turn);let before=chat.conversation("ollama").unwrap().request_history;
+        std::fs::remove_file(&path).unwrap();std::fs::create_dir(&path).unwrap();
+        assert!(chat.start_task(&turn,"must not become history","/tmp","ollama","fixture",None).is_err());
+        assert_eq!(chat.conversation("ollama").unwrap().request_history,before);assert_eq!(chat.tasks().len(),1);drop(lease);clean(&path);
+    }
+    #[test]fn terminal_write_failure_retains_factual_history_and_blocks_reset_until_flush(){
+        let path=path();let chat=Chat::persistent(path.clone());let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);
+        chat.start_task(&turn,"stopped despite disk failure","/tmp","codex","fixture",None).unwrap();
+        std::fs::remove_file(&path).unwrap();std::fs::create_dir(&path).unwrap();
+        assert!(chat.task_update(&turn,"stopped",""));drop(lease);
+        let view=chat.conversation("codex").unwrap();assert_eq!(view.request_history[0].phase,"stopped");assert!(view.notice.unwrap().contains("guardar"));assert!(chat.reset_provider("codex").is_err());
+        std::fs::remove_dir(&path).unwrap();chat.reset_provider("codex").unwrap();drop(chat);
+        let restored=Chat::persistent(path.clone());let archive=&restored.inner.lock().unwrap().archives["codex"][0];assert_eq!(archive.request_history[0].query,"stopped despite disk failure");clean(&path);
+    }
+    #[test]fn explicit_resume_keeps_old_outcome_and_full_original_query_as_a_new_record(){
+        let path=path();let chat=Chat::persistent(path.clone());let query="Original".repeat(900);let(_,id)=stopped(&chat,"ollama","ollama",&query);drop(chat);
+        let chat=Chat::persistent(path.clone());let(_,reservation,_)=chat.reserve_task_resume(&id).unwrap();let channel=reservation.channel();
+        let turn=channel.begin_cli("ollama",Arc::default()).unwrap();let lease=channel.lease(&turn);
+        channel.start_task(&turn,"resume envelope is not the original request","/tmp","ollama","fixture",Some(&id)).unwrap();
+        let view=chat.conversation("ollama").unwrap();assert_eq!(view.request_history.len(),2);assert_eq!(view.request_history[0].phase,"stopped");
+        assert_eq!(view.request_history[1].phase,"pending");assert_eq!(view.request_history[1].query,query);assert_ne!(view.request_history[0].task_id,view.request_history[1].task_id);
+        assert!(turn.history.is_empty());drop(lease);drop(reservation);clean(&path);
+    }
+    #[test]fn crash_recovery_works_even_without_a_retained_task(){
+        let path=path();let chat=Chat::persistent(path.clone());let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);
+        chat.start_task(&turn,"crash original","/tmp","codex","fixture",None).unwrap();
+        let mut saved=chat.inner.lock().unwrap().pets["codex"].saved();saved.tasks.clear();saved.task_notice_id=None;
+        crate::assistant_memory::save(&path,&crate::assistant_memory::Library{pets:HashMap::from([("codex".into(),saved)]),..Default::default()}).unwrap();
+        let restored=Chat::persistent(path.clone());let view=restored.conversation("codex").unwrap();assert!(!view.busy);assert!(restored.tasks().is_empty());
+        assert_eq!(view.request_history[0].phase,"interrupted");assert_eq!(view.request_history[0].query,"crash original");assert!(view.messages.is_empty());drop(lease);clean(&path);
+    }
+    #[test]fn legacy_seeding_requires_explicit_unique_cid_and_does_not_guess_message_position(){
+        let path=path();let chat=Chat::persistent(path.clone());let(cid,_)=stopped(&chat,"codex","codex","retained legacy query");
+        let mut saved=chat.inner.lock().unwrap().pets["codex"].saved();saved.request_history.clear();saved.task_notice_id=None;
+        let library=crate::assistant_memory::Library{pets:HashMap::from([("codex".into(),saved.clone())]),..Default::default()};crate::assistant_memory::save(&path,&library).unwrap();
+        let view=Chat::persistent(path.clone()).read_conversation("codex",&cid).unwrap();let record=&view.request_history[0];assert_eq!(record.source,"taskJournal");assert!(record.message_index.is_none());assert!(record.messages_added.is_none());
+        saved.tasks[0].conversation_id=None;crate::assistant_memory::save(&path,&crate::assistant_memory::Library{pets:HashMap::from([("codex".into(),saved)]),..Default::default()}).unwrap();
+        assert!(Chat::persistent(path.clone()).conversation("codex").unwrap().request_history.is_empty());clean(&path);
+    }
+    #[test]fn summary_search_finds_stopped_requests_without_changing_public_message_count(){
+        let chat=Chat::default();stopped(&chat,"codex","codex","first stopped original");plain(&chat,"codex");stopped(&chat,"codex","codex","latest interrupted original");
+        let summaries=chat.conversations("codex","first stopped original").unwrap();assert_eq!(summaries.len(),1);assert_eq!(summaries[0].title,"first stopped original");assert_eq!(summaries[0].preview,"latest interrupted original");assert_eq!(summaries[0].message_count,2);
+    }
+}
+
+// Integration snippet: append this impl to chat.rs after review. This file is
+// not included by the live application or the portable compile-only crate.
+impl Chat {
+    /// One metadata-only lock for every pet. Does not identify/create a channel,
+    /// clone message bodies, save the library, cancel a turn or switch a chat.
+    pub(crate) fn observability_metadata(
+        &self,
+        bindings: &[crate::pet_observability::core::PetBinding],
+        now: u64,
+    ) -> crate::pet_observability::core::LibraryCapture {
+        use crate::pet_observability::core::{Activity, Coverage, InventoryInput,
+            LibraryCapture, OpenTarget, Origin, Ownership, SessionRow};
+
+        fn title(messages: &[Value], records: &[RequestRecord]) -> String {
+            let first = records.first();
+            let message = messages.iter().find(|m| m["role"] == "user")
+                .and_then(|m| m["content"].as_str());
+            first.filter(|r| r.message_index == Some(0)).map(|r| r.query.as_str())
+                .or(message).or_else(|| first.map(|r| r.query.as_str()))
+                .unwrap_or("Nova conversa").lines().next().unwrap_or("Nova conversa")
+                .chars().take(80).collect()
+        }
+        fn backend(owner: &str, cid: &str, session: &CliSession,
+            tasks: &[crate::assistant_tasks::Task]) -> Option<String> {
+            if matches!(owner, "codex" | "copilot") { return Some(owner.into()); }
+            let names: std::collections::BTreeSet<_> = tasks.iter().filter(|t|
+                t.provider == owner && t.conversation_id.as_deref() == Some(cid)
+                && t.session_id.as_deref() == Some(session.id.as_str()) && t.valid())
+                .map(|t| t.backend.as_str()).collect();
+            (names.len() == 1).then(|| names.into_iter().next().unwrap().to_string())
+        }
+
+        let mut capture = LibraryCapture::default();
+        let all = self.inner.lock();
+        capture.ownership_complete = !self.disk_error && all.is_ok();
+        for binding in bindings {
+            let unavailable = if self.disk_error { Some("libraryUnreadable") }
+                else if all.is_err() { Some("libraryUnavailable") }
+                else { None };
+            if let Some(reason) = unavailable {
+                capture.inventories.insert(binding.pet_id.clone(),
+                    InventoryInput::unavailable("mochiLibrary", reason));
+                continue;
+            }
+            if !crate::assistant_memory::supported(&binding.owner) {
+                capture.inventories.insert(binding.pet_id.clone(), InventoryInput {
+                    scope: "mochiLibrary".into(), coverage: Coverage::NotSupported,
+                    observed_at: None, reason: Some("noConversationLibrary".into()), rows: Vec::new() });
+                continue;
+            }
+            let all = all.as_ref().unwrap();
+            let current = all.pets.get(&binding.owner);
+            let tasks = current.map(|c| c.tasks.as_slice()).unwrap_or(&[]);
+            let mut rows = Vec::new();
+            let mut add = |id: &str, updated: u64, messages: &[Value], records: &[RequestRecord],
+                session: Option<&CliSession>, state: Activity, archived: bool| {
+                if id.is_empty() { return; }
+                let actual_backend = session.and_then(|s| backend(&binding.owner, id, s, tasks));
+                if let Some(s) = session {
+                    capture.ownership.push(Ownership { backend: actual_backend.clone(),
+                        session_id: s.id.clone(), pet_id: Some(binding.pet_id.clone()),
+                        owner: binding.owner.clone(), conversation_id: id.into() });
+                }
+                rows.push(SessionRow {
+                    key: format!("mochi:{}:{}", binding.owner, id),
+                    provider: actual_backend.unwrap_or_else(|| binding.provider.clone()),
+                    pet_id: Some(binding.pet_id.clone()), origin: Origin::Mochi,
+                    session_id: session.map(|s| s.id.clone()), conversation_id: Some(id.into()),
+                    title: title(messages, records), cwd: session.map(|s| s.cwd.chars().take(4096).collect()),
+                    // Existing library and task journal timestamps are ms.
+                    state, archived: Some(archived), updated_at: (updated != 0).then_some(updated / 1000)
+                        .filter(|value| *value <= 9_007_199_254_740_991),
+                    observed_at: Some(now), open: Some(OpenTarget::Mochi { pet_id: binding.pet_id.clone(),
+                        provider: binding.owner.clone(), conversation_id: id.into() }),
+                });
+            };
+            if let Some(c) = current {
+                let phase = c.tasks.last().filter(|t| c.observability_task_epoch == Some(c.epoch) && !t.terminal()
+                    && t.provider == binding.owner && t.conversation_id.as_deref() == Some(c.id.as_str()))
+                    .map(|t| t.phase.as_str());
+                let state = if !c.busy() { Activity::Idle }
+                    // Reservation also covers model selection/maintenance;
+                    // it does not prove that any inference turn has begun.
+                    else if c.active.is_none() { Activity::Reserved }
+                    else { match phase {
+                        Some("approval" | "question") => Activity::Waiting,
+                        Some("thinking" | "working" | "searching" | "message") => Activity::Working,
+                        _ => Activity::Busy,
+                    }};
+                add(&c.id, c.updated, &c.plain, &c.request_history, c.session.as_ref(), state, false);
+            }
+            for saved in all.archives.get(&binding.owner).into_iter().flatten() {
+                // NotLoaded applies to the Mochi channel, not native runtime.
+                add(&saved.id, saved.updated, &saved.messages, &saved.request_history,
+                    saved.session.as_ref(), Activity::NotLoaded, true);
+            }
+            capture.inventories.insert(binding.pet_id.clone(), InventoryInput {
+                scope: "mochiLibrary".into(), coverage: Coverage::Complete, observed_at: Some(now),
+                reason: current.filter(|c| c.save_error.is_some()).map(|_| "memoryNotDurable".into()), rows });
+        }
+        // Retired/unconfigured library owners still protect their exact native
+        // identity. They have no current pet route, so expose no open action.
+        if !self.disk_error {
+            if let Ok(all) = all.as_ref() {
+                let owners: std::collections::BTreeSet<_> = all.pets.keys().chain(all.archives.keys()).collect();
+                for owner in owners {
+                    if bindings.iter().any(|binding| &binding.owner == owner) { continue; }
+                    let tasks = all.pets.get(owner).map(|c| c.tasks.as_slice()).unwrap_or(&[]);
+                    let mut add = |id: &str, session: Option<&CliSession>| {
+                        if let Some(session) = session {
+                            capture.ownership.push(Ownership { backend: backend(owner, id, session, tasks),
+                                session_id: session.id.clone(), pet_id: None,
+                                owner: owner.clone(), conversation_id: id.into() });
+                        }
+                    };
+                    if let Some(c) = all.pets.get(owner) { add(&c.id, c.session.as_ref()); }
+                    for c in all.archives.get(owner).into_iter().flatten() { add(&c.id, c.session.as_ref()); }
+                }
+            }
+        }
+        capture
+    }
+}
+
+// Capture usage ownership before dispatch, without holding a lock across HTTP.
+impl Chat {
+    /// Capture before dispatch and retain the result for the entire public turn.
+    /// Accounting may outlive Stop; it never discovers ownership again later.
+    pub(crate) fn usage_capture_origin(
+        &self,
+        turn: &Turn,
+    ) -> Option<crate::pet_observability::capture::Origin> {
+        // This slice measures the Ollama routes only. Other providers remain
+        // explicitly unavailable, rather than being assigned a misleading zero.
+        if turn.provider != "ollama" || self.disk_error { return None; }
+        let all = match self.inner.try_lock() {
+            Ok(all) => all,
+            Err(_) => {
+                crate::pet_observability::capture::mark_untracked("ollama", &turn.provider,
+                    crate::pet_observability::usage::LedgerError::Busy);
+                return None;
+            }
+        };
+        let Some(c) = all.pets.get(&turn.provider).filter(|c|
+            c.epoch == turn.epoch && c.turn_cancel.as_ref()
+                .is_some_and(|flag| Arc::ptr_eq(flag, &turn.cancel))
+            && crate::assistant_memory::valid_id(&c.id)) else {
+                crate::pet_observability::capture::mark_untracked("ollama", &turn.provider,
+                    crate::pet_observability::usage::LedgerError::Conflict);
+                return None;
+            };
+        // Deliberately no cancel-flag check: exact ownership is independent of
+        // whether the admitted request has just been stopped. A retained Origin
+        // remains immutable when another turn/window/conversation becomes live.
+        Some(crate::pet_observability::capture::Origin {
+            provider: "ollama".into(), owner: turn.provider.clone(), conversation: c.id.clone(),
+        })
+    }
+}
+
+
+#[cfg(test)]
+mod ollama_identity_tests {
+    use super::*;
+
+    fn configured() -> crate::pet_config::Configuration {
+        let mut config = crate::pet_config::defaults();
+        config.pets.get_mut("ai_ollama").unwrap().name = "Lume \"local\"".into();
+        config.pets.get_mut("agent_codex").unwrap().name = "Other companion".into();
+        config
+    }
+
+    #[test]
+    fn captures_exact_owner_cid_and_configured_name_without_retargeting() {
+        let chat = Chat::default();
+        let turn = chat.begin_cli("ollama", Arc::default()).unwrap();
+        let _lease = chat.lease(&turn);
+        let mut config = configured();
+        let identity = chat.capture_local_identity(&turn, &config, "ai_ollama").unwrap();
+        let cid = chat.conversation_id("ollama").unwrap();
+        assert_eq!(identity.owner(), "ollama");
+        assert_eq!(identity.conversation_id(), cid);
+        assert_eq!(identity.name(), "Lume \"local\"");
+        config.pets.get_mut("ai_ollama").unwrap().name = "Changed later".into();
+        let other = chat.begin_cli("codex", Arc::default()).unwrap();
+        let _other_lease = chat.lease(&other);
+        assert_ne!(cid, chat.conversation_id("codex").unwrap());
+        assert_eq!(identity.name(), "Lume \"local\"");
+        assert_eq!(identity.conversation_id(), cid);
+        assert!(chat.capture_local_identity(&other, &config, "ai_ollama").is_err());
+    }
+
+    #[test]
+    fn cancelled_turn_cannot_capture_identity() {
+        let chat = Chat::default();
+        let turn = chat.begin_cli("ollama", Arc::default()).unwrap();
+        let _lease = chat.lease(&turn);
+        turn.cancel.store(true, Ordering::Release);
+        assert!(chat.capture_local_identity(&turn, &configured(), "ai_ollama").is_err());
+    }
+
+    #[test]
+    fn mismatched_epoch_cancel_or_active_identity_fails_closed() {
+        for mismatch in 0..5 {
+            let chat = Chat::default();
+            let turn = chat.begin_cli("ollama", Arc::default()).unwrap();
+            let _lease = chat.lease(&turn);
+            {
+                let mut all = chat.inner.lock().unwrap();
+                let c = all.pets.get_mut("ollama").unwrap();
+                match mismatch {
+                    0 => c.epoch += 1,
+                    1 => c.turn_cancel = Some(Arc::default()),
+                    2 => c.active = Some(Arc::default()),
+                    3 => c.active = None,
+                    _ => c.id = "invalid/cid".into(),
+                }
+            }
+            assert!(chat.capture_local_identity(&turn, &configured(), "ai_ollama").is_err(), "mismatch {mismatch}");
+        }
+    }
+
+    #[test]
+    fn completed_and_replaced_turns_cannot_capture_identity() {
+        let chat = Chat::default();
+        let turn = chat.begin_cli("ollama", Arc::default()).unwrap();
+        let config = configured();
+        let identity = chat.capture_local_identity(&turn, &config, "ai_ollama").unwrap();
+        drop(chat.lease(&turn));
+        assert!(chat.capture_local_identity(&turn, &config, "ai_ollama").is_err());
+        let replacement = chat.begin_cli("ollama", Arc::default()).unwrap();
+        let _lease = chat.lease(&replacement);
+        assert!(chat.capture_local_identity(&turn, &config, "ai_ollama").is_err());
+        assert!(chat.capture_local_identity(&replacement, &config, "ai_ollama").is_ok());
+        assert_eq!(identity.owner(), "ollama");
+        assert_eq!(identity.name(), "Lume \"local\"");
+    }
+
+    #[test]
+    fn missing_or_wrong_owner_configuration_fails_closed() {
+        let chat = Chat::default();
+        let turn = chat.begin_cli("ollama", Arc::default()).unwrap();
+        let _lease = chat.lease(&turn);
+        let mut config = configured();
+        assert!(chat.capture_local_identity(&turn, &config, "agent_codex").is_err());
+        config.pets.get_mut("ai_ollama").unwrap().provider = "codex".into();
+        assert!(chat.capture_local_identity(&turn, &config, "ai_ollama").is_err());
+        config.pets.remove("ai_ollama");
+        assert!(chat.capture_local_identity(&turn, &config, "ai_ollama").is_err());
+    }
+
+    #[test]
+    fn invalid_display_names_fail_closed_without_generic_fallback() {
+        let chat = Chat::default();
+        let turn = chat.begin_cli("ollama", Arc::default()).unwrap();
+        let _lease = chat.lease(&turn);
+        for name in ["".to_string(), "   ".into(), "name\ncommand".into(), "a".repeat(41)] {
+            let mut config = configured();
+            config.pets.get_mut("ai_ollama").unwrap().name = name;
+            assert!(chat.capture_local_identity(&turn, &config, "ai_ollama").is_err());
+        }
+    }
+
+    #[test]
+    fn local_prompt_quotes_captured_name_and_preserves_explicit_language_request() {
+        let chat = Chat::default();
+        let turn = chat.begin_cli("ollama", Arc::default()).unwrap();
+        let _lease = chat.lease(&turn);
+        let identity = chat.capture_local_identity(&turn, &configured(), "ai_ollama").unwrap();
+        let prompt = system_prompt_for_pet_with_user(&identity, None, false);
+        assert!(prompt.starts_with("You are \"Lume \\\"local\\\"\", a personal AI assistant"));
+        assert!(!prompt.contains("You are Mochi"));
+        assert!(prompt.contains("Honor any language explicitly requested by the user."));
+        assert!(prompt.contains("European Portuguese from Portugal (pt-PT)"));
+        assert!(prompt.contains("By default, reply in European Portuguese"));
+        assert!(prompt.contains("Preserve code blocks and technical names without translating them."));
+        assert!(!prompt.contains("Respond in the user's language."));
+        assert!(prompt.contains("You have no web access"));
+        let with_user = system_prompt_for_pet_with_user(&identity, Some("Synthetic"), true);
+        assert!(with_user.contains("Synthetic's personal AI assistant"));
+        assert!(with_user.contains("You have web search access"));
+    }
+
+    #[test]
+    fn generic_provider_prompt_is_byte_identical_to_previous_policy() {
+        for first_name in [None, Some("Synthetic")] {
+            for web in [false, true] {
+                let opening = match first_name {
+                    Some(name) => format!("You are Mochi, {name}'s personal AI assistant living at the top of their screen."),
+                    None => "You are Mochi, a personal AI assistant living at the top of the user's screen.".into(),
+                };
+                let abilities = if web {
+                    "You have web search access and can help with absolutely anything — research, coding, finding places, recommendations, tasks, questions."
+                } else {
+                    "You can help with absolutely anything — research, coding, recommendations, tasks, questions. You have no web access: say so when something needs current information."
+                };
+                let previous = format!("{opening} {abilities} Respond in the user's language. Be thorough and complete — use as much detail as the task requires. Use light Markdown when it helps: short paragraphs, bullet lists, **bold**, `inline code` and fenced code blocks. Avoid tables and big headings: the chat window is small.");
+                assert_eq!(system_prompt_for(first_name, web), previous);
+            }
+        }
+    }
+}
+
+
+impl Chat {
+    /// Current app-owned admission/work only. No saved task or native process
+    /// inventory is promoted into liveness, and native aliases require this turn.
+    pub(crate) fn process_census_live_work(&self,bindings:&[crate::pet_observability::core::PetBinding])->crate::pet_observability::process_census::LiveWork {
+        use crate::pet_observability::process_census::{LiveWork,PetLiveWork,valid_uuid};
+        let Ok(all)=self.inner.try_lock()else{return LiveWork::unavailable("libraryBusy");};
+        let mut rows=Vec::new();
+        for binding in bindings.iter().filter(|b|b.enabled){
+            let Some(c)=all.pets.get(&binding.owner)else{continue;};
+            let pending=c.pending.as_ref().is_some_and(|p|!p.cancel.load(Ordering::Acquire));
+            let active=c.active.as_ref().is_some_and(|flag|!flag.load(Ordering::Acquire)&&c.turn_cancel.as_ref().is_some_and(|turn|Arc::ptr_eq(flag,turn)));
+            if !pending&&!active{continue;}
+            let waiting=active&&c.observability_task_epoch==Some(c.epoch)&&c.tasks.last().is_some_and(|t|t.provider==binding.owner&&t.conversation_id.as_deref()==Some(c.id.as_str())&&!t.terminal()&&matches!(t.phase.as_str(),"approval"|"question"));
+            let native=active.then(||c.session.as_ref()).flatten().filter(|session|c.session_epoch==Some(c.epoch)&&valid_uuid(&session.id));
+            rows.push(PetLiveWork{owner:binding.owner.clone(),pet_id:binding.pet_id.clone(),conversation_id:c.id.clone(),turn:c.epoch.to_string(),phase:if pending{"reserved"}else if waiting{"waiting"}else{"busy"},native_provider:native.map(|_|binding.provider.clone()),native_session_id:native.map(|s|s.id.clone())});
+        }
+        LiveWork{status:"observed",observed_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),reason:None,rows}
+    }
+}
+
+#[cfg(test)]
+mod process_census_chat_tests {
+ use super::*;
+ fn binding(owner:&str,provider:&str)->crate::pet_observability::core::PetBinding {crate::pet_observability::core::PetBinding{pet_id:crate::pet_config::pet_id(owner).unwrap_or("agent_codex").into(),provider:provider.into(),owner:owner.into(),enabled:true}}
+ const SID:&str="00000000-0000-0000-0000-000000000001";
+ #[test]fn no_live_turn_is_an_observed_empty_app_source_not_a_process_assertion(){let chat=Chat::default();let work=chat.process_census_live_work(&[binding("codex","codex")]);assert_eq!(work.status,"observed");assert!(work.rows.is_empty());}
+ #[test]fn reserved_turn_is_distinct_from_running_and_has_no_native_alias(){let chat=Chat::default();let _reservation=chat.reserve_conversation("codex",None).unwrap();let work=chat.process_census_live_work(&[binding("codex","codex")]);assert_eq!(work.rows.len(),1);assert_eq!(work.rows[0].phase,"reserved");assert!(work.rows[0].native_session_id.is_none());}
+ #[test]fn only_native_session_seen_in_this_live_epoch_is_exposed(){let chat=Chat::default();let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);chat.remember_session(&turn,SID,"/synthetic",false);let work=chat.process_census_live_work(&[binding("codex","codex")]);assert_eq!(work.rows[0].native_session_id.as_deref(),Some(SID));drop(lease);let next=chat.begin_cli("codex",Arc::default()).unwrap();let _lease=chat.lease(&next);let work=chat.process_census_live_work(&[binding("codex","codex")]);assert!(work.rows[0].native_session_id.is_none());}
+ #[test]fn cancelled_and_completed_work_is_not_live(){let chat=Chat::default();let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);turn.cancel.store(true,Ordering::Release);assert!(chat.process_census_live_work(&[binding("codex","codex")]).rows.is_empty());drop(lease);assert!(chat.process_census_live_work(&[binding("codex","codex")]).rows.is_empty());}
+ #[test]fn service_logical_owner_and_disabled_binding_are_preserved(){let chat=Chat::default();let turn=chat.begin_cli("integration_github",Arc::default()).unwrap();let _lease=chat.lease(&turn);chat.remember_session(&turn,SID,"/synthetic",false);let mut b=binding("integration_github","codex");let work=chat.process_census_live_work(&[b.clone()]);assert_eq!(work.rows[0].owner,"integration_github");assert_eq!(work.rows[0].native_provider.as_deref(),Some("codex"));b.enabled=false;assert!(chat.process_census_live_work(&[b]).rows.is_empty());}
+ #[test]fn a_busy_library_is_unavailable_not_zero(){let chat=Chat::default();let _guard=chat.inner.lock().unwrap();let work=chat.process_census_live_work(&[binding("codex","codex")]);assert_eq!(work.status,"unavailable");assert_eq!(work.reason.as_deref(),Some("libraryBusy"));}
 }

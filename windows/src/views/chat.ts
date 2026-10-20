@@ -8,9 +8,11 @@ import {PetPreferences,profileModels,profileProvider,profileLabel,profileSummary
 // models of the chosen provider, asked for only once it is picked.
 
 import { h, svg, clear } from "./dom";
+import {buildTaskNotice} from "./task-notice";
+import {buildRequestHistory} from "./request-history";
 import { ICONS } from "./icons";
 import { renderMarkdown } from "./markdown";
-import { Bridge, emitToWindow, onEvent, type ChatContext, type ModelInfo,type ChatTurnState } from "../core/bridge";
+import { Bridge, emitToWindow, onEvent, type ChatContext, type ModelInfo,type ChatTurnState,type ConversationView } from "../core/bridge";
 import {
   activeModel, isCliProvider, pickModel, providerDef, providerForPill, visibleProviders, withModel, type ProviderDef,
 } from "../core/providers";
@@ -23,6 +25,12 @@ import {dialogueId,rememberDialogue,resetDialogue,restoreDialogue} from "../core
 import {SessionChat,sessionTargetKey,sessionOrigin} from "../core/session-chat";
 import {buildAgentRequests} from './agent-requests';
 import {OllamaModelSelection} from '../core/ollama-selection';
+import {commandReview} from './command-review';
+import {LocalCapabilities,type LocalCapabilityEvent} from '../core/local-capabilities';
+
+const localCapabilities=new LocalCapabilities();let watchingCapabilities=false;
+function watchCapabilities(){if(watchingCapabilities)return;watchingCapabilities=true;void onEvent<LocalCapabilityEvent>('local-execution-capability',e=>{if(e.provider==='ollama'){localCapabilities.observe(e.conversationId,e.turn,e.capability);State.notify();}});}
+function capabilityText(id:string,selected:string){const pet=PetPreferences.config?.pets.ai_ollama;const mode=selected==='@fast'?'fast':selected==='@reasoning'?'reasoning':pet?.mode??'auto';const models=!pet?[]:mode==='auto'?[pet.fast.model,pet.reasoning.model]:[pet[mode].model];return localCapabilities.label(id,selected,models,pet?.localExecution?.mode==='ask');}
 
 const STRINGS = {
   placeholderFirst: N_("Ask me anything…"),
@@ -264,6 +272,7 @@ function buildPicker(onChange: () => void,onSelect?:(provider:string,model:strin
 // ── View ──────────────────────────────────────────────────────────────────────
 
 export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDocumentActions?:()=>void): ViewHost {
+  watchCapabilities();
   if(session)return buildSessionPrompt(onHeightChange,session);
   const chipRow = h("div", { class: "chip-row" });
   let documentActionsButton:HTMLButtonElement|null=null;
@@ -292,6 +301,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   );
   const profileBtn=h("button",{class:"picker-link chat-profile",text:"Perfis",title:"Gerir modelos e esforço deste pet",onclick:()=>void Bridge.openSettingsWindow("pets:"+(State.focusId??"agent_codex"))});
   const modelRow = h("div", { class: "model-row" }, modelBtn,profileBtn);
+  const executionBadge=h('p',{class:'local-execution-capability',role:'status'});executionBadge.hidden=true;
   const folderBtn=h("button",{class:"picker-link chat-folder",text:"Pasta de trabalho"}) as HTMLButtonElement;
   const folderInput=h("input",{class:"chat-folder-input",style:"width:100%;box-sizing:border-box;background:transparent;color:inherit;border:1px solid #ffffff38;border-radius:6px;padding:6px",type:"text",placeholder:"/home/…","aria-label":"Pasta de trabalho deste pet"}) as HTMLInputElement;
   const folderSave=h("button",{class:"picker-link",text:"Aplicar"}) as HTMLButtonElement;
@@ -350,6 +360,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   const unavailable=h("p",{class:"pet-chat-unavailable"});unavailable.hidden=true;
   const feedback=h("p",{class:"chat-feedback",style:"font-size:11px;color:#fbbf24","role":"status","aria-live":"polite"});feedback.hidden=true;
   const failedQueries=new Map<string,{query:string;id?:string}>();
+  const turnSnapshots=new Map<string,ConversationView>(),taskStatus=buildTaskNotice(),requestHistory=buildRequestHistory();
   const failedText=h('pre',{class:'failed-request-text'});
   const failedReview=h('details',{class:'failed-request-review'},h('summary',{text:'Rever pedido original · confirma o histórico antes de repetir'}),failedText);failedReview.hidden=true;
   const prepared=h("button",{class:"picker-link prepared-chat"});prepared.hidden=true;
@@ -361,7 +372,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     body.classList.toggle("picking", picker.isOpen);
     drawModelButton();
   });
-  body.append(chipRow, log, requests, picker.el,unavailable,prepared, modelRow,folderEditor,library,feedback,failedReview, bar);
+  body.append(chipRow, log, taskStatus.el,requests, picker.el,unavailable,prepared, modelRow,executionBadge,folderEditor,library,feedback,failedReview, bar);
 
   const requestCards = new Map<string, HTMLElement>();
   const endedRequests=new Set<string>();
@@ -384,7 +395,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
           card.append(h("button", { text: option.label, onclick: () => { input.value = option.label; } }));
         }
       }
-    } else { card.append(h("pre", { text: request.detail, style: "white-space:pre-wrap;max-height:80px;overflow:auto" })); }
+    } else { card.append(commandReview(request.detail,request.provider==='ollama'&&request.approvalScope==='once')); }
     const reply = (allow: boolean) => {
       allowButton.disabled=denyButton.disabled=true;requestError.textContent='';
       const answers = Object.fromEntries([...fields].map(([id, input]) => [id, allow ? [input.value] : []]));
@@ -429,14 +440,18 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     }
     const messages=snapshot?.messages;
     if(!messages || historyRequests.get(provider)!==ticket || State.chatHistoryFor(provider)!==before || before.length!==count || pending.has(provider) || State.chatResettingProviders.has(provider))return;
-    if(snapshot.notice)State.chatFeedback.set(provider,snapshot.notice);
     if(dialogueId(provider) && dialogueId(provider)!==snapshot.id) {
       State.clearDialogueContext(provider);drafts.delete(provider);
       if(provider===State.chatProvider)input.value="";
     }
     rememberDialogue(provider,snapshot);
+    if(provider==='ollama')localCapabilities.observe(snapshot.id,snapshot.turn??0,snapshot.localExecution);
     const running=observed.get(provider);
     if(snapshot.turn!==undefined && running && running.id===snapshot.id && running.turn>snapshot.turn)return;
+    const previousNotice=turnSnapshots.get(provider)?.notice;
+    if(snapshot.notice)State.chatFeedback.set(provider,snapshot.notice);
+    else if(previousNotice&&State.chatFeedback.get(provider)===previousNotice)State.chatFeedback.delete(provider);
+    turnSnapshots.set(provider,snapshot);
     if(snapshot.busy && snapshot.turn!==undefined) {
       observed.set(provider,{id:snapshot.id,turn:snapshot.turn,text:snapshot.stream??"",query:snapshot.query??""});State.chatBusyProviders.add(provider);
     } else if(snapshot.busy===false) {observed.delete(provider);State.chatBusyProviders.delete(provider);}
@@ -452,6 +467,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     modelDot.style.background = p.accent;
     modelName.textContent = profileLabel(activeModel({ ...State.settings, chatProvider: State.chatProvider })) || (isCliProvider(p.id) ? p.name : t(STRINGS.noModel));
     const selected=activeModel({...State.settings,chatProvider:State.chatProvider});
+    executionBadge.textContent=State.chatProvider==='ollama'?capabilityText(dialogueId('ollama')??'',selected):'';executionBadge.hidden=!executionBadge.textContent;
     const summary=profileSummary(p.id,selected)||(isCliProvider(p.id)?p.name:t(STRINGS.noModel));
     modelName.textContent=summary;
     modelBtn.title = `${p.name} · ${summary} · ${t(STRINGS.switchModel)}`;
@@ -481,8 +497,9 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       log.querySelector(".typing")?.parentElement?.remove();
       log.append(h("div", { class: "chat-row" }, live));
     }
+    const follow=!requestHistory.hasEntries||log.scrollHeight-log.scrollTop-log.clientHeight<56;
     renderMarkdown(live, text);
-    log.scrollTop = log.scrollHeight;
+    if(follow)log.scrollTop = log.scrollHeight;
   }
   void onEvent<ChatTurnState>("chat-turn-state",event=>{
     const provider=event.provider,known=dialogueId(provider),old=observed.get(provider);
@@ -620,6 +637,14 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     el,
     sync() {
       const noChat=State.settings.companionMode && !providerForPill(State.focusId??undefined);
+      const snapshot=turnSnapshots.get(State.chatProvider),cid=dialogueId(State.chatProvider),pet=State.focusId;
+      const target=pet&&cid&&providerForPill(pet)===State.chatProvider?{petId:pet,provider:State.chatProvider,origin:'mochi' as const,sessionId:cid,conversationId:cid}:null;
+      const historyChanged=requestHistory.sync(noChat?null:target,snapshot?.requestHistory,State.chatHistory.length);
+      body.classList.toggle('has-request-history',requestHistory.hasEntries);
+      if(historyChanged){renderedCount=-1;live=null;}
+      const noticeWasHidden=taskStatus.el.hidden;
+      taskStatus.sync(noChat?null:target,snapshot?{...snapshot,taskNotice:requestHistory.coversTask(snapshot.taskNotice?.taskId)?undefined:snapshot.taskNotice,busy:!!snapshot.busy}:null,busy(State.chatProvider));
+      if(noticeWasHidden!==taskStatus.el.hidden)onHeightChange();
       const message=State.chatFeedback.get(State.chatProvider)??"";feedback.hidden=!message || !!noChat;feedback.textContent=message;
       const failed=failedQueries.get(State.chatProvider);failedReview.hidden=!failed||failed.id!==dialogueId(State.chatProvider);failedText.textContent=failed?.query??'';
       bar.hidden=modelRow.hidden=log.hidden=!!noChat;unavailable.hidden=!noChat;
@@ -666,14 +691,18 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       const count = State.chatHistory.length + (thinking ? 0.5 : 0);
       if (count !== renderedCount && !live) {
         renderedCount = count;
+        const follow=!requestHistory.hasEntries||log.scrollHeight-log.scrollTop-log.clientHeight<56,previousTop=log.scrollTop;
         clear(log);
-        for (const m of State.chatHistory) log.append(bubble(m));
+        for(let i=0;i<=State.chatHistory.length;i++){
+          log.append(...requestHistory.before(i));if(i<State.chatHistory.length)log.append(bubble(State.chatHistory[i]));
+        }
+        log.append(...requestHistory.unplaced());
         if (thinking) {
           const watching=observed.get(State.chatProvider);
-          if(!pending.has(State.chatProvider) && watching?.query)log.append(bubble({id:0,role:"user",content:watching.query}));
+          if(!pending.has(State.chatProvider) && watching?.query&&!requestHistory.coversPending(watching.query))log.append(bubble({id:0,role:"user",content:watching.query}));
           log.append(typingDots());drawLive(pending.get(State.chatProvider)?.text || watching?.text || "");
         }
-        log.scrollTop = log.scrollHeight;
+        log.scrollTop = follow?log.scrollHeight:previousTop;
       }
 
       // Leaving the chat folds the picker away.
@@ -682,7 +711,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
 
       input.placeholder = t(State.chatHistory.length === 0 ? STRINGS.placeholderFirst : STRINGS.placeholderNext);
       input.disabled = State.chatResettingProviders.has(State.chatProvider)||(State.chatProvider==='ollama'&&OllamaModelSelection.pending);
-      fitInput();
+      fitInput();if(historyChanged)onHeightChange();
     },
     focus() {
       input.focus();
@@ -705,13 +734,15 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat):ViewHos
     const pet=session.target?.petId;if(pet)void Bridge.openSettingsWindow('pets:'+pet);
   }});
   const modelRow=h('div',{class:'model-row'},modelButton,profiles);
+  const executionBadge=h('p',{class:'local-execution-capability',role:'status'});executionBadge.hidden=true;
   const attachments=h('div',{class:'chips'});
+  const taskStatus=buildTaskNotice(),requestHistory=buildRequestHistory();
   const failedText=h('pre',{class:'failed-request-text'});
   const failedReview=h('details',{class:'failed-request-review'},h('summary',{text:'Rever pedido original · confirma o histórico antes de repetir'}),failedText);failedReview.hidden=true;
   const decisions=buildAgentRequests(()=>session.target,onHeightChange);
   const picker=buildPicker(()=>{body.classList.toggle('picking',picker.isOpen);onHeightChange();},(provider,model)=>{if(provider!=='ollama')session.chooseModel(model);},()=>session.target?.origin==='external',()=>session.model||session.snapshot?.model||'');
   const hint=h('p',{id:'session-composer-hint',class:'composer-hint',text:'Enter para enviar · Shift + Enter para mudar de linha'});
-  const body=h('div',{class:'chat-body'},attachments,log,decisions.el,picker.el,modelRow,feedback,failedReview,h('div',{class:'chat-bar'},input,send),hint);
+  const body=h('div',{class:'chat-body'},attachments,log,taskStatus.el,decisions.el,picker.el,modelRow,executionBadge,feedback,failedReview,h('div',{class:'chat-bar'},input,send),hint);
   modelButton.addEventListener('click',()=>{if(picker.isOpen)picker.close();else picker.open();});
   const el=h('div',{class:'view'},h('div',{class:'card wash chat-card'},body));
   (el.querySelector('.card') as HTMLElement).style.setProperty('--wash','rgba(99,102,241,0.5)');
@@ -719,6 +750,7 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat):ViewHos
   const messageNodes=new Map<string,{signature:string;el:HTMLElement}>();
   let emptyNode:HTMLElement|null=null,dots:HTMLElement|null=null;
   const fitInput=()=>{input.style.height='auto';input.style.height=`${Math.min(128,Math.max(20,input.scrollHeight-14))}px`;};
+  PetPreferences.subscribe(()=>{sync();onHeightChange();});
   input.addEventListener('input',()=>{if(session.target)session.drafts.set(sessionTargetKey(session.target),input.value);fitInput();sync();});
   async function submit(){
     const target=session.target,query=input.value.trim();if(!target||!query||session.sending||session.snapshot?.busy||!session.snapshot?.capabilities.send||session.error||(target.provider==='ollama'&&OllamaModelSelection.pending))return;
@@ -735,11 +767,15 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat):ViewHos
   function sync(){
     decisions.sync();
     const target=session.target,snapshot=session.snapshot,key=target?sessionTargetKey(target):'';
+    if(target?.provider==='ollama'&&target.origin==='mochi'&&snapshot)localCapabilities.observe(target.sessionId,Number(snapshot.turn??0),snapshot.localExecution);
+    executionBadge.textContent=target?.provider==='ollama'&&target.origin==='mochi'?capabilityText(target.sessionId,activeModel({...State.settings,chatProvider:'ollama'})):'';executionBadge.hidden=!executionBadge.textContent;
     // Ollama's native selection is shared by text and voice. An old session
     // override must never advertise or send a model preceding the current ACK.
     if(target?.provider==='ollama')session.models.delete(key);
     if(key!==owner){if(owner)session.drafts.set(owner,input.value);owner=key;input.value=session.drafts.get(key)??'';fitInput();rendered='';messageNodes.clear();emptyNode=null;dots=null;clear(log);if(picker.isOpen)picker.close();}
     const waiting=session.sending||!!snapshot?.busy;
+    requestHistory.sync(target,snapshot?.requestHistory,snapshot?.messages.length??0);
+    taskStatus.sync(target,snapshot?{...snapshot,taskNotice:requestHistory.coversTask(snapshot.taskNotice?.taskId)?undefined:snapshot.taskNotice}:null,session.sending);
     const attachment=snapshot?.attachment,label=attachment?`${attachment.name}:${attachment.sequence??''}`:'';
     if(attachments.dataset.label!==label){attachments.dataset.label=label;clear(attachments);if(attachment){attachments.append(contextChip(attachment.name),h('button',{class:'picker-link',text:'Retirar anexo',onclick:()=>void session.clearAttachment()}));}}
     failedReview.hidden=!session.failure;failedText.textContent=session.failure?.query??'';
@@ -747,8 +783,8 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat):ViewHos
     // Preserve scroll position during live updates if the user is reading older
     // messages. Only a new selection or a reader already at the end follows it.
     const follow=log.scrollHeight-log.scrollTop-log.clientHeight<56||log.dataset.owner!==key;
-    const emptyState=!messages.length&&!waiting&&!session.query?(session.error?'error':session.loading?'loading':snapshot?'empty':'opening'):'';
-    const signature=JSON.stringify([key,messages,waiting,session.query,emptyState]);
+    const emptyState=taskStatus.el.hidden&&!requestHistory.hasEntries&&!messages.length&&!waiting&&!session.query?(session.error?'error':session.loading?'loading':snapshot?'empty':'opening'):'';
+    const signature=JSON.stringify([key,messages,waiting,session.query,emptyState,requestHistory.signature]);
     if(signature!==rendered){
       rendered=signature;
       const desired:HTMLElement[]=[],wanted=new Set<string>();
@@ -757,21 +793,23 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat):ViewHos
         if(!cached||cached.signature!==signature){const next={signature,el:bubble({...m,id:0})};cached?.el.replaceWith(next.el);cached=next;messageNodes.set(id,cached);}
         desired.push(cached.el);
       };
-      for(const m of messages)showMessage(m.id,m);
+      for(let i=0;i<=messages.length;i++){desired.push(...requestHistory.before(i));if(i<messages.length)showMessage(messages[i].id,messages[i]);}
+      desired.push(...requestHistory.unplaced());
       if(emptyState){
         const title=emptyState==='error'?'Não foi possível abrir a conversa':emptyState==='loading'||emptyState==='opening'?'A abrir a conversa…':target?.origin==='external'?'Estás nesta sessão de terminal':'Começa uma conversa';
         const description=emptyState==='error'?'Usa Atualizar sessões para tentar novamente.':emptyState==='loading'||emptyState==='opening'?'O histórico vai aparecer aqui.':target?.origin==='external'?'As mensagens escritas aqui pertencem apenas à sessão selecionada.':'Escreve o que precisas. Podes voltar a esta conversa na lista de sessões.';
         if(!emptyNode||emptyNode.dataset.state!==emptyState){emptyNode=h('div',{class:'session-empty'},h('strong',{text:title}),h('p',{text:description}));emptyNode.dataset.state=emptyState;}
         desired.push(emptyNode);
       }
-      if(session.query&&!snapshot?.busy)showMessage('__pending_query__',{role:'user',content:session.query});
+      if(session.query&&!snapshot?.busy&&!requestHistory.coversPending(session.query))showMessage('__pending_query__',{role:'user',content:session.query});
       if(waiting){dots??=typingDots();desired.push(dots);}
       for(const [id,cached]of messageNodes)if(!wanted.has(id)){cached.el.remove();messageNodes.delete(id);}
       const retained=new Set(desired);for(const child of Array.from(log.children))if(!retained.has(child as HTMLElement))child.remove();
       desired.forEach((child,index)=>{if(log.children[index]!==child)log.insertBefore(child,log.children[index]??null);});
       if(follow)log.scrollTop=log.scrollHeight;log.dataset.owner=key;
     }
-    const text=session.error||snapshot?.notice||(session.loading&&!snapshot?'A carregar a conversa…':waiting?'A trabalhar nesta sessão.':'');
+    const notices=[session.error,snapshot?.notice].filter((value,index,all)=>value&&all.indexOf(value)===index);
+    const text=notices.join('\n\n')||(session.loading&&!snapshot?'A carregar a conversa…':waiting?'A trabalhar nesta sessão.':'');
     feedback.hidden=!text;feedback.textContent=text;
     input.disabled=!snapshot?.capabilities.send;
     input.placeholder=snapshot&&!snapshot.capabilities.send?'Esta sessão permite apenas leitura.':target?.origin==='external'?'Mensagem para esta sessão de terminal…':'Escreve uma mensagem…';

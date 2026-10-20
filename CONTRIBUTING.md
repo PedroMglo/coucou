@@ -1,3 +1,26 @@
+# Desenvolvimento deste fork Linux
+
+Este checkout destina-se apenas a Linux. O frontend partilhado e o backend Tauri
+mantêm o nome de pasta `windows/`; isso não amplia o âmbito para Windows ou macOS.
+O estado de entrega e os critérios de aceitação estão em
+[docs/PETS-ARCHITECTURE.md](docs/PETS-ARCHITECTURE.md). As instruções upstream
+sobre Swift/AppKit abaixo são referência histórica para o projeto original.
+
+A fábrica de pets tem uma candidata privada revista, ainda não integrada.
+Na sua adoção, novos pets e melhorias comuns devem usar base, molde e extensão;
+o comportamento específico pertence à instância ou ao adapter. Evoluir os
+moldes e migrar duplicações quando houver benefício concreto. Identidade,
+provider, permissões e política de execução local permanecem explícitos por pet
+e nunca são herdados dos moldes. O catálogo não concede acessos em runtime.
+
+Conservar o destino completo das sessões e dos pedidos em todas as operações.
+Apresentar um pedido não constitui aprovação. Testes simulados, compilação e
+aceitação no desktop são evidências distintas; registar os seus limites no guia.
+Alterações persistentes do anfitrião pertencem ao sysworkspace; dependências e
+artefactos deste projeto permanecem neste repositório/ambiente.
+
+---
+
 # Contributing to Coucou
 
 Thanks for wanting to help Mochi grow up! 🫶

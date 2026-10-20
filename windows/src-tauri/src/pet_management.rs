@@ -97,6 +97,87 @@ fn attach_cached_usage(value:&mut Value){
  #[cfg(not(target_os="linux"))]let _=value;
 }
 
+/// Public, cached account quotas only. Never calls the helper, a network or a
+/// native session client. readAt is this file read, not a provider update.
+fn cached_usage_window(label:&str)->bool {
+ [crate::island::WINDOW_LABEL,crate::HUB_LABEL,crate::companions::LABEL,
+  crate::pet_chat::LABEL,crate::pet_control::LABEL,crate::pet_panel::LABEL].contains(&label)
+}
+fn quota_cache_path(root:&std::path::Path)->Option<std::path::PathBuf>{
+ root.is_absolute().then(||root.join("ia-barra/usage.json"))
+}
+#[cfg(target_os="linux")]
+fn cached_usage_at(path:&std::path::Path,now:u64)->Value {
+ match read_usage_at(path,now){
+  Some(value)=>serde_json::json!({"schemaVersion":1,"source":"ia-barra-local-cache","readAt":now,"status":"available","reason":null,"providers":value["providers"]}),
+  None=>empty_cached_usage(now,"unavailable","cacheUnavailable"),
+ }
+}
+fn empty_cached_usage(now:u64,status:&str,reason:&str)->Value {
+ serde_json::json!({"schemaVersion":1,"source":"ia-barra-local-cache","readAt":now,"status":status,"reason":reason,"providers":{}})
+}
+fn cached_usage()->Value {
+ let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+ #[cfg(target_os="linux")]{
+  // An explicitly set QA cache root must never fall back to the real account.
+  let root=std::env::var_os("XDG_CACHE_HOME").map(std::path::PathBuf::from)
+   .unwrap_or_else(||crate::platform::home_dir().join(".cache"));
+  match quota_cache_path(&root){Some(path)=>cached_usage_at(&path,now),None=>empty_cached_usage(now,"unavailable","invalidCacheRoot")}
+ }
+ #[cfg(not(target_os="linux"))]{empty_cached_usage(now,"notSupported","unsupportedPlatform")}
+}
+
+#[tauri::command]
+pub async fn pet_cached_usage(window:tauri::WebviewWindow)->Result<Value,String>{
+ if !cached_usage_window(window.label()){return Err("Abre um pet para consultar a utilização guardada.".into());}
+ tauri::async_runtime::spawn_blocking(cached_usage).await
+  .map_err(|_|"Não foi possível consultar a utilização guardada.".to_string())
+}
+
+#[cfg(all(test,target_os="linux"))]
+mod cached_quota_tests {
+ use super::*;
+ use std::{path::PathBuf,fs,os::unix::fs::{PermissionsExt,symlink},sync::atomic::{AtomicU64,Ordering}};
+ struct Fixture(PathBuf);
+ impl Fixture {
+  fn new()->Self{static NEXT:AtomicU64=AtomicU64::new(0);let p=std::env::temp_dir().join(format!("coucou-quota-cache-{}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed)));fs::create_dir(&p).unwrap();Self(p)}
+  fn path(&self)->PathBuf{self.0.join("usage.json")}
+  fn write(&self,value:Value){fs::write(self.path(),serde_json::to_vec(&value).unwrap()).unwrap();fs::set_permissions(self.path(),fs::Permissions::from_mode(0o600)).unwrap();}
+ }
+ impl Drop for Fixture{fn drop(&mut self){let _=fs::remove_dir_all(&self.0);}}
+ #[test]fn cache_miss_and_invalid_data_are_unknown_not_zero_or_unlimited(){
+  let f=Fixture::new();let missing=cached_usage_at(&f.path(),1000);
+  assert_eq!(missing["status"],"unavailable");assert_eq!(missing["reason"],"cacheUnavailable");assert_eq!(missing["providers"],serde_json::json!({}));
+  f.write(serde_json::json!({"providers":{"codex":{"updated":1001,"windows":[{"used":12}]}}}));
+  assert_eq!(cached_usage_at(&f.path(),1000),missing);
+  fs::write(f.path(),b"{invalid").unwrap();assert_eq!(cached_usage_at(&f.path(),1000),missing);
+ }
+ #[test]fn cache_returns_only_public_allowlisted_fields_without_account_or_secrets(){
+  let f=Fixture::new();f.write(serde_json::json!({"token":"PRIVATE","providers":{
+   "codex":{"account":"PRIVATE_ACCOUNT","plan":"PRIVATE_PLAN","token":"PRIVATE_TOKEN","updated":900,"available":true,"blocked":false,"windows":[{"label":"Daily","used":12.5,"reset_at":1200,"secret":"PRIVATE_WINDOW"}]},
+   "foreign":{"updated":900,"windows":[{"used":99}]} }}));
+  let value=cached_usage_at(&f.path(),1000);assert_eq!(value["status"],"available");assert_eq!(value["source"],"ia-barra-local-cache");assert_eq!(value["readAt"],1000);assert_eq!(value["providers"]["codex"]["updated"],900);assert_eq!(value["providers"]["codex"]["windows"][0]["used"],12.5);
+  assert_eq!(value["providers"].as_object().unwrap().len(),1);assert!(!value.to_string().contains("PRIVATE"));
+ }
+ #[test]fn old_reading_keeps_its_date_and_is_explicitly_stale(){
+  let f=Fixture::new();f.write(serde_json::json!({"providers":{"copilot":{"updated":10,"windows":[{"used":0}]}}}));
+  let value=cached_usage_at(&f.path(),1000);assert_eq!(value["providers"]["copilot"]["updated"],10);assert_eq!(value["providers"]["copilot"]["stale"],true);assert_eq!(value["readAt"],1000);
+ }
+ #[test]fn symlinks_writable_and_oversized_cache_are_not_read_as_quota(){
+  let f=Fixture::new();f.write(serde_json::json!({"providers":{"codex":{"updated":900}}}));let original=f.0.join("original.json");fs::rename(f.path(),&original).unwrap();symlink(&original,f.path()).unwrap();
+  assert_eq!(cached_usage_at(&f.path(),1000)["status"],"unavailable");fs::remove_file(f.path()).unwrap();fs::rename(original,f.path()).unwrap();
+  fs::set_permissions(f.path(),fs::Permissions::from_mode(0o666)).unwrap();assert_eq!(cached_usage_at(&f.path(),1000)["status"],"unavailable");
+  fs::set_permissions(f.path(),fs::Permissions::from_mode(0o600)).unwrap();fs::write(f.path(),vec![b' ';USAGE_CACHE_LIMIT as usize+1]).unwrap();assert_eq!(cached_usage_at(&f.path(),1000)["status"],"unavailable");
+ }
+ #[test]fn explicit_qa_cache_root_is_used_without_real_home_fallback(){
+  let f=Fixture::new();assert_eq!(quota_cache_path(&f.0),Some(f.0.join("ia-barra/usage.json")));assert!(quota_cache_path(std::path::Path::new("relative-cache")).is_none());assert!(quota_cache_path(std::path::Path::new("")).is_none());
+ }
+ #[test]fn only_native_metadata_windows_can_request_the_cached_snapshot(){
+  for label in [crate::island::WINDOW_LABEL,crate::HUB_LABEL,crate::companions::LABEL,crate::pet_chat::LABEL,crate::pet_control::LABEL,crate::pet_panel::LABEL]{assert!(cached_usage_window(label));}
+  for label in ["","arbitrary","settings-child","SETTINGS","http://settings"]{assert!(!cached_usage_window(label));}
+ }
+}
+
 /// Memory and service changes share the pet's admission gate with text and
 /// voice. Keep the reservation in the blocking worker until the helper exits.
 fn reserve_maintenance(chat:&crate::chat::Chat,request:&Request)->Result<Option<crate::chat::ConversationReservation>,String>{
@@ -252,3 +333,5 @@ pub async fn pet_focus_session(window:tauri::WebviewWindow,provider:String,id:St
   }
  }
 }
+
+#[path="station_history.rs"]pub(crate) mod station_history;

@@ -1,3 +1,4 @@
+import {requestHistoryFor,containsPendingRequest} from '../core/request-history';
 import '../style.css';import './pet-chat.css';
 import {invoke} from '@tauri-apps/api/core';
 import {Bridge,onEvent,onDragDrop,type ConversationView} from '../core/bridge';
@@ -5,30 +6,35 @@ import {State} from '../core/state';
 import {buildPrompt} from '../views/chat';
 import {PetPreferences} from '../mochi/pet-preferences';
 import {SessionChat,sameSession,sessionOrigin,sessionTargetKey,type SessionTarget,type SessionSnapshot,type SessionSummary} from '../core/session-chat';
-import {matchingSessions,mergeSessionLists} from './session-list';
+import {matchingSessions,mergeSessionLists,visibleSessions} from './session-list';
+import {SessionListLoading,type ListSource} from './session-list-loading';
 import {OllamaModelSelection} from '../core/ollama-selection';
 import type {Settings} from '../core/state';
 import {managedReference,managedFor,managedDescription,canOpenManaged,type ManagedCodexSession} from '../core/managed-codex';
 interface Session{id:string;backend:string;title:string;cwd:string;steps:string[];finalLine:string}
 interface Context{pet:string;name:string;provider:string;session?:Session;conversationId?:string;showSessions?:boolean;target?:SessionTarget}
 interface Rect{x:number;y:number;width:number;height:number}
-let context:Context|null=null,rect:Rect={x:100,y:80,width:760,height:620},large=false,listing=0,opening=0;
+let context:Context|null=null,rect:Rect={x:100,y:80,width:760,height:620},large=false,opening=0,selectionIntent=0;
+function acceptRect(value:Rect){rect=value;large=rect.width>760||rect.height>620;}
 let dragging=false,dragState:{id:number;origin:Rect;pointer:{x:number;y:number}|null}|null=null;
 const node=<K extends keyof HTMLElementTagNameMap>(tag:K,text?:string)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;};
 const info=document.getElementById('feedback')!;
+// Sidebar actions must report errors even when the narrow layout hides chat-main.
+document.getElementById('chat-layout')!.before(info);
 const list=document.getElementById('session-list')!,search=document.getElementById('session-search') as HTMLInputElement;
 const newSession=document.getElementById('new-session') as HTMLButtonElement;
 const newCodex=document.getElementById('new-codex') as HTMLButtonElement;
 const managedPanel=document.getElementById('managed-session')!,managedOpen=document.getElementById('managed-open') as HTMLButtonElement,managedRelease=document.getElementById('managed-release') as HTMLButtonElement;
 let managed:ManagedCodexSession[]=[],managedAction=false,managedReading=0,creatingCodex=false;
-let summaries:SessionSummary[]=[],listLoading=false;
-const local=(c:Context,id:string):SessionTarget=>({petId:c.pet,provider:c.provider,origin:'mochi',sessionId:id,conversationId:id});
+let summaries:SessionSummary[]=[];
+let sessionLimits={mochi:50,external:50};
+const local=(c:{pet:string;provider:string},id:string):SessionTarget=>({petId:c.pet,provider:c.provider,origin:'mochi',sessionId:id,conversationId:id});
 function fromLocal(target:SessionTarget,value:ConversationView):SessionSnapshot {
  if(value.id!==target.sessionId)throw new Error('A conversa recebida não corresponde à sessão escolhida.');
  const messages=value.messages.map((m,i)=>({id:`${value.id}:${i}`,role:m.role,content:m.content}));
- if(value.busy&&value.query)messages.push({id:`${value.id}:query`,role:'user',content:value.query});
+ if(value.busy&&value.query&&!containsPendingRequest(requestHistoryFor(target,value.requestHistory,value.messages.length),value.query))messages.push({id:`${value.id}:query`,role:'user',content:value.query});
  if(value.busy&&value.stream)messages.push({id:`${value.id}:stream`,role:'assistant',content:value.stream});
- return {target,messages,notice:value.notice,busy:!!value.busy,turn:value.turn===undefined?undefined:String(value.turn),capabilities:{history:true,send:true,cancel:true}};
+ return {target,messages,notice:value.notice,taskNotice:value.taskNotice,requestHistory:value.requestHistory,localExecution:value.localExecution,busy:!!value.busy,turn:value.turn===undefined?undefined:String(value.turn),capabilities:{history:true,send:true,cancel:true}};
 }
 const session=new SessionChat({
  history:async target=>{
@@ -74,50 +80,76 @@ function drawIdentity(){
  }
  const selected=document.getElementById('selected-session')!;selected.textContent=summary?.cwd|| (target.origin==='mochi'?'Mensagens para este pet':'Mensagens para esta sessão de terminal');selected.title=summary?.cwd||sessionOrigin(target);
 }
+const sessionLists=new SessionListLoading({
+ mochi:async owner=>(await Bridge.chatConversations(owner.provider)).map(s=>({target:local(owner,s.id),title:s.title,cwd:'',updatedAt:s.updated,state:s.current?'Atual':'Guardada',capabilities:{history:true,send:true,cancel:true}})),
+ external:async owner=>(await invoke<SessionSummary[]>('session_chat_list',{petId:owner.pet})).filter(s=>s.target.petId===owner.pet&&s.target.provider===owner.provider&&s.target.origin==='external'),
+ managed:async owner=>(await invoke<ManagedCodexSession[]>('session_chat_managed_list')).filter(s=>s.target.petId===owner.pet&&s.target.provider===owner.provider&&s.target.origin==='external'&&s.phase!=='released'),
+},()=>{
+ const state=sessionLists.state;
+ managed=state.managed.rows;
+ const external=[...state.external.rows];
+ for(const receipt of managed)if(!external.some(s=>sameSession(s.target,receipt.target)))external.unshift({target:receipt.target,title:'Sessão Codex',cwd:receipt.cwd,updatedAt:0,state:receipt.phase==='lost'?'Ligação terminada':receipt.materialized?'Criada no Coucou':'Nova · sem mensagens',capabilities:{history:true,send:receipt.phase!=='lost',cancel:false}});
+ summaries=mergeSessionLists([],state.mochi.rows,external);drawSessions();
+});
+function sourceNote(source:ListSource,label:string){
+ const state=sessionLists.state[source];if(state.phase==='notApplicable')return;
+ const note=node('div');note.className='session-source-note';note.dataset.source=source;note.dataset.loading=String(state.loading);
+ note.setAttribute('role','status');note.tabIndex=-1;
+ const detail=state.loading?state.phase==='idle'?'A procurar…':'A atualizar…':state.phase==='error'?'Indisponível. Não foi possível consultar.':state.phase==='partial'?'Consulta falhou. A mostrar os dados já recebidos.':state.phase==='idle'?'Ainda por consultar.':state.rows.length?`${state.rows.length} identificadas.`:'Nenhuma nesta consulta.';
+ note.append(node('span',`${label} · ${detail}`));
+ if(state.error){const error=node('small',state.error);note.append(error);}
+ if(!state.loading&&(state.phase==='error'||state.phase==='partial')){
+  const retry=node('button','Tentar novamente');retry.dataset.retry=source;retry.setAttribute('aria-label',`Tentar consultar ${label.toLowerCase()} novamente`);retry.onclick=()=>sessionLists.refresh(true,source);note.append(retry);
+ }
+ return note;
+}
 function drawSessions(){
- const query=search.value.trim(),scroll=list.scrollTop,focused=(document.activeElement as HTMLElement|null)?.closest<HTMLButtonElement>('.session-entry')?.dataset.key;list.replaceChildren();
- list.setAttribute('aria-busy',String(listLoading));
- const refresh=document.getElementById('sessions-refresh') as HTMLButtonElement;refresh.disabled=listLoading;refresh.dataset.loading=String(listLoading);
+ const query=search.value.trim(),scroll=list.scrollTop,focused=(document.activeElement as HTMLElement|null)?.closest<HTMLButtonElement>('.session-entry')?.dataset.key;
+ const retryFocus=(document.activeElement as HTMLElement|null)?.closest<HTMLElement>('.session-source-note')?.dataset.source;list.replaceChildren();
+ const states=sessionLists.state,loading=Object.values(states).some(s=>s.loading);
+ // One pending inventory must not hide ready rows from assistive technology.
+ list.setAttribute('aria-busy','false');
+ const refresh=document.getElementById('sessions-refresh') as HTMLButtonElement;
+ refresh.disabled=Object.values(states).every(s=>s.phase==='notApplicable'||s.loading);refresh.dataset.loading=String(loading);
+ const target=session.target,rowsWithSelection=[...summaries];
+ if(target&&!rowsWithSelection.some(s=>sameSession(s.target,target)))rowsWithSelection.unshift({target,title:context?.session?.title||'Sessão selecionada',cwd:context?.session?.cwd||'',updatedAt:0,state:'Selecionada · fora da lista recebida',capabilities:{history:true,send:false,cancel:false}});
  for(const origin of ['mochi','external'] as const){
-  const rows=matchingSessions(summaries,query,origin);
-  if(!rows.length)continue;
-  const heading=node('h3',origin==='mochi'?'Conversas do pet':'Sessões de terminal');heading.append(node('span',String(rows.length)));heading.className='session-group';list.append(heading);
-  for(const s of rows){
-  const button=node('button');button.className='session-entry';button.dataset.key=sessionTargetKey(s.target);button.dataset.selected=String(sameSession(session.target,s.target));
-  if(sameSession(session.target,s.target))button.setAttribute('aria-current','true');
-  button.append(node('strong',s.title||'Conversa'),node('span',`${s.state} · #${s.target.sessionId.slice(0,8)}${s.model?' · '+s.model:''}`));
-  if(s.cwd)button.append(node('small',s.cwd));button.title=`${s.target.sessionId}\n${s.cwd}`;
-  button.onclick=()=>void choose(s.target);list.append(button);
+  if(origin==='mochi'&&states.mochi.phase==='notApplicable')continue;
+  const rows=matchingSessions(rowsWithSelection,query,origin),shown=visibleSessions(rows,sessionLimits[origin],session.target);
+  const group=node('section');group.className='session-source-group';group.dataset.origin=origin;
+  const heading=node('h3',origin==='mochi'?'Conversas do pet':'Sessões externas');heading.className='session-group';
+  // This is the visible inventory, not a provider total or a liveness count.
+  const confirmed=(origin==='mochi'?[states.mochi]:[states.external,states.managed]).every(s=>s.phase==='ready'||s.phase==='notApplicable');
+  heading.append(node('span',!rows.length&&!confirmed?'Por confirmar':`${shown.length<rows.length?`${shown.length} / `:''}${rows.length} listadas`));group.append(heading);
+  for(const source of origin==='mochi'?['mochi'] as const:['external','managed'] as const){const note=sourceNote(source,source==='mochi'?'Conversas':source==='external'?'Inventário externo':'Gestão Codex');if(note)group.append(note);}
+  for(const s of shown){
+   const button=node('button');button.className='session-entry';button.dataset.key=sessionTargetKey(s.target);button.dataset.selected=String(sameSession(session.target,s.target));
+   if(sameSession(session.target,s.target))button.setAttribute('aria-current','true');
+   button.append(node('strong',s.title||'Conversa'),node('span',`${s.state} · #${s.target.sessionId.slice(0,8)}${s.model?' · '+s.model:''}`));
+   if(s.cwd)button.append(node('small',s.cwd));button.title=`${s.target.sessionId}\n${s.cwd}`;
+   button.dataset.origin=origin;button.onclick=()=>void choose(s.target);group.append(button);
   }
+  if(shown.length<rows.length){const more=node('button',`Mostrar mais · ${rows.length-shown.length} por mostrar`);more.className='session-more';more.setAttribute('aria-label',`Mostrar mais ${origin==='mochi'?'conversas do pet':'sessões externas'} · ${rows.length-shown.length} por mostrar`);more.onclick=()=>{sessionLimits[origin]+=50;drawSessions();list.querySelectorAll<HTMLButtonElement>(`.session-entry[data-origin="${origin}"]`)[shown.length]?.focus();};group.append(more);}
+  if(query&&!rows.length)group.append(node('p','Sem correspondências nos dados já recebidos.'));
+  list.append(group);
  }
- if(!list.childElementCount){
-  const empty=node('div');empty.className='session-list-empty';empty.append(node('strong',listLoading?'A procurar conversas…':query?'Sem resultados':'Ainda sem conversas'),node('p',query?'Experimenta outro nome, pasta ou identificador.':'Cria uma conversa para começar a falar com este pet.'));
-  if(query){const clear=node('button','Limpar pesquisa');clear.onclick=()=>{search.value='';drawSessions();search.focus();};empty.append(clear);}list.append(empty);
+ if(query){const clear=node('button','Limpar pesquisa');clear.className='session-more';clear.onclick=()=>{search.value='';sessionLimits={mochi:50,external:50};drawSessions();search.focus();};list.append(clear);}
+ if(document.hasFocus()){
+  if(focused)Array.from(list.querySelectorAll<HTMLButtonElement>('.session-entry')).find(b=>b.dataset.key===focused)?.focus({preventScroll:true});
+  else if(retryFocus)(list.querySelector<HTMLElement>(`[data-retry="${retryFocus}"]`)??list.querySelector<HTMLElement>(`.session-source-note[data-source="${retryFocus}"]`))?.focus({preventScroll:true});
  }
- if(focused&&document.hasFocus())Array.from(list.querySelectorAll<HTMLButtonElement>('.session-entry')).find(b=>b.dataset.key===focused)?.focus({preventScroll:true});
  list.scrollTop=scroll;drawIdentity();
 }
-async function refreshSessions(){
- const c=context;if(!c||listLoading)return;const ticket=++listing;listLoading=true;drawSessions();
- const results=await Promise.allSettled([c.provider?Bridge.chatConversations(c.provider):Promise.resolve([]),invoke<SessionSummary[]>('session_chat_list',{petId:c.pet}),c.pet==='agent_codex'&&c.provider==='codex'?invoke<ManagedCodexSession[]>('session_chat_managed_list'):Promise.resolve([])]);
- if(context!==c||ticket!==listing)return;
- const own=results[0].status==='fulfilled'?results[0].value.map(s=>({target:local(c,s.id),title:s.title,cwd:'',updatedAt:s.updated,state:s.current?'Atual':'Guardada',capabilities:{history:true,send:true,cancel:true}})):null;
- const external=results[1].status==='fulfilled'?results[1].value.filter(s=>s.target.petId===c.pet&&s.target.origin==='external'):null;
- if(results[2].status==='fulfilled')managed=results[2].value.filter(s=>s.target.petId===c.pet&&s.phase!=='released');
- if(external)for(const receipt of managed)if(!external.some(s=>sameSession(s.target,receipt.target)))external.unshift({target:receipt.target,title:'Sessão Codex',cwd:receipt.cwd,updatedAt:0,state:receipt.phase==='lost'?'Ligação terminada':receipt.materialized?'Criada no Coucou':'Nova · sem mensagens',capabilities:{history:true,send:receipt.phase!=='lost',cancel:false}});
- summaries=mergeSessionLists(summaries,own,external);listLoading=false;
- const target=session.target;
- if(target&&!summaries.some(s=>sameSession(s.target,target)))summaries.unshift({target,title:c.session?.title||'Sessão selecionada',cwd:c.session?.cwd||'',updatedAt:0,state:'Selecionada',capabilities:{history:true,send:false,cancel:false}});
- report(results.filter(r=>r.status==='rejected').map(r=>String((r as PromiseRejectedResult).reason).replace(/^Error:\s*/, '')).join(' · '));drawSessions();
-}
+function refreshSessions(manual=false){if(context)sessionLists.refresh(manual);}
 async function choose(target:SessionTarget){
- report('');
- await session.select(target);if(!sameSession(session.target,target))return;drawSessions();if(document.hasFocus())chat.focus?.();
+ const c=context;if(!c||target.petId!==c.pet||target.provider!==c.provider){report('A conversa pedida não pertence a este pet.');return;}
+ const intent=++selectionIntent;report('');
+ const selecting=session.select(target);drawSessions();await selecting;if(context!==c||intent!==selectionIntent||!sameSession(session.target,target))return;drawSessions();if(document.hasFocus())chat.focus?.();
  if(innerWidth<=480)setSidebar(false);
 }
 function setSidebar(show:boolean){document.getElementById('sessions')!.hidden=!show;document.getElementById('chat-layout')!.classList.toggle('sidebar-collapsed',!show);document.getElementById('sessions-toggle')!.setAttribute('aria-expanded',String(show));if(show)void refreshSessions();}
 async function open(c:Context){
- if(!c.pet)return;const ticket=++opening;context=c;session.clear();summaries=[];managed=[];managedReading++;managedPanel.hidden=true;listing++;listLoading=false;search.value='';report('');
+ if(!c.pet)return;const ticket=++opening,intent=++selectionIntent;context=c;session.clear();summaries=[];managed=[];managedReading++;managedPanel.hidden=true;sessionLists.reset(c);search.value='';sessionLimits={mochi:50,external:50};report('');
  document.getElementById('owner')!.textContent=c.name;
  document.getElementById('origin')!.textContent='';document.getElementById('source')!.textContent='A abrir a conversa…';document.getElementById('selected-session')!.textContent='';document.getElementById('terminal')!.hidden=true;
  State.upsertExternalAgent(c.pet,c.name,'#94a3b8');State.setFocus(c.pet);State.view='prompt';State.mode='expanded';State.notify();
@@ -131,12 +163,13 @@ async function open(c:Context){
   else if(c.session)target={petId:c.pet,provider:c.session.backend,origin:'external',sessionId:c.session.id};
   else if(c.provider){const current=await Bridge.chatConversation(c.provider);target=local(c,current.id);}
   else {report('Este pet ainda não tem um provider de chat configurado.');return;}
-  if(ticket!==opening)return;await session.select(target);if(ticket!==opening)return;void refreshSessions();
- }catch(e){if(ticket===opening)report(String(e).replace(/^Error:\s*/,''));}
+  if(ticket!==opening||intent!==selectionIntent)return;await session.select(target);if(ticket!==opening||intent!==selectionIntent)return;void refreshSessions();
+ }catch(e){if(ticket===opening&&intent===selectionIntent)report(String(e).replace(/^Error:\s*/,''));}
 }
 const boot=await Bridge.boot();if(boot)State.settings={...State.settings,...boot.settings,companionMode:true};await PetPreferences.init();
 State.subscribe(()=>chat.sync());
-await onEvent<{context:Context;rect:Rect}>('pet-chat-opened',value=>{rect=value.rect;void open(value.context);});
+PetPreferences.subscribe(()=>chat.sync());
+await onEvent<{context:Context;rect:Rect}>('pet-chat-opened',value=>{acceptRect(value.rect);void open(value.context);});
 let refreshTimer:ReturnType<typeof setTimeout>|undefined;
 function invalidate(target?:SessionTarget){
  if(target&&!sameSession(target,session.target)||refreshTimer)return;
@@ -145,7 +178,7 @@ function invalidate(target?:SessionTarget){
 async function refreshManaged(target?:SessionTarget){
  const receipt=managedFor(managed,target??session.target);if(!receipt)return;
  const c=context,ticket=++managedReading;
- try{const next=await invoke<ManagedCodexSession>('session_chat_managed_inspect',{reference:managedReference(receipt)});if(ticket!==managedReading||context!==c)return;managed=managed.map(row=>row.handle===next.handle?next:row);drawIdentity();}
+ try{const next=await invoke<ManagedCodexSession>('session_chat_managed_inspect',{reference:managedReference(receipt)});if(ticket!==managedReading||context!==c)return;sessionLists.managedReceipt(next);drawIdentity();}
  catch(error){if(ticket===managedReading&&context===c&&sameSession(receipt.target,session.target))report(String(error).replace(/^Error:\s*/,''));}
 }
 await onEvent<{target:SessionTarget}>('session-chat-updated',e=>{invalidate(e.target);void refreshManaged(e.target);});
@@ -174,41 +207,48 @@ await onDragDrop(event=>{
   report(`${file.name} anexado a esta conversa.`);await session.refresh();
  }).catch(error=>{if(sameSession(target,session.target))report(String(error).replace(/^Error:\s*/,''));});
 });
-const initialRect=await invoke<Rect|null>('pet_chat_rect');if(initialRect)rect=initialRect;
+const initialRect=await invoke<Rect|null>('pet_chat_rect');if(initialRect)acceptRect(initialRect);
 const initialOpening=opening,initialContext=await invoke<Context>('pet_chat_context');
 if(opening===initialOpening)await open(initialContext);
-document.getElementById('close')!.onclick=()=>{stopDrag();void invoke('pet_chat_hide');};
-await onEvent('pet-chat-hidden',()=>{opening++;stopDrag();session.clear();});
+const closeButton=document.getElementById('close') as HTMLButtonElement;
+async function hideChat(){
+ if(closeButton.disabled)return;stopDrag();closeButton.disabled=true;closeButton.setAttribute('aria-busy','true');const ticket=opening;
+ try{await invoke('pet_chat_hide');}
+ catch(error){if(ticket===opening)report(`Não foi possível fechar a conversa. ${String(error).replace(/^Error:\s*/,'')}`);}
+ finally{closeButton.disabled=false;closeButton.removeAttribute('aria-busy');}
+}
+closeButton.onclick=()=>void hideChat();
+await onEvent('pet-chat-hidden',()=>{opening++;selectionIntent++;context=null;stopDrag();session.clear();sessionLists.reset(null);});
 document.addEventListener('keydown',e=>{
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();setSidebar(true);search.focus();search.select();}
- else if(e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();void invoke('pet_chat_hide');}
+ else if(e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();void hideChat();}
 });
 document.getElementById('sessions-toggle')!.onclick=()=>{
  const show=document.getElementById('sessions')!.hidden;setSidebar(show);if(show)search.focus();
 };
 newCodex.onclick=()=>{
  const c=context;if(c?.pet!=='agent_codex'||c.provider!=='codex'||creatingCodex)return;
- creatingCodex=true;newCodex.disabled=true;report('A criar a sessão Codex…');
+ const intent=++selectionIntent;creatingCodex=true;newCodex.disabled=true;report('A criar a sessão Codex…');
  void invoke<ManagedCodexSession>('session_chat_managed_create',{query:null,openTerminal:false}).then(async receipt=>{
-  if(context!==c)return;managed=[...managed.filter(row=>row.handle!==receipt.handle),receipt];report(receipt.notice??'');await choose(receipt.target);await refreshSessions();
- }).catch(error=>{if(context===c)report(String(error).replace(/^Error:\s*/,''));}).finally(()=>{creatingCodex=false;newCodex.disabled=false;});
+  if(context!==c)return;if(receipt.target.petId!==c.pet||receipt.target.provider!==c.provider||receipt.target.origin!=='external')throw Error('A sessão criada não pertence a este pet.');sessionLists.managedReceipt(receipt);if(intent===selectionIntent){report(receipt.notice??'');await choose(receipt.target);}refreshSessions();
+ }).catch(error=>{if(context===c&&intent===selectionIntent)report(String(error).replace(/^Error:\s*/,''));}).finally(()=>{creatingCodex=false;newCodex.disabled=false;});
 };
 async function managedCommand(command:'session_chat_managed_open'|'session_chat_managed_release'){
  const receipt=managedFor(managed,session.target),c=context;if(!receipt||managedAction)return;
  managedAction=true;report('');drawIdentity();
  try{
   const next=await invoke<ManagedCodexSession>(command,{reference:managedReference(receipt)});
-  if(context!==c)return;managedReading++;managed=managed.map(row=>row.handle===next.handle?next:row).filter(row=>row.phase!=='released');
-  await refreshSessions();
+  if(context!==c)return;managedReading++;sessionLists.managedReceipt(next);
+  refreshSessions();
   if(context===c&&sameSession(receipt.target,session.target))report(next.notice??(command==='session_chat_managed_open'?'Abertura pedida ao terminal.':'Sessão retirada da gestão. O histórico e o terminal foram preservados.'));
  }catch(error){if(context===c&&sameSession(receipt.target,session.target))report(String(error).replace(/^Error:\s*/,''));}
  finally{managedAction=false;drawIdentity();}
 }
 managedOpen.onclick=()=>void managedCommand('session_chat_managed_open');managedRelease.onclick=()=>void managedCommand('session_chat_managed_release');
-document.getElementById('sessions-close')!.onclick=()=>{setSidebar(false);document.getElementById('sessions-toggle')!.focus();};document.getElementById('sessions-refresh')!.onclick=()=>{void refreshSessions();void session.refresh();};search.oninput=drawSessions;
+document.getElementById('sessions-close')!.onclick=()=>{setSidebar(false);document.getElementById('sessions-toggle')!.focus();};document.getElementById('sessions-refresh')!.onclick=()=>{refreshSessions(true);void session.refresh();};search.oninput=()=>{sessionLimits={mochi:50,external:50};drawSessions();};
 search.onkeydown=e=>{
  if(e.key==='ArrowDown'){e.preventDefault();list.querySelector<HTMLButtonElement>('.session-entry')?.focus();}
- else if(e.key==='Escape'){e.preventDefault();e.stopPropagation();if(search.value){search.value='';drawSessions();}else{setSidebar(false);document.getElementById('sessions-toggle')!.focus();}}
+ else if(e.key==='Escape'){e.preventDefault();e.stopPropagation();if(search.value){search.value='';sessionLimits={mochi:50,external:50};drawSessions();}else{setSidebar(false);document.getElementById('sessions-toggle')!.focus();}}
 };
 list.onkeydown=e=>{
  if(e.key!=='ArrowDown'&&e.key!=='ArrowUp')return;
@@ -216,14 +256,28 @@ list.onkeydown=e=>{
  e.preventDefault();if(e.key==='ArrowUp'&&index===0)search.focus();else buttons[Math.min(buttons.length-1,index+(e.key==='ArrowDown'?1:-1))]?.focus();
 };
 newSession.onclick=()=>{
- const c=context;if(!c?.provider)return;newSession.disabled=true;report('');
- void Bridge.chatReset(c.provider).then(async view=>{if(context!==c)return;if(!view)throw new Error('Não foi possível criar a conversa.');await choose(local(c,view.id));await refreshSessions();})
-  .catch(e=>{if(context===c)report(String(e).replace(/^Error:\s*/,''));}).finally(()=>{if(context===c)newSession.disabled=false;});
+ const c=context;if(!c?.provider||newSession.disabled)return;const intent=++selectionIntent;newSession.disabled=true;report('');
+ void Bridge.chatReset(c.provider).then(async view=>{if(context!==c)return;if(!view)throw new Error('Não foi possível criar a conversa.');if(intent===selectionIntent)await choose(local(c,view.id));refreshSessions(true);})
+  .catch(e=>{if(context===c&&intent===selectionIntent)report(String(e).replace(/^Error:\s*/,''));}).finally(()=>{if(context===c)newSession.disabled=false;});
 };
 document.getElementById('opacity')!.oninput=e=>document.body.style.setProperty('--surface-opacity',String(Number((e.target as HTMLInputElement).value)/100));
-let nextPlacement:Rect|null=null,placing=false;
-async function place(next:Rect){nextPlacement=next;if(placing)return;placing=true;try{while(nextPlacement){const requested=nextPlacement;nextPlacement=null;const fitted=await invoke<Rect>('pet_chat_layout',{rect:requested});if(!nextPlacement)rect=fitted;}}finally{placing=false;}}
-document.getElementById('size')!.onclick=()=>{stopDrag();large=!large;void place({...rect,width:large?1000:760,height:large?800:620});};
+let nextPlacement:Rect|null=null,placement:Promise<void>|null=null;
+function place(next:Rect):Promise<void>{
+ nextPlacement=next;
+ if(!placement)placement=drainPlacement();
+ return placement;
+}
+async function drainPlacement(){
+ try{while(nextPlacement){const requested=nextPlacement;nextPlacement=null;acceptRect(await invoke<Rect>('pet_chat_layout',{rect:requested}));}}
+ catch(error){nextPlacement=null;stopDrag();report(`Não foi possível ajustar a conversa. ${String(error).replace(/^Error:\s*/,'')}`);}
+ finally{placement=null;}
+}
+const sizeButton=document.getElementById('size') as HTMLButtonElement;
+sizeButton.onclick=async()=>{
+ if(sizeButton.disabled)return;stopDrag();sizeButton.disabled=true;sizeButton.setAttribute('aria-busy','true');report('');
+ try{await place({...rect,width:large?760:1000,height:large?620:800});}
+ finally{sizeButton.disabled=false;sizeButton.removeAttribute('aria-busy');}
+};
 const handle=document.getElementById('handle')!;
 function stopDrag(){
  if(!dragging)return;dragging=false;const active=dragState;dragState=null;handle.dataset.dragging='false';

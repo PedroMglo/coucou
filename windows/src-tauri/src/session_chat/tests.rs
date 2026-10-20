@@ -1,7 +1,7 @@
 use super::{history,live::Store,types::{Target,Origin,Snapshot,Capabilities,Role,Message}};
 use serde_json::{json,Value};
 fn target()->Target{Target{pet_id:"agent_codex".into(),provider:"codex".into(),origin:Origin::External,session_id:"00000000-0000-0000-0000-000000000001".into(),conversation_id:None}}
-fn snapshot()->Snapshot{Snapshot{target:target(),messages:vec![],busy:true,turn:Some("turn".into()),capabilities:Capabilities{history:true,send:true,cancel:true},notice:None,model:None}}
+fn snapshot()->Snapshot{Snapshot{target:target(),messages:vec![],busy:true,control_conflict:false,turn:Some("turn".into()),capabilities:Capabilities{history:true,send:true,cancel:true},notice:None,model:None}}
 fn event(method:&str,params:Value)->Value{json!({"method":method,"params":params})}
 fn item(method:&str,text:&str)->Value{event(method,json!({"threadId":target().session_id,"turnId":"turn","item":{"id":"reply","type":"agentMessage","text":text}}))}
 fn delta(text:&str)->Value{event("item/agentMessage/delta",json!({"threadId":target().session_id,"turnId":"turn","itemId":"reply","delta":text}))}

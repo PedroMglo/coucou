@@ -5,8 +5,14 @@ mod assistant_tasks;
 mod pet_management;
 mod pet_model;
 mod pet_usage;
+mod account_usage;
+mod account_usage_core;
+mod pet_observability;
 mod pet_panel;
 mod pet_system;
+mod pet_center_settings;
+mod pet_audio;
+mod local_tasks;
 mod agent_hooks;
 mod agents;
 mod chat;
@@ -20,6 +26,11 @@ mod codex_plan;
 mod config_file;
 mod companions;
 mod pet_control;
+mod pet_native_network_core;
+use pet_native_network_core::{lifecycle,authority_fence,executor};
+#[cfg(target_os="linux")] use pet_native_network_core::transport;
+mod pet_native_binding;
+mod pet_native_network;
 mod pet_chat;
 mod session_chat;
 mod session_bridge;
@@ -143,9 +154,13 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> R
         if let Some(model)=current.chat_models.get("ollama"){
             settings.chat_models.insert("ollama".into(),model.clone());
         }else{settings.chat_models.remove("ollama");}
+        // These flags have a dedicated field patch. A settings page opened
+        // earlier cannot overwrite a later confirmed pet-center change.
+        pet_center_settings::preserve_incoming(current, &mut settings);
         *current = settings;
-    },settings::save,|settings|{let _=app.emit("settings-changed",settings);})
+    },settings::save,|settings|{pet_native_binding::settings_committed(&app,settings.pet_system_center);let _=app.emit("settings-changed",settings);})
         .map_err(|err|{log::line(format!("could not save settings: {err}"));"Não foi possível guardar as definições. As preferências anteriores foram preservadas.".to_string()})?;
+    pet_native_binding::publish_current(&app);
     if autostart_changed {
         let manager = app.autolaunch();
         let result = if settings.autostart { manager.enable() } else { manager.disable() };
@@ -170,6 +185,31 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> R
     Ok(())
 }
 
+/// Confirm the requested flags after successful save. Existing settings events
+/// reconcile native pet surfaces asynchronously in the island renderer.
+#[tauri::command]
+async fn pet_center_settings_patch(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    request: pet_center_settings::Patch,
+) -> Result<pet_center_settings::Flags, String> {
+    pet_center_settings::authorize_window(window.label(), HUB_LABEL)
+        .map_err(|_| "Esta janela não pode alterar estas preferências.".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.try_state::<Shared>()
+            .ok_or_else(|| "As preferências ainda não estão disponíveis.".to_string())?;
+        pet_center_settings::apply_with(
+            &shared.settings,
+            request,
+            settings::save,
+            |fresh| { pet_native_binding::settings_committed(&app,fresh.pet_system_center);let _ = app.emit("settings-changed", fresh); },
+        ).inspect(|_|pet_native_binding::publish_current(&app)).map_err(|err| {
+            log::line(format!("could not save pet-center settings: {err}"));
+            "Não foi possível guardar estas preferências. Os valores anteriores foram preservados.".to_string()
+        })
+    }).await.map_err(|_| "Não foi possível concluir a atualização destas preferências.".to_string())?
+}
+
 /// The island reports the system's languages at launch, for "System" in
 /// Settings → Language (WebView2 and WebKitGTK know them best).
 #[tauri::command]
@@ -188,21 +228,21 @@ fn language_changed(app: &AppHandle) {
     }
 }
 
-/// Hidden island → shrink the window to the invisible wake strip and park the
-/// cursor poll; anything else → full panel and 60 Hz polling.
+/// Close/open explicit cards. Linux keeps only the mapped controller alive,
+/// with an empty input region while closed and no passive wake surface.
 #[tauri::command]
 fn set_collapsed(app: AppHandle, shared: State<Shared>, collapsed: bool) {
     if collapsed{if let Some(win)=island::window(&app){platform::set_activating(&win,false);}}
     let pref = shared.settings.lock().unwrap().screen.clone();
     shared.gate.collapsed.store(collapsed, Ordering::Relaxed);
-    let companion = shared.settings.lock().unwrap().companion_mode;
     // This webview owns background event handlers. Hiding the GTK window
     // suspends WebKit and would prevent a pet from opening its card again.
     island::apply_geometry(&app, &pref, collapsed);
-    if companion { if let Some(win) = island::window(&app) { let _ = win.show(); } }
-    // The wake strip must always take the mouse, and a resize invalidates the flag.
+    let keep_controller=cfg!(target_os="linux")||shared.settings.lock().unwrap().companion_mode;
+    if keep_controller { if let Some(win) = island::window(&app) { let _ = win.show(); } }
+    // Card input follows its actual shape, and a resize invalidates the flag.
     island::refresh_click_through(&app, &shared.gate);
-    shared.gate.set_active(!collapsed);
+    shared.gate.set_active(!collapsed&&!cfg!(target_os="linux"));
     platform::set_pointer_watch(!collapsed);
 }
 
@@ -227,7 +267,7 @@ fn focus_window(app: AppHandle, focused: bool) {
 
 #[tauri::command]
 fn reposition(app: AppHandle, shared: State<Shared>) {
-    if shared.gate.collapsed.load(Ordering::Relaxed) && shared.settings.lock().unwrap().companion_mode { return; }
+    if shared.gate.collapsed.load(Ordering::Relaxed) && (cfg!(target_os="linux")||shared.settings.lock().unwrap().companion_mode) { return; }
     let pref = shared.settings.lock().unwrap().screen.clone();
     let collapsed = shared.gate.collapsed.load(Ordering::Relaxed);
     island::apply_geometry(&app, &pref, collapsed);
@@ -484,21 +524,30 @@ async fn codex_plan_usage() -> Option<serde_json::Value> {
 }
 
 #[tauri::command]
-fn approval_decision(app: AppHandle, request_id: String, decision: String) {
-    recap::record_decision(&app, &request_id, &decision);
-    pipe::answer(&app, &request_id, &decision);
+async fn approval_decision(window:tauri::WebviewWindow,app: AppHandle, request_id: String, decision: String)->bool {
+    #[cfg(target_os="linux")]
+    let accepted=pipe::answer_from_card(app.clone(),window,request_id.clone(),decision.clone()).await;
+    #[cfg(not(target_os="linux"))]
+    let accepted={let _=window;pipe::answer(&app,&request_id,&decision);true};
+    if accepted{recap::record_decision(&app,&request_id,&decision);}
+    accepted
 }
 
 /// An option picked on the island for a question Claude Code asked.
 #[tauri::command]
-fn approval_answer(
+async fn approval_answer(
+    window:tauri::WebviewWindow,
     app: AppHandle,
     request_id: String,
     answers: std::collections::HashMap<String, serde_json::Value>,
-) {
+)->bool {
+    #[cfg(target_os="linux")]
+    let accepted=pipe::answer_question_from_card(app.clone(),window,request_id.clone(),answers).await;
+    #[cfg(not(target_os="linux"))]
+    let accepted={let _=window;pipe::answer_question(&app,&request_id,&answers);true};
     // An answered question is not an Allow / Deny: nothing for the recap.
-    recap::forget_request(&app, &request_id);
-    pipe::answer_question(&app, &request_id, &answers);
+    if accepted{recap::forget_request(&app,&request_id);}
+    accepted
 }
 
 /// The island has the card on screen, so the long wait for a human may begin.
@@ -535,6 +584,7 @@ async fn chat_send(
 ) -> Result<ChatReply, String> {
     let provider=provider.unwrap_or_else(||shared.settings.lock().unwrap().chat_provider.clone());
     let provider=if provider.is_empty(){"anthropic".to_string()}else{provider};
+    if provider=="integration_spotify" {return Err("O Spoty controla música e som e não inicia conversas com modelos.".into());}
     if !crate::pet_config::service(&provider) && !["anthropic","openai","google","openrouter","codex","copilot","antigravity","gemini-cli","claude-cli","ollama","lmstudio","custom"].contains(&provider.as_str()) { return Err("Unknown chat provider".into()); }
     // Admission precedes the effective model snapshot. A model ACK that wins
     // the race is visible here; an admitted turn prevents a later selection.
@@ -831,14 +881,20 @@ pub fn run() {
             gate: gate.clone(),
         })
         .manage(Pending::default())
+        .manage(account_usage::Runtime::default())
         .manage(Chat::persistent(platform::local_dir().join("assistant").join("conversations.json")))
         .manage(shortcuts::Registry::default())
         .manage(recap::load())
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
+            pet_center_settings_patch,
             pet_model::pet_model_select,
             pet_usage::pet_usage,
+            account_usage::pet_account_usage,
+            account_usage::pet_account_usage_refresh,
+            pet_observability::pet_observability,
+            pet_observability::pet_session_lookup,
             set_system_languages,
             set_collapsed,
             set_island_rect,
@@ -865,6 +921,7 @@ pub fn run() {
             approval_decision,
             approval_answer,
             approval_ack,
+            pipe::approval_presented,
             approval_decline,
             log_line,
             chat_send,
@@ -882,6 +939,8 @@ pub fn run() {
             chat_conversations,
             chat_restore_conversation,
             pet_management::pet_management,
+            pet_management::pet_cached_usage,
+            pet_management::station_history::pet_station_history,
             pet_management::pet_focus_session,
             pet_panel::pet_panel_open,
             pet_panel::pet_panel_hide,
@@ -946,8 +1005,20 @@ pub fn run() {
             pet_control::pet_control_open,
             pet_system::pet_system_panel,
             pet_system::pet_system_status,
+            pet_system::pet_system_tray,
+            pet_audio::pet_audio_snapshot,
+            pet_audio::pet_audio_control,
+            pet_audio::pet_system_audio_snapshot,
+            pet_audio::pet_system_audio_control,
             pet_control::pet_control_input,
             pet_control::pet_control_context,
+            pet_native_binding::pet_control_navigation_context,
+            pet_native_binding::pet_control_navigate,
+            pet_native_network::pet_system_network_read,
+            pet_native_network::pet_system_network_view,
+            pet_native_network::pet_system_network_scan,
+            pet_native_network::pet_system_network_ticket,
+            pet_native_network::pet_system_network_cancel,
             pet_chat::pet_chat_open,
             pet_chat::pet_chat_context,
             pet_chat::pet_chat_hide,
@@ -1027,6 +1098,8 @@ pub fn run() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            pet_native_binding::setup(&handle,loaded.pet_system_center);
+            pet_observability::runtime::start(&handle);
             app.manage(phone_link::PhoneLink::new(handle.clone()));
             tray::build(&handle)?;
             // Before the island: see create_settings_window.
@@ -1050,20 +1123,24 @@ pub fn run() {
                         files::allow_dropped(paths.iter().map(|p| p.to_string_lossy().to_string()));
                     }
                 });
+                #[cfg(target_os="linux")]platform::set_pointer_watch(false);
                 platform::make_non_activating(&win);
                 #[cfg(windows)]
                 webview_drop::install(&handle);
                 island::apply_geometry(&handle, &loaded.screen, false);
                 let _ = win.show();
             }
-            gate.collapsed.store(false, Ordering::Relaxed);
+            gate.collapsed.store(cfg!(target_os="linux"), Ordering::Relaxed);
             // Nothing drawn yet, so nothing takes the mouse until the page
             // reports the island's shape.
             if !platform::CURSOR_POLL {
                 island::refresh_click_through(&handle, &gate);
             }
-            gate.set_active(true);
-            island::spawn_cursor_poll(handle.clone(), gate.clone());
+            #[cfg(target_os="linux")]island::spawn_display_watch(handle.clone());
+            #[cfg(not(target_os="linux"))]{
+                gate.set_active(true);
+                island::spawn_cursor_poll(handle.clone(), gate.clone());
+            }
 
             log::line(format!("--- Coucou {} started ---", env!("CARGO_PKG_VERSION")));
             hooks::ensure_hook_exe(&handle);
@@ -1103,8 +1180,11 @@ pub fn run() {
         .run(|app, event| {
             // Withdraw the phone link's announcement on the local network before the process ends.
             if let tauri::RunEvent::Exit = event {
+                pet_native_binding::shutdown(app);
+                pet_system::release_on_exit();
                 phone_link::stop_on_exit(app);
                 notes::shutdown(app);
+                pet_observability::runtime::shutdown_on_exit(app);
             }
         });
 }

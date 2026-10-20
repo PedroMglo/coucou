@@ -8,7 +8,7 @@ pub const LABEL:&str="pet-chat";
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Session {pub id:String,pub backend:String,pub title:String,pub cwd:String,#[serde(default)]pub steps:Vec<String>,#[serde(default)]pub final_line:String}
 #[derive(Clone,Default,Serialize,Deserialize)]
-#[serde(rename_all="camelCase",deny_unknown_fields)]pub struct Request {pub pet:String,pub session:Option<Session>,#[serde(default)]pub show_sessions:bool,#[serde(default)]pub target:Option<Target>}
+#[serde(rename_all="camelCase",deny_unknown_fields)]pub struct Request {pub pet:String,pub session:Option<Session>,#[serde(default)]pub show_sessions:bool,#[serde(default)]pub target:Option<Target>,#[serde(default)]pub request_id:Option<String>}
 #[derive(Clone,Default,Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct Context {pub pet:String,pub name:String,pub provider:String,pub session:Option<Session>,pub conversation_id:Option<String>,pub show_sessions:bool,pub target:Option<Target>}
@@ -80,7 +80,7 @@ async fn layout(app:&AppHandle,r:Rect)->Result<Rect,String>{
  let pref=app.state::<crate::Shared>().settings.lock().unwrap().screen.clone();let s=crate::island::screen_info(app,&pref);let r=fit(r,s.width,s.height);
  let win=app.get_webview_window(LABEL).ok_or("A conversa flutuante não está disponível.")?;let other=app.clone();let(tx,rx)=tokio::sync::oneshot::channel();
  app.run_on_main_thread(move||{let _=win.set_size(LogicalSize::new(r.width,r.height));
-  #[cfg(target_os="linux")]crate::platform::place_pet_panel(&other,&win,r.x,r.y);
+  #[cfg(target_os="linux")]if crate::platform::pet_chat_normal_window(){crate::platform::place_pet_chat(s.x+r.x,s.y+r.y,r.width,r.height);}else{crate::platform::place_pet_panel(&other,&win,r.x,r.y);}
   #[cfg(not(target_os="linux"))]let _=win.set_position(tauri::LogicalPosition::new(s.x+r.x,s.y+r.y));
   let _=tx.send(r);
  }).map_err(|_|"Não foi possível posicionar a conversa.")?;
@@ -111,7 +111,21 @@ fn pointer()->Result<Point,String>{
  #[cfg(target_os="linux")]{tauri::async_runtime::spawn_blocking(pointer).await.map_err(|_|"A deslocação foi interrompida.".to_string())?}
  #[cfg(not(target_os="linux"))]{Err("Esta deslocação está disponível na sessão Linux.".into())}
 }
-#[tauri::command]pub async fn pet_chat_open(app:AppHandle,request:Request)->Result<(),String>{
+fn validate_help(request_id:Option<&str>,target:Option<&Target>)->Result<(),String>{
+ if let Some(id)=request_id{
+  if id.is_empty()||id.len()>128||!id.bytes().all(|c|c.is_ascii_alphanumeric()||c==b'-')||target.is_none(){
+   return Err("O pedido de ajuda não tem um destino válido.".into());
+  }
+ }Ok(())
+}
+fn help_is_live(app:&AppHandle,request_id:Option<&str>,target:Option<&Target>)->Result<bool,String>{
+ let Some(id)=request_id else{return Ok(true);};
+ let target=target.ok_or("O pedido de ajuda não tem um destino válido.")?;
+ Ok(crate::cli_chat::with_pending_help(&app.state::<crate::chat::Chat>(),id,target,||())?.is_some())
+}
+#[tauri::command]pub async fn pet_chat_open(app:AppHandle,request:Request)->Result<bool,String>{
+ if request.pet=="integration_spotify"{return Err("O Spoty controla música e som. Abre os seus controlos na ilha.".into());}
+ validate_help(request.request_id.as_deref(),request.target.as_ref())?;
  let config=crate::pet_config::read()?;let p=config.pets.get(&request.pet).ok_or("Pet desconhecido.")?;
  {let shared=app.state::<crate::Shared>();let s=shared.settings.lock().unwrap();if request.pet!=s.main_pill&&!s.active_integrations.contains(&request.pet){return Err("Este pet não está configurado.".into());}}
  if let Some(s)=&request.session{if s.id.is_empty()||s.id.len()>512||s.backend.len()>64||s.title.len()>2048||s.cwd.len()>4096||s.steps.len()>64||s.steps.iter().any(|s|s.len()>2048)||s.final_line.len()>16000{return Err("A sessão não tem metadados válidos.".into());}}
@@ -121,22 +135,38 @@ fn pointer()->Result<Point,String>{
  let provider=logical_provider(&request.pet,&p.provider);
  let owners=config.pets.iter().map(|(id,p)|logical_provider(id,&p.provider)).collect::<Vec<_>>();
  let conversation_id=selected_conversation(&request.pet,&provider,request.session.as_ref(),request.target.as_ref(),&app.state::<crate::chat::Chat>(),&owners)?;
+ if !help_is_live(&app,request.request_id.as_deref(),request.target.as_ref())?{return Ok(false);}
+ let request_id=request.request_id;
  let ctx=Context{pet:request.pet,name:p.name.clone(),provider,session:request.session,conversation_id,show_sessions:request.show_sessions,target:request.target};
  let state=app.state::<ChatWindow>();let generation=state.opening.fetch_add(1,Ordering::AcqRel)+1;
  let _gate=state.open_gate.lock().await;
- if state.opening.load(Ordering::Acquire)!=generation{return Ok(());}
+ if state.opening.load(Ordering::Acquire)!=generation||!help_is_live(&app,request_id.as_deref(),ctx.target.as_ref())?{return Ok(false);}
  let pref=app.state::<crate::Shared>().settings.lock().unwrap().screen.clone();let s=crate::island::screen_info(&app,&pref);
  let previous=*app.state::<ChatWindow>().rect.lock().unwrap();
  let rect=layout(&app,previous.unwrap_or(Rect{x:(s.width-760.0)/2.0,y:80.0,width:760.0,height:620.0})).await?;
+ if !help_is_live(&app,request_id.as_deref(),ctx.target.as_ref())?{return Ok(false);}
  // Context, event and visibility land together on GTK. A newer open/close
  // invalidates a layout that was already queued, before it can reopen A over B.
  let current=app.clone();let(tx,rx)=tokio::sync::oneshot::channel();
  app.run_on_main_thread(move||{
-  let state=current.state::<ChatWindow>();if state.opening.load(Ordering::Acquire)!=generation{let _=tx.send(Ok(()));return;}
-  let result=(||->Result<(),String>{let win=current.get_webview_window(LABEL).ok_or("A conversa flutuante não está disponível.")?;
+  let state=current.state::<ChatWindow>();
+  let present=||->Result<bool,String>{
+   if state.opening.load(Ordering::Acquire)!=generation{return Ok(false);}
+   let win=current.get_webview_window(LABEL).ok_or("A conversa flutuante não está disponível.")?;
    *state.context.lock().unwrap()=ctx.clone();
    win.emit("pet-chat-opened",serde_json::json!({"context":ctx,"rect":rect})).map_err(|_|"Não foi possível abrir a conversa.")?;
-   crate::platform::set_activating(&win,true);win.show().map_err(|_|"Não foi possível mostrar a conversa.")?;let _=win.set_focus();Ok(())})();let _=tx.send(result);
+   crate::platform::set_activating(&win,true);win.show().map_err(|_|"Não foi possível mostrar a conversa.")?;
+   #[cfg(target_os="linux")]if crate::platform::pet_chat_normal_window(){crate::pet_control::collapse(&current);}
+   let _=win.set_focus();Ok(true)
+  };
+  let result=if let Some(id)=request_id.as_deref(){
+   let chat=current.state::<crate::chat::Chat>();
+   match ctx.target.as_ref(){
+    Some(target)=>crate::cli_chat::with_pending_help(&chat,id,target,present).and_then(|value|value.unwrap_or(Ok(false))),
+    None=>Err("O pedido de ajuda não tem um destino válido.".into()),
+   }
+  }else{present()};
+  let _=tx.send(result);
  }).map_err(|_|"Não foi possível abrir a conversa.")?;
  rx.await.map_err(|_|"A conversa não respondeu.".to_string())?
 }
@@ -191,6 +221,22 @@ mod target_tests {
 
     fn current(chat: &Chat, provider: &str) -> Value {
         serde_json::to_value(chat.conversation(provider).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn help_wire_keeps_manual_requests_compatible_and_requires_a_bounded_request_identity(){
+        let old:Request=serde_json::from_value(json!({"pet":"agent_codex"})).unwrap();
+        assert!(old.request_id.is_none());assert!(super::validate_help(None,None).is_ok());
+        for origin in [Origin::Mochi,Origin::External]{
+            let t=target("agent_codex","codex",origin,NATIVE_A);
+            let new:Request=serde_json::from_value(json!({"pet":"agent_codex","target":t,"requestId":"cli-23"})).unwrap();
+            assert_eq!(new.request_id.as_deref(),Some("cli-23"));
+            assert!(super::validate_help(new.request_id.as_deref(),new.target.as_ref()).is_ok());
+            assert!(super::validate_help(Some("cli-23"),None).is_err());
+            for invalid in ["".to_string(),"x".repeat(129),"cli\n23".into(),"cli/23".into()]{
+                assert!(super::validate_help(Some(&invalid),new.target.as_ref()).is_err());
+            }
+        }
     }
 
     #[test]

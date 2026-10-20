@@ -551,17 +551,6 @@
    "ru": "Не удалось удалить {path}: {error}",
    "id": "Tidak dapat menghapus {path}: {error}"
   },
-  "Could not remove: {error}": {
-   "zh-Hans": "无法移除：{error}",
-   "hi": "हटाया नहीं जा सका: {error}",
-   "es": "No se pudo quitar: {error}",
-   "ar": "تعذّرت الإزالة: {error}",
-   "fr": "Suppression impossible : {error}",
-   "bn": "সরানো যায়নি: {error}",
-   "pt-BR": "Não foi possível remover: {error}",
-   "ru": "Не удалось удалить: {error}",
-   "id": "Tidak dapat menghapus: {error}"
-  },
   "Could not save the image: {error}": {
    "zh-Hans": "无法保存图片：{error}",
    "hi": "छवि सहेजी नहीं जा सकी: {error}",
@@ -583,17 +572,6 @@
    "pt-BR": "Não foi possível salvar sua linha de status atual ao lado do relay; nada foi alterado.",
    "ru": "Не удалось сохранить вашу текущую строку состояния рядом с ретранслятором; ничего не изменено.",
    "id": "Tidak dapat menyimpan baris status Anda saat ini di samping relay; tidak ada yang diubah."
-  },
-  "Could not save: {error}": {
-   "zh-Hans": "无法保存：{error}",
-   "hi": "सहेजा नहीं जा सका: {error}",
-   "es": "No se pudo guardar: {error}",
-   "ar": "تعذّر الحفظ: {error}",
-   "fr": "Enregistrement impossible : {error}",
-   "bn": "সংরক্ষণ করা যায়নি: {error}",
-   "pt-BR": "Não foi possível salvar: {error}",
-   "ru": "Не удалось сохранить: {error}",
-   "id": "Tidak dapat menyimpan: {error}"
   },
   "Could not write: {error}": {
    "zh-Hans": "无法写入：{error}",
@@ -1859,17 +1837,6 @@
    "pt-BR": "Salva como {name}",
    "ru": "Сохранено как {name}",
    "id": "Disimpan sebagai {name}"
-  },
-  "Saved. It never touches disk.": {
-   "zh-Hans": "已保存。它从不写入磁盘。",
-   "hi": "सहेजी गई। यह कभी डिस्क पर नहीं जाती।",
-   "es": "Guardada. Nunca toca el disco.",
-   "ar": "تم الحفظ. لا يُكتب على القرص أبدًا.",
-   "fr": "Enregistrée. Elle ne touche jamais le disque.",
-   "bn": "সংরক্ষিত। এটি কখনো ডিস্কে লেখা হয় না।",
-   "pt-BR": "Salva. Ela nunca vai para o disco.",
-   "ru": "Сохранено. Ключ никогда не попадает на диск.",
-   "id": "Tersimpan. Kunci tidak pernah ditulis ke disk."
   },
   "Saving…": {
    "zh-Hans": "正在保存…",
@@ -5010,6 +4977,149 @@
    "pt-BR": "Não foi possível copiar. Selecione o link e copie-o manualmente. {error}",
    "ru": "Не удалось скопировать. Выделите ссылку и скопируйте её вручную. {error}",
    "id": "Tidak dapat menyalin. Pilih tautan dan salin secara manual. {error}"
+  },
+  "Lower the volume during identified ads": {
+   "zh-Hans": "降低已识别广告期间的音量",
+   "hi": "पहचाने गए विज्ञापनों के दौरान आवाज़ कम करें",
+   "es": "Bajar el volumen durante los anuncios identificados",
+   "ar": "خفض مستوى الصوت أثناء الإعلانات التي تم التعرف عليها",
+   "fr": "Baisser le volume pendant les publicités identifiées",
+   "bn": "শনাক্ত করা বিজ্ঞাপনের সময় শব্দের মাত্রা কমান",
+   "pt-BR": "Reduzir o volume durante anúncios identificados",
+   "ru": "Уменьшать громкость во время распознанной рекламы",
+   "id": "Kecilkan volume selama iklan yang teridentifikasi"
+  },
+  "Pet island": {
+   "zh-Hans": "宠物岛",
+   "hi": "पेट आइलैंड",
+   "es": "Isla de mascotas",
+   "ar": "جزيرة الرفقاء",
+   "fr": "Îlot des compagnons",
+   "bn": "পেট আইল্যান্ড",
+   "ru": "Островок питомцев",
+   "id": "Pulau peliharaan",
+   "pt-BR": "Ilha dos pets"
+  },
+  "System in the island": {
+   "zh-Hans": "岛内系统",
+   "hi": "आइलैंड में सिस्टम",
+   "es": "Sistema en la isla",
+   "ar": "النظام في الجزيرة",
+   "fr": "Système dans l’îlot",
+   "bn": "আইল্যান্ডে সিস্টেম",
+   "ru": "Система в островке",
+   "id": "Sistem di pulau",
+   "pt-BR": "Sistema na ilha"
+  },
+  "Show the pet gallery and management when desktop companions are enabled.": {
+   "zh-Hans": "启用桌面伙伴后，显示宠物库和管理功能。",
+   "hi": "डेस्कटॉप साथी चालू होने पर पेट गैलरी और प्रबंधन दिखाएँ।",
+   "es": "Muestra la galería y la gestión cuando los compañeros de escritorio están activados.",
+   "ar": "اعرض معرض الرفقاء وإدارته عند تفعيل رفقاء سطح المكتب.",
+   "fr": "Affiche la galerie et la gestion lorsque les compagnons de bureau sont activés.",
+   "bn": "ডেস্কটপ সঙ্গী চালু থাকলে পেট গ্যালারি ও ব্যবস্থাপনা দেখান।",
+   "ru": "Показывает галерею и управление при включённых настольных питомцах.",
+   "id": "Tampilkan galeri dan pengelolaan saat pendamping desktop diaktifkan.",
+   "pt-BR": "Mostra a galeria e a gestão quando os pets de ambiente estão ligados."
+  },
+  "Keep the clock, date and system controls available even when desktop companions are off.": {
+   "zh-Hans": "即使关闭桌面伙伴，仍保留时钟、日期和系统控制。",
+   "hi": "डेस्कटॉप साथी बंद होने पर भी घड़ी, तारीख और सिस्टम नियंत्रण उपलब्ध रखें।",
+   "es": "Mantiene el reloj, la fecha y los controles del sistema aunque los compañeros estén desactivados.",
+   "ar": "أبقِ الساعة والتاريخ وعناصر تحكم النظام متاحة حتى عند تعطيل الرفقاء.",
+   "fr": "Garde l’horloge, la date et les commandes système disponibles même sans compagnons.",
+   "bn": "ডেস্কটপ সঙ্গী বন্ধ থাকলেও ঘড়ি, তারিখ ও সিস্টেম নিয়ন্ত্রণ চালু রাখুন।",
+   "ru": "Сохраняет часы, дату и системные элементы при отключённых питомцах.",
+   "id": "Jam, tanggal, dan kontrol sistem tetap tersedia saat pendamping desktop dimatikan.",
+   "pt-BR": "Mantém as horas, a data e os controlos do sistema disponíveis mesmo com os pets desligados."
+  },
+  "Saving the pet island…": {
+   "zh-Hans": "正在保存宠物岛设置…",
+   "hi": "पेट आइलैंड सहेजा जा रहा है…",
+   "es": "Guardando la isla de mascotas…",
+   "ar": "جارٍ حفظ جزيرة الرفقاء…",
+   "fr": "Enregistrement de l’îlot…",
+   "bn": "পেট আইল্যান্ড সংরক্ষণ করা হচ্ছে…",
+   "ru": "Сохранение островка питомцев…",
+   "id": "Menyimpan pulau peliharaan…",
+   "pt-BR": "A guardar a ilha dos pets…"
+  },
+  "Saving system access…": {
+   "zh-Hans": "正在保存系统访问设置…",
+   "hi": "सिस्टम पहुँच सहेजी जा रही है…",
+   "es": "Guardando el acceso al sistema…",
+   "ar": "جارٍ حفظ الوصول إلى النظام…",
+   "fr": "Enregistrement de l’accès au système…",
+   "bn": "সিস্টেম অ্যাক্সেস সংরক্ষণ করা হচ্ছে…",
+   "ru": "Сохранение доступа к системе…",
+   "id": "Menyimpan akses sistem…",
+   "pt-BR": "A guardar o acesso ao sistema…"
+  },
+  "Checking the saved preferences…": {
+   "zh-Hans": "正在检查已保存的偏好设置…",
+   "hi": "सहेजी गई प्राथमिकताएँ जाँची जा रही हैं…",
+   "es": "Comprobando las preferencias guardadas…",
+   "ar": "جارٍ التحقق من التفضيلات المحفوظة…",
+   "fr": "Vérification des préférences enregistrées…",
+   "bn": "সংরক্ষিত পছন্দ যাচাই করা হচ্ছে…",
+   "ru": "Проверка сохранённых настроек…",
+   "id": "Memeriksa preferensi tersimpan…",
+   "pt-BR": "A confirmar as preferências guardadas…"
+  },
+  "Preferences confirmed.": {
+   "zh-Hans": "偏好设置已确认。",
+   "hi": "प्राथमिकताएँ पुष्ट हो गईं।",
+   "es": "Preferencias confirmadas.",
+   "ar": "تم تأكيد التفضيلات.",
+   "fr": "Préférences confirmées.",
+   "bn": "পছন্দ নিশ্চিত হয়েছে।",
+   "ru": "Настройки подтверждены.",
+   "id": "Preferensi dikonfirmasi.",
+   "pt-BR": "Preferências confirmadas."
+  },
+  "The current values changed. The confirmed values were kept.": {
+   "zh-Hans": "当前值已更改，已保留确认后的值。",
+   "hi": "वर्तमान मान बदल गए। पुष्ट मान बनाए रखे गए हैं।",
+   "es": "Los valores actuales cambiaron. Se conservaron los valores confirmados.",
+   "ar": "تغيّرت القيم الحالية. تم الاحتفاظ بالقيم المؤكدة.",
+   "fr": "Les valeurs ont changé. Les valeurs confirmées ont été conservées.",
+   "bn": "বর্তমান মান বদলেছে। নিশ্চিত মানগুলো রাখা হয়েছে।",
+   "ru": "Значения изменились. Подтверждённые значения сохранены.",
+   "id": "Nilai saat ini berubah. Nilai terkonfirmasi dipertahankan.",
+   "pt-BR": "Os valores atuais mudaram. Mantive os valores confirmados."
+  },
+  "Could not save this change. The current confirmed values are shown.": {
+   "zh-Hans": "无法保存此更改。当前显示已确认的值。",
+   "hi": "बदलाव सहेजा नहीं जा सका। वर्तमान पुष्ट मान दिखाए गए हैं।",
+   "es": "No se pudo guardar el cambio. Se muestran los valores confirmados actuales.",
+   "ar": "تعذّر حفظ التغيير. تُعرض القيم الحالية المؤكدة.",
+   "fr": "Impossible d’enregistrer ce changement. Les valeurs confirmées sont affichées.",
+   "bn": "পরিবর্তন সংরক্ষণ করা যায়নি। বর্তমান নিশ্চিত মান দেখানো হচ্ছে।",
+   "ru": "Не удалось сохранить изменение. Показаны подтверждённые значения.",
+   "id": "Perubahan tidak dapat disimpan. Nilai terkonfirmasi saat ini ditampilkan.",
+   "pt-BR": "Não foi possível guardar esta alteração. Os valores atuais confirmados estão apresentados."
+  },
+  "Could not confirm the current preferences. Refresh before changing them.": {
+   "zh-Hans": "无法确认当前偏好设置。请刷新后再更改。",
+   "hi": "वर्तमान प्राथमिकताएँ पुष्ट नहीं हो सकीं। बदलने से पहले रीफ़्रेश करें।",
+   "es": "No se pudieron confirmar las preferencias. Actualiza antes de cambiarlas.",
+   "ar": "تعذّر تأكيد التفضيلات الحالية. حدّثها قبل تغييرها.",
+   "fr": "Impossible de confirmer les préférences. Actualisez avant de les modifier.",
+   "bn": "বর্তমান পছন্দ নিশ্চিত করা যায়নি। বদলানোর আগে রিফ্রেশ করুন।",
+   "ru": "Не удалось подтвердить настройки. Обновите их перед изменением.",
+   "id": "Preferensi saat ini tidak dapat dikonfirmasi. Segarkan sebelum mengubahnya.",
+   "pt-BR": "Não foi possível confirmar as preferências atuais. Atualiza antes de as alterar."
+  },
+  "Refresh preferences": {
+   "zh-Hans": "刷新偏好设置",
+   "hi": "प्राथमिकताएँ रीफ़्रेश करें",
+   "es": "Actualizar preferencias",
+   "ar": "تحديث التفضيلات",
+   "fr": "Actualiser les préférences",
+   "bn": "পছন্দ রিফ্রেশ করুন",
+   "ru": "Обновить настройки",
+   "id": "Segarkan preferensi",
+   "pt-BR": "Atualizar preferências"
   }
  }
 }

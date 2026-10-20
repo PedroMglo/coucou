@@ -281,9 +281,9 @@ test("the playing card: title, artist · album, times, and the controls", async 
     { action: "next", value: null },
     { action: "playPause", value: null },
   ]);
-  // The page shows the clicks at once.
-  assert.equal(Spotify.state.shuffle, false);
-  assert.equal(Spotify.state.repeat, true);
+  // A request does not confirm a new player state.
+  assert.equal(Spotify.state.shuffle, true);
+  assert.equal(Spotify.state.repeat, false);
   assert.equal(Spotify.state.playing, false, "a click is not confirmation from the player");
   await new Promise(setImmediate);
   emit("spotify",playing());

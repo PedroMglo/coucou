@@ -1,4 +1,52 @@
+Estado atual (20/10/2026): a **0.5.1-mochi.22 está instalada permanentemente**,
+com launcher/autostart e preservação de conversas e preferências verificados.
+A aceitação nativa está parcial. Uma falha de apresentação após mudança de
+monitor deixou o cartão invisível; o reinício do mesmo binário recuperou o
+alfa da superfície e o hover voltou a abrir o cartão, confirmado visualmente.
+A .22 inclui a correção nativa R2 revista; a prevenção da repetição após mudança real de ecrã ainda precisa de aceitação.
+Os cinco chats próprios abriram e reabriram na .22 com identidade e rascunho
+exatos, sem envio; o Ollama preservou os seus 73 caracteres.
+Sistema → Som tem controlos próprios; a .20 acrescenta leitura/pesquisa de rede
+e atividade da conta. Os restantes controlos próprios e a matriz completa de
+sessões/definições continuam por concluir. Os sete indicadores direitos
+permanecem na barra. O estado detalhado e os critérios de aceitação estão em
+[PETS-ARCHITECTURE.md](PETS-ARCHITECTURE.md).
+
 # Living companions on Linux
+
+> Current Linux delivery status is maintained in
+> [PETS-ARCHITECTURE.md](PETS-ARCHITECTURE.md). The installed version is .22 (544 frozen source files);
+> native presentation/hotplug acceptance is incomplete. The five LLM cards passed count checks in .17. Own System sound mute
+> and unmute passed on a temporary virtual output in .18. Later version notes below are
+> historical evidence, not confirmation that every requested capability shipped.
+
+The current design uses Coucou's expanding island in the centre of the system
+bar. Open **Pets**, choose the configured provider and use **Conversar** for the
+floating chat. Its session sidebar distinguishes the pet's own conversations
+from terminal sessions; opening or closing the window does not itself interrupt
+work. A session's origin and identifier determine where a message or decision is
+sent. When history cannot establish a unique active turn, it remains readable
+and control is refused with an explanation.
+
+There are five chat owners: Codex, Gravity, Copilot CLI, Ollama and GitHub.
+Spoty owns music and PC audio; it no longer has an LLM chat, model picker or
+new LLM session. Existing Spoty history is preserved. Models and stable names
+are configured in `~/.config/coucou/pets.json`; email is enabled only for Ollama
+by default. A pet without the relevant document capability must reject the drop.
+
+The old shelter home widget and the former AI status widget are superseded by
+the island. The native system blocks and transparent gaps remain. Right-side
+icons for background apps, peripherals, CPU/system readings, clipboard, battery
+and notifications remain on the bar. Only the old control-centre entry may be
+retired after complete own island controls are accepted. The earlier shelter description below documents the
+previous implementation and must not be used to re-enable that widget.
+
+Super alone toggles the companion voice session. Say the configured pet name
+before the request. Voice enters the selected pet's own conversation, without
+pasting into a terminal. Stop ends listening; the pet's explicit task controls
+remain responsible for work already admitted. Mixed PT/EN recognition and real
+Raquel latency still need the later quality acceptance recorded in the architecture.
+
 
 Each declared integration has one pet with a stable identity. Click it to open
 its own card beside it; permissions remain explicit user decisions. Clicking
@@ -231,10 +279,213 @@ The centre reserves space for errors instead of covering the pet actions. Browse
 journeys cover these failure and recovery paths. Recap persistence acknowledgements
 remain a reported, deferred backend item.
 
-The installed frontend passed TypeScript, Vite and 607 JavaScript checks before
-packaging. Remaining frontend follow-ups include visible recovery when native
-chat close or resize fails, immediate agreement between gallery selection and
-the detail header, and distinguishing an error from a request awaiting a human
-decision. These follow-ups are not yet present in mochi.14. Weather location and
-freshness were also reported to the backend owner: the current compact weather
-contract does not identify the configured city.
+The installed mochi.14 frontend passed TypeScript, Vite and 607 JavaScript checks
+before packaging. The mochi.15 frontend is frozen with TypeScript, Vite and
+673 JavaScript checks passing; the first native candidate passed all thirteen system openings and five pet
+chat ownership checks. Spotify retains its separate MPRIS music controls. It adds visible recovery for native chat close/resize errors,
+immediate gallery/roster agreement, and separate error and approval actions.
+Session archives render fifty rows per origin, with progressive loading, full
+archive search and the selected archived session retained. A synthetic archive
+of 1,647 sessions passed search, paging and keyboard-focus checks.
+
+The System page now includes Wi-Fi/network, Bluetooth, audio, battery, recording,
+clipboard, disks and tray controls, in addition to the five existing entries.
+Status remains explicit when unknown or stale; device actions use the native
+DMS panels. Exact opaque tray identifiers route application activation and menus.
+A recording indicator remains visible on compact and Pets views while recording
+is active, and shows uncertainty after a failed reading. Browser checks cover
+all eight routes, exact tray actions, repeated clicks, failures, stale values and
+widths from 320 to 1,440 pixels. No real recording was started. Native DMS panels
+and the clipboard contents area were observed on the laptop display; tray close
+by X, Escape and outside click, plus tray-menu Escape/outside, returned real
+keyboard input to an isolated test editor. Disk and tray-menu alignment was corrected in the host-owned QML and
+observed again with both popups centred. The right legacy block stays until the
+integrated mochi.15 centre passes acceptance and the host owner performs cutover.
+Native ultrawide acceptance remains pending because that display is disconnected.
+
+The central gallery/card now consumes its own native file-drop events. An exact
+pet or explicit recipient choice owns the one-use document token. Cancellation,
+slow ingestion, expiry and a failed handoff remain recoverable without sending
+a chat or consuming a successful receipt twice. Browser delivery checks passed;
+the first native PDF delivery reached the exact Ollama owner but exposed a
+gallery overlay after handoff. The frontend now ignores stale pointer entries
+from the former expanded region; a focused hover-enabled browser regression
+passes, including reopening through a real compact hover. The rebuilt candidate passed native PDF and folder delivery to Ollama with
+the actions fully accessible, plus reopening without a new ingestion. Removing
+the PDF attachment and cancelling the folder delivery both cleared the chat
+attachment. The compact clock and genuine hover opening remained functional.
+
+Ollama execution presentation uses verified, conversation-specific model capability
+metadata. Conversation-only models are labelled accordingly, and task actions
+remain subject to the pet policy and an exact, once-only command review. The
+review retains the complete original JSON as well as literal arguments, working
+directory and timeout. Task details show individual execution receipts, including
+unknown outcomes and unconfirmed cleanup; closing a window does not establish
+that a task stopped. Policy changes update the floating-chat badge immediately.
+The command review and receipt contracts were checked with synthetic events.
+A native QA prompt using Qwen3:1.7b was rejected for invalid command arguments
+before approval; the UI reported that no command started and displayed the
+verified model capability. A later Qwen3.5:4b-q4_K_M proposal reached the real approval card. The first
+approval expired safely; an explicit task retake presented a new human decision.
+After that human approval, the receipt reported one exit0 execution,13 stdout
+bytes,0 stderr bytes and no truncation; the UI showed the literal
+MOCHI_QA15_OK result. No automatic decision, retry or parser relaxation was used.
+Stopping a later pending command review retired the approval and busy indicator;
+the native journal confirmed cancellation by the user with no command start or
+output. The empty chat after Stop remains a reported follow-up: the UI should
+show the preserved request and verified interruption receipt.
+Weather location and freshness remain reported backend follow-ups: the compact
+contract does not yet identify the configured city.
+
+The shared System centre is independent of desktop-pet visibility. Turning
+companions or the pet bar off leaves the clock and System controls available
+when System centre is enabled; its default opening is System. Browser checks
+cover flag changes, retained profile drafts, sixty-five seconds idle and saves
+that preserve the actual companionMode value. A native pre-recomposition run
+retained the clock for more than eighty seconds without interaction.
+
+Linux now has a dedicated pet-cards.html entry. Pet-control owns the only home,
+gallery and management surface. The contextual controller reuses the original
+bot renderer and document, chat, Spotify and decision components, but does not
+construct the classic greeting, wake strip, compact mini-grid, gallery, ticker,
+plan timer or visual listeners. Its separate CardLifecycle has only open/closed
+transitions. It does not construct the singleton desktop controller, subscribe
+to its events, publish its snapshots or query desktop_info. Work/completion and
+music updates publish metadata without revealing a second surface. The original
+index presentation remains for the other targets, outside the Linux runtime.
+
+Explicit document delivery and requests work with desktop pets off. The focused
+pet retains its provider and document context, independently of the global chat
+provider. Help opens the exact native request/session. Closing a pending decision
+does not answer it; a later handoff closes the card without reopening the old
+home. Contextual headers contain pet actions, sessions, attachment, configuration
+and close controls, with no second home or gallery. Session and profile management
+return to the central surface, while application settings open the existing hub.
+
+Explicit home/management opening with both passive presentations disabled is
+temporary: closing returns to the disabled state without writing preferences or
+waking pets. If System integration is disabled, its page explains that state and
+opens application settings; it does not poll or invoke denied system actions.
+The native DMS lease fallback remains continuity of system controls after the
+application exits, rather than another Coucou presentation.
+
+Browser composition checks verify absence of the legacy DOM, state machine,
+singleton and listeners, plus startup infrastructure, slow cursor movement,
+work/completion/music updates, System-only document/email ownership and draft
+retention, exact approval fold/reopen/handoff, and explicit off-flag management.
+A form is synchronised before accepting input, preventing an immediate first edit
+from being erased by its initial redraw. Hidden views leave the accessibility and
+pointer paths immediately; old pet content does not linger through a transition.
+The email card reserves enough height for both actions. Isolated email checks
+also cover text delimiters, portal error/retry, pending-click guards, per-pet and
+folder capabilities, keyboard navigation and 360-pixel layout. They do not open a
+mail client or send email; native compose acceptance is separate.
+
+Review follow-up routes each modern help request by its immutable request ID
+and canonical pet/provider/origin/conversation target, including service pets
+whose logical owner differs from their CLI backend. Routing does not restore a
+conversation or replace another pet's focus/draft. Pending routing metadata is
+bounded and uses snapshot epochs as well as ended-request tombstones, so a late
+read cannot resurrect a retired request after eviction. Failed opening has an
+explicit retry for the same live request and target.
+
+Native opening now returns whether the requested window was actually shown.
+A withdrawn or superseded open does not emit a presentation receipt. Request-bound
+Help is checked natively through presentation; this reads request authority and
+never consumes or answers it. Contextual cards use their local presentation token
+and exact target to ignore late receipts for another pet, conversation or reopened
+card. A generic chat opened from the centre is independent and does not fold a
+card whose identity cannot be established. Cross-window Help for the same live
+request/CID can fold that exact card. A System panel's successful hide-popup
+request deliberately folds the contextual card while preserving its pending
+approval and drafts. Ending a different request never releases another approval's
+pin. Two isolated browser realms verified these cross-window rules without
+inference, decisions, session restoration or settings writes.
+
+Desktop pets retain their own activity, speech and document targets. Native
+baseline acceptance on candidate8 confirmed a working Codex pet receiving both
+a PDF and a folder directly, with correct ownership and cancellation, and an
+Ollama pet appearing during actual local responses. Closing the chat during a
+response exposed a missing speech bubble; candidate9 addresses the presentation
+failures and the backend separately supplies activity for plain responses.
+When other pets leave too little room in the bar, speech falls below the bar
+with its tail attached to the owner, a readable preview and its navigation
+action. Completion gives the final streamed text a fresh reading window;
+duplicate receipts do not extend it. Message navigation keeps the immutable
+conversation target captured by that turn, even if the current conversation
+changes, and habitat Help passes the current request ID through the native guard.
+An expired decision cannot reopen an overview on the next render frame. The
+dashboard uses its own avatar so the controller bot does not cover its metrics.
+Native9 acceptance confirmed an actual Ollama pet during Qwen and Gemma replies,
+readable speech with the system centre expanded, physical message navigation to
+conversation A while B remained current, and keyboard input in another application
+while the chat stayed open. Direct PDF and folder drops on the Ollama pet reached
+its document actions; folder cancellation closed the card. Six live habitat/bar
+preference changes preserved an explicit chat and its unsent synthetic draft;
+re-enabling the habitat after closing that chat did not reopen it.
+
+Candidate10 also captures the native session identity with each public message.
+Its read action becomes available only after a read-only canonical external-session
+lookup completes. Missing, owned or unsupported native identities show an honest
+explanation and an explicitly labelled session-list action. Native IDs never become
+invented Mochi conversation IDs. The lookup itself cannot open a chat or supersede
+a newer manual opening; a new click uses the already confirmed target immediately.
+A pending request has its own origin and action, independently of older speech.
+Modern centre availability retires the old shelter DOM and input even when both
+centre preferences are off. Unit and real-page browser checks cover these cases,
+including late lookups, removal/reappearance of a pet and disabled-centre flags;
+candidate10 still requires matching native acceptance.
+The pet overview clears the previous conversation's usage before drawing a newly
+current conversation. Missing or failed measurements stay unknown; late results
+for another conversation or pet cannot replace the current counts. Real-page
+checks cover pending/error reads and results completing out of order.
+
+The native email journey reached the correct Ollama PDF and preserved all three
+synthetic form fields. Betterbird opened percent-encoded subjects and two compose
+windows were observed after one automated opening action. This is a reported
+backend blocker: exact client fields, attachment and discard remain unaccepted;
+no email was sent during the test.
+
+Source11 adds explicit presentation acknowledgement for legacy permission cards:
+the exact request, session and pet must still match after rendering, native surface
+preparation and acknowledgement. Controls stay disabled until that acknowledgement
+and a fresh activation guard. Stale callbacks cannot decide a newer request, and
+a rejected answer remains visibly unresolved. Eight isolated real-page browser
+scenarios cover delayed acknowledgements, folding, same-request reopening,
+handoff and multi-step questions. These use a mock transport, not native decisions.
+The source passes 696 JavaScript tests, TypeScript and Vite. Native11 Codex and
+Copilot trials then showed the exact permission card and accepted presentation
+receipt; closing each synthetic client handed its request back without a decision
+or execution. Other native permission paths remain under integration review.
+The card composition regression also preserves document/email
+drafts and confirms that slow hover does not recreate the classic island.
+
+The native Stop metadata now renders the interrupted original request as a task
+status, separately from assistant messages, without sending or resuming anything.
+Floating-chat browser checks at widths 360 and 760 preserve the draft, show
+persistence failures, scroll long queries and clear obsolete status on a completed
+new turn; another conversation cannot inherit the notice. A source11 compact
+inline clipping defect placed the original request above the visible card after
+composer focus. Source12 reserves room when that status appears, recalculates
+geometry when it clears, and bounds query and feedback scrolling. Source-level
+browser checks now confirm both short and long original requests, plus the draft
+composer, inside the actual card clip below its header. Matching native12
+acceptance remains pending; source11 was retained only for the isolated native
+permission trial.
+
+The next user journeys include truthful active-session counts on each pet,
+management of work after a terminal window closes, and opening all conversations
+in the expanded chat by default, with terminal opening as an explicit alternative.
+Closing a window, interrupting a task and retiring a managed session require
+distinct labels and verified backend effects; unknown liveness must not be counted
+as confirmed active work. Backend lifecycle validation is coordinated separately.
+The System integration also remains transitional: the intended island owns its
+widget controls rather than opening native Linux/DMS panels. Compact pets above
+date/time and pointer-leave dismissal (excluding expanded chats) are recorded
+follow-ups after the permission and production delivery checks.
+
+The recompiled Linux runtime still requires native acceptance of slow hover,
+startup/flags, System-only documents and exact approvals, followed by close/crash
+fallback and the host-owned retirement of the right legacy block. Installation,
+restoration of the preserved production draft and focused signed commits remain
+the integration owner's final delivery checkpoints.

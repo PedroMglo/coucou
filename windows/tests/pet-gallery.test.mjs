@@ -16,3 +16,13 @@ test('removing a pet removes its entry without replacing surviving pets',()=>{
 test('catalogue ordering changes without losing existing cards',()=>{
  installFakeDom();const g=petGallery(()=>{},()=>{});g.sync([pet('one'),pet('two')]);const cards=g.el.find('button');g.sync([pet('two'),pet('one')]);assert.deepEqual(g.el.find('button'),[cards[1],cards[0]]);
 });
+
+for(const state of ['error','ratelimit'])test(`${state} opens an explanation without promising an approval`,()=>{
+ installFakeDom();let opened;const g=petGallery(p=>opened=p,()=>{}),identity={...pet('one',state),attention:true};g.sync([identity]);
+ const card=g.el.find('button')[0];assert.match(card.textContent,/Ver aviso/);assert.doesNotMatch(card.textContent,/Rever pedido/);card.onclick();assert.equal(opened,identity);
+});
+
+test('a resolved request updates the same card back to its normal action',()=>{
+ installFakeDom();const g=petGallery(()=>{},()=>{});g.sync([{...pet('one','question'),attention:true}]);const card=g.el.find('button')[0];assert.match(card.textContent,/Rever pedido/);
+ g.sync([pet('one')]);assert.equal(g.el.find('button')[0],card);assert.match(card.textContent,/Abrir pet/);assert.doesNotMatch(card.textContent,/Rever pedido/);
+});

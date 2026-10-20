@@ -11,6 +11,7 @@ import {calls,internals,sent} from './tauri.mjs';
 
 const originalInvoke=internals.invoke;
 const originalSound=Sound.enabled;
+const originalViewport=window.innerHeight;window.innerHeight=560;
 let ingest;
 let currentIds;
 const flush=async()=>{for(let i=0;i<16;i++)await Promise.resolve();};
@@ -42,11 +43,13 @@ function reset(){
   State.chatBusyProviders.clear();State.chatResettingProviders.clear();
   State.replaceChatHistory('ollama',[]);State.replaceChatHistory('codex',[]);
   const card=Object.create(Island.prototype);
+  card.views=new Map();
   const effects={morph:[],gulp:0,emotes:[],geometry:[]};
   card.desktop={companionsActive:true};
   card.engine={animateMorph(value){effects.morph.push(value);},gulp(){effects.gulp++;},triggerEmote(value){effects.emotes.push(value);}};
   card.fsm={forceHome(){},mouseLeft(){},pinned:false};
   card.animateGeometry=()=>effects.geometry.push(card.targetSize());
+  card.presentApproval=context=>{card.renderAlert(context.view);return Promise.resolve(true);};
   card.wasInIsland=true;card.dragHeight=null;card.dragOwner=null;
   card.dropSequence=0;card.providerDrops=new Map();card.providerDropTokens=new Map();
   return {card,effects};
@@ -94,34 +97,35 @@ try{
     assert.equal(State.view,'choose');assert.equal(UploadSeq.isActive,false);
     assert.equal(State.fileFor('ollama')?.name,'document.txt');
   });
-  await run('expanded-over-retains-296-and-does-not-reroute',async({card})=>{
+  await run('expanded drag retains the overview height and does not reroute',async({card})=>{
     const before=card.targetSize();
     card.onDragDrop({type:'over'});await flush();
     const after=card.targetSize();
-    assert.equal(before.h,296);assert.equal(after.h,296);
+    assert.equal(before.h,520);assert.equal(after.h,before.h);
     assert.equal(State.view,'upload');assert.equal(presentations().length,0);
     assert.deepEqual(card.dragOwner,{provider:'ollama',conversationId:'fixture-ollama-A',pet:'ai_ollama'});
     card.onDragDrop({type:'over'});
-    assert.equal(card.targetSize().h,296);
+    assert.equal(card.targetSize().h,before.h);
     // A late receiving route must also retain the captured geometry.
     card.openFromDesktop(undefined,'upload');await flush();
-    assert.equal(card.targetSize().h,296);assert.equal(presentations().length,0);
-    assert.ok(260<card.targetSize().h+14);
+    assert.equal(card.targetSize().h,before.h);assert.equal(presentations().length,0);
+    assert.ok(before.h-36<card.targetSize().h+14);
     return {before:before.h,during:after.h,afterLateReceivingRoute:card.targetSize().h,presentationRequests:0,lowerPointStillInside:true};
   });
 
   await run('leave-retains-height-until-navigation-cleans-drag',async({card,effects})=>{
+    const initial=card.targetSize().h;
     card.onDragDrop({type:'enter'});
     const owner=card.dragOwner;
     card.onDragDrop({type:'leave'});
-    assert.equal(card.targetSize().h,296);assert.equal(State.fileDragOver,false);
+    assert.equal(card.targetSize().h,initial);assert.equal(State.fileDragOver,false);
     assert.equal(card.dragOwner,owner);assert.equal(UploadSeq.isActive,true);
     assert.equal(effects.morph.at(-1),0);
     card.setView('overview');
     assert.equal(card.dragHeight,null);assert.equal(card.dragOwner,null);
     assert.equal(UploadSeq.isActive,false);assert.equal(State.fileDragOver,false);
-    card.onDragDrop({type:'over'});assert.equal(card.targetSize().h,296);
-    return {leaveHeight:296,sequenceIntentionallyRetainedOnLeave:true,navigationClearsOwnerAndSequence:true,newDragHeight:296};
+    card.onDragDrop({type:'over'});assert.equal(card.targetSize().h,initial);
+    return {leaveHeight:initial,sequenceIntentionallyRetainedOnLeave:true,navigationClearsOwnerAndSequence:true,newDragHeight:initial};
   });
 
   await run('delivery-after-focus-change-uses-captured-owner',async({card,effects})=>{
@@ -200,5 +204,5 @@ try{
     return {ingestionCalls:0,dragStateCleared:true,view:State.view};
   });
 }finally{
-  UploadSeq.deactivate();Sound.setEnabled(originalSound);internals.invoke=originalInvoke;
+  UploadSeq.deactivate();Sound.setEnabled(originalSound);window.innerHeight=originalViewport;internals.invoke=originalInvoke;
 }

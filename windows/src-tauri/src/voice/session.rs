@@ -195,7 +195,7 @@ fn available(app: &AppHandle, pet: Pet) -> bool {
         Pet::Copilot=>crate::copilot_chat::executable().is_ok(),
         Pet::Gravity => crate::gravity_chat::executable().is_ok(),
         Pet::Claude | Pet::Gemini => false, // Models now belong to the single Gravity pet.
-        Pet::Spotify=>crate::spotify::spotify_installed(),
+        Pet::Spotify=>true, // PC audio remains useful without the Spotify application.
         Pet::GitHub|Pet::Notion|Pet::Vercel|Pet::N8n|Pet::Resend|Pet::Stripe|Pet::Calcom=>crate::codex_chat::installed(),
         Pet::Ollama => super::local::config(&app.state::<crate::Shared>().settings.lock().unwrap()).is_some(),
     }
@@ -355,7 +355,7 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
         }
         view(app, stop, "received", &question, "", Some(pet));
         let direct=if pet==Pet::Spotify {super::services::spotify(app,&question)}else{None};
-        let reply = if let Some(reply)=direct {Some(reply)}else{brains.entry(pet).or_default().respond_as(
+        let reply = if let Some(reply)=direct {Some(reply)}else if pet==Pet::Spotify {Some(super::brain::Reply{text:"Posso controlar a música e o som do PC. Diz, por exemplo, pausa, próxima música, volume do sistema 40 ou silenciar microfone.".into(),acted:false,language:Some("pt-PT".into())})}else{brains.entry(pet).or_default().respond_as(
             app,
             &question,
             pet.provider(),

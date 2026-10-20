@@ -108,9 +108,9 @@ pub fn summary(thread: &Value, target: Target) -> Result<Summary, String> {
     let turns = thread.get("turns").and_then(Value::as_array);
     let active = match turns {
         Some(turns) => active_turn(turns)?,
-        None => None,
+        None => ActiveTurns::default(),
     };
-    let capabilities = capabilities(thread, state, active.is_some());
+    let capabilities = capabilities(thread, state, &active);
     let model = nonempty(thread.get("model")).map(str::to_owned);
     Ok(Summary {
         target,
@@ -129,10 +129,13 @@ pub fn snapshot(thread: &Value, target: Target, turns: &[Value]) -> Result<Snaps
     validate_thread(thread, &target)?;
     let state = state(thread)?;
     let messages = messages(turns)?;
-    let turn = active_turn(turns)?.map(str::to_owned);
-    let busy = state == "active" || turn.is_some();
-    let capabilities = capabilities(thread, state, turn.is_some());
-    let notice = if state == "notLoaded" {
+    let active = active_turn(turns)?;
+    let turn = active.exact().map(str::to_owned);
+    let busy = state == "active" || active.id.is_some();
+    let capabilities = capabilities(thread, state, &active);
+    let notice = if active.conflict {
+        Some("O terminal anunciou vários turnos ativos. Podes consultar o histórico; o envio e a interrupção ficam indisponíveis até existir um turno inequívoco.".into())
+    } else if state == "notLoaded" {
         Some("Sessão guardada; o terminal não a tem carregada para receber mensagens.".into())
     } else if state == "systemError" {
         Some("O terminal reporta um erro de sistema nesta sessão.".into())
@@ -158,6 +161,7 @@ pub fn snapshot(thread: &Value, target: Target, turns: &[Value]) -> Result<Snaps
         capabilities,
         notice,
         model,
+        control_conflict: active.conflict,
     })
 }
 
@@ -181,30 +185,46 @@ fn state(thread: &Value) -> Result<&str, String> {
     }
 }
 
-fn capabilities(thread: &Value, state: &str, has_active_turn: bool) -> Capabilities {
+fn capabilities(thread: &Value, state: &str, active: &ActiveTurns<'_>) -> Capabilities {
     let loaded = state != "notLoaded";
     Capabilities {
         history: thread.get("ephemeral").and_then(Value::as_bool) != Some(true),
         // Only an explicit advertised capability permits input. A readable
         // stored thread and an idle status do not imply ownership of its input.
         send: loaded
+            && !active.conflict
             && thread.get("ephemeral").and_then(Value::as_bool) != Some(true)
             && state != "systemError"
             && thread.get("canAcceptDirectInput").and_then(Value::as_bool) == Some(true),
-        cancel: loaded && has_active_turn,
+        cancel: loaded && active.exact().is_some(),
     }
 }
 
-fn active_turn(turns: &[Value]) -> Result<Option<&str>, String> {
-    let mut active = None;
+// Public history remains readable when runtime control has no exact turn.
+// This state never selects a turn by order or recency.
+#[derive(Default)]
+struct ActiveTurns<'a> {
+    id: Option<&'a str>,
+    conflict: bool,
+}
+impl<'a> ActiveTurns<'a> {
+    fn exact(&self) -> Option<&'a str> {
+        if self.conflict { None } else { self.id }
+    }
+}
+
+fn active_turn(turns: &[Value]) -> Result<ActiveTurns<'_>, String> {
+    let mut active = ActiveTurns::default();
+    let mut active_ids = HashSet::new();
     for turn in turns {
         match turn.get("status").and_then(Value::as_str) {
             Some("inProgress") => {
                 let id = identifier(turn.get("id"))?;
-                // Never choose a turn arbitrarily when the terminal snapshot
-                // contains conflicting active turn IDs.
-                if active.replace(id).is_some() {
-                    return Err("O terminal anunciou mais de um turno ativo nesta sessão.".into());
+                if !active_ids.insert(id) { return Err(INVALID.into()); }
+                if let Some(previous) = active.id {
+                    active.conflict |= previous != id;
+                } else {
+                    active.id = Some(id);
                 }
             }
             Some("completed" | "interrupted" | "failed") => {}

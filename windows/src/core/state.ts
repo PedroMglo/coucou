@@ -60,6 +60,10 @@ export interface ApprovalInfo {
   pillId: string;
   tool: string;
   command: string;
+  /** Native receipt for this exact rendered request, never permission to execute. */
+  presentationReady?:boolean;
+  answering?:boolean;
+  feedback?:string;
   /** Set when Claude Code is asking a question rather than for a permission. */
   questions?: AskedQuestion[];
 }
@@ -248,6 +252,8 @@ export const MAX_DIFFS_PER_PILL = 50;
 export const DIFF_TTL_MS = 3_600_000;
 
 class AppState {
+  /** Runtime composition only; never a persisted preference or a pet opt-in. */
+  petCardsOnly = false;
   mode: IslandMode = "hidden";
   view: IslandViewName = "overview";
 
@@ -280,7 +286,7 @@ class AppState {
   clearAllDialogueContexts(){this.chatContexts.clear();this.chatFiles.clear();}
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
-  get chatProvider(): ProviderId { return (this.settings.companionMode ? providerForPill(this.focusId ?? undefined) : null) ?? this.settings.chatProvider; }
+  get chatProvider(): ProviderId { return (this.settings.companionMode || this.petCardsOnly ? providerForPill(this.focusId ?? undefined) : null) ?? this.settings.chatProvider; }
   chatBusyProviders = new Set<string>();
   chatResettingProviders = new Set<string>();
   chatFeedback = new Map<string,string>();

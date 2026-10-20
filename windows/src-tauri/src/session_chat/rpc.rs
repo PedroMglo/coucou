@@ -1,10 +1,13 @@
 //! Codex daemon JSON-RPC over the user's existing local Unix WebSocket.
 //! This client never starts an executor, imports a transcript, or retries a write.
-use std::{collections::HashMap, path::{Path,PathBuf},sync::{Arc,atomic::{AtomicBool,AtomicU64,Ordering}},time::{Duration,Instant}};
+use std::{collections::HashMap, path::{Path,PathBuf},sync::{Arc,Mutex,atomic::{AtomicBool,AtomicU64,Ordering}},time::{Duration,Instant}};
 use futures_util::{SinkExt,StreamExt};
 use serde_json::{json,Value};
-use tokio::{net::UnixStream,sync::{broadcast,mpsc,oneshot,Mutex},time::timeout};
+use tokio::{net::UnixStream,sync::{broadcast,mpsc,oneshot},time::timeout};
 use tokio_tungstenite::{client_async_with_config,tungstenite::{Message,protocol::WebSocketConfig}};
+
+#[path="native_settings.rs"]
+pub(crate) mod native_settings;
 
 const IO_TIMEOUT:Duration=Duration::from_secs(20);
 const MAX_FRAME:usize=64*1024*1024;
@@ -23,11 +26,37 @@ struct Packet {message:Value,written:oneshot::Sender<Result<(),()>>,deadline:Ins
 impl Packet {
     fn expired(&self)->bool{self.written.is_closed()||Instant::now()>=self.deadline||self.cancel.as_ref().is_some_and(|c|c.load(Ordering::Acquire))}
 }
-type Pending=Arc<Mutex<HashMap<String,oneshot::Sender<Answer>>>>;
+struct PendingEntry {
+    identity: Arc<()>,
+    answer: oneshot::Sender<Answer>,
+}
+type Pending=Arc<Mutex<HashMap<String,PendingEntry>>>;
+
+/// Owns only this call's pending slot across every suspension point.
+struct PendingCall {
+    pending: Pending,
+    id: String,
+    identity: Arc<()>,
+}
+impl Drop for PendingCall {
+    fn drop(&mut self) {
+        let removed = {
+            let mut pending = self.pending.lock().unwrap_or_else(|poison| poison.into_inner());
+            if pending.get(&self.id).is_some_and(|entry| Arc::ptr_eq(&entry.identity, &self.identity)) {
+                pending.remove(&self.id)
+            } else {
+                None
+            }
+        };
+        // Dropping a sender may wake a receiver; release the map lock first.
+        drop(removed);
+    }
+}
 pub struct Client {
     writer:mpsc::Sender<Packet>,pending:Pending,events:broadcast::Sender<Value>,
     next:AtomicU64,connected:Arc<AtomicBool>,stop:tokio::sync::watch::Sender<bool>,
     endpoint:PathBuf,endpoint_identity:(u64,u64,i64,i64),
+    settings:Arc<Mutex<native_settings::Cache>>,
 }
 
 /// Default control socket only; a caller cannot route a pet to a remote endpoint.
@@ -67,8 +96,9 @@ impl Client {
         let(events,_)=broadcast::channel(256);
         let(stop,mut stopped)=tokio::sync::watch::channel(false);
         let pending:Pending=Arc::default();let connected=Arc::new(AtomicBool::new(true));
-        let client=Arc::new(Self{writer,pending:pending.clone(),events:events.clone(),next:AtomicU64::new(1),connected:connected.clone(),stop,endpoint:path,endpoint_identity});
-        let out_pending=pending.clone();let out_connected=connected.clone();
+        let settings:Arc<Mutex<native_settings::Cache>>=Arc::default();
+        let client=Arc::new(Self{writer,pending:pending.clone(),events:events.clone(),next:AtomicU64::new(1),connected:connected.clone(),stop,endpoint:path,endpoint_identity,settings:settings.clone()});
+        let out_pending=pending.clone();let out_connected=connected.clone();let out_settings=settings.clone();
         tokio::spawn(async move{
             loop {
                 tokio::select!{
@@ -86,6 +116,7 @@ impl Client {
                 }
             }
             out_connected.store(false,Ordering::Release);
+            out_settings.lock().unwrap_or_else(|p|p.into_inner()).disconnect();
             fail_pending(&out_pending).await;
             let _=timeout(Duration::from_millis(200),sink.close()).await;
         });
@@ -96,17 +127,28 @@ impl Client {
                 let Some(Ok(message))=message else{break;};
                 let Message::Text(data)=message else{if matches!(message,Message::Close(_)){break;}continue;};
                 let Ok(value)=serde_json::from_str::<Value>(&data)else{break;};
+                let settings_event=settings.lock().unwrap_or_else(|p|p.into_inner()).event(&value,settings_now());
                 if value.get("method").is_none(){
                     if let Some(id)=value["id"].as_str(){
-                        if let Some(answer)=pending.lock().await.remove(id){
+                        let answer = {
+                            let mut pending = pending.lock().unwrap_or_else(|poison| poison.into_inner());
+                            pending.remove(id)
+                        };
+                        if let Some(entry)=answer{
                             let result=if value.get("error").is_some(){Err(Error{code:value["error"]["code"].as_i64(),message:"O daemon Codex recusou o pedido. Atualiza a sessão antes de continuar.".into(),native_message:value["error"]["message"].as_str().map(|s|s.chars().take(1024).collect())})}
                                 else{value.get("result").cloned().ok_or_else(||Error::local("O daemon Codex devolveu uma resposta incompleta."))};
-                            let _=answer.send(result);
+                            let _=entry.answer.send(result);
                         }
                     }
+                }else if value["method"]=="thread/settings/updated"{
+                    // Forward only an observation invalidation. ThreadSettings
+                    // also carries private instructions/model configuration.
+                    // Intercept malformed request-shaped frames too: Cache
+                    // ignores them, and raw settings must never escape here.
+                    if let Some(event)=settings_event{let _=events.send(event);}
                 }else if allowed_event(&value){let _=events.send(value);}
             }
-            connected.store(false,Ordering::Release);fail_pending(&pending).await;
+            connected.store(false,Ordering::Release);settings.lock().unwrap_or_else(|p|p.into_inner()).disconnect();fail_pending(&pending).await;
             let _=events.send(json!({"method":"mochi/disconnected","params":{}}));
         });
         client.call("initialize",json!({"clientInfo":{"name":"coucou_mochi_sessions","title":"Mochi · Sessões","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await?;
@@ -116,6 +158,15 @@ impl Client {
 
     pub fn connected(&self)->bool{self.connected.load(Ordering::Acquire)}
     pub fn events(&self)->broadcast::Receiver<Value>{self.events.subscribe()}
+
+    /// Read the latest permission projection observed on THIS connection only.
+    /// This is not an update ACK, terminal binding, effective turn policy or an
+    /// authority to approve a request. It performs no RPC or filesystem access.
+    pub(crate) fn settings_observation(&self,thread_id:&str,now:u64,max_age:u64)->native_settings::Observation{
+        let mut settings=self.settings.lock().unwrap_or_else(|p|p.into_inner());
+        if !self.connected(){settings.disconnect();}
+        settings.snapshot(thread_id,now,max_age)
+    }
 
     /// Reuse only this connection's verified local endpoint when opening its
     /// TUI. A replacement socket is not the same executor/provenance.
@@ -140,10 +191,20 @@ impl Client {
     pub async fn call(&self,method:&str,params:Value)->Answer{
         let id=format!("mochi-{}-{}",std::process::id(),self.next.fetch_add(1,Ordering::Relaxed));
         let(tx,rx)=oneshot::channel();
-        {let mut pending=self.pending.lock().await;if pending.len()>=128{return Err(Error::local("Há demasiadas consultas Codex pendentes. Aguarda antes de atualizar."));}pending.insert(id.clone(),tx);}
-        if let Err(e)=self.write(json!({"id":id,"method":method,"params":params})).await{self.pending.lock().await.remove(&id);return Err(e);}
+        let identity = Arc::new(());
+        let _pending_call = {
+            let mut pending = self.pending.lock().unwrap_or_else(|poison| poison.into_inner());
+            if pending.contains_key(&id) {
+                return Err(Error::local("O identificador da consulta Codex já está reservado."));
+            }
+            if pending.len()>=128 {
+                return Err(Error::local("Há demasiadas consultas Codex pendentes. Aguarda antes de atualizar."));
+            }
+            pending.insert(id.clone(), PendingEntry { identity: identity.clone(), answer: tx });
+            PendingCall { pending: self.pending.clone(), id: id.clone(), identity }
+        };
+        if let Err(e)=self.write(json!({"id":id,"method":method,"params":params})).await{return Err(e);}
         let result=timeout(IO_TIMEOUT,rx).await;
-        self.pending.lock().await.remove(&id);
         match result{Ok(Ok(answer))=>answer.map_err(|mut error|{if let Some(code)=error.code{error.message=format!("O daemon Codex recusou {method} (código{code}). Atualiza a sessão antes de continuar.");}error}),_=>Err(Error::local("O daemon Codex não confirmou o resultado. Consulta o histórico antes de repetir o pedido."))}
     }
     pub async fn notify(&self,method:&str,params:Value)->Result<(),Error>{self.write(json!({"method":method,"params":params})).await}
@@ -153,12 +214,22 @@ impl Client {
 }
 
 impl Drop for Client{fn drop(&mut self){let _=self.stop.send(true);}}
-async fn fail_pending(pending:&Pending){for(_,tx)in pending.lock().await.drain(){let _=tx.send(Err(Error::local("A ligação Codex terminou; atualiza o histórico antes de repetir.")));}}
+async fn fail_pending(pending:&Pending){
+    let entries: Vec<_> = {
+        let mut pending = pending.lock().unwrap_or_else(|poison| poison.into_inner());
+        pending.drain().map(|(_, entry)| entry).collect()
+    };
+    for entry in entries {
+        let _=entry.answer.send(Err(Error::local("A ligação Codex terminou; atualiza o histórico antes de repetir.")));
+    }
+}
+
+fn settings_now()->u64{std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()}
 
 fn allowed_event(message:&Value)->bool{
     if message.get("id").is_some(){return true;} // Native approval/question; never answer in the transport.
     match message["method"].as_str().unwrap_or(""){
-        "item/agentMessage/delta"|"thread/status/changed"|"thread/started"|"thread/name/updated"|"turn/started"|"turn/completed"|"serverRequest/resolved"|"thread/closed"=>true,
+        "thread/settings/updated"|"item/agentMessage/delta"|"thread/status/changed"|"thread/started"|"thread/name/updated"|"turn/started"|"turn/completed"|"serverRequest/resolved"|"thread/closed"=>true,
         "item/started"|"item/completed"=>matches!(message["params"]["item"]["type"].as_str(),Some("userMessage"|"agentMessage"|"commandExecution"|"fileChange"|"mcpToolCall"|"dynamicToolCall")),
         _=>false,
     }
@@ -170,6 +241,9 @@ mod endpoint_tests {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::net::UnixListener;
+    include!("rpc_cancel_tests.rs");
+    include!("list_budget_rpc_tests.rs");
+    include!("native_settings_rpc_tests.rs");
 
     struct Scratch(PathBuf);
     impl Scratch {
@@ -194,6 +268,8 @@ mod endpoint_tests {
         server:tokio::task::JoinHandle<()>,
         commands:mpsc::UnboundedSender<Command>,
         socket:PathBuf,
+        held:Arc<std::sync::Mutex<Vec<Value>>>,
+        received:Arc<std::sync::Mutex<Vec<Value>>>,
         _scratch:Scratch,
     }
     impl Fixture {
@@ -205,6 +281,9 @@ mod endpoint_tests {
             let (commands,mut incoming)=mpsc::unbounded_channel();
             let initialized=Arc::new(tokio::sync::Notify::new());
             let ready=initialized.clone();
+            let held=Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+            let observed=held.clone();
+            let received=Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));let received_frames=received.clone();
             let server=tokio::spawn(async move {
                 let (stream,_)=listener.accept().await.unwrap();
                 let mut ws=tokio_tungstenite::accept_async(stream).await.unwrap();
@@ -226,8 +305,10 @@ mod endpoint_tests {
                             let Some(Ok(message))=message else {break;};
                             let Message::Text(text)=message else {if matches!(message,Message::Close(_)){break;}continue;};
                             let request:Value=serde_json::from_str(&text).unwrap();
+                            received_frames.lock().unwrap().push(request.clone());
                             let method=request["method"].as_str().unwrap_or("");
                             if method=="initialized" {ready.notify_one();continue;}
+                            if method=="fixture/hold" {observed.lock().unwrap().push(request);continue;}
                             let Some(id)=request.get("id") else {continue;};
                             let response=match method {
                                 "initialize"|"fixture/barrier"=>json!({"id":id,"result":{}}),
@@ -239,7 +320,7 @@ mod endpoint_tests {
                 }
             });
             // Own cleanup before any fallible connection or initialization wait.
-            let mut fixture=Self{client:None,server,commands,socket,_scratch:scratch};
+            let mut fixture=Self{client:None,server,commands,socket,held,received,_scratch:scratch};
             fixture.client=Some(Client::connect(&fixture.socket).await.unwrap());
             timeout(Duration::from_secs(5),initialized.notified()).await.unwrap();
             fixture

@@ -1,6 +1,7 @@
 import {Bridge,onEvent,type AgentRequest} from '../core/bridge';
 import {sameSession,type SessionTarget} from '../core/session-chat';
 import {h} from './dom';
+import {commandReview} from './command-review';
 
 /** Public native decisions are keyed by request ID and immutable session. A
  * second surface can observe them; only one human answer is accepted by Rust. */
@@ -18,16 +19,16 @@ export function buildAgentRequests(selected:()=>SessionTarget|null,changed:()=>v
    const field=h('input',{class:'chat-input',type:question.isSecret?'password':'text',autocomplete:'off','aria-label':question.question}) as HTMLInputElement;
    fields.set(question.id,field);card.append(h('label',{text:question.question}),field);
    for(const option of question.options??[])card.append(h('button',{text:option.label,onclick:()=>{field.value=option.label;}}));
-  }else card.append(h('pre',{text:request.detail,style:'white-space:pre-wrap;max-height:120px;overflow:auto'}));
+  }else card.append(commandReview(request.detail,request.provider==='ollama'&&request.approvalScope==='once'));
   const error=h('p',{class:'chat-feedback',role:'status'});
-  const allow=h('button',{class:'cli-allow',text:request.kind==='question'?'Enviar':request.approvalScope==='turn'?'Permitir neste turno':'Permitir uma vez'}),deny=h('button',{class:'cli-deny',text:'Recusar'});
+  const allow=h('button',{class:'cli-allow btn primary',text:request.kind==='question'?'Enviar':request.approvalScope==='turn'?'Permitir neste turno':'Permitir uma vez'}),deny=h('button',{class:'cli-deny btn secondary',text:'Recusar'});
   function answer(yes:boolean){
    allow.disabled=deny.disabled=true;
    const answers=Object.fromEntries([...fields].map(([id,input])=>[id,yes?[input.value]:[]]));
    void Bridge.cliAgentAnswer(request.id,{allow:yes,answers},request.target).then(()=>{card.remove();cards.delete(request.id);changed();})
     .catch(e=>{error.textContent=String(e).replace(/^Error:\s*/,'');allow.disabled=deny.disabled=false;changed();});
   }
-  allow.onclick=()=>answer(true);deny.onclick=()=>answer(false);card.append(allow,deny,error);cards.set(request.id,{el:card,request});el.append(card);sync();changed();
+  allow.onclick=()=>answer(true);deny.onclick=()=>answer(false);card.append(h('div',{class:'actions'},allow,deny),error);cards.set(request.id,{el:card,request});el.append(card);sync();changed();
  }
  void onEvent<AgentRequest>('agent-request',add);
  void onEvent<{id:string}>('agent-request-ended',({id})=>{ended.add(id);if(ended.size>256)ended.delete(ended.values().next().value!);cards.get(id)?.el.remove();cards.delete(id);changed();});

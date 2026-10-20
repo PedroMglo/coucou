@@ -42,9 +42,9 @@
       {
         "label": "island",
         "title": "Coucou",
-        "url": "index.html",
-        "width": 240,
-        "height": 6,
+        "url": "pet-cards.html",
+        "width": 720,
+        "height": 320,
         "resizable": false,
         "decorations": false,
         "transparent": true,

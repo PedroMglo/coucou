@@ -649,7 +649,7 @@ const CODEX_EVENTS: &[(&str, u64)] = &[
     ("SessionEnd", 3),
 ];
 
-const CODEX_WAITING: &str = "Waiting for your answer in the island (Coucou)";
+const CODEX_WAITING: &str = "A tentar apresentar o pedido no Coucou…";
 
 fn codex_install(root: &Value, command: &str) -> Result<Value, String> {
     let events = CODEX_EVENTS.iter().map(|(event, timeout)| {
@@ -1206,6 +1206,12 @@ mod tests {
             assert_eq!(ours["timeout"], *timeout, "{event}");
             assert!(ours["command"].as_str().unwrap().ends_with("--agent codex"), "{event}");
             assert_eq!(ours.get("statusMessage").is_some(), *event == "PermissionRequest");
+            if *event=="PermissionRequest" {
+                assert_eq!(ours["statusMessage"],CODEX_WAITING);
+                assert!(CODEX_WAITING.contains("A tentar apresentar"));
+                assert!(!CODEX_WAITING.contains("à espera"));
+                assert!(!CODEX_WAITING.contains("Waiting for your answer in the island"));
+            }
         }
         assert_eq!(installed["hooks"]["PreToolUse"][0]["matcher"], "Bash");
         assert_eq!(removed.unwrap(), serde_json::from_str::<Value>(existing).unwrap());

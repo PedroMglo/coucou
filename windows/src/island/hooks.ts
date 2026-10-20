@@ -17,6 +17,7 @@ import { parseClaudePlan, restorePlanUsage } from "../core/plan";
 import { setClaudePlanUsage, storedClaudePlanUsage } from "../views/usage";
 import { N_, t } from "../i18n/i18n";
 import { taskPet } from "../mochi/tasks";
+import {approvalContext} from '../core/approval-presentation';
 
 const CLAUDE_ID = "integration_claude";
 const CURSOR_ID = "agent_cursor";
@@ -43,6 +44,11 @@ export function dropPendingCard(island: Island): void {
   if (!State.pendingApproval) return;
   const editor=State.endApproval();
   island.dropPin();
+  if(State.petCardsOnly){
+    if(editor&&State.mode==='expanded')island.setView(editor);
+    else island.collapse();
+    State.notify();return;
+  }
   if(editor&&State.settings.companionMode)island.alert(editor);
   else if (State.view === "approval" || State.view === "question") {
     island.setView(State.defaultView());
@@ -300,6 +306,9 @@ function handleHook(island: Island, payload: HookPayload) {
   /** Alerts force the island open; work events only reveal the compact island. */
   const surface = (view: Parameters<Island["alert"]>[0], isAlert: boolean) => {
     publish();
+    // Work/completion updates belong to the shared centre. Only the dedicated
+    // decision path below may present a request card from a hook event.
+    if (State.petCardsOnly) return;
     if (State.settings.companionMode) {
       // Completion is the pet's speech. Decisions/errors retain their original card.
       if (isAlert && view !== "finished") { State.setFocus(agentId); island.alert(view); }
@@ -544,16 +553,16 @@ function handleHook(island: Island, payload: HookPayload) {
         pillId: agentId,
         tool,
         command: approvalTarget(tool, input),
+        presentationReady:false,
         ...(questions ? { questions } : {}),
       },interrupted);
-      // The relay's short ack window closes in 800 ms; everything below this
-      // line is synchronous, so the card really is up by the time it lands.
-      if (requestId) void Bridge.approvalAck(requestId);
       updateTask(agentId, view);
       Sound.play(view);
       // Any agent's card (Claude Code, Codex, Copilot CLI, Muse Code) comes up
       // the same way: beginApproval brought its pill to the front.
-      island.alert(view);
+      // A routed event is not a visible card. The controller confirms the
+      // exact rendered scope with native GTK before the long human wait starts.
+      void island.presentApproval(approvalContext({requestId,sessionId,pillId:agentId},view));
       // Coucou answers within 108 s or not at all; after that the terminal has
       // taken over and the card would be lying.
       pendingTimeout = window.setTimeout(() => {

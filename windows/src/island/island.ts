@@ -28,10 +28,18 @@ import { closePlanCard, openPlanColor, planCardOpen } from "../views/usage";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
+import {CardLifecycle} from './card-lifecycle';
 import { refreshHookPills } from "./integrations";
 import { DesktopLink } from "./desktop";
 import type { ViewCommand } from "./shortcuts";
 import { DRAG_THRESHOLD } from "../mochi/desktop-logic";
+import {buildPetCardHeader} from '../views/pet-card-header';
+import {initializeRequestDestinations,requestDestinations} from '../core/request-destinations';
+import {presentRequest} from './request-routing';
+import {sameSession} from '../core/session-chat';
+import {cardPresentation,registerCardPresentation} from '../core/card-presentation';
+import {approvalContext,sameApproval,canAnswerApproval,presentApproval,type ApprovalContext} from '../core/approval-presentation';
+import {handoffPendingApproval} from './hooks';
 
 const BOT_OVERHANG = 40;
 const CLAUDE_DESKTOP_ID = "agent_claude-desktop";
@@ -49,7 +57,7 @@ const PRE_PROGRESS = USC.T_PROG_START - USC.T_DROP;
 const modeOrder = (m: IslandMode) => (m === "hidden" ? 0 : m === "compact" ? 1 : 2);
 
 export class Island {
-  readonly fsm = new IslandStateMachine();
+  readonly fsm: IslandStateMachine | CardLifecycle;
   /** Mochi on the desktop: his life cycle and the drag out of the island. */
   readonly desktop: DesktopLink;
 
@@ -60,13 +68,16 @@ export class Island {
   private viewsEl!: HTMLElement;
   private botCanvas!: HTMLCanvasElement;
   private botGlow!: HTMLElement;
-  private greetingCanvas!: HTMLCanvasElement;
-  private miniGrid!: HTMLElement;
+  private greetingCanvas: HTMLCanvasElement | null = null;
+  private miniGrid: HTMLElement | null = null;
   private countdown!: HTMLElement;
-  private wakeStrip!: HTMLElement;
+  private wakeStrip: HTMLElement | null = null;
 
   private header!: ViewHost;
   private views!: Map<IslandViewName, ViewHost>;
+  private approvalEpoch=0;
+  private approvalOpening:{context:ApprovalContext;generation:number;promise:Promise<boolean>}|null=null;
+  private approvalLatest:{context:ApprovalContext;generation:number}|null=null;
   private uploadCanvas!: UploadCanvas;
 
   private width = new Tracked(NOTCH_W);
@@ -77,7 +88,7 @@ export class Island {
   private botSize = new Spring(10);
 
   private engine = new BotEngine();
-  private greeting = new Greeting();
+  private greeting: Greeting | null = null;
   private greetingShown = false;
   private seasons = new SeasonCache();
 
@@ -104,6 +115,12 @@ export class Island {
   private confusedRecovery: number | null = null;
   private prevViewBeforeConfused: IslandViewName = "overview";
   private keyboardView = '';
+  private manualOpening=false;
+  private cardIngesting=0;
+  private cardDocumentHolds=new Map<string,Set<string>>();
+  private cardPetPointer=new Map<string,{context:number;inside:boolean}>();
+  private cardHasDecision(){return !!State.pendingApproval||requestDestinations.size>0||State.tasks.some(t=>['approval','question'].includes(t.state));}
+  private cardHasHold(){return this.cardHasDecision()||State.fileDragOver||this.cardIngesting>0||!!this.cardDocumentHolds.get(State.focusId??'')?.size;}
 
   /** The launch greeting ended, or the island came out of hidden — two of the
    *  moments the Monday recap may open (see src/recap/recap.ts). */
@@ -122,14 +139,38 @@ export class Island {
   private dragHeight:number|null=null;
   private dragOwner:{provider:string;conversationId:string|undefined;pet:string|null}|null=null;
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, private readonly presentation: {cardsOnly?: boolean} = {}) {
     this.root = root;
-    void onEvent("companions-hide-popup", () => { if (State.settings.companionMode) this.collapse(); });
-    void onEvent<{pet:string}>('pet-chat-presented',({pet})=>{
-      if(State.settings.companionMode&&State.focusId===pet&&!State.pendingApproval)this.collapse();
+    this.fsm = this.cardsOnly ? new CardLifecycle(()=>this.cardHasHold()) : new IslandStateMachine();
+    if(this.cardsOnly)registerCardPresentation(()=>JSON.stringify([State.focusId,State.view,State.chatProvider,State.fileFor(State.chatProvider)?.conversationId||dialogueId(State.chatProvider),State.fileFor(State.chatProvider)?.sequence,State.focusTask?.sessionId,State.lastActivity]));
+    if(this.cardsOnly)void onEvent<{pillId:string;context:string;holding:boolean}>('pet-card-document-hold',value=>{
+      if(!value.pillId||!value.context||typeof value.holding!=='boolean')return;
+      const holds=this.cardDocumentHolds.get(value.pillId)??new Set<string>();
+      if(value.holding)holds.add(value.context);else holds.delete(value.context);
+      if(holds.size)this.cardDocumentHolds.set(value.pillId,holds);else this.cardDocumentHolds.delete(value.pillId);
+      if(!value.holding&&State.focusId===value.pillId&&this.fsm instanceof CardLifecycle)this.fsm.refreshHold();
+    });
+    if(this.cardsOnly)void onEvent<{pillId:string;context:number;inside:boolean}>('pet-card-pointer',value=>{
+      if(!value.pillId||!Number.isSafeInteger(value.context)||value.context<1||typeof value.inside!=='boolean')return;
+      const old=this.cardPetPointer.get(value.pillId);if(old&&value.context<old.context)return;
+      if(old&&value.context===old.context&&old.inside===false&&value.inside)return;
+      this.cardPetPointer.set(value.pillId,{context:value.context,inside:value.inside});
+      if(this.fsm instanceof CardLifecycle&&this.fsm.manual&&State.mode==='expanded'&&State.focusId===value.pillId)this.fsm.setPetInside(value.inside);
+    });
+    if (!this.cardsOnly) this.greeting = new Greeting();
+    void onEvent("companions-hide-popup", () => { if (this.cardsOnly || State.settings.companionMode) this.collapse(); });
+    void onEvent<{pet:string;target?:import('../core/session-chat').SessionTarget;requestId?:string;sourceContext?:string}>('pet-chat-presented',({pet,target,requestId,sourceContext})=>{
+      if(this.cardsOnly&&(!target&&!sourceContext||sourceContext&&sourceContext!==cardPresentation()))return;
+      if(requestId){const current=requestDestinations.get(requestId);if(!current||!target||!sameSession(current.target,target))return;}
+      if(target){
+        const provider=providerForPill(State.focusId??undefined);
+        const current=target.origin==='mochi'?(State.fileFor(provider??State.chatProvider)?.conversationId||dialogueId(provider??State.chatProvider)):State.focusTask?.sessionId;
+        if(provider!==target.provider||current!==target.sessionId)return;
+      }
+      if((this.cardsOnly||State.settings.companionMode)&&State.focusId===pet&&!State.pendingApproval)this.collapse();
     });
     this.desktop = new DesktopLink({
-      openFromDesktop: (id, view) => this.openFromDesktop(id, view),
+      openFromDesktop: (id, view, manual) => this.openFromDesktop(id, view, manual),
       reveal: () => this.reveal(),
       wardrobeFromDesktop: () => this.wardrobeFromDesktop(),
       dizzyFromDesktop: () => this.handleDizzy(),
@@ -147,7 +188,14 @@ export class Island {
     window.addEventListener('blur',()=>window.setTimeout(refreshEditing,0));
     const cliRequests = new Set<string>();
     let wasPinned = false;
+    if(this.cardsOnly)initializeRequestDestinations();
     void onEvent<{ id: string; provider: string;origin?:string;target?:import('../core/session-chat').SessionTarget }>("agent-request", ({ id, provider,origin,target }) => {
+      if(this.cardsOnly){
+        const destination=requestDestinations.add({id,target});
+        if(destination)void presentRequest(destination);
+        else if(!target)void emitToWindow('pet-control','pet-control-request-error',{id,message:'O pedido não identifica uma conversa válida. Consulta as sessões ou o terminal de origem.'});
+        return;
+      }
       if(target?.origin==='external'){
         void emitToWindow('companions','companions-notice',{key:`external-request:${id}`,pet:target.petId,text:'Esta sessão de terminal precisa de uma decisão tua.',urgent:true,origin,view:'floating',session:{id:target.sessionId,backend:target.provider}});
         return;
@@ -160,13 +208,17 @@ export class Island {
       } else { this.reveal(); this.setView("prompt"); }
     });
     void onEvent<{ id: string }>("agent-request-ended", ({ id }) => {
+      if(this.cardsOnly){requestDestinations.end(id);return;}
       cliRequests.delete(id);
       if (!cliRequests.size) this.fsm.pinned = wasPinned;
     });
     this.wireFsm();
     this.wireInput();
+    window.addEventListener('resize',()=>{
+      if(State.mode==='expanded'&&State.view==='overview'&&(this.cardsOnly||State.settings.companionMode))this.animateGeometry(false);
+    });
     this.engine.onDizzy = () => this.handleDizzy();
-    this.greeting.onComplete = () => {
+    if (this.greeting) this.greeting.onComplete = () => {
       this.fsm.greetComplete();
       this.onGreetingDone?.();
     };
@@ -176,10 +228,13 @@ export class Island {
     });
   }
 
+  private get cardsOnly() { return this.presentation?.cardsOnly === true; }
+
   /** The request has its answer: the card goes and the session carries on. */
   private closeApproval() {
     const editor=State.endApproval();
     this.fsm.pinned = false;
+    if(this.cardsOnly&&!editor){this.collapse();return;}
     if(editor&&State.settings.companionMode)this.alert(editor);
     else this.setView(editor??State.defaultView());
   }
@@ -192,7 +247,7 @@ export class Island {
   foldApproval() {
     if (!State.pendingApproval || State.mode !== "expanded") return;
     State.isPinned = true;
-    if (State.settings.companionMode) { this.fsm.pinned = false; this.fsm.forceHidden(); return; }
+    if (this.cardsOnly || State.settings.companionMode || this.desktop.centerSupported) { this.fsm.pinned = false; this.fsm.forceHidden(); return; }
     this.fsm.pinned = true;
     this.fsm.forcePetit();
   }
@@ -247,27 +302,14 @@ export class Island {
       openUrl: (url) => {
         if (url) void Bridge.openUrl(url);
       },
-      decide: (d) => {
-        const req = State.pendingApproval;
-        void Bridge.log(`decide ${d} req=${req?.requestId ?? "none"}`);
-        if (!req) return;
-        Sound.play(d === "deny" ? "blip" : "approve");
-        void Bridge.approvalDecision(req.requestId, d);
-        this.closeApproval();
+      decide: (d,context,interaction) => {
+        void this.answerLegacy(context,()=>Bridge.approvalDecision(context.requestId,d),d,interaction);
       },
-      answer: (answers) => {
-        const req = State.pendingApproval;
-        if (!req) return;
-        Sound.play("approve");
-        void Bridge.approvalAnswer(req.requestId, answers);
-        this.closeApproval();
+      answer: (answers,context) => {
+        void this.answerLegacy(context,()=>Bridge.approvalAnswer(context.requestId,answers),'question');
       },
-      answerInTerminal: () => {
-        const req = State.pendingApproval;
-        if (!req) return;
-        Sound.play("blip");
-        void Bridge.approvalDecline(req.requestId);
-        this.closeApproval();
+      answerInTerminal: (context) => {
+        if(canAnswerApproval(context,State.pendingApproval,this.approvalVisible(context)))void this.handoffApproval(context);
       },
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
@@ -303,15 +345,17 @@ export class Island {
       },
     };
 
-    this.wakeStrip = h("div", { id: "wake-strip" });
+    if (!this.cardsOnly) this.wakeStrip = h("div", { id: "wake-strip" });
     this.botGlow = h("div", { id: "bot-glow" });
     this.botCanvas = h("canvas", { id: "bot-canvas" });
-    this.greetingCanvas = h("canvas", { id: "greeting-canvas" });
-    this.miniGrid = h("div", { id: "mini-grid" });
+    if (!this.cardsOnly) {
+      this.greetingCanvas = h("canvas", { id: "greeting-canvas" });
+      this.miniGrid = h("div", { id: "mini-grid" });
+    }
     this.countdown = h("div", { id: "countdown" });
 
-    this.header = buildHeader(actions);
-    this.views = buildViews(actions, () => this.animateGeometry(false));
+    this.header = this.cardsOnly ? buildPetCardHeader(actions) : buildHeader(actions);
+    this.views = buildViews(actions, () => this.animateGeometry(false), {cardsOnly: this.cardsOnly});
     this.viewsEl = h("div", { id: "views" });
     for (const v of this.views.values()) this.viewsEl.append(v.el);
     this.contentEl = h("div", { id: "content" }, this.header.el, this.viewsEl);
@@ -331,7 +375,7 @@ export class Island {
     this.clipEl = h(
       "div",
       { id: "island-clip" },
-      this.greetingCanvas,
+      ...(this.greetingCanvas ? [this.greetingCanvas] : []),
       this.uploadCanvas.el,
       this.contentEl,
     );
@@ -341,17 +385,21 @@ export class Island {
       this.clipEl,
       this.botGlow,
       this.botCanvas,
-      this.miniGrid,
+      ...(this.miniGrid ? [this.miniGrid] : []),
       this.countdown,
     );
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    this.greetingCanvas.width = Math.round(EXPANDED_W * dpr);
-    this.greetingCanvas.height = Math.round(150 * dpr);
-    this.greetingCanvas.style.width = `${EXPANDED_W}px`;
-    this.greetingCanvas.style.height = "150px";
+    if (this.greetingCanvas) {
+      this.greetingCanvas.width = Math.round(EXPANDED_W * dpr);
+      this.greetingCanvas.height = Math.round(150 * dpr);
+      this.greetingCanvas.style.width = `${EXPANDED_W}px`;
+      this.greetingCanvas.style.height = "150px";
+    }
 
-    this.root.append(this.wakeStrip, this.islandEl);
+    if (this.wakeStrip) this.root.append(this.wakeStrip);
+    this.root.append(this.islandEl);
+    if (this.cardsOnly) this.root.classList.add('pet-cards-runtime');
     this.applyGeometry();
   }
 
@@ -359,6 +407,20 @@ export class Island {
 
   private wireFsm() {
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;
+    if (this.cardsOnly) {
+      // A contextual card has only open and closed states. No compact surface,
+      // greeting, hover wake or fallback presentation is installed in this entry.
+      this.fsm.openOnHover = false;
+      this.fsm.petitToHiddenDelay = 0;
+      this.fsm.onTransition = (_from, to) => {
+        if (to === 'home') {
+          this.expand(State.defaultView());
+          if (!this.wasInIsland&&!(this.fsm instanceof CardLifecycle&&this.fsm.manual)) this.fsm.mouseLeft();
+        } else if (to === 'hidden') this.setMode('hidden');
+        else this.fsm.forceHidden();
+      };
+      return;
+    }
     this.fsm.petitToHiddenDelay = State.settings.companionMode ? 2 : 60;
     this.fsm.openOnHover = State.settings.openOnHover;
     this.fsm.onTransition = (from, to) => {
@@ -369,26 +431,26 @@ export class Island {
           this.setMode("hidden");
           break;
         case "petit":
-          if (State.settings.companionMode && this.desktop.supported) {
+          if (this.desktop.centerSupported || (State.settings.companionMode && this.desktop.supported)) {
             this.fsm.forceHidden();
             return;
           }
-          if (from === "coucou") this.greeting.interrupt();
+          if (from === "coucou") this.greeting?.interrupt();
           else if (from === "hidden" && !this.silentReveal) Sound.play("peek");
           this.setMode("compact");
           if (from === "coucou") State.view = State.defaultView();
-          if (!this.wasInIsland) this.fsm.mouseLeft();
+          if (!this.wasInIsland&&!(this.fsm instanceof CardLifecycle&&this.fsm.manual)) this.fsm.mouseLeft();
           break;
         case "home":
           this.expand(State.defaultView());
-          if (!this.wasInIsland) this.fsm.mouseLeft();
+          if (!this.wasInIsland&&!(this.fsm instanceof CardLifecycle&&this.fsm.manual)) this.fsm.mouseLeft();
           // Hooks may have been installed in a terminal since: the idle cards
           // say so on the next open, without polling while the island is shut.
           void refreshHookPills();
           break;
         case "coucou":
           this.expand("greeting");
-          this.greeting.start();
+          this.greeting?.start();
           break;
       }
       State.notify();
@@ -397,7 +459,17 @@ export class Island {
   }
 
   launch() {
-    if (State.settings.companionMode && this.desktop.supported) {
+    if (this.cardsOnly) {
+      void this.desktop.launch();
+      if (State.mode !== 'expanded') {
+        this.collapsed = true;
+        void Bridge.setCollapsed(true);
+      }
+      return;
+    }
+    if (this.desktop.centerSupported || (State.settings.companionMode && this.desktop.supported)) {
+      // The shared centre owns the top edge even when desktop pets are off.
+      // Keep explicit document/approval cards available without waking a pet.
       this.desktop.launch();
       this.fsm.forceHidden();
       this.collapsed = true;
@@ -407,7 +479,7 @@ export class Island {
     }
   }
 
-  openFromDesktop(id?: string, view?: string) {
+  openFromDesktop(id?: string, view?: string, manual=false) {
     if (id) State.setFocus(id);
     // A companion's completed ingestion enters the real document actions.
     // The hover canvas belongs only to the still-active native drag.
@@ -419,7 +491,8 @@ export class Island {
     const request = State.pendingApproval;
     const decision=request?.pillId===State.focusId&&(!view||['overview','approval','question'].includes(view));
     const target = decision?(request.questions?'question':'approval'):view && view in VIEW_LAYOUTS ? view as IslandViewName : id && request?.pillId !== id ? "overview" : State.defaultView();
-    this.alert(target, true);
+    this.manualOpening=manual;
+    try{this.alert(target, true);}finally{this.manualOpening=false;}
   }
 
   // ── Mode / view ─────────────────────────────────────────────────────────────
@@ -460,36 +533,44 @@ export class Island {
   }
 
   expand(view: IslandViewName) {
-    if (view === "prompt" && State.settings.companionMode && !providerForPill(State.focusId ?? undefined)) view = "overview";
+    if (this.cardsOnly && view === 'settings') { void Bridge.openSettingsWindow(); return; }
+    if (view === "prompt" && (State.settings.companionMode || this.cardsOnly) && !providerForPill(State.focusId ?? undefined)) view = "overview";
     this.stopSequenceIfLeaving(view);
     if (view !== "overview") closePlanCard();
     State.view = view;
     if (State.mode !== "expanded") this.setMode("expanded");
     else this.animateGeometry(false);
+    this.views?.get(view)?.sync();
     State.lastActivity = performance.now();
     State.notify();
   }
 
   setView(view: IslandViewName) {
-    if (view === "prompt" && State.settings.companionMode && !providerForPill(State.focusId ?? undefined)) view = "overview";
+    if((view==='approval'||view==='question')&&State.pendingApproval?.pillId===State.focusId){void this.presentApproval(approvalContext(State.pendingApproval,view));return;}
+    this.approvalEpoch++;
+    if (this.cardsOnly && view === 'settings') { void Bridge.openSettingsWindow(); return; }
+    if (view === "prompt" && (State.settings.companionMode || this.cardsOnly) && !providerForPill(State.focusId ?? undefined)) view = "overview";
     this.stopSequenceIfLeaving(view);
     if (view !== "overview") closePlanCard();
     if (State.mode !== "expanded") {
       this.fsm.forceHome();
       State.view = view;
+      this.views?.get(view)?.sync();
       this.animateGeometry(false);
       State.notify();
       return;
     }
     const grew = VIEW_LAYOUTS[view].height >= VIEW_LAYOUTS[State.view].height;
     State.view = view;
+    this.views?.get(view)?.sync();
     State.lastActivity = performance.now();
     this.animateGeometry(!grew);
     State.notify();
   }
 
   collapse() {
-    if (State.settings.companionMode) { this.fsm.pinned = false; this.fsm.forceHidden(); return; }
+    this.approvalEpoch++;
+    if (this.cardsOnly || State.settings.companionMode || this.desktop.centerSupported) { this.fsm.pinned = false; this.fsm.forceHidden(); return; }
     // A waiting card is only ever folded, never dropped by a close.
     if (State.pendingApproval) {
       this.foldApproval();
@@ -505,26 +586,107 @@ export class Island {
 
   /** Alert from the hook server: open on this view. Pinned alerts never auto-close. */
   alert(view: IslandViewName, anchored = false) {
+    if (this.cardsOnly && view === 'settings') { void Bridge.openSettingsWindow(); return; }
+    if((view==='approval'||view==='question')&&State.pendingApproval?.pillId===State.focusId){
+      void this.presentApproval(approvalContext(State.pendingApproval,view));return;
+    }
+    this.approvalEpoch++;
     if (this.desktop.companionsActive && !anchored) {
       void emitToWindow("companions", "companions-present", { id: State.focusId, view });
       return;
     }
+    this.renderAlert(view);
+  }
+
+  private renderAlert(view:IslandViewName){
+    if(this.fsm instanceof CardLifecycle)this.fsm.setManual(this.manualOpening,this.cardPetPointer.get(State.focusId??'')?.inside??false,this.wasInIsland||this.pointerInside===true);
     this.fsm.pinned = State.isPinned;
     this.fsm.forceHome();
     this.expand(view);
+    if(this.fsm instanceof CardLifecycle&&this.fsm.manual&&this.cardPetPointer.get(State.focusId??'')?.inside===false&&!this.wasInIsland&&this.pointerInside!==true)this.fsm.mouseLeft();
     // forceHome also cancels timers when another card is already open. In
     // that case there is no FSM transition to restart the leave countdown.
-    if (!this.wasInIsland) this.fsm.mouseLeft();
+    if (!this.wasInIsland&&!(this.fsm instanceof CardLifecycle&&this.fsm.manual)) this.fsm.mouseLeft();
+  }
+
+  private approvalVisible(context:ApprovalContext):boolean{
+    if(document.hidden||!sameApproval(context,State.pendingApproval)||State.mode!=='expanded'||State.view!==context.view||State.focusId!==context.petId)return false;
+    const view=this.views.get(context.view)?.el;
+    if(!view?.isConnected||!view.classList.contains('on'))return false;
+    const clip=this.islandEl.getBoundingClientRect();
+    const controls=Array.from(view.querySelectorAll<HTMLElement>('.actions button'));
+    const description=view.querySelector<HTMLElement>('.code,.question-text');
+    if(!description||!controls.length)return false;
+    return [description,...controls].every(node=>{
+      const r=node.getBoundingClientRect(),style=getComputedStyle(node);
+      return style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity)>.05&&r.width>0&&r.height>0&&r.left>=Math.max(0,clip.left)-1&&r.right<=Math.min(innerWidth,clip.right)+1&&r.top>=Math.max(0,clip.top)-1&&r.bottom<=Math.min(innerHeight,clip.bottom)+1;
+    });
+  }
+
+  presentApproval(context:ApprovalContext):Promise<boolean>{
+    const opening=this.approvalOpening;
+    if(opening&&opening.generation===this.approvalEpoch&&opening.context.requestId===context.requestId&&opening.context.sessionId===context.sessionId&&opening.context.petId===context.petId&&opening.context.view===context.view)return opening.promise;
+    if(canAnswerApproval(context,State.pendingApproval,this.approvalVisible(context)))return Promise.resolve(true);
+    if(sameApproval(context,State.pendingApproval))State.pendingApproval!.presentationReady=false;
+    const record={context,generation:++this.approvalEpoch,promise:Promise.resolve(false)};
+    this.approvalOpening=record;
+    this.approvalLatest={context,generation:record.generation};
+    const current=(scope:ApprovalContext)=>this.approvalEpoch===record.generation&&sameApproval(scope,State.pendingApproval);
+    const visible=(scope:ApprovalContext)=>current(scope)&&this.approvalVisible(scope);
+    const paint=()=>Promise.race([new Promise<void>(resolve=>requestAnimationFrame(()=>resolve())),new Promise<void>(resolve=>window.setTimeout(resolve,40))]);
+    record.promise=Promise.resolve().then(()=>presentApproval(context,{
+      current,visible,
+      prepare:async scope=>{
+        if(!current(scope))return false;
+        this.renderAlert(scope.view);
+        const until=performance.now()+450;
+        while(!visible(scope)&&performance.now()<until){
+          if(!current(scope)||State.mode!=='expanded'||State.view!==scope.view)return false;
+          this.frames.wake();await paint();
+        }
+        if(!visible(scope))return false;
+        if(await Bridge.prepareApprovalSurface(this.islandRect(),()=>visible(scope))!==true)return false;
+        if(!visible(scope))return false;
+        await paint();return visible(scope);
+      },
+      acknowledge:scope=>Bridge.approvalPresented(scope),
+      ready:scope=>{if(current(scope)){State.pendingApproval!.presentationReady=true;State.notify();}},
+      handoff:scope=>{
+        const newer=this.approvalLatest;
+        if(newer&&newer.generation>record.generation&&newer.context.requestId===scope.requestId&&newer.context.sessionId===scope.sessionId&&newer.context.petId===scope.petId)return;
+        return this.handoffApproval(scope);
+      },
+    })).finally(()=>{if(this.approvalOpening===record)this.approvalOpening=null;});
+    return record.promise;
+  }
+
+  private async handoffApproval(context:ApprovalContext){
+    try{await Bridge.approvalHandoff(context.requestId);}
+    catch(error){console.error('Não foi possível confirmar a entrega do pedido ao terminal.',error);}
+    handoffPendingApproval(this,{requestId:context.requestId,sessionId:context.sessionId,reason:'presentation-unavailable'});
+  }
+
+  private async answerLegacy(context:ApprovalContext,send:()=>Promise<boolean>,kind:'allow'|'deny'|'question',interaction?:{trusted:boolean;detail:number}){
+    const req=State.pendingApproval;
+    if(!req||req.answering||!canAnswerApproval(context,req,this.approvalVisible(context)))return;
+    req.answering=true;req.feedback='';State.notify();
+    void Bridge.log(`decide ${kind} req=${context.requestId} trusted=${interaction?.trusted??false} detail=${interaction?.detail??0}`);
+    try{
+      const accepted=await send();if(!sameApproval(context,State.pendingApproval))return;
+      if(accepted===true){Sound.play(kind==='deny'?'blip':'approve');this.closeApproval();}
+      else req.feedback='Não foi possível confirmar esta resposta. O pedido mantém-se por resolver.';
+    }catch(error){if(sameApproval(context,State.pendingApproval))req.feedback=String(error).replace(/^Error:\s*/,'');}
+    finally{if(sameApproval(context,State.pendingApproval)){req.answering=false;State.notify();}}
   }
 
   reveal() {
-    if (State.settings.companionMode) return;
+    if (this.cardsOnly || State.settings.companionMode || this.desktop.centerSupported) return;
     this.fsm.reveal();
   }
 
   /** Music started playing: the compact island, without the peek sound (musicReveal). */
   revealSilently() {
-    if (State.settings.companionMode) return;
+    if (this.cardsOnly || State.settings.companionMode || this.desktop.centerSupported) return;
     this.silentReveal = true;
     this.fsm.reveal();
     this.silentReveal = false;
@@ -565,7 +727,7 @@ export class Island {
   dropPin() {
     this.fsm.pinned = false;
     // The countdown the pin held back starts now, if the mouse is elsewhere.
-    if (!this.wasInIsland) this.fsm.mouseLeft();
+    if (!this.wasInIsland&&!(this.fsm instanceof CardLifecycle&&this.fsm.manual)) this.fsm.mouseLeft();
   }
 
   // ── Keyboard shortcuts (island/shortcuts.ts) ────────────────────────────────
@@ -641,18 +803,18 @@ export class Island {
         UploadSeq.enterZone(State.mouseInIsland.x, State.mouseInIsland.y);
         // This surface already owns the drag. Re-presenting it through the
         // habitat moves the native destination out from under the pointer.
-        this.alert("upload",true);
+        this.manualOpening=this.cardsOnly;
+        try{this.alert("upload",true);}finally{this.manualOpening=false;}
         break;
       }
       case "leave": {
         if (!State.fileDragOver) return;
         State.fileDragOver = false;
         this.engine.animateMorph(0);
-        // The island deliberately stays open: the drag session is still alive.
         UploadSeq.exitZone();
-        // Keep the expanded destination stable until the next user action;
-        // crossing the pet/card boundary can emit leave before enter.
         State.notify();
+        // A same-turn enter/drop can take the hold before the manual close runs.
+        if(this.fsm instanceof CardLifecycle)this.fsm.refreshHold();
         break;
       }
       case "drop": {
@@ -680,6 +842,7 @@ export class Island {
   private providerDropTokens=new Map<string,string>();
   private async swallow(path: string,dropId?:string,owner:{provider:string;conversationId:string|undefined;pet:string|null}|null=null) {
     const sequence=++this.dropSequence,provider=owner?.provider??State.chatProvider;
+    this.cardIngesting++;
     this.providerDrops.set(provider,sequence);
     if(dropId)this.providerDropTokens.set(provider,dropId);
     try {
@@ -701,7 +864,7 @@ export class Island {
       if(pet && State.settings.companionMode)void emitToWindow("companions","companions-notice",{key:`file:${sequence}`,pet,text:message,urgent:false,view:"prompt"});
       if(sequence!==this.dropSequence || provider!==State.chatProvider || State.pendingApproval?.pillId===State.focusId)return;
       UploadSeq.deactivate();this.engine.animateMorph(0);this.setView("prompt");Sound.play("error");
-    }
+    } finally {this.cardIngesting--;if(this.fsm instanceof CardLifecycle)this.fsm.refreshHold();}
   }
 
   /** "Cancel" on the dropped file: forget it, so the chat does not pick it up. */
@@ -749,12 +912,17 @@ export class Island {
   private targetSize(): { w: number; h: number; r: number } {
     let { w, h } = islandSize(State.mode, State.view, State.chatHistory.length);
     if (State.mode === "expanded" && State.view === "overview") {
-      if (State.settings.companionMode) { w = 640; h = 296; }
-      if (State.focusId === "integration_spotify") h = 300;
+      if (State.settings.companionMode || this.cardsOnly) {
+        const viewport=Number.isFinite(window.innerHeight)&&window.innerHeight>0?window.innerHeight:PANEL_H;
+        w = 640; h = Math.min(520,Math.max(1,viewport-24));
+      }
+      if (State.focusId === "integration_spotify") {const viewport=Number.isFinite(window.innerHeight)&&window.innerHeight>0?window.innerHeight:560;h=Math.min(520,Math.max(1,viewport-24));}
     }
     if (State.mode === "expanded" && State.view === "question" && State.pendingApproval?.questions) {
       h = QUESTION_PICKER_H;
     }
+    if (this.cardsOnly && State.mode === 'expanded' && State.view === 'mail') h = 320;
+    if(State.mode==='expanded'&&State.view==='prompt'&&this.views.get('prompt')?.el.querySelector('.task-notice:not([hidden])'))h=Math.max(h,316);
     if(State.mode==='expanded'&&State.view==='upload'&&this.dragHeight!==null)h=Math.max(h,this.dragHeight);
     const r = State.mode === "expanded" ? EXPANDED_CORNER : ROUNDED_CORNER;
     return { w, h, r };
@@ -778,17 +946,19 @@ export class Island {
     const w = this.width.value;
     const hh = this.height.value;
     const r = this.radius.value;
-    this.islandEl.classList.toggle("companion-card", State.settings.companionMode);
-    this.islandEl.classList.toggle('companion-overview',State.settings.companionMode&&State.view==='overview');
+    this.islandEl.classList.toggle("companion-card", State.settings.companionMode || this.cardsOnly);
+    this.islandEl.classList.toggle('companion-overview',(State.settings.companionMode || this.cardsOnly)&&State.view==='overview');
     this.islandEl.style.width = `${w}px`;
     this.islandEl.style.height = `${hh}px`;
-    this.islandEl.style.borderRadius = State.settings.companionMode ? `${r}px` : `0 0 ${r}px ${r}px`;
+    this.islandEl.style.borderRadius = State.settings.companionMode || this.cardsOnly ? `${r}px` : `0 0 ${r}px ${r}px`;
     this.islandEl.style.transform = `translateX(-50%)`;
     // These follow the island as it resizes, so they belong here rather than in
     // the state-driven DOM sync.
-    this.miniGrid.style.left = `${w - 40 - 22.5}px`;
-    this.miniGrid.style.top = `${hh / 2 - 14.5}px`;
-    this.greetingCanvas.style.left = `${(w - EXPANDED_W) / 2}px`;
+    if (this.miniGrid) {
+      this.miniGrid.style.left = `${w - 40 - 22.5}px`;
+      this.miniGrid.style.top = `${hh / 2 - 14.5}px`;
+    }
+    if (this.greetingCanvas) this.greetingCanvas.style.left = `${(w - EXPANDED_W) / 2}px`;
     this.uploadCanvas.el.style.left = `${(w - EXPANDED_W) / 2}px`;
 
     const viewportW = window.innerWidth > 0 ? window.innerWidth : PANEL_W;
@@ -835,9 +1005,10 @@ export class Island {
   // ── Input ───────────────────────────────────────────────────────────────────
 
   private wireInput() {
+    if (this.cardsOnly) { this.wireCardInput(); return; }
     // The wake strip is the only thing the OS can hit while the island is hidden.
-    this.wakeStrip.addEventListener("mouseenter", () => {
-      if (this.desktop.companionsActive) return;
+    this.wakeStrip?.addEventListener("mouseenter", () => {
+      if (this.desktop.companionsActive || this.desktop.centerSupported) return;
       Sound.resume();
       if (State.mode === "hidden") this.fsm.mouseEntered();
     });
@@ -914,6 +1085,26 @@ export class Island {
     if (!IS_TAURI) this.followPageCursor();
   }
 
+  private wireCardInput() {
+    this.islandEl.addEventListener('pointerdown', event => {
+      State.lastActivity = performance.now();
+      const target=event.target as Element|null,label=target?.closest('label') as HTMLLabelElement|null;
+      const control=target?.closest('button,input,textarea,select,a,[role="button"]')??label?.control;
+      if(this.fsm instanceof CardLifecycle&&control&&!control.matches(':disabled,[aria-disabled="true"]')&&!this.cardHasDecision())this.fsm.setManual(true,this.cardPetPointer.get(State.focusId??'')?.inside??false,true);
+      this.fsm.userInteracted();
+    });
+    this.islandEl.addEventListener('input',()=>{State.lastActivity=performance.now();});
+    window.addEventListener('keydown', e => {
+      if (e.defaultPrevented) return;
+      if (e.key === 'Escape' && State.mode === 'expanded') {
+        if (State.pendingApproval) this.foldApproval(); else this.collapse();
+      }
+    });
+    void onDragDrop(e => { if (State.mode === 'expanded') this.onDragDrop(e); });
+    // Cursor tracking is local to an explicitly opened card. It cannot reveal it.
+    this.followPageCursor();
+  }
+
   /**
    * Takes the cursor from the page's own mouse events instead of Rust's poll.
    * Used where the OS has no global cursor position (Wayland): the events only
@@ -935,11 +1126,13 @@ export class Island {
 
   setPointerInside(inside: boolean) {
     this.pointerInside = inside;
+    if(this.cardsOnly&&State.mode==='expanded'){if(inside)this.fsm.mouseEntered();else this.fsm.mouseLeft();}
   }
 
   /** Cursor in window-logical coordinates. */
   onCursor(x: number, y: number) {
-    if (this.desktop.companionsActive && State.mode === "hidden") { this.wasInIsland = false; return; }
+    if (this.cardsOnly && State.mode !== 'expanded') { this.wasInIsland = false; return; }
+    if ((this.desktop.companionsActive || this.desktop.centerSupported) && State.mode === "hidden") { this.wasInIsland = false; return; }
     // WebKitGTK can deliver a mousemove after the pointer has left the layer
     // surface; trusting it re-enters the island and the auto-close never runs.
     if (this.pointerInside === false) {
@@ -966,7 +1159,7 @@ export class Island {
     const wasIn = this.wasInIsland;
     this.wasInIsland = inIsland;
     if (inIsland && !wasIn) {
-      if (this.fsm.state === "coucou") this.greeting.hover();
+      if (this.fsm.state === "coucou") this.greeting?.hover();
       this.fsm.mouseEntered();
     }
     if (!inIsland && wasIn) {
@@ -1076,7 +1269,7 @@ export class Island {
     this.botSize.step(dt);
 
     const greetingActive = State.mode === "expanded" && State.view === "greeting";
-    if (greetingActive) {
+    if (greetingActive && this.greetingCanvas && this.greeting) {
       const gctx = this.greetingCanvas.getContext("2d");
       if (gctx) {
         const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -1241,9 +1434,17 @@ export class Island {
   // ── DOM sync ────────────────────────────────────────────────────────────────
 
   private syncDom() {
-    if((State.view==='approval'||State.view==='question')&&!State.pendingApproval){this.setView(State.defaultView());return;}
+    if((State.view==='approval'||State.view==='question')&&!State.pendingApproval){
+      // Ending a request can fold the card before its next frame. A normal
+      // setView would force it open again, displaying an unrelated overview.
+      if(this.cardsOnly){State.view=State.defaultView();this.collapse();}
+      else this.setView(State.defaultView());
+      return;
+    }
     const expanded = State.mode === "expanded";
     const greetingActive = expanded && State.view === "greeting";
+    // The dashboard owns its avatar; the floating bot would cover its metrics.
+    this.botCanvas.hidden=this.botGlow.hidden=this.cardsOnly&&State.view==='overview';
 
     const live = expanded && !greetingActive;
     this.contentEl.style.opacity = live ? "1" : "0";
@@ -1251,10 +1452,10 @@ export class Island {
     // underneath, so only the header may keep taking clicks up here.
     this.contentEl.style.pointerEvents = live && !this.uploadActive ? "auto" : "none";
     this.header.el.style.pointerEvents = live ? "auto" : "none";
-    this.greetingCanvas.style.display = greetingActive ? "block" : "none";
+    if (this.greetingCanvas) this.greetingCanvas.style.display = greetingActive ? "block" : "none";
 
     // Leaving the greeting, however it ends, lets its sound fade out.
-    if (this.greetingShown && !greetingActive) this.greeting.leave();
+    if (this.greetingShown && !greetingActive) this.greeting?.leave();
     this.greetingShown = greetingActive;
     // A wardrobe try-on never outlives the wardrobe.
     if (State.wardrobePreview && !(expanded && State.view === "wardrobe")) State.wardrobePreview = null;
@@ -1281,8 +1482,8 @@ export class Island {
 
     // Compact mini grid
     const showGrid = State.mode === "compact";
-    this.miniGrid.style.opacity = showGrid ? "1" : "0";
-    if (showGrid) {
+    if (this.miniGrid) this.miniGrid.style.opacity = showGrid ? "1" : "0";
+    if (showGrid && this.miniGrid) {
       const others = State.otherTasks.slice(0, 6);
       const key = others.map((t) => t.id).join("|");
       if (this.miniGrid.dataset.key !== key) {
@@ -1304,8 +1505,8 @@ export class Island {
     Sound.setEnabled(State.settings.soundEnabled);
     Sound.setVolume(State.settings.soundVolume);
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;
-    this.fsm.petitToHiddenDelay = State.settings.companionMode ? 2 : 60;
-    this.fsm.openOnHover = State.settings.openOnHover;
+    this.fsm.petitToHiddenDelay = this.cardsOnly ? 0 : State.settings.companionMode ? 2 : 60;
+    this.fsm.openOnHover = !this.cardsOnly && State.settings.openOnHover;
     State.notify();
   }
 

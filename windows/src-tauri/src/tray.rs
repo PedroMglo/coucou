@@ -39,8 +39,17 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app: &AppHandle, event| match event.id.as_ref() {
             "quit" => app.exit(0),
             "settings" => crate::show_settings_window(app),
-            // The Coucou window: dictation, notes and every setting.
-            "open" => crate::show_hub(app, None),
+            "open" => {
+                #[cfg(target_os="linux")]{
+                    let app=app.clone();
+                    tauri::async_runtime::spawn(async move{
+                        if let Err(error)=crate::pet_control::open_section(app,None,Some("home".into())).await{
+                            crate::log::line(error);
+                        }
+                    });
+                }
+                #[cfg(not(target_os="linux"))]crate::show_hub(app,None);
+            },
             id => {
                 let _ = app.emit_to(WINDOW_LABEL, "tray", id.to_string());
             }

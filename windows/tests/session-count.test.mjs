@@ -1,0 +1,5 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';
+import {knownSessionCount,sessionCountLabel,compactSessionCount} from '../src/core/session-count.ts';
+test('missing, malformed and impossible catalogue counts remain unknown',()=>{for(const n of [undefined,null,'0',-1,.5,NaN,Infinity,Number.MAX_SAFE_INTEGER+1]){assert.equal(knownSessionCount(n),undefined);assert.equal(compactSessionCount(n),'Sessões · —');assert.equal(sessionCountLabel(n),'Contagem de sessões não disponível');}});
+test('explicit zero is known and differs from a missing measurement',()=>{assert.equal(knownSessionCount(0),0);assert.equal(compactSessionCount(0),'0 sessões');assert.equal(sessionCountLabel(0),'0 sessões conhecidas');});
+test('known counts describe records without claiming running jobs',()=>{assert.equal(compactSessionCount(1),'1 sessão');assert.equal(sessionCountLabel(1),'1 sessão conhecida');assert.equal(sessionCountLabel(4),'4 sessões conhecidas');assert.doesNotMatch(sessionCountLabel(4),/ativa|execução|trabalhar/);});

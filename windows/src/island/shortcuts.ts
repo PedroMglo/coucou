@@ -52,6 +52,11 @@ function focusPill(host: ShortcutHost, id: string | null, open: boolean) {
 export function runGlobalShortcut(host: ShortcutHost, action: string, resume: () => void) {
   switch (action) {
     case "toggleIsland":
+      if (State.petCardsOnly) {
+        resume();
+        void Bridge.petPanelOpen(360,50,undefined,'home');
+        break;
+      }
       if (State.mode === "expanded") {
         host.collapse();
       } else {
@@ -66,7 +71,7 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
       resume();
       {
         const provider = providerForPill(State.focusTask?.id);
-        if (provider) {
+        if (provider && !State.petCardsOnly) {
           State.settings = { ...State.settings, chatProvider: provider };
           void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
         }

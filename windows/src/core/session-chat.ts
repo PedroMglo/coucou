@@ -12,8 +12,9 @@ export interface SessionMessage {id:string;role:'user'|'assistant';content:strin
 export interface SessionAttachment {name:string;path:string;kind?:'file'|'folder';provider?:string;conversationId?:string;sequence?:number}
 export interface SessionSnapshot {
   target:SessionTarget;messages:SessionMessage[];busy:boolean;turn?:string;
-  capabilities:SessionCapabilities;notice?:string;model?:string;
+  capabilities:SessionCapabilities;notice?:string;taskNotice?:import('./task-notice').TaskNotice;requestHistory?:import('./request-history').RequestRecord[];model?:string;
   attachment?:SessionAttachment|null;
+  localExecution?:import('./local-capabilities').LocalExecutionCapability;
 }
 export interface SessionSummary {
   target:SessionTarget;title:string;cwd:string;updatedAt:number;state:string;

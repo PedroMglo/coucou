@@ -146,6 +146,7 @@ export function buildMail(actions:ViewActions):ViewHost{
   let message='';try{message=await Bridge.petMailDraft(provider,file.path,to.value,subject.value,body.value);}catch(error){message=String(error).replace(/^Error:\s*/,'');}finally{busy.delete(provider);const draft=drafts.get(provider);if(draft)draft.status=message;if(owner===provider){status.textContent=message;send.disabled=false;}}
  }});
  function keep(){if(owner)drafts.set(owner,{to:to.value,subject:subject.value,body:body.value,status:status.textContent??''});}
+ for(const field of [to,subject,body])field.addEventListener('input',keep);
  const el=h('div',{class:'view'},h('div',{class:'card'},h('div',{class:'pet-mail-form'},attachment,to,subject,body,status,h('div',{class:'actions'},send,h('button',{class:'btn secondary',text:'Voltar',onclick:()=>actions.setView('choose')})))));
  return{el,focus:()=>subject.focus(),sync(){
   // Hidden views are synced as well. An unrelated approval must not replace

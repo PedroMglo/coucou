@@ -62,6 +62,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         island: resolve(__dirname, "index.html"),
+        petCards: resolve(__dirname, "pet-cards.html"),
         settings: resolve(__dirname, "settings.html"),
         mochi: resolve(__dirname, "mochi.html"),
         companions: resolve(__dirname, "companions.html"),

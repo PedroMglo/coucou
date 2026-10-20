@@ -13,12 +13,14 @@ pub struct Task {
     #[serde(default)] pub resumed_by:Option<String>,
     #[serde(default)] pub conversation_id:Option<String>,
     #[serde(default)] pub session_id:Option<String>,
+    #[serde(default,skip_serializing_if="Vec::is_empty")]pub local_execution:Vec<crate::local_tasks::types::StepReceipt>,
+    #[serde(default,skip_serializing_if="Option::is_none")]pub local_reasoning_effort:Option<String>,
 }
 fn now()->u64 {std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64}
 impl Task {
     pub fn new(provider:&str,query:&str,cwd:&str,backend:&str,model:&str,epoch:u64)->Self {
         let stamp=now();let nonce=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-        Self{id:format!("{nonce:x}-{epoch:x}"),provider:provider.into(),backend:backend.into(),model:model.into(),query:query.into(),cwd:cwd.into(),phase:"thinking".into(),progress:String::new(),result:String::new(),started:stamp,updated:stamp,finished:None,resumes:None,resumed_by:None,conversation_id:None,session_id:None}
+        Self{id:format!("{nonce:x}-{epoch:x}"),provider:provider.into(),backend:backend.into(),model:model.into(),query:query.into(),cwd:cwd.into(),phase:"thinking".into(),progress:String::new(),result:String::new(),started:stamp,updated:stamp,finished:None,resumes:None,resumed_by:None,conversation_id:None,session_id:None,local_execution:Vec::new(),local_reasoning_effort:None}
     }
     pub fn terminal(&self)->bool {matches!(self.phase.as_str(),"done"|"failed"|"stopped"|"interrupted"|"resumed")}
     pub fn update(&mut self,phase:&str,message:&str) {
@@ -28,18 +30,23 @@ impl Task {
         if self.terminal() {self.finished=Some(self.updated);}
     }
     pub fn recover(&mut self) {
+        for receipt in &mut self.local_execution{receipt.recover();}
         if !self.terminal() {
             self.phase="interrupted".into();self.finished=None;
             self.progress="A aplicação reiniciou. O estado real da execução precisa de ser verificado antes de continuar.".into();
         }
     }
     pub fn bound(&mut self) {
+        self.local_execution.truncate(crate::local_tasks::types::MAX_CALLS);
+        self.local_execution.retain(|r|r.valid());
+        if self.backend!="ollama"{self.local_execution.clear();self.local_reasoning_effort=None;}
         for (value,max) in [(&mut self.id,128),(&mut self.provider,32),(&mut self.backend,32),(&mut self.model,256),(&mut self.cwd,4096),(&mut self.query,4000),(&mut self.progress,1000),(&mut self.result,8000)] {*value=value.chars().take(max).collect();}
         for value in [&mut self.resumes,&mut self.resumed_by,&mut self.conversation_id,&mut self.session_id] {if let Some(text)=value {*text=text.chars().take(512).collect();}}
         if !matches!(self.phase.as_str(),"thinking"|"working"|"searching"|"message"|"approval"|"question"|"stopping"|"done"|"failed"|"stopped"|"interrupted"|"resumed") {self.phase="interrupted".into();}
     }
     pub fn valid(&self)->bool {
-        match self.backend.as_str() {"copilot"=>self.provider=="copilot","codex"=>self.provider=="codex" || crate::pet_config::service(&self.provider),"antigravity"=>matches!(self.provider.as_str(),"antigravity"|"gemini-cli"|"claude-cli"),_=>false}
+        if self.backend=="ollama"&&self.local_reasoning_effort.as_ref().is_some_and(|s|s.is_empty()||s.len()>64||s.chars().any(char::is_control)){return false;}
+        match self.backend.as_str() {"ollama"=>self.provider=="ollama"&&self.session_id.is_none()&&self.conversation_id.as_deref().is_some_and(crate::assistant_memory::valid_id),"copilot"=>self.provider=="copilot","codex"=>self.provider=="codex" || crate::pet_config::service(&self.provider),"antigravity"=>matches!(self.provider.as_str(),"antigravity"|"gemini-cli"|"claude-cli"),_=>false}
     }
     pub fn resume_prompt(&self)->Result<String,String> {
         if !self.valid() || !matches!(self.phase.as_str(),"interrupted"|"stopped"|"failed") {return Err("Esta tarefa não está disponível para retomar.".into());}
@@ -81,10 +88,18 @@ pub async fn assistant_resume_task(app:AppHandle,id:String,cwd:Option<String>)->
         let before=chat.tasks().into_iter().find(|t|t.id==id).ok_or("A tarefa já não está no histórico local.")?;
         // Invalid folders must not switch the user's conversation or retire a task.
         let settings=resume_settings(&before,&source,cwd)?;
+        let local_policy=if before.backend=="ollama"{
+            let policy=crate::pet_config::read()?.local_execution();
+            if !cfg!(target_os="linux")||policy.mode!=crate::pet_config::LocalExecutionMode::Ask{return Err("Ativa os pedidos de aprovação de execução local antes de retomar esta tarefa Ollama.".into());}Some(policy)
+        }else{None};
         let(task,reservation,changed)=chat.reserve_task_resume(&id)?;
         let query=task.resume_prompt()?;
         if changed{crate::pet_documents::invalidate(&app,Some(&task.provider));let _=app.emit("assistant-history-changed",&task.provider);}
         let reservation=reservation.broadcast(&app,&query);let channel=reservation.channel();
+        if let Some(policy)=local_policy{
+            let server=crate::local_chat::server(&settings,"ollama").ok_or("O servidor Ollama não está configurado.")?;
+            return tauri::async_runtime::block_on(crate::local_tasks::respond(&app,&channel,&settings,&server,&task.model,None,query,None,policy,Some(&task)));
+        }
         crate::cli_chat::run(&app,&channel,&settings,&task.backend,&task.provider,&task.model,&query,None,false,&crate::voice::brain::tools(),None,Some(&task.id),|_|{}).map(|(text,_)|ChatReply{text})
     }).await.map_err(|_|"O assistente parou inesperadamente.".to_string())?
 }

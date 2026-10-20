@@ -1,3 +1,7 @@
+import {scopedSessionSummary,type ScopedSessionSummary} from '../core/scoped-session-summary';
+import {petObservation} from '../core/pet-observability';
+import {PetObservability,observePetObservability} from '../core/pet-observability-resource';
+import {PetPreferences} from '../mochi/pet-preferences';
 import { providerForPill } from "../core/providers";
 import {sessionLabel} from '../core/pet-sessions';
 // Island views — DOM ports of IslandViewContent.swift. Paddings, font sizes,
@@ -23,11 +27,13 @@ import { lastTextStep } from "../core/diff";
 import { Bridge } from "../core/bridge";
 import { buildRecap } from "./recap";
 import { buildWardrobe } from "./wardrobe";
-import { buildSpotifyCard, buildSpotifyPill, type SpotifyPillHost } from "./spotify";
+import { buildSpotifyPill, type SpotifyPillHost } from "./spotify";
+import {buildSpotyCard} from "./spoty-audio";
 import { SPOTIFY_ID } from "../core/spotify";
 import type { Outfit, OutfitSelection } from "../mochi/wardrobe";
 import { language, t, tl, type Msg } from "../i18n/i18n";
 import type { ViewCommand } from "../island/shortcuts";
+import {approvalContext,canAnswerApproval,type ApprovalContext} from '../core/approval-presentation';
 import {buildPetOverview} from './pet-overview';
 
 export interface ViewActions {
@@ -42,11 +48,11 @@ export interface ViewActions {
   /** The ↗ button: opens whatever the focused pill points at. */
   openTarget(): void;
   openUrl(url: string): void;
-  decide(d: "allow" | "deny"): void;
+  decide(d: "allow" | "deny",context:ApprovalContext,interaction?:{trusted:boolean;detail:number}): void;
   /** Answers the question Claude Code asked: question text → chosen label. */
-  answer(answers: Record<string, string | string[]>): void;
+  answer(answers: Record<string, string | string[]>,context:ApprovalContext): void;
   /** Hands the pending request back to the terminal. */
-  answerInTerminal(): void;
+  answerInTerminal(context:ApprovalContext): void;
   toggleSound(): void;
   setVolume(v: number): void;
   setAutoClose(seconds: number): void;
@@ -118,7 +124,9 @@ function stack(padLeft: number, padRight: number, ...children: Node[]): HTMLElem
 
 // ── Header ────────────────────────────────────────────────────────────────────
 
-export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse'|'toggleSound'>,sessionCount?:(pet:string)=>number): ViewHost {
+export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse'|'toggleSound'>,sessionInfo?:(pet:string)=>ScopedSessionSummary): ViewHost {
+  let sessionOwner='',sessionEpoch=0,sessionPending=false,sessionError='';
+  const infoFor=(pet:string)=>sessionInfo?.(pet)??scopedSessionSummary(petObservation(PetObservability.snapshot,pet),!!PetObservability.error,PetPreferences.config?.pets[pet]?.provider);
   const tabHome = h("button", { class: "tab", title: tl("Overview"), onclick: () => go("overview") }, svg(ICONS.house, 13));
   const tabChat = h("button", { class: "tab", title: tl("Ask"), onclick: () => go("prompt") }, svg(ICONS.bubble, 13));
   const tabDrop = h("button", { class: "tab", title: tl("Drop"), onclick: () => go("upload") }, svg(ICONS.plus, 13));
@@ -135,11 +143,30 @@ export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse
   const claudePill = buildPlanPill(false);
   const codexPill = buildPlanPill(true);
   const companionName = h("span", { class: "companion-owner" });
-  const sessionsButton=h('button',{class:'session-picker',title:'Consultar e escolher sessões deste pet',onclick:()=>{
-    void Bridge.petPanelOpen(360,50,State.focusId??undefined,'sessions');
-  }});
+  const sessionsButton=h('button',{class:'session-picker',title:'Consultar e escolher sessões deste pet',onclick:()=>void openSessions()});
   const planPills = h("div", { class: "plan-pills" }, claudePill.el, codexPill.el);
   let codexShown = false;
+
+  function syncSessionControl(){
+    const task=State.focusTask,owner=task?.id??'';
+    if(owner!==sessionOwner){sessionOwner=owner;sessionEpoch++;sessionPending=false;sessionError='';}
+    const info=task?infoFor(task.id):undefined;
+    sessionsButton.hidden=!task||(!providerForPill(task.id)&&!['workspace','agent','ai'].includes(pillDefinition(task.id)?.category??''));
+    sessionsButton.disabled=sessionPending;sessionsButton.setAttribute('aria-busy',String(sessionPending));
+    sessionsButton.textContent=sessionPending?'A abrir…':sessionError?'Tentar novamente':info?.label??'Sessões';sessionsButton.dataset.stale=String(!!info?.stale);
+    sessionsButton.title=[sessionError,info?.detail??'Não há contagem verificada neste cabeçalho.',info?.kind==='library'?'Consultar esta biblioteca no chat':'Consultar sessões e conversas deste pet'].filter(Boolean).join('\n');
+    sessionsButton.setAttribute('aria-label',`Consultar sessões de ${task?.name??'pet'} · ${info?.label??'Contagem por confirmar'} · ${sessionError||info?.detail||''}`);
+  }
+  async function openSessions(){
+    syncSessionControl();const task=State.focusTask;if(!task||sessionPending)return;
+    const pet=task.id,kind=infoFor(pet).kind,ticket=++sessionEpoch;
+    sessionPending=true;sessionError='';syncSessionControl();
+    try{
+      if(kind==='library'){if(await Bridge.petChatOpen(pet,undefined,true)!==true)throw Error('notOpened');}
+      else await Bridge.petPanelOpen(360,50,pet,'sessions');
+    }catch{if(ticket===sessionEpoch&&State.focusId===pet)sessionError='Não foi possível abrir as sessões. Tenta novamente.';}
+    finally{if(ticket===sessionEpoch&&State.focusId===pet){sessionPending=false;syncSessionControl();}}
+  }
 
   function go(v: IslandViewName) {
     actions.blip();
@@ -157,15 +184,18 @@ export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse
     h("div", { class: "header-actions" }, sessionsButton,expandChat,companionName, planPills, gearBtn, soundBtn, closeBtn),
   );
   const headerActions = el.lastElementChild as HTMLElement;
+  const visible=()=>el.isConnected&&!document.hidden&&State.mode==='expanded'&&!!State.focusTask&&State.focusId!==SPOTIFY_ID&&(typeof el.getClientRects!=='function'||el.getClientRects().length>0);
+  observePetObservability(visible,()=>{if(visible())syncSessionControl();});
 
   return {
     el,
     sync() {
+      if(visible())void PetObservability.refresh();
       const v = State.view;
       closeBtn.hidden = !State.settings.companionMode;
-      expandChat.hidden=!State.settings.companionMode || !State.focusTask;
+      expandChat.hidden=!State.settings.companionMode || !State.focusTask || State.focusId===SPOTIFY_ID;
       tabHome.classList.toggle("on", v === "overview" || v === "empty");
-      const ownChat = !State.settings.companionMode || providerForPill(State.focusId ?? undefined) != null;
+      const ownChat = State.focusId!==SPOTIFY_ID&&(!State.settings.companionMode || providerForPill(State.focusId ?? undefined) != null);
       tabChat.hidden = tabDrop.hidden = !ownChat;
       tabChat.classList.toggle("on", v === "prompt");
       tabDrop.classList.toggle("on", v === "upload");
@@ -177,10 +207,7 @@ export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse
       companionName.hidden = !State.settings.companionMode;
       companionName.textContent = State.focusTask?.name ?? "Mochi";
       companionName.style.color = State.focusTask?.color ?? "inherit";
-      const task=State.focusTask,count=task?(sessionCount?.(task.id)??State.petSessions.list(task.id).length):0;
-      sessionsButton.hidden=!task||(!providerForPill(task.id)&&!['workspace','agent','ai'].includes(pillDefinition(task.id)?.category??''));
-      sessionsButton.textContent=`${count} ${count===1?'sessão':'sessões'}`;
-      sessionsButton.title=task?.sessionId?`${sessionLabel(task)}\n${task.sessionCwd??''}\nConsultar todas as sessões`:'Consultar sessões e conversas deste pet';
+      syncSessionControl();
       syncPlanPills();
       el.style.opacity = v === "confused" ? "0" : "1";
     },
@@ -244,7 +271,7 @@ function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'
   let planTimer: number | null = null;
   // Spotify's card and pill are kept and updated in place: the progress bar
   // runs on, and a slider being dragged must not be rebuilt under the pointer.
-  const spotifyCard = buildSpotifyCard();
+  const spotifyCard = buildSpotyCard();
   let spotifyPill: SpotifyPillHost | null = null;
 
   const el = h("div", { class: "view overview" },
@@ -554,26 +581,32 @@ function buildApproval(actions: ViewActions): ViewHost {
   const who = h("div");
   const code = h("div", { class: "code" });
   const row = h("div", { class: "actions" });
+  const feedback=h('p',{class:'approval-feedback',role:'status'});
   const el = h("div", { class: "view" },
-    card("amber", stack(116, 16, who, code, row), foldButton(actions)));
+    card("amber", stack(116, 16, who, code, row,feedback), foldButton(actions)));
   let rowKey = "";
   // The card pops up under a cursor that was busy with something else: a click
   // meant for the window underneath must not land on Allow. Clicks in the first
   // moments after a new request appears are ignored.
-  let shownFor: string | null = null;
   let shownAt = 0;
-  const guarded = (d: "allow" | "deny") => () => {
-    if (performance.now() - shownAt < CLICK_GUARD_MS) return;
-    actions.decide(d);
+  let wasReady=false,guardTimer:number|null=null;
+  const interactive=(context:ApprovalContext)=>canAnswerApproval(context,State.pendingApproval,el.isConnected&&el.classList.contains('on')&&State.mode==='expanded'&&State.view===context.view&&State.focusId===context.petId)&&!State.pendingApproval?.answering;
+  const guarded = (context:ApprovalContext,d: "allow" | "deny") => (event?:MouseEvent) => {
+    if (performance.now() - shownAt < CLICK_GUARD_MS||!interactive(context)) return;
+    actions.decide(d,context,{trusted:event?.isTrusted??false,detail:event?.detail??0});
   };
   return {
     el,
     sync() {
-      const req = State.pendingApproval?.requestId ?? null;
-      if (req !== shownFor) {
-        shownFor = req;
-        shownAt = performance.now();
+      const req=State.pendingApproval;
+      if(!req){clear(row);feedback.hidden=true;return;}
+      const context=approvalContext(req,'approval'),key=JSON.stringify([context.requestId,context.sessionId,context.petId]);
+      const changed=key!==rowKey;
+      if(changed||wasReady!==!!req.presentationReady){
+        shownAt=performance.now();if(guardTimer!==null)window.clearTimeout(guardTimer);
+        guardTimer=window.setTimeout(()=>{guardTimer=null;if(canAnswerApproval(context,State.pendingApproval,true))State.notify();},CLICK_GUARD_MS+1);
       }
+      wasReady=!!req.presentationReady;
       clear(who);
       const approvalTask=State.tasks.find(t=>t.id===State.pendingApproval?.pillId)??State.focusTask;
       who.append(agentWho(approvalTask, t("needs permission")),approvalOrigin());
@@ -581,16 +614,11 @@ function buildApproval(actions: ViewActions): ViewHost {
       // is the command, the file path or the URL being authorised, not just the
       // name of the tool asking.
       code.textContent = State.pendingApproval?.command || State.pendingApproval?.tool || "…";
-      // Two buttons, built once. Rebuilding them between a mouse-down and a
-      // mouse-up would swallow the click, and there is nothing left to vary:
-      // "Always" is gone until the remembered-rules list exists to back it.
-      if (rowKey === "built") return;
-      rowKey = "built";
-      clear(row);
-      row.append(
-        btn(tl("Deny"), "secondary", guarded("deny"), "N"),
-        btn(tl("Allow"), "primary", guarded("allow"), "Y"),
-      );
+      // Preserve nodes within one request; replace them for a new identity so
+      // a delayed old activation can never dispatch against another request.
+      if(changed){rowKey=key;clear(row);row.append(btn(tl('Deny'),'secondary',guarded(context,'deny'),'N'),btn(tl('Allow'),'primary',guarded(context,'allow'),'Y'));}
+      for(const button of row.querySelectorAll('button'))button.disabled=!req.presentationReady||!!req.answering||performance.now()-shownAt<CLICK_GUARD_MS;
+      feedback.textContent=req.feedback??(!req.presentationReady?'A apresentar o pedido…':'');feedback.hidden=!feedback.textContent;
     },
   };
 }
@@ -602,7 +630,8 @@ function buildQuestion(actions: ViewActions): ViewHost {
   const title = h("div", { class: "title question-text" });
   const row = h("div", { class: "actions options" });
   const fold = foldButton(actions);
-  const el = h("div", { class: "view" }, card("cyan", stack(116, 16, who, title, row), fold));
+  const feedback=h('p',{class:'approval-feedback',role:'status'});
+  const el = h("div", { class: "view" }, card("cyan", stack(116, 16, who, title, row,feedback), fold));
 
   // Where we are in the request on screen: which question, what is answered so
   // far, and what is ticked in a pick-several question.
@@ -614,18 +643,20 @@ function buildQuestion(actions: ViewActions): ViewHost {
   // between a mouse-down and a mouse-up would swallow the click.
   let rowKey = "";
 
-  const next = (question: string, answer: string | string[], total: number) => {
+  const interactive=(context:ApprovalContext)=>canAnswerApproval(context,State.pendingApproval,el.isConnected&&el.classList.contains('on')&&State.mode==='expanded'&&State.view===context.view&&State.focusId===context.petId)&&!State.pendingApproval?.answering;
+  const next = (question: string, answer: string | string[], total: number,context:ApprovalContext) => {
+    if(!interactive(context))return;
     answers[question] = answer;
     picked = new Set();
-    index += 1;
-    if (index >= total) actions.answer(answers);
-    else State.notify();
+    if (index + 1 >= total) actions.answer({...answers},context);
+    else {index += 1;State.notify();}
   };
 
   return {
     el,
     sync() {
       const questions = State.pendingApproval?.questions;
+      feedback.textContent=State.pendingApproval?.feedback??(State.pendingApproval&&!State.pendingApproval.presentationReady?'A apresentar o pedido…':'');feedback.hidden=!feedback.textContent;
       clear(who);
       // Only a request that is waiting can be folded away and come back.
       fold.style.display = State.pendingApproval ? "" : "none";
@@ -650,6 +681,7 @@ function buildQuestion(actions: ViewActions): ViewHost {
         picked = new Set();
       }
       const q = questions[Math.min(index, questions.length - 1)];
+      const context=approvalContext(State.pendingApproval!,'question'),shownIndex=index;
       const asking = questions.length > 1
         ? t("is asking ({index} of {total})", { index: index + 1, total: questions.length })
         : t("is asking");
@@ -657,15 +689,16 @@ function buildQuestion(actions: ViewActions): ViewHost {
       title.textContent = q.question;
       title.title = q.question;
 
-      const key = `${requestId}:${index}:${[...picked].join("|")}`;
+      const key = `${requestId}:${index}:${[...picked].join("|")}:${State.pendingApproval!.presentationReady}:${State.pendingApproval!.answering}`;
       if (rowKey === key) return;
       rowKey = key;
       clear(row);
       for (const option of q.options) {
         const on = picked.has(option.label);
         const button = btn(option.label, on ? "primary" : "secondary", () => {
+          if(!interactive(context)||index!==shownIndex)return;
           if (!q.multiSelect) {
-            next(q.question, option.label, questions.length);
+            next(q.question, option.label, questions.length,context);
             return;
           }
           if (on) picked.delete(option.label);
@@ -673,13 +706,15 @@ function buildQuestion(actions: ViewActions): ViewHost {
           State.notify();
         });
         if (option.description) button.title = option.description;
+        (button as HTMLButtonElement).disabled=!State.pendingApproval!.presentationReady||!!State.pendingApproval!.answering;
         row.append(button);
       }
       if (q.multiSelect) {
         const done = btn(tl("Done"), "primary", () => {
-          if (picked.size > 0) next(q.question, [...picked], questions.length);
+          if (index===shownIndex&&picked.size > 0) next(q.question, [...picked], questions.length,context);
         });
         if (picked.size === 0) done.classList.add("off");
+        (done as HTMLButtonElement).disabled=!State.pendingApproval!.presentationReady||!!State.pendingApproval!.answering;
         row.append(done);
       }
       row.append(
@@ -687,7 +722,8 @@ function buildQuestion(actions: ViewActions): ViewHost {
           class: "link-btn",
           style: "color:#8e939c",
           text: tl("Answer in terminal"),
-          onclick: () => actions.answerInTerminal(),
+          disabled:!State.pendingApproval!.presentationReady||!!State.pendingApproval!.answering,
+          onclick: () => {if(interactive(context))actions.answerInTerminal(context);},
         }),
       );
     },
@@ -853,9 +889,12 @@ function buildPlaceholder(title: Msg, sub: string): ViewHost {
 export function buildViews(
   actions: ViewActions,
   onChatHeightChange: () => void,
+  options: {cardsOnly?: boolean} = {},
 ): Map<IslandViewName, ViewHost> {
   const map = new Map<IslandViewName, ViewHost>();
-  map.set("overview", buildOverview(actions));
+  // The Linux card runtime never instantiates the legacy gallery, its ticker,
+  // plan timer, pill list or keyboard listeners.
+  map.set("overview", options.cardsOnly ? buildPetOverview(actions) : buildOverview(actions));
   map.set("empty", buildEmpty(actions));
   map.set("approval", buildApproval(actions));
   map.set("question", buildQuestion(actions));
@@ -863,7 +902,7 @@ export function buildViews(
   map.set("finished", buildFinished(actions));
   map.set("confused", buildConfused());
   map.set("note", buildNote());
-  map.set("settings", buildSettings(actions));
+  if (!options.cardsOnly) map.set("settings", buildSettings(actions));
   map.set("prompt", buildPrompt(onChatHeightChange,undefined,()=>actions.setView('choose')));
   map.set("upload", buildUpload());
   map.set("uploading", buildUploading());

@@ -1,29 +1,80 @@
-// Island window: placement on the chosen display, the two window sizes
-// (full panel / invisible wake strip), click-through and the cursor poll.
-//
-// There is no notch on a PC, so the island is a black shape drawn at the top
-// centre of the main display inside a borderless, transparent, always-on-top
-// window that never takes focus.
+// Explicit pet cards on Linux: a mapped controller with no passive input area.
+// The central island lives in pet-control; this window hosts only selected
+// chats, documents and native decisions. Other targets retain upstream geometry.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+#[cfg(target_os="linux")]
+use std::sync::atomic::AtomicU64;
+use std::sync::{Condvar, Mutex};
+#[cfg(not(target_os="linux"))]use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-use crate::platform::{self, cursor_physical, left_button_down};
+use crate::platform::{self,cursor_physical};
+#[cfg(not(target_os="linux"))]use crate::platform::left_button_down;
 
 /// Logical size of the full window — the largest island view, like the macOS panel.
 pub const PANEL_W: f64 = 720.0;
 pub const PANEL_H: f64 = 320.0;
+// Linux pet cards have their own canvas; the retired singleton keeps its size.
+#[cfg(target_os="linux")]const PET_CARD_H: f64 = 560.0;
 /// Logical size of the invisible strip that wakes the island when it is hidden.
-pub const STRIP_W: f64 = 240.0;
-pub const STRIP_H: f64 = 6.0;
+#[cfg(not(target_os="linux"))]pub const STRIP_W: f64 = 240.0;
+#[cfg(not(target_os="linux"))]pub const STRIP_H: f64 = 6.0;
 
 static LOCAL_ORIGIN: Mutex<(f64, f64)> = Mutex::new((0.0, 0.0));
 
 pub fn local_origin() -> (f64, f64) { *LOCAL_ORIGIN.lock().unwrap() }
+
+// Presentation ordering only, never request/operation authority. A newer
+// geometry attempt invalidates queued resize work even if no monitor remains.
+#[cfg(target_os="linux")]
+type GeometryScreen=(i32,i32,u32,u32,u64);
+#[cfg(target_os="linux")]
+static GEOMETRY_REVISION:AtomicU64=AtomicU64::new(0);
+#[cfg(target_os="linux")]
+#[derive(Clone,Copy)]
+pub(crate) struct GeometryStamp {revision:u64,screen:GeometryScreen}
+#[cfg(target_os="linux")]
+fn next_geometry_revision(sequence:&AtomicU64)->Option<u64>{
+    // MAX is a permanent invalidation tombstone, never a reusable ticket.
+    let mut old=sequence.load(Ordering::Acquire);
+    loop{
+        let next=old.checked_add(1)?;
+        match sequence.compare_exchange_weak(old,next,Ordering::AcqRel,Ordering::Acquire){
+            Ok(_)=>return (next!=u64::MAX).then_some(next),
+            Err(current)=>old=current,
+        }
+    }
+}
+#[cfg(target_os="linux")]
+impl GeometryStamp {
+    fn matches(&self,revision:u64,screen:Option<GeometryScreen>)->bool{
+        self.revision!=u64::MAX&&self.revision==revision&&screen==Some(self.screen)
+    }
+    pub(crate) fn current(&self,app:&AppHandle)->bool{
+        let screen=current_screen_key(app);
+        self.matches(GEOMETRY_REVISION.load(Ordering::Acquire),screen)
+    }
+}
+#[cfg(target_os="linux")]
+pub(crate) fn native_logical_size(width:f64,height:f64)->Option<(i32,i32)>{
+    [width,height].iter().all(|v|v.is_finite()&&*v>0.0&&*v<=f64::from(i32::MAX))
+        .then(||(width.round().max(1.0)as i32,height.round().max(1.0)as i32))
+}
+
+fn system_popup_top(system_center:bool,native_height:Option<f64>)->f64{
+    if !system_center{return 0.0;}
+    native_height.filter(|height|height.is_finite()&&(24.0..=80.0).contains(height)).unwrap_or(44.0)+4.0
+}
+
+fn card_size(display:(f64,f64))->(f64,f64){
+    #[cfg(target_os="linux")]let height=PET_CARD_H;
+    #[cfg(not(target_os="linux"))]let height=PANEL_H;
+    (PANEL_W.min((display.0-16.0).max(1.0)),height.min((display.1-112.0).max(1.0)))
+}
 
 /// A popup close to the companion, fully inside the display and clear of
 /// its top/bottom controls. Positions are logical pixels on that display.
@@ -364,6 +415,8 @@ pub fn screen_info(app: &AppHandle, pref: &str) -> ScreenInfo {
 
 /// Places and sizes the window. `collapsed` picks the wake strip instead of the panel.
 pub fn apply_geometry(app: &AppHandle, pref: &str, collapsed: bool) {
+    #[cfg(target_os="linux")]
+    let revision=next_geometry_revision(&GEOMETRY_REVISION);
     let Some(win) = window(app) else { return };
     let Some(m) = target_monitor(app, pref) else { return };
 
@@ -371,18 +424,28 @@ pub fn apply_geometry(app: &AppHandle, pref: &str, collapsed: bool) {
     let mp = *m.position();
     let ms = *m.size();
 
+    let display = (ms.width as f64 / scale, ms.height as f64 / scale);
+    #[cfg(target_os="linux")]
+    let (lw,lh)=card_size(display);
+    #[cfg(not(target_os="linux"))]
     let (lw, lh) = if collapsed { (STRIP_W, STRIP_H) } else { (PANEL_W, PANEL_H) };
+    #[cfg(target_os="linux")]let _=collapsed;
     let pw = (lw * scale).round().max(1.0) as u32;
     let ph = (lh * scale).round().max(1.0) as u32;
     let companion = app.try_state::<crate::Shared>()
         .is_some_and(|s| s.settings.lock().unwrap().companion_mode);
-    let display = (ms.width as f64 / scale, ms.height as f64 / scale);
     let origin = if companion {
         let point = crate::desktop::companion_center(app, &m)
             .unwrap_or((display.0 - 100.0, display.1 - 180.0));
-        companion_origin(point, display, (PANEL_W, PANEL_H))
+        #[cfg(target_os="linux")]let size=(lw,lh);
+        #[cfg(not(target_os="linux"))]let size=(PANEL_W,PANEL_H);
+        companion_origin(point, display, size)
     } else {
-        ((display.0 - lw) / 2.0, 0.0)
+        #[cfg(target_os="linux")]{
+        let screen=ScreenInfo{x:mp.x as f64/scale,y:mp.y as f64/scale,width:display.0,height:display.1,scale};
+        ((display.0 - lw) / 2.0, system_popup_top(true,crate::companions::native_bar_height(&screen)))
+        }
+        #[cfg(not(target_os="linux"))]{((display.0-lw)/2.0,0.0)}
     };
     *LOCAL_ORIGIN.lock().unwrap() = origin;
     let x = mp.x + (origin.0 * scale).round() as i32;
@@ -400,7 +463,7 @@ pub fn apply_geometry(app: &AppHandle, pref: &str, collapsed: bool) {
     let (lx, ly) = logical_origin(&m);
     platform::pin_to_monitor(&win, lx, ly);
     #[cfg(target_os = "linux")]
-    platform::place_island(&win, companion.then_some(origin));
+    platform::place_island(&win, Some(origin));
     // Moving across displays can rescale the window: re-assert the physical size.
     let _ = win.set_size(PhysicalSize::new(pw, ph));
     let _ = win.set_always_on_top(true);
@@ -417,6 +480,14 @@ pub fn apply_geometry(app: &AppHandle, pref: &str, collapsed: bool) {
             let _ = win.set_position(PhysicalPosition::new(x, y));
         }
     }
+    // GtkFixed/WebKit can retain the old logical minimum after an output/scale
+    // change. Reset the actual view and its own GTK toplevel together, as the
+    // habitat already does. Never show/remap, focus, or replay a card here.
+    #[cfg(target_os="linux")]
+    if let Some(revision)=revision{
+        let stamp=GeometryStamp {revision,screen:(mp.x,mp.y,ms.width,ms.height,scale.to_bits())};
+        platform::resize_island_native_view(&win,lw,lh,stamp);
+    }
 }
 
 /// Position, size and scale of the monitor the island lives on. Any change here
@@ -432,8 +503,26 @@ fn current_screen_key(app: &AppHandle) -> Option<(i32, i32, u32, u32, u64)> {
     Some((p.x, p.y, size.width, size.height, m.scale_factor().to_bits()))
 }
 
+/// Display changes belong to the controller, including while no card is open.
+/// This does not observe the pointer or wake a retired compact/hover surface.
+#[cfg(target_os="linux")]
+pub fn spawn_display_watch(app:AppHandle){
+    std::thread::spawn(move||{
+        let mut previous=current_screen_key(&app);
+        loop{
+            std::thread::sleep(Duration::from_secs(1));
+            let next=current_screen_key(&app);
+            if next.is_some()&&next!=previous{
+                previous=next;
+                let _=app.emit_to(WINDOW_LABEL,"screen-changed",());
+            }
+        }
+    });
+}
+
 /// Emits `cursor` (window-logical coordinates) at ~60 Hz while the island is
 /// visible. Parked on a condvar the rest of the time.
+#[cfg(not(target_os="linux"))]
 pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
     std::thread::spawn(move || {
         let mut was_down = false;
@@ -543,9 +632,8 @@ pub fn refresh_click_through(app: &AppHandle, gate: &PollGate) {
         // The wake strip itself, never "the whole window": if the window ever
         // fails to shrink to the strip, the rest of it must not swallow clicks
         // meant for whatever sits under the top of the screen.
-        let companion = app.try_state::<crate::Shared>()
-            .is_some_and(|s| s.settings.lock().unwrap().companion_mode);
-        Some((0.0, 0.0, if companion { 0.0 } else { STRIP_W }, STRIP_H))
+        // A closed Linux card is a controller, never a passive wake target.
+        Some((0.0, 0.0, 0.0, 0.0))
     } else {
         let r = *gate.rect.lock().unwrap();
         if r.w <= 0.0 {
@@ -572,13 +660,77 @@ pub fn set_ignore_cursor(app: &AppHandle, ignore: bool) {
 mod companion_tests {
     use super::*;
     #[test]
+    fn explicit_system_only_popups_clear_the_control_island() {
+        assert_eq!(system_popup_top(true,Some(44.0)),48.0);
+        assert_eq!(system_popup_top(true,Some(60.0)),64.0);
+        assert_eq!(system_popup_top(true,None),48.0);
+        assert_eq!(system_popup_top(true,Some(f64::NAN)),48.0);
+        assert_eq!(system_popup_top(false,Some(44.0)),0.0);
+    }
+    #[cfg(target_os="linux")]
+    #[test]
+    fn pet_dashboard_fits_the_native_canvas_on_laptop_and_external_displays() {
+        for display in [(1440.0,900.0),(3440.0,1440.0)] {
+            let (width,height)=card_size(display);
+            assert!(width>=640.0 && height>=520.0+16.0);
+            assert!(height<=display.1-112.0);
+        }
+    }
+    #[test]
     fn popup_stays_inside_each_display_and_off_the_bars() {
-        for display in [(3440.0,1440.0),(1920.0,1080.0),(800.0,600.0)] {
+        for display in [(3440.0,1440.0),(1920.0,1080.0),(800.0,600.0),(360.0,500.0)] {
+            let size=card_size(display);
             for point in [(0.0,0.0),(display.0,display.1),(display.0/2.0,display.1/2.0)] {
-                let (x,y) = companion_origin(point,display,(PANEL_W,PANEL_H));
-                assert!(x >= 8.0 && x + PANEL_W <= display.0 - 8.0);
-                assert!(y >= 48.0 && y + PANEL_H <= display.1 - 64.0);
+                let (x,y) = companion_origin(point,display,size);
+                assert!(x >= 8.0 && x + size.0 <= display.0 - 8.0);
+                assert!(y >= 48.0 && y + size.1 <= display.1 - 64.0);
             }
+        }
+    }
+    #[cfg(target_os="linux")]
+    #[test]
+    fn queued_native_resize_requires_latest_geometry_and_current_screen(){
+        let sequence=AtomicU64::new(0);let screen=(0,0,2880,1800,2.0_f64.to_bits());
+        let old=GeometryStamp{revision:next_geometry_revision(&sequence).unwrap(),screen};
+        assert!(old.matches(sequence.load(Ordering::Acquire),Some(screen)));
+        let latest=GeometryStamp{revision:next_geometry_revision(&sequence).unwrap(),screen};
+        assert!(!old.matches(sequence.load(Ordering::Acquire),Some(screen)));
+        assert!(latest.matches(sequence.load(Ordering::Acquire),Some(screen)));
+        // A newer attempt with no monitor must still invalidate pending work.
+        next_geometry_revision(&sequence).unwrap();
+        assert!(!latest.matches(sequence.load(Ordering::Acquire),None));
+        assert!(!latest.matches(sequence.load(Ordering::Acquire),Some(screen)));
+    }
+    #[cfg(target_os="linux")]
+    #[test]
+    fn queued_native_resize_rejects_origin_size_scale_and_missing_output_changes(){
+        let screen=(0,0,2880,1800,2.0_f64.to_bits());let stamp=GeometryStamp{revision:7,screen};
+        for changed in [None,Some((1440,0,3440,1440,1.0_f64.to_bits())),
+            Some((1,0,2880,1800,2.0_f64.to_bits())),Some((0,1,2880,1800,2.0_f64.to_bits())),
+            Some((0,0,2881,1800,2.0_f64.to_bits())),Some((0,0,2880,1801,2.0_f64.to_bits())),
+            Some((0,0,2880,1800,1.0_f64.to_bits()))]{assert!(!stamp.matches(7,changed));}
+        assert!(stamp.matches(7,Some(screen)));
+    }
+    #[cfg(target_os="linux")]
+    #[test]
+    fn geometry_revision_exhaustion_permanently_invalidates_queued_resize(){
+        let sequence=AtomicU64::new(u64::MAX-2);let screen=(0,0,1,1,1.0_f64.to_bits());
+        let last=GeometryStamp{revision:next_geometry_revision(&sequence).unwrap(),screen};
+        assert!(last.matches(sequence.load(Ordering::Acquire),Some(screen)));
+        assert!(next_geometry_revision(&sequence).is_none());
+        assert!(!last.matches(sequence.load(Ordering::Acquire),Some(screen)));
+        assert!(next_geometry_revision(&sequence).is_none());
+        assert!(!GeometryStamp{revision:u64::MAX,screen}.matches(u64::MAX,Some(screen)));
+    }
+    #[cfg(target_os="linux")]
+    #[test]
+    fn native_resize_uses_bounded_logical_dimensions_across_scale_changes(){
+        for display in [(1440.,900.),(3440.,1440.)]{
+            let size=card_size(display);assert_eq!(native_logical_size(size.0,size.1),Some((720,560)));
+        }
+        assert_eq!(native_logical_size(0.5,1.5),Some((1,2)));
+        for bad in [0.,-1.,f64::NAN,f64::INFINITY,f64::from(i32::MAX)+1.]{
+            assert!(native_logical_size(bad,560.).is_none());assert!(native_logical_size(720.,bad).is_none());
         }
     }
 }

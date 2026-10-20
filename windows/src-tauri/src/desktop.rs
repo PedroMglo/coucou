@@ -296,7 +296,9 @@ fn body_disc() -> MouseShape {
 /// island's webview, then only shown and hidden. Nothing is created where the
 /// feature is off.
 pub fn setup(app: &AppHandle) {
-    let mut mode = platform::desktop_mode();
+    // Linux uses the configured companions habitat. Do not create or launch
+    // the upstream singleton as a hidden second renderer or error fallback.
+    let mut mode = if cfg!(target_os="linux"){DesktopMode::Off}else{platform::desktop_mode()};
     if mode != DesktopMode::Off {
         match create_window(app, mode) {
             Some(win) if platform::prepare_desktop_window(&win, mode) => {}

@@ -1,26 +1,31 @@
 //! Explicit shelter popout: metadata/tasks/models without opening the main Coucou window.
 use serde::{Serialize,Deserialize};
 use std::sync::Mutex;
-use tauri::{AppHandle,Emitter,Manager,WebviewUrl,WebviewWindowBuilder,LogicalSize};
+use tauri::{AppHandle,Emitter,Manager,LogicalSize};
+#[cfg(not(target_os="linux"))]use tauri::{WebviewUrl,WebviewWindowBuilder};
 pub const LABEL:&str="pet-manager";
 #[derive(Default,Clone,Serialize,Deserialize)]
 pub struct Context {pub pet:Option<String>,pub section:Option<String>}
 #[derive(Default)]pub struct Panel(Mutex<Context>);
 pub fn create(app:&AppHandle){
  app.manage(Panel::default());
+ // Linux has one management surface: pet-control. Do not create a second
+ // webview whose page could initialise the retired management UI.
+ #[cfg(target_os="linux")]return;
+ #[cfg(not(target_os="linux"))]{
  #[allow(unused_mut)]let mut url=WebviewUrl::App("pet-manager.html".into());
  #[cfg(dev)]if let Some(mut base)=app.config().build.dev_url.clone(){base.set_path("/pet-manager.html");url=WebviewUrl::External(base);}
  match WebviewWindowBuilder::new(app,LABEL,url).additional_browser_args(crate::BROWSER_ARGS).title("Pets · Gestão")
   .inner_size(760.0,650.0).min_inner_size(320.0,280.0).decorations(false).transparent(true).shadow(false)
   .always_on_top(true).skip_taskbar(true).visible_on_all_workspaces(true).focused(false).visible(false).build(){
   Ok(win)=>{
-   #[cfg(target_os="linux")]if !crate::platform::prepare_pet_panel(&win){crate::log::line("pet management popout: platform preparation failed");let _=win.destroy();return;}
    let app=app.clone();
    win.on_window_event(move|event|match event{
     tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();hide(&app);},
     _=>{}
    });
   },Err(error)=>crate::log::line(format!("pet management popout: {error}")),
+ }
  }
 }
 pub fn hide(app:&AppHandle){crate::pet_control::collapse(app);if let Some(win)=app.get_webview_window(LABEL){let _=win.emit("hub-visible",false);let _=win.hide();}}
@@ -34,8 +39,8 @@ fn geometry(width:f64,height:f64,x:f64,y:f64)->(f64,f64,f64,f64){
 pub async fn pet_panel_open(app:AppHandle,x:f64,y:f64,pet:Option<String>,section:Option<String>)->Result<(),String>{
  if !x.is_finite()||!y.is_finite(){return Err("Posição inválida para a gestão dos pets.".into());}
  if pet.as_ref().is_some_and(|id|!crate::pet_config::defaults().pets.contains_key(id)){return Err("Pet desconhecido.".into());}
- if section.as_ref().is_some_and(|s|!["tasks","sessions","providers","models","profiles"].contains(&s.as_str())){return Err("Secção desconhecida.".into());}
- let inline={let shared=app.state::<crate::Shared>();let s=shared.settings.lock().unwrap();s.companion_mode&&s.pet_control_bar};
+ if !crate::pet_control::valid_section(&section){return Err("Secção desconhecida.".into());}
+ let inline=cfg!(target_os="linux")||{let shared=app.state::<crate::Shared>();let s=shared.settings.lock().unwrap();s.companion_mode&&s.pet_control_bar};
  if inline{return crate::pet_control::open_section(app,pet,section).await;}
  let context=Context{pet,section};*app.state::<Panel>().0.lock().unwrap()=context.clone();
  let win=app.get_webview_window(LABEL).ok_or("O painel dos pets não está disponível nesta sessão.")?;

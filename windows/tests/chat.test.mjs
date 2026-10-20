@@ -41,6 +41,24 @@ const $ = (cls) => view.el.querySelector(cls);
 const chips = () => view.el.find(".picker-chip").map((c) => c.textContent);
 const models = () => view.el.find(".picker-model").map((m) => m.textContent);
 
+test('an interrupted inline conversation displays its canonical original request without inventing messages',async()=>{
+ State.settings={...DEFAULT_SETTINGS,chatProvider:'ollama'};State.focusId='ai_ollama';State.mode='expanded';State.chatHistory=[];
+ const taskNotice={taskId:'stopped-task',provider:'ollama',conversationId:'stopped-cid',phase:'stopped',query:'Pedido original interrompido',message:'Interrompido; verifica os efeitos.'};
+ answers.chat_conversation=()=>({id:'stopped-cid',messages:[],busy:false,notice:taskNotice.message,taskNotice});
+ view=buildPrompt(()=>{});view.sync();await flush();view.sync();
+ assert.equal($('.task-notice').hidden,false);assert.match($('.task-notice').textContent,/Pedido original interrompido/);assert.deepEqual(State.chatHistory,[]);
+ assert.deepEqual(sent('chat_send'),[]);assert.deepEqual(sent('assistant_resume_task'),[]);
+});
+
+test('new success clears the old native Stop status while another pet never borrows its request',async()=>{
+ State.settings={...DEFAULT_SETTINGS,chatProvider:'ollama'};State.focusId='ai_ollama';State.mode='expanded';State.chatHistory=[];
+ const warning='Interrompido; verifica os efeitos.';let snapshot={id:'stopped-cid',messages:[],busy:false,notice:warning,taskNotice:{taskId:'stopped-task',provider:'ollama',conversationId:'stopped-cid',phase:'stopped',query:'Original de Ollama',message:warning}};
+ answers.chat_conversation=()=>snapshot;view=buildPrompt(()=>{});view.sync();await flush();view.sync();assert.equal($('.task-notice').hidden,false);
+ snapshot={id:'stopped-cid',messages:[{role:'user',content:'Novo pedido'},{role:'assistant',content:'Resposta nova'}],busy:false};emit('assistant-history-changed','ollama');await flush();view.sync();
+ assert.equal($('.task-notice').hidden,true);assert.notEqual(State.chatFeedback.get('ollama'),warning);
+ State.settings={...State.settings,chatProvider:'codex'};State.focusId='agent_codex';view.sync();assert.equal($('.task-notice').hidden,true);
+});
+
 test("the model button shows the active provider's model", () => {
   assert.equal($(".model-name").textContent, "claude-opus-5");
   State.settings = { ...State.settings, chatProvider: "google" };
@@ -343,9 +361,9 @@ test('a Codex attachment cannot be sent with Gravity and a late copy keeps its o
 });
 
 
-test("all eight service pets restore only their own public conversation",async()=>{
+test("all seven conversational service pets restore only their own public conversation",async()=>{
  State.settings={...DEFAULT_SETTINGS,companionMode:true,chatProvider:"ollama"};
- const owners=["integration_github","integration_spotify","integration_n8n","integration_notion","integration_vercel","integration_resend","integration_calcom","integration_stripe"];
+ const owners=["integration_github","integration_n8n","integration_notion","integration_vercel","integration_resend","integration_calcom","integration_stripe"];
  answers.chat_conversation=({provider})=>({id:`dialogue-${provider}`,messages:[{role:"user",content:`saved ${provider}`},{role:"assistant",content:`reply ${provider}`}]});
  for(const pet of owners){State.focusId=pet;State.chatHistory=[];view.sync();await flush();view.sync();assert.deepEqual(State.chatHistory.map(m=>m.content),[`saved ${pet}`,`reply ${pet}`]);}
  assert.equal(State.settings.chatProvider,"ollama");assert.deepEqual(sent("chat_send"),[]);

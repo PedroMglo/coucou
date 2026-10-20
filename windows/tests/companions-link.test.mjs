@@ -159,3 +159,30 @@ test("the shelter lists only configured entities and rejects unconfigured servic
   assert.deepEqual(sent("chat_send"),[]);assert.deepEqual(sent("spotify_control"),[]);assert.deepEqual(sent("approval_decision"),[]);
  }finally{Bridge.companionsConfigure=original;}
 });
+
+for(const scenario of ['display-during-habitat','bar-during-control','display-during-failed-habitat'])test(`${scenario}: an obsolete placement cannot consume a newer layout change`,async()=>{
+ const original=Bridge.companionsConfigure,control=Bridge.petControlConfigure;
+ let habitatCalls=0,controlCalls=0,release;
+ const current={width:3440,height:320,top:0,band:{height:48,lanes:[[8,500]]}};
+ try{
+  Bridge.petControlConfigure=async()=>{controlCalls++;if(scenario==='bar-during-control'&&controlCalls===1)await new Promise(resolve=>release=resolve);};
+  Bridge.companionsConfigure=async enabled=>{
+   habitatCalls++;
+   if(enabled&&habitatCalls===2&&scenario!=='bar-during-control')return new Promise(resolve=>release=resolve);
+   return current;
+  };
+  State.settings={...DEFAULT_SETTINGS,companionMode:true,mainPill:'agent_codex',activeIntegrations:[]};State.tasks=[task('agent_codex')];State.pendingApproval=null;
+  const link=new CompanionsLink(()=>assert.fail('layout updates must not open a card'),()=> 'none');await link.init();
+  const running=link.launch();await settle();assert.equal(typeof release,'function');
+  emit(scenario==='bar-during-control'?'companions-layout-changed':'screen-changed',null);
+  if(scenario==='display-during-habitat')emit('companions-layout-changed',null);
+  await settle();release(scenario==='display-during-failed-habitat'?null:{width:1440,height:320,top:0,band:{height:40,lanes:[[8,200]]}});
+  await running;await settle();
+  assert.equal(controlCalls,2,'Coalesced layout changes require a fresh control placement');
+  assert.equal(habitatCalls,scenario==='bar-during-control'?2:3,'An obsolete control placement must not configure the habitat');
+  assert.equal(link.supported,true);assert.equal(link.active,true,'An obsolete failure must not disable the current surface');
+  const latest=sent('plugin:event|emit_to').filter(e=>e.event===PET_EVENTS.state).at(-1).payload;
+  assert.deepEqual(latest.band,current.band,'Only the new geometry may reach the pets');
+  assert.deepEqual(sent('chat_send'),[]);assert.deepEqual(sent('approval_decision'),[]);
+ }finally{Bridge.companionsConfigure=original;Bridge.petControlConfigure=control;}
+});

@@ -4,12 +4,12 @@
 //
 // What they show comes from src-tauri/src/spotify.rs (MPRIS on Linux, the
 // system media controls on Windows) through
-// island/spotify.ts. A click changes the page's copy at once and Spotify
-// confirms it, as the Mac's controller does.
+// island/spotify.ts. Controls show pending/failed operations; playback values
+// follow the observed player state.
 
 import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
-import { Bridge } from "../core/bridge";
+import { Bridge, type SpotifyAction } from "../core/bridge";
 import { State, type AgentTask } from "../core/state";
 import {
   SPOTIFY_GREEN, SPOTIFY_ID, Spotify, currentArtwork, formatTime, isAd, spotifyPosition, volumeLevel,
@@ -28,58 +28,92 @@ function lighter(hex: string, amount: number): string {
 
 // ── Controls (shared by the pill and the card) ───────────────────────────────
 
-/** Controls never raise the app and wait for the actual MPRIS state. */
+/** Commands remain pending until the backend replies; only a player read changes playback state. */
+const pendingControls = new Map<SpotifyAction, number>();
+let controlFeedback = "";
+let controlGeneration = 0;
 let playPending = false;
+
+async function control(action: SpotifyAction, value?: number): Promise<boolean> {
+  const generation = ++controlGeneration;
+  pendingControls.set(action, (pendingControls.get(action) ?? 0) + 1);
+  controlFeedback = "";
+  State.notify();
+  try {
+    const accepted = await Bridge.spotifyControl(action, value);
+    if (accepted !== true && generation === controlGeneration) controlFeedback = accepted === false ? "O Spotify não aceitou o comando. Podes tentar novamente." : "Não foi possível comunicar com o Spotify. Podes tentar novamente.";
+    try {
+      const observed = Spotify.state;
+      const latest = await Bridge.spotifyRefresh();
+      if (latest && generation === controlGeneration && Spotify.state === observed) Spotify.state = latest;
+      else if (!latest && accepted && generation === controlGeneration) controlFeedback = "Comando enviado; ainda não foi possível confirmar o estado do Spotify.";
+    } catch {
+      if (accepted && generation === controlGeneration) controlFeedback = "Comando enviado; ainda não foi possível confirmar o estado do Spotify.";
+    }
+    return accepted === true;
+  } catch {
+    if (generation === controlGeneration) controlFeedback = "Não foi possível comunicar com o Spotify. Podes tentar novamente.";
+    return false;
+  } finally {
+    const remaining = (pendingControls.get(action) ?? 1) - 1;
+    if (remaining > 0) pendingControls.set(action, remaining); else pendingControls.delete(action);
+    State.notify();
+  }
+}
+
 export async function togglePlay() {
   if (playPending) return;
   playPending = true;
-  State.notify();
-  try {
-    await Bridge.spotifyControl(Spotify.state.running ? "playPause" : "play");
-    const latest = await Bridge.spotifyRefresh();
-    if (latest) Spotify.state = latest;
-  } finally { playPending = false; State.notify(); }
+  try { await control(Spotify.state.running ? "playPause" : "play"); }
+  finally { playPending = false; State.notify(); }
 }
 
 function seek(seconds: number) {
-  const s = Spotify.state;
-  const track = s.track;
-  if (!s.running || !track || isAd(track)) return;
+  const { running, track } = Spotify.state;
+  if (!running || !track || isAd(track)) return;
   const target = Math.min(Math.max(0, seconds), Math.max(0, track.duration - 1));
-  Spotify.state = { ...s, position: target, positionAt: Date.now() };
-  State.notify();
-  void Bridge.spotifyControl("seek", target);
+  void control("seek", target);
 }
 
 function setFlag(which: "shuffle" | "repeat", on: boolean) {
-  if (!Spotify.state.running) return;
-  Spotify.state = { ...Spotify.state, [which]: on };
-  State.notify();
-  void Bridge.spotifyControl(which, on ? 1 : 0);
+  if (!Spotify.state.running || pendingControls.has(which)) return;
+  void control(which, on ? 1 : 0);
 }
 
-// A slider drag sends at most one volume every 120 ms (SpotifyController.setVolume).
+// Coalesce rapid volume changes, with one request in flight and a 120 ms minimum gap.
 let pendingVolume: number | null = null;
-let volumeTimer: number | null = null;
-
+let inFlightVolume: number | null = null;
+let volumeSending = false;
 function setVolume(value: number) {
   if (!Spotify.state.running) return;
   const v = Math.min(100, Math.max(0, Math.round(value)));
-  Spotify.state = { ...Spotify.state, volume: v };
-  State.notify();
+  if (pendingVolume === v || inFlightVolume === v) return;
   pendingVolume = v;
-  if (volumeTimer != null) return;
-  const send = () => {
-    const next = pendingVolume;
-    pendingVolume = null;
-    if (next == null) {
-      volumeTimer = null;
-      return;
+  if (volumeSending) return;
+  volumeSending = true;
+  void (async () => {
+    try {
+      while (pendingVolume != null) {
+        const next: number = pendingVolume;
+        pendingVolume = null;
+        inFlightVolume = next;
+        const started = Date.now();
+        await control("volume", next);
+        const wait = 120 - (Date.now() - started);
+        if (wait > 0) await new Promise(resolve => window.setTimeout(resolve, wait));
+      }
+    } finally { inFlightVolume = null; volumeSending = false; }
+  })();
+}
+
+async function openSpotify() {
+  controlFeedback = ""; State.notify();
+  try {
+    if (!await Bridge.spotifyOpen()) {
+      controlFeedback = "Não foi possível abrir o Spotify.";
+      State.notify();
     }
-    void Bridge.spotifyControl("volume", next);
-    volumeTimer = window.setTimeout(send, 120);
-  };
-  send();
+  } catch { controlFeedback = "Não foi possível abrir o Spotify."; State.notify(); }
 }
 
 // ── Pill (overview right column) ──────────────────────────────────────────────
@@ -90,7 +124,7 @@ export interface SpotifyPillHost {
 }
 
 /** MusicControlButton: a 20 px round button in the pill's colour. */
-function pillButton(color: string, icon: string, onClick: () => void): HTMLElement {
+function pillButton(color: string, icon: string, onClick: () => void): HTMLButtonElement {
   const b = h("button", { class: "np-pill-btn" }, svg(icon, 8));
   b.style.borderColor = `${color}24`;
   b.addEventListener("click", (e) => {
@@ -121,7 +155,7 @@ export function buildSpotifyPill(task: AgentTask, onTap: () => void): SpotifyPil
   const mini = createMiniBot(task, 24, () => State.spotifyPlaying);
   const label = h("span", { class: "lbl", text: task.name });
   const playBtn = pillButton(color, ICONS.play, togglePlay);
-  const nextBtn = pillButton(color, ICONS.forward, () => void Bridge.spotifyControl("next"));
+  const nextBtn = pillButton(color, ICONS.forward, () => void control("next"));
   const controls = h("div", { class: "np-pill-controls" }, playBtn, nextBtn);
   const pill = h("div", { class: "pill np-pill", onclick: onTap }, mini, label, controls);
   pill.style.borderColor = `${color}24`;
@@ -141,7 +175,11 @@ export function buildSpotifyPill(task: AgentTask, onTap: () => void): SpotifyPil
       playBtn.append(svg(s.playing ? ICONS.pause : ICONS.play, 8));
     }
     playBtn.title = s.playing ? t("Pause") : t("Play");
-    nextBtn.title = t("Next");
+    playBtn.setAttribute("aria-label", playBtn.title);
+    playBtn.disabled = playPending;
+    nextBtn.title = controlFeedback || t("Next");
+    nextBtn.setAttribute("aria-label", t("Next"));
+    nextBtn.disabled = pendingControls.has("next");
   };
 
   pill.addEventListener("mouseenter", () => {
@@ -170,24 +208,26 @@ export function buildSpotifyPill(task: AgentTask, onTap: () => void): SpotifyPil
  * NowPlayingBar: a grey track whose filled part turns green and grows a knob
  * under the pointer; drag or click anywhere on it.
  */
-class NowPlayingBar {
+export class NowPlayingBar {
   readonly el: HTMLElement;
   private fill: HTMLElement;
   private knob: HTMLElement;
   private hovering = false;
   private dragging = false;
   private fraction = 0;
-  enabled = true;
+  private available = true;
+  private pointerId:number|null=null;
+  private gestureContext:string|undefined;
   private onChange: (f: number) => void;
   private onCommit: (f: number) => void;
 
-  constructor(onChange: (f: number) => void, onCommit: (f: number) => void) {
+  constructor(onChange: (f: number) => void, onCommit: (f: number) => void,private readonly options:{label:string;step:()=>number;valueText:(fraction:number)=>string;onCancel?:()=>void;context?:()=>string}) {
     this.onChange = onChange;
     this.onCommit = onCommit;
     this.fill = h("i", { class: "np-fill" });
     this.knob = h("i", { class: "np-knob" });
     this.fill.style.background = "#C5C8CD";
-    this.el = h("div", { class: "np-bar" }, h("i", { class: "np-track" }), this.fill, this.knob);
+    this.el = h("div", { class: "np-bar",role:"slider",tabindex:0,"aria-label":options.label,"aria-valuemin":0,"aria-valuemax":100 }, h("i", { class: "np-track" }), this.fill, this.knob);
     this.el.addEventListener("mouseenter", () => {
       this.hovering = true;
       this.paint();
@@ -197,29 +237,52 @@ class NowPlayingBar {
       this.paint();
     });
     this.el.addEventListener("pointerdown", (e) => {
-      if (!this.enabled || e.button !== 0) return;
+      if (!this.enabled || this.dragging || e.button !== 0) return;
       e.stopPropagation();
-      this.dragging = true;
+      this.dragging = true;this.pointerId=e.pointerId;this.gestureContext=this.options.context?.();this.el.focus({preventScroll:true});
       try {
         this.el.setPointerCapture(e.pointerId);
       } catch {
         /* capture is a nicety */
       }
-      this.onChange(this.at(e.clientX));
+      this.fraction=this.at(e.clientX);this.onChange(this.fraction);
       this.paint();
     });
     this.el.addEventListener("pointermove", (e) => {
-      if (this.dragging) this.onChange(this.at(e.clientX));
+      if(!this.dragging||this.pointerId!==e.pointerId)return;
+      if(this.options.context?.()!==this.gestureContext){this.cancel();return;}
+      if(this.enabled){this.fraction=this.at(e.clientX);this.onChange(this.fraction);this.paint();}
     });
     const end = (e: PointerEvent) => {
-      if (!this.dragging) return;
-      this.dragging = false;
-      this.onCommit(this.at(e.clientX));
+      if (!this.dragging||this.pointerId!==e.pointerId) return;
+      if(this.options.context?.()!==this.gestureContext){this.cancel();return;}
+      this.dragging = false;this.pointerId=null;
+      try { this.el.releasePointerCapture(e.pointerId); } catch { /* capture already released */ }
+      this.fraction=this.at(e.clientX);if(this.enabled)this.onCommit(this.fraction);
       this.paint();
     };
     this.el.addEventListener("pointerup", end);
-    this.el.addEventListener("pointercancel", end);
+    const cancel=(e:PointerEvent)=>{if(this.pointerId===e.pointerId)this.cancel();};
+    this.el.addEventListener("pointercancel",cancel);
+    this.el.addEventListener("lostpointercapture",cancel);
+    this.el.addEventListener("keydown",e=>{
+      if(!this.enabled||e.altKey||e.ctrlKey||e.metaKey)return;
+      if(e.key==='Escape'&&this.dragging){e.preventDefault();e.stopPropagation();this.cancel();return;}
+      if(this.dragging)return;
+      const step=this.options.step();let next:number;
+      switch(e.key){case 'Home':next=0;break;case 'End':next=1;break;
+       case 'ArrowRight':case 'ArrowUp':next=this.fraction+step;break;
+       case 'ArrowLeft':case 'ArrowDown':next=this.fraction-step;break;
+       case 'PageUp':next=this.fraction+step*5;break;case 'PageDown':next=this.fraction-step*5;break;
+       default:return;}
+      e.preventDefault();e.stopPropagation();next=Math.max(0,Math.min(1,next));
+      if(next===this.fraction)return;this.fraction=next;this.paint();this.onChange(next);this.onCommit(next);
+    });this.paint();
   }
+
+  get enabled(){return this.available;}
+  set enabled(value:boolean){this.available=value;this.el.tabIndex=value?0:-1;this.el.setAttribute('aria-disabled',String(!value));if(!value)this.cancel();this.paint();}
+  private cancel(){if(!this.dragging)return;const id=this.pointerId;this.dragging=false;this.pointerId=null;if(id!==null)try{this.el.releasePointerCapture(id);}catch{/* capture already released */}this.options.onCancel?.();this.paint();}
 
   get active(): boolean {
     return this.enabled && (this.hovering || this.dragging);
@@ -231,11 +294,14 @@ class NowPlayingBar {
   }
 
   set(fraction: number) {
+    if (this.dragging) return;
     this.fraction = Math.min(1, Math.max(0, fraction));
     this.paint();
   }
 
   private paint() {
+    this.el.setAttribute("aria-valuenow",String(Math.round(this.fraction*100)));
+    this.el.setAttribute("aria-valuetext",this.options.valueText(this.fraction));
     const active = this.active;
     this.el.classList.toggle("active", active);
     const pct = `${this.fraction * 100}%`;
@@ -246,7 +312,7 @@ class NowPlayingBar {
 }
 
 /** NowPlayingIconButton: an icon that brightens under the pointer. */
-function iconButton(icon: string, size: number, stroke: number, onClick: () => void): HTMLElement {
+function iconButton(icon: string, size: number, stroke: number, onClick: () => void): HTMLButtonElement {
   const b = h("button", { class: "np-icon" }, svg(icon, size, stroke ? { stroke } : {}));
   b.addEventListener("click", onClick);
   return b;
@@ -262,12 +328,12 @@ export function buildSpotifyCard(): SpotifyCardHost {
   const green = SPOTIFY_GREEN;
 
   // Now playing: artwork row, progress row, controls row.
-  const art = h("div", { class: "np-art" });
+  const art = h("button", { class: "np-art", type: "button", "aria-label": t("Open Spotify") });
   const artImg = h("img", { alt: "", draggable: "false" }) as HTMLImageElement;
   const artNote = svg(ICONS.musicNote, 16);
   artNote.style.color = `${green}b3`;
   art.append(artNote, artImg);
-  art.addEventListener("click", () => void Bridge.spotifyOpen());
+  art.addEventListener("click", () => void openSpotify());
   const title = h("span", { class: "np-title" });
   const subtitle = h("div", { class: "np-sub" });
   const head = h("div", { class: "np-head" },
@@ -288,12 +354,13 @@ export function buildSpotifyCard(): SpotifyCardHost {
       dragFraction = null;
       seek(f * d);
     },
+    {label:'Posição da reprodução',step:()=>5/Math.max(1,Spotify.state.track?.duration??1),valueText:f=>formatTime(f*(Spotify.state.track?.duration??0)),onCancel:()=>{dragFraction=null;paintProgress();},context:()=>Spotify.state.track?.id??''},
   );
   const progressRow = h("div", { class: "np-progress" }, elapsed, progress.el, remaining);
 
   const shuffle = iconButton(ICONS.shuffle, 10, 2.2, () => setFlag("shuffle", !Spotify.state.shuffle));
-  const prev = iconButton(ICONS.backward, 11, 0, () => void Bridge.spotifyControl("previous"));
-  const next = iconButton(ICONS.forward, 11, 0, () => void Bridge.spotifyControl("next"));
+  const prev = iconButton(ICONS.backward, 11, 0, () => void control("previous"));
+  const next = iconButton(ICONS.forward, 11, 0, () => void control("next"));
   const repeat = iconButton(ICONS.repeat, 10, 2.2, () => setFlag("repeat", !Spotify.state.repeat));
   prev.style.color = "#C5C8CD";
   next.style.color = "#C5C8CD";
@@ -302,6 +369,7 @@ export function buildSpotifyCard(): SpotifyCardHost {
   const volume = new NowPlayingBar(
     (f) => setVolume(f * 100),
     (f) => setVolume(f * 100),
+    {label:'Volume do Spotify',step:()=>.05,valueText:f=>`${Math.round(f*100)}%`},
   );
   const volumeBox = h("div", { class: "np-volume" }, volIcon, volume.el);
   const controls = h("div", { class: "np-controls" },
@@ -315,8 +383,8 @@ export function buildSpotifyCard(): SpotifyCardHost {
   const idleDot = dot("#22C55E", 5);
   const idleText = h("span");
   const idleAction = h("button", { class: "link-btn", style: `color:${green}d9` });
-  idleAction.addEventListener("click", () => void (Spotify.state.installed ? togglePlay() : Bridge.spotifyOpen()));
-  const openApp = h("button", {class:"link-btn",text:t("Open Spotify"),onclick:()=>void Bridge.spotifyOpen()});
+  idleAction.addEventListener("click", () => void (Spotify.state.installed ? togglePlay() : openSpotify()));
+  const openApp = h("button", {class:"link-btn",text:t("Open Spotify"),onclick:()=>void openSpotify()});
   const idleSub = h("span");
   const idleEl = h("div", { class: "int-card" },
     h("div", { class: "int-head" }, dot(green, 7), h("b", { text: "Spotify" }), idleSub),
@@ -326,14 +394,17 @@ export function buildSpotifyCard(): SpotifyCardHost {
 
   const searchInput=h("input",{type:"search",class:"chat-input",placeholder:t("Recent music or Spotify link"),"aria-label":t("Recent music or Spotify link")}) as HTMLInputElement;
   const matches=h("div",{class:"np-search-results",style:"display:grid;gap:4px;margin:6px 0;max-height:100px;overflow:auto"});
+  matches.setAttribute("role","status");matches.setAttribute("aria-live","polite");
   let searching=false;
+  let searchGeneration=0;
   const playItem=async (uri:string)=>{
-    if(searching)return;searching=true;
-    try { const ok=await Bridge.spotifyPlayItem(uri);matches.textContent=ok?t("Sent to Spotify"):t("Spotify could not play this item."); }
-    finally {searching=false;}
+    if(searching)return;searching=true;const generation=searchGeneration;matches.setAttribute("aria-busy","true");
+    try { const ok=await Bridge.spotifyPlayItem(uri);if(generation===searchGeneration)matches.textContent=ok?t("Sent to Spotify"):t("Spotify could not play this item."); }
+    catch { if(generation===searchGeneration)matches.textContent=t("Spotify could not play this item."); }
+    finally {searching=false;matches.setAttribute("aria-busy","false");}
   };
   const searchRecent=()=>{
-    clear(matches);const text=searchInput.value.trim();if(!text)return;
+    searchGeneration++;clear(matches);const text=searchInput.value.trim();if(!text)return;
     const uri=spotifyItemUri(text);
     if(uri){matches.append(h("button",{class:"link-btn",text:t("Play this link"),onclick:()=>void playItem(uri)}));return;}
     const tracks=recentMusic.search(text);
@@ -345,7 +416,9 @@ export function buildSpotifyCard(): SpotifyCardHost {
   searchInput.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();searchRecent();}e.stopPropagation();});
   const quiet = h("input",{type:"checkbox"}) as HTMLInputElement;
   quiet.addEventListener("change",()=>{State.settings={...State.settings,spotifyQuietAds:quiet.checked};void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);State.notify();});
-  const extras=h("div",{class:"np-options",style:"margin-top:10px;font-size:12px"},searchInput,matches,h("label",{},quiet,h("span",{text:" Lower the volume during identified ads"})));
+  const extras=h("div",{class:"np-options"},searchInput,matches,h("label",{class:"np-quiet"},quiet,h("span",{text:t("Lower the volume during identified ads")})));
+  const feedback = h("p", { class: "np-feedback", role: "status", "aria-live": "polite" });
+  feedback.hidden = true;
   const el = h("div", { class: "np-root" });
   let showing: "playing" | "idle" | null = null;
   let shownTrack: SpotifyTrack | null = null;
@@ -403,15 +476,17 @@ export function buildSpotifyCard(): SpotifyCardHost {
       artImg.removeAttribute("src");
     }
 
-    progress.enabled = !isAd(track) && track.duration > 0;
+    progress.enabled = s.running && !isAd(track) && track.duration > 0;
     paintProgress();
 
     shuffle.style.color = s.shuffle ? green : "#6B7079";
     shuffle.title = s.shuffle ? t("Shuffle on") : t("Shuffle off");
+    shuffle.setAttribute("aria-label", shuffle.title);shuffle.setAttribute("aria-pressed",String(s.shuffle));shuffle.disabled = !s.running || pendingControls.has("shuffle");
     repeat.style.color = s.repeat ? green : "#6B7079";
     repeat.title = s.repeat ? t("Repeat on") : t("Repeat off");
-    prev.title = t("Previous");
-    next.title = t("Next");
+    repeat.setAttribute("aria-label", repeat.title);repeat.setAttribute("aria-pressed",String(s.repeat));repeat.disabled = !s.running || pendingControls.has("repeat");
+    prev.title = t("Previous");prev.setAttribute("aria-label",prev.title);prev.disabled=!s.running||pendingControls.has("previous");
+    next.title = t("Next");next.setAttribute("aria-label",next.title);next.disabled=!s.running||pendingControls.has("next");
     if (playIcon !== s.playing) {
       playIcon = s.playing;
       clear(play);
@@ -419,7 +494,7 @@ export function buildSpotifyCard(): SpotifyCardHost {
       if (!s.playing) icon.style.transform = "translateX(1px)";
       play.append(icon);
     }
-    play.title = s.playing ? t("Pause") : t("Play");
+    play.title = s.playing ? t("Pause") : t("Play");play.setAttribute("aria-label",play.title);play.disabled=playPending;
 
     const level = volumeLevel(s.volume);
     if (level !== volIconLevel) {
@@ -427,6 +502,7 @@ export function buildSpotifyCard(): SpotifyCardHost {
       clear(volIcon);
       volIcon.append(svg([ICONS.volume0, ICONS.volume1, ICONS.volume2, ICONS.volume3][level], 10, { stroke: 2.2 }));
     }
+    volume.enabled = s.running;
     volume.set(s.volume / 100);
     volumeBox.title = t("Volume {0}%", { 0: s.volume });
   }
@@ -445,12 +521,16 @@ export function buildSpotifyCard(): SpotifyCardHost {
     el,
     sync() {
       quiet.checked=State.settings.spotifyQuietAds;
+      const pending = pendingControls.size > 0;
+      feedback.textContent = controlFeedback || (pending ? "A enviar comando ao Spotify…" : "");
+      feedback.hidden = !feedback.textContent;
+      playingEl.setAttribute("aria-busy",String(pending));
       const track = Spotify.state.track;
       const want = track ? "playing" : "idle";
       if (want !== showing) {
         showing = want;
         clear(el);
-        el.append(want === "playing" ? playingEl : idleEl,extras);
+        el.append(want === "playing" ? playingEl : idleEl,feedback,extras);
         shownTrack = null;
       }
       if (track) syncPlaying(track);

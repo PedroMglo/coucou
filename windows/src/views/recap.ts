@@ -71,8 +71,11 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 export function buildRecap(actions: ViewActions): ViewHost {
   const card = h("div", { class: "card wash recap-card" });
   card.style.setProperty("--wash", washRGBA("indigo"));
+  card.style.overflowY="auto";card.style.overscrollBehavior="contain";
   const el = h("div", { class: "view" }, card);
 
+  const preferenceNotice=h('div',{class:'recap-status',role:'status','aria-live':'polite',style:'display:block;white-space:normal;overflow-wrap:anywhere'});
+  let viewIntent=0,syncShare:(()=>void)|null=null;
   let built = -1;
   let shareCanvas: HTMLCanvasElement | null = null;
   /** Share mode's redraw, while it is open: a language change redraws the image. */
@@ -133,78 +136,45 @@ export function buildRecap(actions: ViewActions): ViewHost {
   }
 
   function showSummary() {
-    redrawShare = null;
+    viewIntent++;syncShare=null;redrawShare = null;
     clear(card);
-    card.append(Recap.summary ? summaryBody(Recap.summary) : emptyBody());
+    card.append(Recap.summary ? summaryBody(Recap.summary) : emptyBody(),preferenceNotice);updateNotice();
   }
 
-  function showShare(s: WeeklySummary) {
-    const thumb = h("canvas", { class: "recap-thumb" });
-    const status = h("div", { class: "recap-status" });
-    const sw = h("button", { class: Recap.prefs.hideProjects ? "switch on" : "switch" });
-
-    const draw = () => {
-      shareCanvas = renderShareImage(s, Recap.prefs.hideProjects);
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      thumb.width = Math.round(64 * dpr);
-      thumb.height = Math.round(114 * dpr);
-      const ctx = thumb.getContext("2d");
-      if (ctx) {
-        ctx.imageSmoothingQuality = "high";
-        ctx.drawImage(shareCanvas, 0, 0, thumb.width, thumb.height);
-      }
+  function updateNotice(){
+    const message=syncShare?(Recap.hidePending?'A guardar a preferência…':Recap.notice):Recap.noticeFrom==='shown'?Recap.notice:'';
+    preferenceNotice.textContent=message;preferenceNotice.hidden=!message;preferenceNotice.style.color=message&&!Recap.hidePending?'#f2b8a6':'';preferenceNotice.setAttribute('role',message&&!Recap.hidePending?'alert':'status');
+  }
+  Recap.subscribe(()=>{if(syncShare)syncShare();else updateNotice();});
+  function showShare(s:WeeklySummary){
+    const current=++viewIntent;let saving=false,copying=false,drawnHide:boolean|null=null;
+    const thumb=h('canvas',{class:'recap-thumb'}),status=h('div',{class:'recap-status'});
+    const sw=h('button',{type:'button',class:'switch','aria-label':tl("Hide project names")}) as HTMLButtonElement;
+    const retry=btn('Atualizar preferência','secondary',()=>{if(Recap.hidePending)return;if(!Recap.prefsKnown)void Recap.readPreferences();else if(Recap.retryHide!==null)void Recap.setHideProjects(Recap.retryHide);});
+    const draw=()=>{
+      drawnHide=Recap.hidePending||!Recap.prefsKnown||Recap.prefs.hideProjects||Recap.retryHide===true;
+      shareCanvas=renderShareImage(s,drawnHide);const dpr=Math.min(2,window.devicePixelRatio||1);thumb.width=Math.round(64*dpr);thumb.height=Math.round(114*dpr);
+      const ctx=thumb.getContext('2d');if(ctx){ctx.imageSmoothingQuality='high';ctx.drawImage(shareCanvas,0,0,thumb.width,thumb.height);}
     };
-
-    const say = (text: string, extra?: HTMLElement) => {
-      clear(status);
-      status.append(h("span", { text }));
-      if (extra) status.append(extra);
-    };
-
-    sw.addEventListener("click", () => {
-      const next = !Recap.prefs.hideProjects;
-      sw.classList.toggle("on", next);
-      void Recap.setHideProjects(next);
-      draw();
-      clear(status);
+    const say=(text:string,extra?:HTMLElement)=>{clear(status);status.append(h('span',{text}));if(extra)status.append(extra);};
+    const blocked=()=>Recap.hidePending||!Recap.prefsKnown||Recap.retryHide===true&&!Recap.prefs.hideProjects;
+    sw.onclick=()=>{if(blocked()||saving||copying)return;clear(status);void Recap.setHideProjects(!Recap.prefs.hideProjects);};
+    const save=btn(tl("Save image"),'primary',async()=>{
+      if(!shareCanvas||blocked()||saving||copying)return;saving=true;sync();say(T.saving);
+      try{const path=await Bridge.recapSavePng(toPngDataUrl(shareCanvas),dayKey(s.weekStart));if(current!==viewIntent)return;const name=path.split(/[\\/]/).pop()??path;say(T.savedAs(name),h('button',{class:'link-btn recap-link',text:tl("Show in folder"),onclick:()=>void Bridge.recapRevealSaved()}));}
+      catch(error){if(current===viewIntent)say(String(error).replace(/^Error:\s*/,''));}
+      finally{saving=false;if(current===viewIntent)sync();}
     });
-
-    const save = btn(tl("Save image"), "primary", async () => {
-      if (!shareCanvas) return;
-      save.disabled = true;
-      say(T.saving);
-      try {
-        const path = await Bridge.recapSavePng(toPngDataUrl(shareCanvas), dayKey(s.weekStart));
-        const name = path.split(/[\\/]/).pop() ?? path;
-        say(T.savedAs(name), h("button", {
-          class: "link-btn recap-link",
-          text: tl("Show in folder"),
-          onclick: () => void Bridge.recapRevealSaved(),
-        }));
-      } catch (err) {
-        say(String(err).replace(/^Error:\s*/, ""));
-      } finally {
-        save.disabled = false;
-      }
+    const copy=btn(tl("Copy"),'secondary',async()=>{
+      if(!shareCanvas||blocked()||saving||copying)return;copying=true;sync();try{const copied=await copyImage(shareCanvas);if(current===viewIntent)say(copied?T.copied:T.copyUnavailable);}finally{copying=false;if(current===viewIntent)sync();}
     });
-
-    const copy = btn(tl("Copy"), "secondary", async () => {
-      if (!shareCanvas) return;
-      say(await copyImage(shareCanvas) ? T.copied : T.copyUnavailable);
-    });
-
-    clear(card);
-    card.append(h("div", { class: "stack recap-share" },
-      thumb,
-      h("div", { class: "recap-share-side" },
-        h("div", { class: "recap-title", text: tl("Share your week") }),
-        h("div", { class: "settings-row" }, sw, h("span", { text: tl("Hide project names") })),
-        h("div", { class: "actions" }, save, copy, btn(tl("Back"), "secondary", showSummary)),
-        status,
-      ),
-    ));
-    draw();
-    redrawShare = draw;
+    function sync(){
+      sw.classList.toggle('on',Recap.prefs.hideProjects);sw.setAttribute('aria-pressed',blocked()?'mixed':String(Recap.prefs.hideProjects));sw.setAttribute('aria-busy',String(Recap.hidePending));sw.title=blocked()?'Estado da preferência por confirmar.':'Preferência observada.';sw.disabled=blocked()||saving||copying;
+      save.disabled=copy.disabled=blocked()||saving||copying;retry.hidden=Recap.prefsKnown&&Recap.retryHide===null;retry.disabled=Recap.hidePending||saving||copying;retry.firstElementChild!.textContent=Recap.prefsKnown?'Tentar guardar novamente':'Atualizar preferência';
+      if(drawnHide!==(Recap.hidePending||!Recap.prefsKnown||Recap.prefs.hideProjects||Recap.retryHide===true))draw();updateNotice();
+    }
+    clear(card);card.append(h('div',{class:'stack recap-share',style:'height:auto;min-height:100%;box-sizing:border-box;align-items:flex-start;flex-wrap:wrap'},thumb,h('div',{class:'recap-share-side',style:'flex:1 1 150px'},h('div',{class:'recap-title',text:tl("Share your week")}),h('div',{class:'settings-row'},sw,h('span',{text:tl("Hide project names")})),h('div',{class:'actions',style:'flex-wrap:wrap'},save,copy,btn(tl("Back"),'secondary',showSummary),retry),status,preferenceNotice)));
+    syncShare=sync;draw();sync();redrawShare=draw;
   }
 
   return {
