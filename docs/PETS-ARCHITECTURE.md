@@ -76,8 +76,12 @@ rascunho recuperado e passou fechar/reabrir sem escrita ou envio. Codex abriu
 a conversa, mas a retoma do seletor pela acessibilidade não encontrou a linha
 para reabrir; Copilot e esse percurso Codex conservam aceitação gráfica pendente,
 sem regressão demonstrada. Os quatro rascunhos dos pets anteriormente ativos
-ficaram guardados privadamente. A configuração concorrente que deixou Gravity
-inativo foi preservada, sem reativação. O rascunho GitHub
+ficaram guardados privadamente. Após clarificação expressa do utilizador em 21/10, o Gravity foi reposto: só
+o pet GitHub deve ser retirado. A galeria confirmou Codex, Gravity, Copilot CLI,
+Ollama e Spotify, sem GitHub. O desaparecimento foi observado na configuração
+ativa da .23 antes da troca; não foi identificado o autor dessa gravação. A
+migração inicial manteve indevidamente esse estado e foi corrigida sem alterar
+histórico, perfis, modelos ou os outros campos. O rascunho GitHub
 foi guardado privadamente antes da troca; não foi reaberto depois da retirada,
 e não há código novo de eliminação/migração dos seus dados IndexedDB. A conversa
 e as tarefas antigas GitHub permanecem no journal com o mesmo dono. A .23 fica

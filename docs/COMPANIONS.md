@@ -9,7 +9,9 @@ O Ollama recuperou automaticamente os 73 caracteres na CID original e passou
 fechar/reabrir, sem escrita ou envio. A verificação gráfica dos outros chats
 permanece parcial; os seus rascunhos anteriores ficaram guardados privadamente. Histórico/tarefas GitHub e os 25 perfis foram
 preservados; o seu rascunho anterior ficou também num backup privado. A .23
-permanece para recuperação. O objetivo integral tem um único agente responsável.
+permanece para recuperação. Gravity foi reposto após a clarificação de que só
+o pet GitHub deve ser retirado; a galeria confirmou a sua presença e a ausência
+do GitHub. O objetivo integral tem um único agente responsável.
 
 A aceitação nativa de apresentação/hotplug e os restantes controlos próprios
 continuam incompletos. Os sete indicadores direitos permanecem na barra.
