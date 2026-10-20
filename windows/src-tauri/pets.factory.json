@@ -594,7 +594,8 @@
         "taskProvider": "integration_github",
         "role": "service",
         "taskName": null
-      }
+      },
+      "retired": true
     },
     "integration_notion": {
       "mold": "application",

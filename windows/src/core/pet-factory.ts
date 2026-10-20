@@ -19,7 +19,7 @@ export interface PetRouting {
  readonly taskProvider:string|null;readonly role:string|null;readonly taskName:string|null;
 }
 export interface PetBlueprint {
- readonly id:string;readonly mold:PetMold;readonly service:boolean;
+ readonly id:string;readonly mold:PetMold;readonly service:boolean;readonly retired:boolean;
  readonly preferences:PetPreference;readonly presentation:PetPresentation;readonly routing:PetRouting;
 }
 type Row=Record<string,unknown>;
@@ -59,13 +59,13 @@ export function createPetFactory(input:unknown){
  // Stable identity and access policy are always explicit for each pet.
  const protectedKeys=['name','aliases','provider','permissions','localExecution'];
  for(const recipe of [source.base,...Object.values(molds),...Object.values(extensions)]){
-  if(!object(recipe))invalid();
+  if(!object(recipe)||Object.hasOwn(recipe,'retired'))invalid();
   if(recipe.preferences!==undefined&&(!object(recipe.preferences)||protectedKeys.some(k=>Object.hasOwn(recipe.preferences as Row,k))))invalid();
  }
  const entries=new Map<string,PetBlueprint>();
  const routeOwners=new Map<string,string>();
  for(const[id,raw]of Object.entries(pets)){
-  if(!object(raw)||(raw.mold!=='llm'&&raw.mold!=='application')||typeof raw.service!=='boolean'||!object(raw.preferences)||!object(raw.routing))invalid();
+  if(!object(raw)||(raw.retired!==undefined&&typeof raw.retired!=='boolean')||(raw.mold!=='llm'&&raw.mold!=='application')||typeof raw.service!=='boolean'||!object(raw.preferences)||!object(raw.routing))invalid();
   if(!['name','aliases','provider','permissions'].every(k=>Object.hasOwn(raw.preferences as Row,k)))invalid();
   const mold=molds[raw.mold];if(!object(mold))invalid();
   let effective=merge(source.base as Row,mold);
@@ -85,7 +85,10 @@ export function createPetFactory(input:unknown){
    if(typeof route!=='string'||!route||routeOwners.has(`${channel}:${route}`))invalid();
    routeOwners.set(`${channel}:${route}`,id);
   }
-  entries.set(id,freeze({id,mold:raw.mold,service:raw.service,preferences:p,presentation:effective.presentation,routing:r}) as unknown as PetBlueprint);
+  const retired=raw.retired===true;
+  // Route identities remain usable for historical conversations. New work is gated separately.
+  const routing=retired?{...r,execute:false}:r;
+  entries.set(id,freeze({id,mold:raw.mold,service:raw.service,retired,preferences:p,presentation:effective.presentation,routing}) as unknown as PetBlueprint);
  }
  if(entries.size===0)invalid();
  const services=freeze([...entries.values()].filter(p=>p.service).map(p=>p.id));
@@ -94,11 +97,12 @@ export function createPetFactory(input:unknown){
   services,
   configuration:():PetConfiguration=>structuredClone({...source.configuration as Row,pets:Object.fromEntries([...entries].map(([id,p])=>[id,p.preferences]))}) as unknown as PetConfiguration,
   forTaskProvider:(provider:string)=>typeof provider==='string'&&provider?[...entries.values()].find(p=>p.routing.taskProvider===provider)?.id??null:null,
-  profileProvider:(provider:string)=>typeof provider==='string'&&!!provider&&[...entries.values()].some(p=>p.routing.taskProvider===provider&&p.presentation.profiles),
+  profileProvider:(provider:string)=>typeof provider==='string'&&!!provider&&[...entries.values()].some(p=>!p.retired&&p.routing.taskProvider===provider&&p.presentation.profiles),
  });
 }
 export const PetFactory=createPetFactory(catalog);
 export const petBlueprint=(id:string)=>PetFactory.get(id);
+export const petRetired=(id:string)=>petBlueprint(id)?.retired===true;
 export const petForTaskProvider=(provider:string)=>PetFactory.forTaskProvider(provider);
 export const taskProviderForPet=(id:string)=>petBlueprint(id)?.routing.taskProvider??null;
 export const factoryProfileProvider=(provider:string)=>PetFactory.profileProvider(provider);

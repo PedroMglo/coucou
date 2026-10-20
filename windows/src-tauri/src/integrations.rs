@@ -68,14 +68,17 @@ pub fn start(app: AppHandle) {
     spawn(app.clone(), "integration_vercel", 5, 30, poll_vercel);
     spawn(app.clone(), "integration_stripe", 6, 30, poll_stripe);
     spawn(app.clone(), "integration_resend", 6, 60, poll_resend);
-    spawn(app.clone(), "integration_github", 7, 300, poll_github);
-    spawn_github_loops(app.clone());
+    if !crate::pet_config::retired(GITHUB_ID){
+        spawn(app.clone(), GITHUB_ID, 7, 300, poll_github);
+        spawn_github_loops(app.clone());
+    }
     spawn(app.clone(), "integration_calcom", 8, 300, poll_calcom);
     spawn(app, "integration_notion", 9, 300, poll_notion);
 }
 
 /// True when the user has this integration switched on in settings.
 fn enabled(app: &AppHandle, id: &str) -> bool {
+    if crate::pet_config::retired(id){return false;}
     app.try_state::<crate::Shared>()
         .map(|shared| {
             let settings = shared.settings.lock().unwrap();
@@ -108,6 +111,7 @@ where
 
 /// One-shot refresh from the Refresh buttons in the island.
 pub async fn poll_once(app: AppHandle, id: &str) {
+    if crate::pet_config::retired(id){return;}
     match id {
         "integration_stripe" => poll_stripe(app).await,
         "integration_github" => {
@@ -274,6 +278,7 @@ async fn poll_stripe(app: AppHandle) {
 // ── GitHub ────────────────────────────────────────────────────────────────────
 
 async fn poll_github(app: AppHandle) {
+    if crate::pet_config::retired(GITHUB_ID){return;}
     let Some(token) = secrets::get("github-token") else { return };
     let http = client();
 
@@ -506,6 +511,7 @@ fn wake_github_pulse() {
 /// limits (1 min for the pulse, 5 min for the activity grid). No-op while a
 /// request is already in flight.
 pub fn github_refresh_if_stale(section: &str) {
+    if crate::pet_config::retired(GITHUB_ID){return;}
     let now = now_ms();
     let cache = GITHUB.cache.lock().unwrap();
     match section {
@@ -549,7 +555,7 @@ pub fn github_token_changed(app: &AppHandle) {
 /// Switching the pill off forgets the pulse, so switching it back on starts
 /// silent instead of alerting on everything that changed in between.
 pub fn settings_saved(app: &AppHandle, active_integrations: &[String]) {
-    if active_integrations.iter().any(|id| id == GITHUB_ID) {
+    if !crate::pet_config::retired(GITHUB_ID)&&active_integrations.iter().any(|id| id == GITHUB_ID) {
         return;
     }
     let had_data = {

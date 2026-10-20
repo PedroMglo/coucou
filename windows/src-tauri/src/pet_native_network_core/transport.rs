@@ -78,7 +78,7 @@ struct Source { peer: Incarnation, uid: u32, socket: PathBuf, endpoint: Endpoint
 /// Only minted by this transport from one authenticated, completed RPC stream.
 /// No public fields/constructor, serde, Debug, process/endpoint getters or UI ID.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct Origin { source: Source, scan_proven: bool, enable_wifi_proven: bool }
+pub(crate) struct Origin { source: Source, scan_proven: bool, enable_wifi_proven: bool, disable_wifi_proven: bool }
 
 pub(crate) struct Reply {
     pub api_version: Option<u64>,
@@ -95,6 +95,8 @@ pub(crate) struct ScanAck { origin: Origin }
 impl ScanAck { pub(crate) fn origin(&self) -> &Origin { &self.origin } }
 pub(crate) struct EnableWifiAck { origin: Origin }
 impl EnableWifiAck { pub(crate) fn origin(&self) -> &Origin { &self.origin } }
+pub(crate) struct DisableWifiAck { origin: Origin }
+impl DisableWifiAck { pub(crate) fn origin(&self) -> &Origin { &self.origin } }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WriteState { NotStarted, MayHaveStarted }
@@ -201,10 +203,10 @@ impl ScanReader {
             if frame.get("error").is_some_and(|v| !v.is_null()) { return Err(Error::NativeFailure); }
             let expected = match rpc {
                 Rpc::Scan => json!({"success":true,"message":"scanning"}),
-                Rpc::EnableWifi => {
+                Rpc::EnableWifi | Rpc::DisableWifi => {
                     let fields=frame.as_object().ok_or(Error::Protocol)?;
                     if fields.len()!=2||!fields.contains_key("id")||!fields.contains_key("result"){return Err(Error::Protocol);}
-                    json!({"enabled":true})
+                    json!({"enabled":matches!(rpc,Rpc::EnableWifi)})
                 },
                 Rpc::Read => return Err(Error::Protocol),
             };
@@ -215,7 +217,7 @@ impl ScanReader {
 }
 
 #[derive(Clone, Copy)]
-enum Rpc { Read, Scan, EnableWifi }
+enum Rpc { Read, Scan, EnableWifi, DisableWifi }
 
 async fn request<E, F>(config: &Config, rpc: Rpc, expected: Option<&Origin>, guard: F) -> Result<Reply, Failure<E>>
 where F: FnOnce(&Origin) -> Result<(), E> {
@@ -225,16 +227,16 @@ where F: FnOnce(&Origin) -> Result<(), E> {
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
         let (mut stream, source) = connect(config).await.map_err(|e| failure(e, write))?;
         if let Some(origin) = expected {
-            let proven=match rpc {Rpc::Scan=>origin.scan_proven,Rpc::EnableWifi=>origin.enable_wifi_proven,Rpc::Read=>false};
+            let proven=match rpc {Rpc::Scan=>origin.scan_proven,Rpc::EnableWifi=>origin.enable_wifi_proven,Rpc::DisableWifi=>origin.disable_wifi_proven,Rpc::Read=>false};
             if !proven { return Err(failure(Error::Unsupported, write)); }
             if source != origin.source { return Err(failure(Error::OriginChanged, write)); }
         }
         let mut scanner = ScanReader::default();
-        let handshake = if matches!(rpc, Rpc::Scan | Rpc::EnableWifi) {
+        let handshake = if matches!(rpc, Rpc::Scan | Rpc::EnableWifi | Rpc::DisableWifi) {
             Some(scanner.handshake(&mut stream).await.map_err(|e| failure(e, write))?)
         } else { None };
         let id = next_request_id(&NEXT_ID).map_err(|e| failure(e, write))?;
-        let method = match rpc { Rpc::Read => "network.getState", Rpc::Scan => "network.wifi.scan", Rpc::EnableWifi=>"network.wifi.enable" };
+        let method = match rpc { Rpc::Read => "network.getState", Rpc::Scan => "network.wifi.scan", Rpc::EnableWifi=>"network.wifi.enable", Rpc::DisableWifi=>"network.wifi.disable" };
         let mut bytes = serde_json::to_vec(&json!({"id":id,"method":method})).map_err(|_| failure(Error::Protocol, write))?;
         bytes.push(b'\n');
         // Wait before the final authority checks. The guard never precedes an
@@ -243,7 +245,8 @@ where F: FnOnce(&Origin) -> Result<(), E> {
         verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
         let candidate = Origin { source: source.clone(), scan_proven: handshake.is_some(),
-            enable_wifi_proven: expected.is_some_and(|o|o.enable_wifi_proven) };
+            enable_wifi_proven: expected.is_some_and(|o|o.enable_wifi_proven),
+            disable_wifi_proven: expected.is_some_and(|o|o.disable_wifi_proven) };
         guard(&candidate).map_err(Failure::Guard)?;
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
         write_frame(&mut stream, &bytes, &mut write).await.map_err(|e| failure(e, write))?;
@@ -256,8 +259,9 @@ where F: FnOnce(&Origin) -> Result<(), E> {
         verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
         let origin = match rpc {
             Rpc::Read=>Origin {source,scan_proven:scan_supported(raw.api_version,&raw.capabilities),
-                enable_wifi_proven:crate::lifecycle::enable_wifi_supported(&raw.result,raw.api_version,&raw.capabilities)},
-            Rpc::Scan|Rpc::EnableWifi=>candidate,
+                enable_wifi_proven:crate::lifecycle::enable_wifi_supported(&raw.result,raw.api_version,&raw.capabilities),
+                disable_wifi_proven:crate::lifecycle::disable_wifi_supported(&raw.result,raw.api_version,&raw.capabilities)},
+            Rpc::Scan|Rpc::EnableWifi|Rpc::DisableWifi=>candidate,
         };
         Ok(Reply { api_version: raw.api_version, capabilities: raw.capabilities, result: raw.result, origin })
     };
@@ -290,6 +294,12 @@ where F:FnOnce(&Origin)->Result<(),E>{
     if !expected.enable_wifi_proven{return Err(failure(Error::Unsupported,WriteState::NotStarted));}
     let reply=request(config,Rpc::EnableWifi,Some(expected),guard).await?;
     Ok(EnableWifiAck {origin:reply.origin})
+}
+pub(crate) async fn disable_wifi<E,F>(config:&Config,expected:&Origin,guard:F)->Result<DisableWifiAck,Failure<E>>
+where F:FnOnce(&Origin)->Result<(),E>{
+    if !expected.disable_wifi_proven{return Err(failure(Error::Unsupported,WriteState::NotStarted));}
+    let reply=request(config,Rpc::DisableWifi,Some(expected),guard).await?;
+    Ok(DisableWifiAck {origin:reply.origin})
 }
 
 // The unguarded compatibility helper is fixture-only; production must supply a
@@ -399,4 +409,39 @@ async fn read_reply(stream: &mut UnixStream, id: u64) -> Result<WireReply, Error
 #[cfg(test)]
 pub(crate) fn config_for_fixture(socket: PathBuf, runtime: PathBuf, trusted_executable: PathBuf, uid: u32, deadline: Duration) -> Config {
     Config {socket,runtime,uid,trusted_executable,trusted_executable_uid:uid,deadline}
+}
+
+
+/// Read-only domain result: deliberately has no network Origin, target scope or
+/// mutation proof. Socket authentication and framing are shared with network.
+pub(crate) struct BluetoothReply {
+    pub(crate) api_version: Option<u64>,
+    pub(crate) capabilities: Vec<String>,
+    pub(crate) result: Value,
+}
+
+/// Fixed query only. No method, parameters, subscription or selector is supplied
+/// by a renderer. Original context is checked at the writer after peer checks.
+pub(crate) async fn bluetooth_snapshot_guarded<E, F>(config: &Config, guard: F) -> Result<BluetoothReply, Failure<E>>
+where F: FnOnce() -> Result<(), E> {
+    let deadline = Instant::now() + config.deadline;
+    let mut write = WriteState::NotStarted;
+    let operation = async {
+        let (mut stream, source) = connect(config).await.map_err(|e| failure(e, write))?;
+        let id = next_request_id(&NEXT_ID).map_err(|e| failure(e, write))?;
+        let mut bytes = serde_json::to_vec(&json!({"id":id,"method":"bluetooth.getState"})).map_err(|_| failure(Error::Protocol, write))?;
+        bytes.push(b'\n');
+        stream.writable().await.map_err(|_| failure(Error::Unavailable, write))?;
+        verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
+        if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
+        guard().map_err(Failure::Guard)?;
+        verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
+        if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
+        write_frame(&mut stream, &bytes, &mut write).await.map_err(|e| failure(e, write))?;
+        let reply = read_reply(&mut stream, id).await.map_err(|e| failure(e, write))?;
+        verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
+        Ok(BluetoothReply {api_version:reply.api_version,capabilities:reply.capabilities,result:reply.result})
+    };
+    let result = timeout_at(deadline, operation).await;
+    finish_result(result.map_err(|_| failure(Error::Timeout, write))?, deadline, write)
 }

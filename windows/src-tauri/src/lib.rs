@@ -31,6 +31,7 @@ use pet_native_network_core::{lifecycle,authority_fence,executor};
 #[cfg(target_os="linux")] use pet_native_network_core::transport;
 mod pet_native_binding;
 mod pet_native_network;
+mod pet_bluetooth;
 mod pet_chat;
 mod session_chat;
 mod session_bridge;
@@ -1014,10 +1015,12 @@ pub fn run() {
             pet_control::pet_control_context,
             pet_native_binding::pet_control_navigation_context,
             pet_native_binding::pet_control_navigate,
+            pet_bluetooth::pet_system_bluetooth_read,
             pet_native_network::pet_system_network_read,
             pet_native_network::pet_system_network_view,
             pet_native_network::pet_system_network_scan,
             pet_native_network::pet_system_network_enable_wifi,
+            pet_native_network::pet_system_network_disable_wifi,
             pet_native_network::pet_system_network_ticket,
             pet_native_network::pet_system_network_cancel,
             pet_chat::pet_chat_open,

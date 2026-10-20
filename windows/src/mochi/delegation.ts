@@ -1,8 +1,10 @@
+import {petRetired} from "../core/pet-factory";
 import {pillDefinition} from "../core/pills";
 import {petCapabilities} from "./capabilities";
 
 /** Editable requests only. Selecting a service never starts an AI or PC job. */
 export function delegatedRequest(id:string):{source:string;text:string}|null {
+  if(petRetired(id))return null;
   const pet=pillDefinition(id);
   if(!pet || petCapabilities(id).execute || !["service","workspace","agent"].includes(pet.category))return null;
   const requests:Record<string,string>={

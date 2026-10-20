@@ -156,3 +156,17 @@ fn enable_binding_observe(e:&Env)->String {
  let e=Env::new();e.system();let scope=enable_binding_observe(&e);let original=e.prepared();e.mode(Mode::Compact);e.system();assert!(original.prepared.fixture_enable_wifi(&e.service,&scope,"old-original").is_err());
  let view=e.prepared().prepared.fixture_view(&e.service).unwrap();assert!(!view.refreshing);
 }
+
+fn disable_binding_observe(e:&Env)->String {
+ let mut w=e.read().work.unwrap();w.begin_dispatch(peer(),Instant::now()).unwrap();
+ w.finish_read(lifecycle::NativeObservation{producer:peer(),api_version:Some(34),capabilities:vec!["network".into()],result:json!({"backend":"networkmanager","wifiEnabled":false,"wifiDevices":[{"name":"wlan0","hwAddress":"","state":"disconnected","connected":false,"apCapable":false,"networks":null}]}),targets:vec![],scan_support:lifecycle::ScanSupport::VerifiedByAdapter,observed_at_ms:1_792_500_000_000},Instant::now()).unwrap();
+ e.prepared().prepared.fixture_view(&e.service).unwrap().disable_wifi_scope.unwrap()
+}
+#[test]fn disable_checked_request_has_only_revision_scope_and_intent(){
+ let good=json!({"expectedRevision":"1","scope":"opaque-scope","intentId":"disable_1"});assert!(serde_json::from_value::<DisableWifiRequest>(good.clone()).is_ok());
+ for (key,value)in [("expectedRevision",json!(1)),("scope",json!("x".repeat(129))),("intentId",json!("bad intent")),("enabled",json!(true)),("device",json!("wlan0")),("target",json!("native")),("method",json!("network.wifi.disable"))]{let mut v=good.clone();v[key]=value;assert!(serde_json::from_value::<DisableWifiRequest>(v).is_err());}
+}
+#[test]fn disable_original_native_prepared_context_is_never_reminted_after_route_roundtrip(){
+ let e=Env::new();e.system();let scope=disable_binding_observe(&e);let original=e.prepared();e.mode(Mode::Compact);e.system();assert!(original.prepared.fixture_disable_wifi(&e.service,&scope,"old-original").is_err());
+ let view=e.prepared().prepared.fixture_view(&e.service).unwrap();assert!(!view.refreshing);
+}

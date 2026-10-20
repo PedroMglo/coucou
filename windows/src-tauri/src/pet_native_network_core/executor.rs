@@ -48,6 +48,7 @@ enum Command {
     Read { window: Stamp, force: bool, response: Response<l::Ticket> },
     Scan { window: Stamp, scope: String, intent: String, response: Response<l::Ticket> },
     EnableWifi { window: Stamp, scope: String, intent: String, response: Response<l::Ticket> },
+    DisableWifi { window: Stamp, scope: String, intent: String, response: Response<l::Ticket> },
     View { window: Stamp, response: Response<l::View> },
     Ticket { window: Stamp, id: String, response: Response<l::Ticket> },
     Cancel { window: Stamp, id: String, response: Response<l::Ticket> },
@@ -59,7 +60,7 @@ struct Inspection { association: Option<Association>, active: bool, reserved: u6
 impl Command {
     fn abandoned(&self) -> bool {
         match self {
-            Self::Read { response,.. } | Self::Scan { response,.. } | Self::EnableWifi { response,.. } |
+            Self::Read { response,.. } | Self::Scan { response,.. } | Self::EnableWifi { response,.. } | Self::DisableWifi { response,.. } |
             Self::Ticket { response,.. } | Self::Cancel { response,.. } => response.is_closed(),
             Self::View { response,.. } => response.is_closed(),
             #[cfg(test)]
@@ -68,7 +69,7 @@ impl Command {
     }
     fn reject(self, reason: l::Reason) {
         match self {
-            Self::Read { response,.. } | Self::Scan { response,.. } | Self::EnableWifi { response,.. } |
+            Self::Read { response,.. } | Self::Scan { response,.. } | Self::EnableWifi { response,.. } | Self::DisableWifi { response,.. } |
             Self::Ticket { response,.. } | Self::Cancel { response,.. } => { let _ = response.send(Err(reason)); }
             Self::View { response,.. } => { let _ = response.send(Err(reason)); }
             #[cfg(test)]
@@ -108,6 +109,14 @@ impl Client {
         }
         let window=window.capture(&self.binding)?;
         self.submit(|response| Command::EnableWifi {window,scope:scope.into(),intent:intent.into(),response}).await
+    }
+pub(crate) async fn disable_wifi(&self, window: &WindowRef, scope: &str, intent: &str) -> Result<l::Ticket,l::Reason> {
+        if scope.len()>128 { return Err(l::Reason::StaleTarget); }
+        if intent.is_empty() || intent.len()>64 || !intent.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'-'|b'_')) {
+            return Err(l::Reason::InvalidIntent);
+        }
+        let window=window.capture(&self.binding)?;
+        self.submit(|response| Command::DisableWifi {window,scope:scope.into(),intent:intent.into(),response}).await
     }
     pub(crate) async fn view(&self, window: &WindowRef) -> Result<l::View,l::Reason> {
         let window=window.capture(&self.binding)?;
@@ -165,6 +174,7 @@ enum Outcome {
     Read { result: Result<t::Reply,t::Failure<GuardReason>>, producer: l::ProducerId, observed_at_ms: Option<u64> },
     Scan { result: Result<t::ScanAck,t::Failure<GuardReason>>, association: Association },
     EnableWifi { result: Result<t::EnableWifiAck,t::Failure<GuardReason>>, association: Association },
+    DisableWifi { result: Result<t::DisableWifiAck,t::Failure<GuardReason>>, association: Association },
 }
 struct Completed { work: l::Work, outcome: Outcome, permit: Arc<Permit>, window: Stamp }
 
@@ -203,6 +213,17 @@ fn spawn_enable_wifi(native: t::Config, mut work: l::Work, association: Associat
             })
         }).await;
         Completed {work,outcome:Outcome::EnableWifi {result,association},permit,window}
+    })
+}
+fn spawn_disable_wifi(native: t::Config, mut work: l::Work, association: Association, permit: Arc<Permit>, window: Stamp, binding: Arc<AuthorityFence>) -> JoinHandle<Completed> {
+    tokio::spawn(async move {
+        let result = t::disable_wifi(&native,&association.origin,|fresh| {
+            if fresh!=&association.origin { return Err(GuardReason::Lifecycle(l::Reason::SourceChanged)); }
+            window.run(&binding,|_|work.begin_dispatch(association.producer,Instant::now())).map_err(GuardReason::Fence)?.map_err(GuardReason::Lifecycle).and_then(|op| {
+                if op==l::Operation::DisableWifi { Ok(()) } else { Err(GuardReason::Lifecycle(l::Reason::InvalidObservation)) }
+            })
+        }).await;
+        Completed {work,outcome:Outcome::DisableWifi {result,association},permit,window}
     })
 }
 fn native_error(error: t::Error) -> l::NativeError {
@@ -251,6 +272,11 @@ fn publish(completed: Completed, association: &mut Option<Association>, acceptin
         },
         Outcome::EnableWifi {result,association:expected} => match result {
             Ok(ack) if ack.origin()==&expected.origin => { let _ = work.finish_enable_wifi(expected.producer,Instant::now()); }
+            Ok(_) => { let _ = work.fail(l::NativeError::InvalidResponse,Instant::now()); }
+            Err(error) => failed(work,error),
+        },
+        Outcome::DisableWifi {result,association:expected} => match result {
+            Ok(ack) if ack.origin()==&expected.origin => { let _ = work.finish_disable_wifi(expected.producer,Instant::now()); }
             Ok(_) => { let _ = work.fail(l::NativeError::InvalidResponse,Instant::now()); }
             Err(error) => failed(work,error),
         },
@@ -335,6 +361,20 @@ async fn actor(native: t::Config, service: l::Service, mut counter: ProducerCoun
                             Ok(admission.ticket)
                         })();
                         let _=response.send(result);
+                    }                    Command::DisableWifi {window,scope,intent,response} => {
+                        let result = (|| {
+                            let admission=window.run(&binding,|owner|service.disable_wifi(owner,&scope,&intent,Instant::now()))??;
+                            if let Some(work)=admission.work {
+                                if active.is_some() { drop(work);return Err(l::Reason::Busy); }
+                                let Some(association)=current.clone() else {
+                                    let _=work.fail(l::NativeError::InvalidResponse,Instant::now());
+                                    return Err(l::Reason::InvalidObservation);
+                                };
+                                active=Some(spawn_disable_wifi(native.clone(),work,association,permit.clone(),window,binding.clone()));
+                            }
+                            Ok(admission.ticket)
+                        })();
+                        let _=response.send(result);
                     }
                     Command::View {window,response} => {
                         let result=window.run(&binding,|owner|service.view(owner,Instant::now())).and_then(|v|v);let _=response.send(result);
@@ -389,6 +429,10 @@ impl Prepared {
     pub(crate) fn fixture_enable_wifi(&self,service:&l::Service,scope:&str,intent:&str)->Result<l::Admission,l::Reason>{
         self.stamp.run(&self.binding,|owner|service.enable_wifi(owner,scope,intent,Instant::now()))?
     }
+    #[cfg(test)]
+    pub(crate) fn fixture_disable_wifi(&self,service:&l::Service,scope:&str,intent:&str)->Result<l::Admission,l::Reason>{
+        self.stamp.run(&self.binding,|owner|service.disable_wifi(owner,scope,intent,Instant::now()))?
+    }
 }
 /// Test-only inert inbox: captures real fenced request state but starts no actor,
 /// singleton, Tokio worker, socket, account or native device operation.
@@ -431,6 +475,11 @@ impl Client {
         if scope.len()>128{return Err(l::Reason::StaleTarget);}
         if intent.is_empty()||intent.len()>64||!intent.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'-'|b'_')) {return Err(l::Reason::InvalidIntent);}
         self.enqueue(|response|Command::EnableWifi {window:prepared.stamp,scope:scope.into(),intent:intent.into(),response})
+    }
+pub(crate) fn enqueue_prepared_disable_wifi(&self,prepared:Prepared,scope:&str,intent:&str)->Result<Pending<l::Ticket>,l::Reason> {
+        if scope.len()>128{return Err(l::Reason::StaleTarget);}
+        if intent.is_empty()||intent.len()>64||!intent.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'-'|b'_')) {return Err(l::Reason::InvalidIntent);}
+        self.enqueue(|response|Command::DisableWifi {window:prepared.stamp,scope:scope.into(),intent:intent.into(),response})
     }
     pub(crate) fn enqueue_prepared_ticket(&self,prepared:Prepared,id:&str)->Result<Pending<l::Ticket>,l::Reason> {
         if id.len()>128{return Err(l::Reason::NotFound);}

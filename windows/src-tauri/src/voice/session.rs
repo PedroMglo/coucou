@@ -188,6 +188,7 @@ fn view(app: &AppHandle, stop:&Arc<AtomicBool>, phase: &str, heard: &str, answer
 }
 
 fn available(app: &AppHandle, pet: Pet) -> bool {
+    if crate::pet_config::require_active_provider(pet.provider()).is_err(){return false;}
     let configured={let shared=app.state::<crate::Shared>();let s=shared.settings.lock().unwrap();crate::pet_config::pet_id(pet.provider()).is_some_and(|id|s.main_pill==id || s.active_integrations.iter().any(|active|active==id))};
     if !configured{return false;}
     match pet {

@@ -387,6 +387,7 @@ impl Chat {
 
     pub fn reserve_conversation(&self,provider:&str,expected:Option<&str>)->Result<ConversationReservation,String> {
         let provider=if provider.is_empty(){ANTHROPIC}else{provider};
+        crate::pet_config::require_active_provider(provider)?;
         if self.admission.is_some(){return Err("The CLI request was cancelled.".into());}
         if self.disk_error {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
         let mut all=self.inner.lock().unwrap();self.flush_pending(&mut all)?;let c=all.pets.entry(provider.into()).or_default();c.identify();
@@ -407,6 +408,7 @@ impl Chat {
         let mut matching=all.pets.values().flat_map(|c|c.tasks.iter()).filter(|task|task.id==id);
         let task=matching.next().cloned().ok_or("A tarefa já não está no histórico local.")?;
         if matching.next().is_some(){return Err("O identificador da tarefa é ambíguo. A retoma foi recusada.".into());}
+        crate::pet_config::require_active_provider(&task.provider)?;
         task.resume_prompt()?;
         let provider=task.provider.clone();
         if all.pets.get(&provider).is_some_and(Conversation::busy){return Err(BUSY_ERROR.into());}
@@ -467,6 +469,7 @@ impl Chat {
     }
 
     pub fn check_admission(&self,provider:&str)->Result<(),String>{
+        crate::pet_config::require_active_provider(provider)?;
         let Some(ticket)=&self.admission else{return Ok(());};
         if ticket.provider!=provider||ticket.cancel.load(Ordering::Acquire){return Err("The CLI request was cancelled.".into());}
         let all=self.inner.lock().unwrap();
@@ -673,6 +676,7 @@ impl Chat {
     }
 
     fn start(&self,provider:&str,cancel:Arc<AtomicBool>,exclusive:bool)->Result<Turn,String> {
+        crate::pet_config::require_active_provider(provider)?;
         if self.disk_error && exclusive {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
         let mut all=self.inner.lock().unwrap();
         if let Some(ticket)=&self.admission {
@@ -1129,6 +1133,7 @@ pub async fn send_for_phone(
 /// that provider, and only once it has a key (or, for a local server, an
 /// address): nothing is sent anywhere before that.
 pub async fn models(settings: &Settings, provider: &str) -> Result<Vec<ModelInfo>, String> {
+    crate::pet_config::require_active_provider(provider)?;
     if provider=="copilot" {return crate::copilot_adapter::models().await;}
     if crate::cli_chat::backend(provider)==Some("codex") { return crate::codex_chat::models().await; }
     if matches!(provider,"antigravity"|"gemini-cli"|"claude-cli") {
@@ -2171,9 +2176,9 @@ mod durable_request_history_tests {
         assert_eq!(chat.restore_conversation("codex",&cid).unwrap().request_history,archived.request_history);
     }
     #[test]fn logical_pet_ownership_is_kept_separate_from_its_codex_engine(){
-        let chat=Chat::default();let(cid,_)=stopped(&chat,"integration_github","codex","github origin");stopped(&chat,"codex","codex","codex origin");
-        let view=chat.read_conversation("integration_github",&cid).unwrap();let event=&view.request_history[0];
-        assert_eq!(event.provider,"integration_github");assert_eq!(event.pet_id,"integration_github");assert_eq!(event.conversation_id,cid);
+        let chat=Chat::default();let(cid,_)=stopped(&chat,"integration_notion","codex","notion origin");stopped(&chat,"codex","codex","codex origin");
+        let view=chat.read_conversation("integration_notion",&cid).unwrap();let event=&view.request_history[0];
+        assert_eq!(event.provider,"integration_notion");assert_eq!(event.pet_id,"integration_notion");assert_eq!(event.conversation_id,cid);
         assert!(chat.read_conversation("codex",&cid).is_err());assert_eq!(chat.conversation("codex").unwrap().request_history[0].query,"codex origin");
     }
     #[test]fn late_terminal_callback_from_a_cannot_relabel_b(){
@@ -2563,6 +2568,45 @@ mod process_census_chat_tests {
  #[test]fn reserved_turn_is_distinct_from_running_and_has_no_native_alias(){let chat=Chat::default();let _reservation=chat.reserve_conversation("codex",None).unwrap();let work=chat.process_census_live_work(&[binding("codex","codex")]);assert_eq!(work.rows.len(),1);assert_eq!(work.rows[0].phase,"reserved");assert!(work.rows[0].native_session_id.is_none());}
  #[test]fn only_native_session_seen_in_this_live_epoch_is_exposed(){let chat=Chat::default();let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);chat.remember_session(&turn,SID,"/synthetic",false);let work=chat.process_census_live_work(&[binding("codex","codex")]);assert_eq!(work.rows[0].native_session_id.as_deref(),Some(SID));drop(lease);let next=chat.begin_cli("codex",Arc::default()).unwrap();let _lease=chat.lease(&next);let work=chat.process_census_live_work(&[binding("codex","codex")]);assert!(work.rows[0].native_session_id.is_none());}
  #[test]fn cancelled_and_completed_work_is_not_live(){let chat=Chat::default();let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);turn.cancel.store(true,Ordering::Release);assert!(chat.process_census_live_work(&[binding("codex","codex")]).rows.is_empty());drop(lease);assert!(chat.process_census_live_work(&[binding("codex","codex")]).rows.is_empty());}
- #[test]fn service_logical_owner_and_disabled_binding_are_preserved(){let chat=Chat::default();let turn=chat.begin_cli("integration_github",Arc::default()).unwrap();let _lease=chat.lease(&turn);chat.remember_session(&turn,SID,"/synthetic",false);let mut b=binding("integration_github","codex");let work=chat.process_census_live_work(&[b.clone()]);assert_eq!(work.rows[0].owner,"integration_github");assert_eq!(work.rows[0].native_provider.as_deref(),Some("codex"));b.enabled=false;assert!(chat.process_census_live_work(&[b]).rows.is_empty());}
+ #[test]fn service_logical_owner_and_disabled_binding_are_preserved(){let chat=Chat::default();let turn=chat.begin_cli("integration_notion",Arc::default()).unwrap();let _lease=chat.lease(&turn);chat.remember_session(&turn,SID,"/synthetic",false);let mut b=binding("integration_notion","codex");let work=chat.process_census_live_work(&[b.clone()]);assert_eq!(work.rows[0].owner,"integration_notion");assert_eq!(work.rows[0].native_provider.as_deref(),Some("codex"));b.enabled=false;assert!(chat.process_census_live_work(&[b]).rows.is_empty());}
  #[test]fn a_busy_library_is_unavailable_not_zero(){let chat=Chat::default();let _guard=chat.inner.lock().unwrap();let work=chat.process_census_live_work(&[binding("codex","codex")]);assert_eq!(work.status,"unavailable");assert_eq!(work.reason.as_deref(),Some("libraryBusy"));}
+}
+
+#[cfg(test)]mod retirement_tests {
+ use super::*;
+ const OWNER:&str="integration_github";
+ fn saved()->Chat{
+  let chat=Chat::default();let mut c=Conversation::default();c.identify();
+  c.plain=vec![json!({"role":"user","content":"old GitHub question"}),json!({"role":"assistant","content":"old GitHub answer"})];
+  let mut task=crate::assistant_tasks::Task::new(OWNER,"old task","/tmp","codex","model",1);
+  task.recover();task.conversation_id=Some(c.id.clone());c.tasks.push(task);
+  chat.inner.lock().unwrap().pets.insert(OWNER.into(),c);chat
+ }
+ #[test]fn retired_work_is_rejected_without_changing_legacy_conversation_or_task(){
+  let chat=saved();let before=serde_json::to_value(chat.conversation(OWNER).unwrap()).unwrap();
+  let tasks=serde_json::to_value(chat.tasks()).unwrap();let id=chat.tasks()[0].id.clone();
+  assert!(chat.reserve_conversation(OWNER,None).is_err());
+  assert!(chat.check_admission(OWNER).is_err());
+  assert!(chat.begin_cli(OWNER,Arc::default()).is_err());
+  assert!(chat.reserve_task_resume(&id).is_err());
+  assert_eq!(serde_json::to_value(chat.conversation(OWNER).unwrap()).unwrap(),before);
+  assert_eq!(serde_json::to_value(chat.tasks()).unwrap(),tasks);
+  assert_eq!(chat.history(OWNER).len(),2);assert_eq!(chat.conversations(OWNER,"").unwrap().len(),1);
+  assert!(chat.reserve_conversation("codex",None).is_ok());assert!(chat.reserve_conversation("copilot",None).is_ok());
+ }
+ #[test]fn retired_model_queries_fail_before_any_native_provider_lookup(){
+  let settings=Settings::default();
+  let result=tauri::async_runtime::block_on(models(&settings,OWNER));
+  assert!(result.unwrap_err().contains("temporariamente"));
+  let result=tauri::async_runtime::block_on(crate::cli_chat::resolve_model(&settings,OWNER,"@fast"));
+  assert!(result.unwrap_err().contains("temporariamente"));
+ }
+}
+
+/// Tests restore legacy data without starting work for a retired provider.
+#[cfg(test)]impl Chat {
+ pub(crate) fn fixture_restore_saved(&self,provider:&str,saved:SavedConversation){
+  assert!(crate::assistant_memory::supported(provider));
+  self.inner.lock().unwrap().pets.insert(provider.into(),Conversation::from_saved(saved));
+ }
 }

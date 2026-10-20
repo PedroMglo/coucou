@@ -475,3 +475,5 @@ fn native_scan_errors_before_dispatch_keep_typed_reason_without_unknown_action()
 }
 
 include!("enable_lifecycle_tests.rs");
+
+include!("disable_lifecycle_tests.rs");

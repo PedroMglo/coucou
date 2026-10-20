@@ -1,3 +1,4 @@
+import {petRetired} from "../core/pet-factory";
 // Integration events → island state. Port of the `handle…` methods in the Swift
 // pollers: a genuinely new item flips the pill to finished/error, badges it when
 // the pill isn't focused, plays a sound, and clears itself after 60 s.
@@ -27,6 +28,7 @@ export function registerIntegrationHandlers(island: Island) {
  * is focused, as on macOS.
  */
 export function handleGitHubAlerts(events: GitHubEvent[]) {
+  if(petRetired(GITHUB))return;
   if (State.paused) return;
   const alert = gitHubAlert(events);
   if (!alert) return;
@@ -41,6 +43,7 @@ let gitHubShown = false;
 
 /** The GitHub card just came on screen (focused, island opened): refresh it if stale. */
 function refreshGitHubWhenShown() {
+  if(petRetired(GITHUB))return;
   const shown = State.mode === "expanded" && State.focusTask?.id === GITHUB;
   if (shown && !gitHubShown) void Bridge.githubRefresh("pulse");
   gitHubShown = shown;
@@ -91,6 +94,7 @@ export async function refreshHookPills() {
 }
 
 function handle(island: Island, update: IntegrationUpdate) {
+  if(petRetired(update.id))return;
   if (State.paused) return;
 
   const previous = State.integrations[update.id];

@@ -13,6 +13,7 @@ impl Client {
  pub(crate) fn enqueue_prepared_view(&self,_:Prepared)->Result<Pending<l::View>,l::Reason>{Err(l::Reason::Unsupported)}
  pub(crate) fn enqueue_prepared_scan(&self,_:Prepared,_:&str,_:&str)->Result<Pending<l::Ticket>,l::Reason>{Err(l::Reason::Unsupported)}
  pub(crate) fn enqueue_prepared_enable_wifi(&self,_:Prepared,_:&str,_:&str)->Result<Pending<l::Ticket>,l::Reason>{Err(l::Reason::Unsupported)}
+pub(crate) fn enqueue_prepared_disable_wifi(&self,_:Prepared,_:&str,_:&str)->Result<Pending<l::Ticket>,l::Reason>{Err(l::Reason::Unsupported)}
  pub(crate) fn enqueue_prepared_ticket(&self,_:Prepared,_:&str)->Result<Pending<l::Ticket>,l::Reason>{Err(l::Reason::Unsupported)}
  pub(crate) fn enqueue_prepared_cancel(&self,_:Prepared,_:&str)->Result<Pending<l::Ticket>,l::Reason>{Err(l::Reason::Unsupported)}
 }

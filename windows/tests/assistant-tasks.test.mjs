@@ -32,7 +32,7 @@ test("task controls preserve the pet identity and never default an unknown job t
 const {petCapabilities}=await import("../src/mochi/capabilities.ts");
 const {availablePills}=await import("../src/core/pills.ts");
 test("every Linux pet has an honest role and only implemented account bridges offer PC execution",()=>{
- const pets=availablePills("linux");assert.equal(pets.length,23);
+ const pets=availablePills("linux");assert.equal(pets.length,22);
  for(const pet of pets){const c=petCapabilities(pet.id);assert.ok(c.role.length>12,pet.id);
   if(c.execute)assert.ok(["codex","copilot","antigravity","gemini-cli","claude-cli","integration_github","integration_spotify","integration_resend","integration_notion","integration_n8n","integration_vercel","integration_calcom","integration_stripe"].includes(c.chat),pet.id);
  }

@@ -57,6 +57,14 @@ pub struct Document {pub config:Configuration,pub path:String,pub revision:Strin
 #[derive(Clone,Debug,PartialEq)]
 pub struct Selection {pub model:String,pub effort:String,pub mode:String}
 pub fn defaults()->Configuration {factory::bundled()}
+/// Availability is bundled policy, separate from stable history/account identity.
+pub fn retired(id:&str)->bool {factory::retired(id)}
+pub fn require_active(id:&str)->Result<(),String>{
+ if retired(id){Err("O pet GitHub está temporariamente desativado. O histórico e as preferências foram preservados.".into())}else{Ok(())}
+}
+pub fn require_active_provider(provider:&str)->Result<(),String>{
+ if let Some(id)=integration_pet(provider){require_active(id)?;}Ok(())
+}
 pub fn path()->PathBuf {crate::settings::config_dir().join("pets.json")}
 pub const SERVICE_PETS:&[&str]=&["integration_resend","integration_n8n","integration_vercel","integration_github","integration_notion","integration_calcom","integration_stripe","integration_spotify"];
 pub fn service(id:&str)->bool {SERVICE_PETS.contains(&id)}
@@ -70,7 +78,7 @@ impl Configuration {
  }
 }
 pub fn require(id:&str,capability:&str)->Result<(),String>{
- let c=read()?;let p=c.permissions(id)?;
+ require_active(id)?;let c=read()?;let p=c.permissions(id)?;
  let allowed=match capability{"documents"=>p.documents,"emailDrafts"=>p.email_drafts,"music"=>p.music,"openApps"=>p.open_apps,_=>false};
  if allowed{Ok(())}else{Err(format!("{} não tem acesso a {capability}. Altera as permissões na gestão deste pet.",c.pets[id].name))}
 }
@@ -151,7 +159,7 @@ pub(crate) fn read_existing()->Result<Configuration,String> {
 mod read_existing_tests;
 pub fn identity_name(id:&str)->String {read().ok().and_then(|c|c.pets.get(id).map(|p|p.name.clone())).or_else(||defaults().pets.get(id).map(|p|p.name.clone())).unwrap_or_else(||id.into())}
 pub fn aliases()->Result<BTreeMap<String,Vec<String>>,String> {
- let config=read()?;Ok(config.pets.into_iter().filter(|(id,p)|id.as_str()=="integration_spotify"||!p.provider.is_empty()).map(|(id,mut p)|{p.aliases.push(p.name);(if service(&id){id}else{p.provider},p.aliases)}).collect())
+ let config=read()?;Ok(config.pets.into_iter().filter(|(id,p)|!retired(id)&&(id.as_str()=="integration_spotify"||!p.provider.is_empty())).map(|(id,mut p)|{p.aliases.push(p.name);(if service(&id){id}else{p.provider},p.aliases)}).collect())
 }
 impl Configuration {
  /// An explicitly addressed monitor/API pet must never borrow the selected CLI.
@@ -162,10 +170,10 @@ impl Configuration {
   for prefix in ["chama o ","chama ","muda para ","troca para ","falar com "] {if let Some(rest)=text.strip_prefix(prefix){text=rest;break;}}
   let mut addressed:Vec<_>=self.pets.iter().flat_map(|(id,p)|std::iter::once(&p.name).chain(&p.aliases).map(move|name|(normalized(name),id,p))).filter(|(name,_,_)|!name.is_empty() && (text==name || text.strip_prefix(name.as_str()).is_some_and(|rest|rest.starts_with(' ')))).collect();
   addressed.sort_by_key(|(name,_,_)|std::cmp::Reverse(name.len()));
-  addressed.first().filter(|(_,_,p)|p.provider.is_empty()).map(|(_,_,p)|p.name.clone())
+  addressed.first().filter(|(_,id,p)|retired(id)||p.provider.is_empty()).map(|(_,_,p)|p.name.clone())
  }
  pub fn select(&self,provider:&str,requested:&str,query:&str)->Result<Selection,String> {
-  let id=pet_id(provider).ok_or("Este pet não tem perfil de modelos.")?;let p=self.pets.get(id).ok_or("Falta o perfil deste pet.")?;
+  require_active_provider(provider)?;let id=pet_id(provider).ok_or("Este pet não tem perfil de modelos.")?;let p=self.pets.get(id).ok_or("Falta o perfil deste pet.")?;
   if id=="integration_spotify"{return Err("O Spoty controla música e som e não tem perfil de modelos.".into());}
   if p.provider.is_empty(){return Err("Os modelos Gemini e Claude da conta Gravity estão no pet Gravity. Escolhe o modelo nesse pet.".into());}
   if !requested.is_empty() && !requested.starts_with('@') {return Ok(Selection{model:requested.into(),effort:String::new(),mode:"manual".into()});}
@@ -186,7 +194,7 @@ pub fn pet_configuration()->Result<Document,String> {let _edit=EDIT.lock().unwra
 pub fn pet_roster(shared:tauri::State<'_,crate::Shared>)->Vec<String>{
  let settings=shared.settings.lock().unwrap();let base=defaults();let mut ids=vec![settings.main_pill.clone()];
  for id in &settings.active_integrations{if !ids.contains(id){ids.push(id.clone());}}
- ids.retain(|id|base.pets.contains_key(id));ids
+ ids.retain(|id|base.pets.contains_key(id)&&!retired(id));ids
 }
 fn save_at(file:&Path,config:&Configuration,expected:&str)->Result<Document,String> {
  let current=read_at(file)?;
@@ -221,7 +229,7 @@ pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revisi
   let c=defaults();let aliases:BTreeMap<_,_>=c.pets.iter().filter(|(id,p)|id.as_str()=="integration_spotify"||!p.provider.is_empty()).map(|(id,p)|(if service(id){id.clone()}else{p.provider.clone()},p.aliases.clone())).collect();
   for pet in crate::voice::dialogue::Pet::ALL {
    let owner=pet.provider();let id=pet_id(owner).unwrap();
-   if c.pets[id].provider.is_empty(){continue;}
+   if retired(id)||c.pets[id].provider.is_empty(){continue;}
    for mode in ["@fast","@reasoning"] {assert!(!c.select(owner,mode,"olá").unwrap().model.is_empty(),"{id}");}
    for name in std::iter::once(&c.pets[id].name).chain(&c.pets[id].aliases) {
     assert!(matches!(crate::voice::dialogue::parse_with_aliases(&format!("{name}, check the logs por favor"),&aliases),crate::voice::dialogue::Command::Select(selected,ref query) if selected==pet && query=="check the logs por favor"),"{id}: {name}");
@@ -236,7 +244,7 @@ pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revisi
   assert_eq!(c.unavailable_address("Olá Cursor, abre a app"),Some("Cursor".into()));
   assert_eq!(c.unavailable_address("Claude Desktop, abre a app"),Some("Claude Desktop".into()));
   assert_eq!(c.unavailable_address("explica como funciona o Copilot"),None);
-  assert_eq!(c.unavailable_address("GitHub, verifica o CI"),None);
+  assert_eq!(c.unavailable_address("GitHub, verifica o CI"),Some("GitHub".into()));
  }
  #[test]fn identities_remain_stable_and_ambiguous_names_or_cloud_local_models_are_rejected(){
   let mut c=defaults();c.pets.get_mut("agent_codex").unwrap().name="Cody".into();validate(&c).unwrap();assert_eq!(c.pets["agent_codex"].provider,"codex");
@@ -267,5 +275,30 @@ pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revisi
   let bytes=serde_json::to_vec(&config).unwrap();std::fs::write(&path,&bytes).unwrap();let doc=read_at(&path).unwrap();let pet=&doc.config.pets["integration_spotify"];
   assert!(pet.provider.is_empty());assert_eq!(pet.name,"Som pessoal");assert!(pet.aliases.iter().any(|a|a=="audio pessoal"));assert_eq!(pet.fast,fast);assert_eq!(pet.permissions,grants);assert_eq!(std::fs::read(&path).unwrap(),bytes);
   std::fs::remove_dir_all(dir).unwrap();
+ }
+}
+
+#[cfg(test)]mod retirement_tests {
+ use super::*;
+ #[test]fn retired_pet_cannot_select_even_an_explicit_model_or_borrow_another_owner(){
+  let mut c=defaults();let before=serde_json::to_value(&c).unwrap();
+  for model in ["@auto","@fast","@reasoning","chosen-model",""]{assert!(c.select("integration_github",model,"pedido").is_err());}
+  assert_eq!(serde_json::to_value(&c).unwrap(),before);validate(&c).unwrap();
+  c.pets.get_mut("integration_github").unwrap().name="Git antigo".into();
+  assert_eq!(c.unavailable_address("Git antigo, abre issues"),Some("Git antigo".into()));
+  assert_eq!(c.unavailable_address("github, verifica CI"),Some("Git antigo".into()));
+  assert_eq!(c.unavailable_address("explica GitHub"),None);
+  assert_eq!(c.unavailable_address("Copilot CLI, ajuda"),None);
+ }
+ #[test]fn history_classification_and_sibling_models_remain_available(){
+  assert!(service("integration_github"));assert_eq!(crate::cli_chat::backend("integration_github"),Some("codex"));
+  assert_eq!(pet_id("integration_github"),Some("integration_github"));
+  assert!(crate::assistant_memory::supported("integration_github"));
+  for provider in ["codex","copilot","antigravity","ollama","integration_notion","integration_vercel"]{
+   assert!(require_active_provider(provider).is_ok());assert!(defaults().select(provider,"@fast","olá").is_ok(),"{provider}");
+  }
+  // Before reading HOME preferences or touching a dropped file.
+  assert!(matches!(crate::pet_files::ingest("integration_github","/not/a/real/file"),Err(error)if error.contains("temporariamente")));
+  assert!(require("integration_github","documents").unwrap_err().contains("temporariamente"));
  }
 }

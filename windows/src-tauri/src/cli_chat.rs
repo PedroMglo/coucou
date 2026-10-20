@@ -84,7 +84,7 @@ mod help_presentation_tests {
     fn live()->Instant{Instant::now()+Duration::from_secs(60)}
 
     #[test]fn help_reads_exact_logical_owner_without_answering_or_consuming_request(){
-        let(chat,id,target,_cancel,rx,requests)=fixture("integration_github","integration_github",Origin::Mochi,live());
+        let(chat,id,target,_cancel,rx,requests)=fixture("integration_notion","integration_notion",Origin::Mochi,live());
         assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||"shown").unwrap(),Some("shown"));
         assert!(matches!(rx.try_recv(),Err(mpsc::TryRecvError::Empty)));
         let mut backend=target.clone();backend.provider="codex".into();
@@ -263,6 +263,7 @@ pub fn model_matches(provider:&str,model:&str)->bool {
     match provider {"gemini-cli"=>name.starts_with("gemini-"),"claude-cli"=>name.starts_with("claude-"),_=>true}
 }
 pub async fn resolve_model(settings:&Settings,provider:&str,selected:&str)->Result<String,String> {
+    crate::pet_config::require_active_provider(provider)?;
     if backend(provider).is_none() {return Err("Este pet não tem uma conta CLI de conversação.".into());}
     if selected.starts_with('@') { return Ok(selected.into()); }
     if !selected.trim().is_empty() {

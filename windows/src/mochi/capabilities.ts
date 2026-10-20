@@ -9,6 +9,7 @@ export interface PetCapabilities {
 /** Product actions follow implemented bridges, never a name or an AI-looking icon. */
 export function petCapabilities(id:string):PetCapabilities {
   const blueprint=petBlueprint(id),def=pillDefinition(id),routing=blueprint?.routing;
+  if(blueprint?.retired)return {chat:null,voice:null,execute:false,role:"Pet temporariamente desativado · histórico preservado"};
   if(routing?.role){
     const role=routing.role==='service'?`${petName(id,def?.name??id)} · ações na app/serviço · conta Codex`:routing.role;
     return {chat:routing.chat as ProviderId|null,voice:routing.voice as ProviderId|null,execute:routing.execute,role};

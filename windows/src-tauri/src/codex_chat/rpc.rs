@@ -459,6 +459,13 @@ impl Client {
             if params.get("turnId").is_some() && params["turnId"] != turn_id {
                 continue;
             }
+            // Terminal notifications identify their turn in the nested object.
+            // A matching thread (or optional flat ID) cannot substitute that ID.
+            if message["method"] == "turn/completed"
+                && params["turn"]["id"].as_str() != Some(turn_id.as_str())
+            {
+                continue;
+            }
             if first_event {
                 timing::mark(self.timing.as_ref(), Stage::FirstAcceptedEvent);
                 first_event = false;
@@ -1080,3 +1087,7 @@ for line in sys.stdin:
 #[cfg(test)]
 #[path="rpc_timing_tests.rs"]
 mod timing_tests;
+
+#[cfg(all(test,unix))]
+#[path="rpc_turn_identity_tests.rs"]
+mod turn_identity_tests;

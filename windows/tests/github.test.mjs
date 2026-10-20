@@ -181,34 +181,34 @@ beforeEach(() => {
   State.loadIntegrationTasks();
 });
 
-test("an alert badges the GitHub pill when another pill is on screen", () => {
+test("retired GitHub alerts cannot recreate a pet or add a badge", () => {
   emit("github-alerts", [{ kind: "mainFailed", repo: "a/b" }]);
-  assert.equal(github().pillBadge, "error");
-  assert.equal(github().state, "idle", "Mochi's state is left alone, as on macOS");
+  assert.equal(github(),undefined);
 });
 
-test("no badge while the GitHub pill is the one on screen", () => {
+test("a stale focus request cannot select retired GitHub", () => {
   State.setFocus(GITHUB);
   emit("github-alerts", [{ kind: "reviewRequested", prId: "a/b#1" }]);
-  assert.equal(github().pillBadge, null);
+  assert.equal(github(),undefined);
+  assert.notEqual(State.focusId,GITHUB);
 });
 
 test("nothing happens while paused", () => {
   State.paused = true;
   emit("github-alerts", [{ kind: "ciFailed", prId: "a/b#1" }]);
-  assert.equal(github().pillBadge ?? null, null);
+  assert.equal(github(),undefined);
 });
 
-test("showing the GitHub card asks Rust for a refresh, once per showing", () => {
+test("retired GitHub never asks Rust for a refresh even after stale focus requests", () => {
   State.setFocus(GITHUB);
   assert.deepEqual(sent("github_refresh"), [], "not while the island is closed");
   State.mode = "expanded";
   State.notify();
   State.notify();
-  assert.deepEqual(sent("github_refresh"), [{ section: "pulse" }]);
+  assert.deepEqual(sent("github_refresh"), []);
   State.setFocus("integration_claude");
   State.setFocus(GITHUB);
-  assert.deepEqual(sent("github_refresh"), [{ section: "pulse" }, { section: "pulse" }]);
+  assert.deepEqual(sent("github_refresh"), []);
 });
 
 // ── The lists from the keyboard (GitHubDetailView: ⌘↓ ⌘↑ ⌘O) ──────────────────

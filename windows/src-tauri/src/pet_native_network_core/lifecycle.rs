@@ -9,6 +9,7 @@ mod projection;
 #[path="enable_support.rs"]
 mod enable_support;
 pub(crate) fn enable_wifi_supported(value:&Value,api:Option<u64>,caps:&[String])->bool{enable_support::supported(value,api,caps)}
+pub(crate) fn disable_wifi_supported(value:&Value,api:Option<u64>,caps:&[String])->bool{enable_support::supported(value,api,caps)}
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -75,10 +76,10 @@ pub struct Config {pub cache_age:Duration,pub target_ttl:Duration,pub operation_
 impl Default for Config {fn default()->Self{Self{cache_age:Duration::from_secs(15),target_ttl:Duration::from_secs(15),operation_timeout:Duration::from_secs(3),ticket_retention:Duration::from_secs(120),max_tickets:128,max_bindings:256,max_targets:64}}}
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]
 #[serde(rename_all="camelCase")]
-pub enum Kind {Read,Scan,EnableWifi}
+pub enum Kind {Read,Scan,EnableWifi,DisableWifi}
 impl Kind {
- fn mutating(self)->bool{match self{Self::Read=>false,Self::Scan|Self::EnableWifi=>true}}
- fn operation(self)->Operation{match self{Self::Read=>Operation::ReadNetwork,Self::Scan=>Operation::ScanWifi,Self::EnableWifi=>Operation::EnableWifi}}
+ fn mutating(self)->bool{match self{Self::Read=>false,Self::Scan|Self::EnableWifi|Self::DisableWifi=>true}}
+ fn operation(self)->Operation{match self{Self::Read=>Operation::ReadNetwork,Self::Scan=>Operation::ScanWifi,Self::EnableWifi=>Operation::EnableWifi,Self::DisableWifi=>Operation::DisableWifi}}
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -94,14 +95,14 @@ pub struct Projected(Value);
 pub struct TargetView {pub handle:String,pub kind:TargetKind,pub label:String}
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct Capabilities {pub read:bool,pub scan:bool,pub enable_wifi:bool,pub connect:bool,pub radio:bool,pub credentials:bool}
+pub struct Capabilities {pub read:bool,pub scan:bool,pub enable_wifi:bool,pub disable_wifi:bool,pub connect:bool,pub radio:bool,pub credentials:bool}
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct View {pub schema_version:u8,pub source:&'static str,pub generation:Option<String>,pub stale:bool,pub refreshing:bool,pub data:Option<Projected>,pub scan_scope:Option<String>,pub enable_wifi_scope:Option<String>,pub targets:Vec<TargetView>,pub capabilities:Capabilities,pub reason:Option<Reason>}
+pub struct View {pub schema_version:u8,pub source:&'static str,pub generation:Option<String>,pub stale:bool,pub refreshing:bool,pub data:Option<Projected>,pub scan_scope:Option<String>,pub enable_wifi_scope:Option<String>,pub disable_wifi_scope:Option<String>,pub targets:Vec<TargetView>,pub capabilities:Capabilities,pub reason:Option<Reason>}
 struct TicketRecord {ticket:Ticket,owner:Lease,intent:Option<String>,scope:Option<String>,created:Instant}
-struct Cached {data:Projected,producer:ProducerId,at:Instant,setting_epoch:u64,scan_support:ScanSupport,enable_wifi_support:bool,targets:Vec<NativeTarget>,stale:bool,reason:Option<Reason>}
+struct Cached {data:Projected,producer:ProducerId,at:Instant,setting_epoch:u64,scan_support:ScanSupport,enable_wifi_support:bool,disable_wifi_support:bool,targets:Vec<NativeTarget>,stale:bool,reason:Option<Reason>}
 #[derive(Clone,PartialEq,Eq)]
-enum BindingKind {Scope,EnableWifi,Target(TargetKind,String)}
+enum BindingKind {Scope,EnableWifi,DisableWifi,Target(TargetKind,String)}
 struct Binding {owner:Lease,producer:ProducerId,generation:u64,expires:Instant,kind:BindingKind}
 struct Flight {id:String,kind:Kind,owner:Lease,deadline:Instant,started:bool,peer:Option<ProducerId>,tickets:Vec<String>}
 struct State {alive:bool,nonce:u128,next:u64,generation:u64,setting:SystemSetting,config:Config,cache:Option<Cached>,bindings:BTreeMap<String,Binding>,tickets:BTreeMap<String,TicketRecord>,flight:Option<Flight>}
@@ -111,7 +112,7 @@ pub struct Admission {pub ticket:Ticket,pub work:Option<Work>}
 /// Dropping this while detached IO still runs violates the adapter contract.
 pub struct Work {state:Arc<Mutex<State>>,id:String,owner:Lease,deadline:Instant,kind:Kind,expected:Option<ProducerId>,source_generation:Option<u64>,target_deadline:Option<Instant>,done:bool}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum Operation {ReadNetwork,ScanWifi,EnableWifi}
+pub enum Operation {ReadNetwork,ScanWifi,EnableWifi,DisableWifi}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum NativeError {Unavailable,Rejected,InvalidResponse}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -159,8 +160,11 @@ impl Service {
  pub fn enable_wifi(&self,window:&SystemWindowAuthority,scope:&str,intent:&str,now:Instant)->Result<Admission,Reason>{
   self.mutate(window,Kind::EnableWifi,scope,intent,now)
  }
+pub fn disable_wifi(&self,window:&SystemWindowAuthority,scope:&str,intent:&str,now:Instant)->Result<Admission,Reason>{
+  self.mutate(window,Kind::DisableWifi,scope,intent,now)
+ }
  fn mutate(&self,window:&SystemWindowAuthority,kind:Kind,scope:&str,intent:&str,now:Instant)->Result<Admission,Reason>{
-  let binding_kind=match kind{Kind::Scan=>BindingKind::Scope,Kind::EnableWifi=>BindingKind::EnableWifi,Kind::Read=>return Err(Reason::Unsupported)};
+  let binding_kind=match kind{Kind::Scan=>BindingKind::Scope,Kind::EnableWifi=>BindingKind::EnableWifi,Kind::DisableWifi=>BindingKind::DisableWifi,Kind::Read=>return Err(Reason::Unsupported)};
   if scope.len()>128{return Err(Reason::StaleTarget);}if intent.is_empty()||intent.len()>64||!intent.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'-'|b'_')){return Err(Reason::InvalidIntent);}
   let lease=window.lease()?;let mut s=self.state.lock().unwrap();s.authorize(&lease)?;s.sweep(now);
   if let Some(t)=s.tickets.values().find(|t|t.owner.same_window(&lease)&&t.intent.as_deref()==Some(intent)){
@@ -170,29 +174,29 @@ impl Service {
   let binding=s.bindings.get(scope).ok_or(Reason::StaleTarget)?;
   if binding.kind!=binding_kind{return Err(Reason::WrongTarget);}if !binding.owner.same_window(&lease)||!binding.owner.valid()||binding.generation!=s.generation||now>=binding.expires{return Err(Reason::StaleTarget);}
   let producer=binding.producer;let source_generation=binding.generation;let target_deadline=binding.expires;
-  let supported=s.cache.as_ref().is_some_and(|c|c.producer==producer&&match kind{Kind::Scan=>c.scan_support==ScanSupport::VerifiedByAdapter,Kind::EnableWifi=>c.enable_wifi_support,Kind::Read=>false});
+  let supported=s.cache.as_ref().is_some_and(|c|c.producer==producer&&match kind{Kind::Scan=>c.scan_support==ScanSupport::VerifiedByAdapter,Kind::EnableWifi=>c.enable_wifi_support,Kind::DisableWifi=>c.disable_wifi_support,Kind::Read=>false});
   if !supported{return Err(Reason::Unsupported);}
   let ticket=s.ticket(lease.clone(),kind,Phase::Queued,Some(intent.into()),Some(scope.into()),now)?;
   let deadline=now+s.config.operation_timeout;s.flight=Some(Flight{id:ticket.id.clone(),kind,owner:lease.clone(),deadline,started:false,peer:None,tickets:vec![ticket.id.clone()]});
   Ok(Admission{work:Some(Work{state:self.state.clone(),id:ticket.id.clone(),owner:lease,deadline,kind,expected:Some(producer),source_generation:Some(source_generation),target_deadline:Some(target_deadline),done:false}),ticket})
  }
  pub fn view(&self,window:&SystemWindowAuthority,now:Instant)->Result<View,Reason>{
-  let lease=window.lease()?;let mut s=self.state.lock().unwrap();s.authorize(&lease)?;s.sweep(now);let fresh=s.fresh(&lease,now);let mut scope=None;let mut enable_scope=None;let mut targets=Vec::new();
+  let lease=window.lease()?;let mut s=self.state.lock().unwrap();s.authorize(&lease)?;s.sweep(now);let fresh=s.fresh(&lease,now);let mut scope=None;let mut enable_scope=None;let mut disable_scope=None;let mut targets=Vec::new();
   let actionable=fresh&&s.cache.as_ref().is_some_and(|c|now.saturating_duration_since(c.at)<s.config.target_ttl);
   // All-or-none handle publication: a full registry cannot hide a missing scope
   // behind an apparently successful view. Existing bindings remain valid.
   if actionable {
    let c=s.cache.as_ref().unwrap();let native=c.targets.clone();let producer=c.producer;
-   let scan=c.scan_support==ScanSupport::VerifiedByAdapter;let enable=c.enable_wifi_support;
+   let scan=c.scan_support==ScanSupport::VerifiedByAdapter;let enable=c.enable_wifi_support;let disable=c.disable_wifi_support;
    let mut desired:Vec<_>=native.iter().map(|t|BindingKind::Target(t.kind,t.key.clone())).collect();
-   if scan{desired.push(BindingKind::Scope);}if enable{desired.push(BindingKind::EnableWifi);}
+   if scan{desired.push(BindingKind::Scope);}if enable{desired.push(BindingKind::EnableWifi);}if disable{desired.push(BindingKind::DisableWifi);}
    let needed=desired.iter().filter(|kind|s.bound_id(&lease,kind,producer,now).is_none()).count();
    if needed>s.config.max_bindings.saturating_sub(s.bindings.len())||s.next.checked_add(needed as u64).is_none(){return Err(Reason::Capacity);}
-   if scan{scope=Some(s.bind(&lease,BindingKind::Scope,now)?);}if enable{enable_scope=Some(s.bind(&lease,BindingKind::EnableWifi,now)?);}
+   if scan{scope=Some(s.bind(&lease,BindingKind::Scope,now)?);}if enable{enable_scope=Some(s.bind(&lease,BindingKind::EnableWifi,now)?);}if disable{disable_scope=Some(s.bind(&lease,BindingKind::DisableWifi,now)?);}
    for target in native{let handle=s.bind(&lease,BindingKind::Target(target.kind,target.key),now)?;targets.push(TargetView{handle,kind:target.kind,label:target.label});}
   }
   let c=s.cache.as_ref();let reason=match c{None=>Some(Reason::NotObserved),Some(c)if c.setting_epoch!=lease.setting_epoch=>Some(Reason::Revoked),Some(c)if c.stale=>c.reason,Some(_)if !fresh=>Some(Reason::CacheExpired),Some(_)if !actionable=>Some(Reason::StaleTarget),_=>None};
-  Ok(View{schema_version:2,source:"dmsNetwork",generation:c.map(|_|s.generation.to_string()),stale:!fresh,refreshing:s.flight.is_some(),data:c.map(|c|c.data.clone()),scan_scope:scope.clone(),enable_wifi_scope:enable_scope.clone(),targets,capabilities:Capabilities{read:true,scan:scope.is_some()&&s.flight.is_none(),enable_wifi:enable_scope.is_some()&&s.flight.is_none(),connect:false,radio:false,credentials:false},reason})
+  Ok(View{schema_version:2,source:"dmsNetwork",generation:c.map(|_|s.generation.to_string()),stale:!fresh,refreshing:s.flight.is_some(),data:c.map(|c|c.data.clone()),scan_scope:scope.clone(),enable_wifi_scope:enable_scope.clone(),disable_wifi_scope:disable_scope.clone(),targets,capabilities:Capabilities{read:true,scan:scope.is_some()&&s.flight.is_none(),enable_wifi:enable_scope.is_some()&&s.flight.is_none(),disable_wifi:disable_scope.is_some()&&s.flight.is_none(),connect:false,radio:false,credentials:false},reason})
  }
  pub fn ticket(&self,window:&SystemWindowAuthority,id:&str,now:Instant)->Result<Ticket,Reason>{let lease=window.lease()?;let mut s=self.state.lock().unwrap();s.authorize(&lease)?;if id.len()>128{return Err(Reason::NotFound);}s.sweep(now);let t=s.tickets.get(id).ok_or(Reason::NotFound)?;if !t.owner.same_window(&lease){return Err(Reason::Unauthorized);}Ok(t.ticket.clone())}
  pub fn cancel(&self,window:&SystemWindowAuthority,id:&str,now:Instant)->Result<Ticket,Reason>{let lease=window.lease()?;let mut s=self.state.lock().unwrap();s.authorize(&lease)?;if id.len()>128{return Err(Reason::NotFound);}s.sweep(now);let t=s.tickets.get_mut(id).ok_or(Reason::NotFound)?;if !t.owner.same_window(&lease){return Err(Reason::Unauthorized);}match t.ticket.phase{Phase::Queued=>{t.ticket.phase=Phase::Cancelled;t.ticket.reason=Some(Reason::CancelledBeforeDispatch)},Phase::Running=>{t.ticket.phase=Phase::Unknown;t.ticket.reason=Some(Reason::CancelledAfterDispatch);t.ticket.refresh_recommended=t.ticket.kind.mutating()},_=>{}}Ok(t.ticket.clone())}
@@ -214,21 +218,23 @@ impl Work {
  fn complete(mut self,observation:Option<NativeObservation>,ack:Option<(Kind,ProducerId)>,error:Option<Reason>,now:Instant)->Result<(),Reason>{
   let parsed=if let Some(v)=observation{
    let enable=enable_wifi_supported(&v.result,v.api_version,&v.capabilities);
+   let disable=disable_wifi_supported(&v.result,v.api_version,&v.capabilities);
    let projection=projection::project(&v.result,v.api_version,&v.capabilities,v.observed_at_ms).map_err(|_|Reason::InvalidObservation);
    let mut identities=BTreeSet::new();let unique=v.targets.iter().all(|t|identities.insert((t.kind,t.key.clone())));
-   match projection{Ok(value)if unique=>serde_json::to_value(value).map(|value|Some((Projected(value),v.producer,v.targets,v.scan_support,enable))).map_err(|_|Reason::InvalidObservation),_=>Err(Reason::InvalidObservation)}
+   match projection{Ok(value)if unique=>serde_json::to_value(value).map(|value|Some((Projected(value),v.producer,v.targets,v.scan_support,enable,disable))).map_err(|_|Reason::InvalidObservation),_=>Err(Reason::InvalidObservation)}
   }else{Ok(None)};
   let mut s=self.state.lock().unwrap();s.sweep(now);let f=s.flight.as_ref().filter(|f|f.id==self.id).ok_or(Reason::Closed)?;let ids=f.tickets.clone();let started=f.started;let peer=f.peer;let live=ids.iter().any(|id|s.tickets.get(id).is_some_and(|t|matches!(t.ticket.phase,Phase::Queued|Phase::Running)));
   // A connection/peer failure before the writer is a valid typed failure,
   // not a successful completion without dispatch. Never mark it started.
   let result=if !s.alive{Err(Reason::Closed)}else if !self.owner.valid(){Err(Reason::Revoked)}else if now>=self.deadline{Err(Reason::Deadline)}else if !live{Err(if started{Reason::CancelledAfterDispatch}else{Reason::CancelledBeforeDispatch})}else if let Some(error)=error{Err(error)}else if !started{Err(Reason::InvalidObservation)}else{parsed};
-  let result=result.and_then(|data|match(self.kind,data,ack){(Kind::Read,Some((data,producer,targets,support,enable)),None)if peer==Some(producer)=>{if targets.len()>s.config.max_targets{return Err(Reason::InvalidObservation);}let generation=s.generation.checked_add(1).ok_or(Reason::Capacity)?;s.generation=generation;s.bindings.clear();s.cache=Some(Cached{data,producer,targets,scan_support:support,enable_wifi_support:enable,at:now,setting_epoch:self.owner.setting_epoch,stale:false,reason:None});Ok(())},(Kind::Scan|Kind::EnableWifi,None,Some((ack_kind,producer)))if self.kind==ack_kind&&peer==Some(producer)&&self.expected==Some(producer)=>Ok(()),_=>Err(Reason::InvalidObservation)});
-  for id in ids{if let Some(t)=s.tickets.get_mut(&id){if matches!(t.ticket.phase,Phase::Queued|Phase::Running){match result{Ok(())=>{t.ticket.phase=match self.kind{Kind::Read=>Phase::Observed,Kind::Scan|Kind::EnableWifi=>Phase::Acknowledged};t.ticket.refresh_recommended=self.kind.mutating();t.ticket.reason=None},Err(reason)=>{t.ticket.phase=if started&&self.kind.mutating(){Phase::Unknown}else{Phase::Failed};t.ticket.reason=Some(reason);t.ticket.refresh_recommended=started&&self.kind.mutating()}}}}}
+  let result=result.and_then(|data|match(self.kind,data,ack){(Kind::Read,Some((data,producer,targets,support,enable,disable)),None)if peer==Some(producer)=>{if targets.len()>s.config.max_targets{return Err(Reason::InvalidObservation);}let generation=s.generation.checked_add(1).ok_or(Reason::Capacity)?;s.generation=generation;s.bindings.clear();s.cache=Some(Cached{data,producer,targets,scan_support:support,enable_wifi_support:enable,disable_wifi_support:disable,at:now,setting_epoch:self.owner.setting_epoch,stale:false,reason:None});Ok(())},(Kind::Scan|Kind::EnableWifi|Kind::DisableWifi,None,Some((ack_kind,producer)))if self.kind==ack_kind&&peer==Some(producer)&&self.expected==Some(producer)=>Ok(()),_=>Err(Reason::InvalidObservation)});
+  for id in ids{if let Some(t)=s.tickets.get_mut(&id){if matches!(t.ticket.phase,Phase::Queued|Phase::Running){match result{Ok(())=>{t.ticket.phase=match self.kind{Kind::Read=>Phase::Observed,Kind::Scan|Kind::EnableWifi|Kind::DisableWifi=>Phase::Acknowledged};t.ticket.refresh_recommended=self.kind.mutating();t.ticket.reason=None},Err(reason)=>{t.ticket.phase=if started&&self.kind.mutating(){Phase::Unknown}else{Phase::Failed};t.ticket.reason=Some(reason);t.ticket.refresh_recommended=started&&self.kind.mutating()}}}}}
   if let Err(reason)=result{s.stale(reason);}s.flight=None;self.done=true;result
  }
  pub fn finish_read(self,value:NativeObservation,now:Instant)->Result<(),Reason>{self.complete(Some(value),None,None,now)}
  pub fn finish_scan(self,peer:ProducerId,now:Instant)->Result<(),Reason>{self.complete(None,Some((Kind::Scan,peer)),None,now)}
  pub fn finish_enable_wifi(self,peer:ProducerId,now:Instant)->Result<(),Reason>{self.complete(None,Some((Kind::EnableWifi,peer)),None,now)}
+pub fn finish_disable_wifi(self,peer:ProducerId,now:Instant)->Result<(),Reason>{self.complete(None,Some((Kind::DisableWifi,peer)),None,now)}
  pub fn fail(self,error:NativeError,now:Instant)->Result<(),Reason>{self.complete(None,None,Some(match error{NativeError::Unavailable=>Reason::NativeUnavailable,NativeError::Rejected=>Reason::NativeRejected,NativeError::InvalidResponse=>Reason::InvalidObservation}),now)}
 }
 impl Drop for Work {fn drop(&mut self){if self.done{return;}let mut s=self.state.lock().unwrap();if let Some(f)=s.flight.as_ref().filter(|f|f.id==self.id){let started=f.started;let reason=if started{Reason::UnknownAfterDispatch}else{Reason::AbandonedBeforeDispatch};let ids=f.tickets.clone();let mut settled=false;let previous=ids.iter().find_map(|id|s.tickets.get(id).and_then(|t|t.ticket.reason));for id in ids{if let Some(t)=s.tickets.get_mut(&id){if matches!(t.ticket.phase,Phase::Queued|Phase::Running){settled=true;t.ticket.phase=if started{Phase::Unknown}else{Phase::Cancelled};t.ticket.reason=Some(reason);t.ticket.refresh_recommended=started&&self.kind.mutating();}}}s.stale(if settled{reason}else{previous.unwrap_or(reason)});s.flight=None;}}}

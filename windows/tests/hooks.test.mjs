@@ -521,9 +521,9 @@ test("the pill you were on comes back after a withdrawn card too", () => {
 test("a pill picked while the card was up keeps the front after the answer", () => {
   State.setFocus("integration_n8n");
   ask("r1");
-  State.setFocus("integration_github");
+  State.setFocus("integration_vercel");
   State.endApproval();
-  assert.equal(State.focusId, "integration_github");
+  assert.equal(State.focusId, "integration_vercel");
 });
 
 test("the card shows when the island is already open, and is what it reopens on", () => {

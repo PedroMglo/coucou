@@ -1,22 +1,25 @@
-Estado atual (20/10/2026): a **0.5.1-mochi.23 está instalada permanentemente**,
-com launcher/autostart e preservação de conversas e preferências verificados.
-A aceitação nativa está parcial. Uma falha de apresentação após mudança de
-monitor deixou o cartão invisível; o reinício do mesmo binário recuperou o
-alfa da superfície e o hover voltou a abrir o cartão, confirmado visualmente.
-A .22 inclui a correção nativa R2 revista; a prevenção da repetição após mudança real de ecrã ainda precisa de aceitação.
-Os cinco chats próprios abriram e reabriram na .23 com identidade e rascunho
-exatos, sem envio. O Ollama recuperou automaticamente os seus 73 caracteres
-depois de reiniciar o Coucou, sem os voltar a escrever.
-Sistema → Som tem controlos próprios; a .20 acrescenta leitura/pesquisa de rede
-e atividade da conta. Os restantes controlos próprios e a matriz completa de
-sessões/definições continuam por concluir. Os sete indicadores direitos
-permanecem na barra. O estado detalhado e os critérios de aceitação estão em
+Estado atual: a **0.5.1-mochi.24 está instalada permanentemente**,
+com executável, socket, XDG e ambiente DMS verificados. Inclui leitura Bluetooth,
+controlo Wi-Fi de desativação explícita, correlação do turno Codex e retirada
+temporária do pet GitHub. Não foi alterada a ligação Wi-Fi ou Bluetooth.
+Passaram 1413 testes Rust (dez ignorados), 1010 JavaScript, quatro Python,
+cargo check, TypeScript e Vite sobre 571 fontes congeladas.
+
+O Ollama recuperou automaticamente os 73 caracteres na CID original e passou
+fechar/reabrir, sem escrita ou envio. A verificação gráfica dos outros chats
+permanece parcial; os seus rascunhos anteriores ficaram guardados privadamente. Histórico/tarefas GitHub e os 25 perfis foram
+preservados; o seu rascunho anterior ficou também num backup privado. A .23
+permanece para recuperação. O objetivo integral tem um único agente responsável.
+
+A aceitação nativa de apresentação/hotplug e os restantes controlos próprios
+continuam incompletos. Os sete indicadores direitos permanecem na barra.
+Frontend/UX estão sem prioridade até nova indicação. Estado e critérios em
 [PETS-ARCHITECTURE.md](PETS-ARCHITECTURE.md).
 
 # Living companions on Linux
 
 > Current Linux delivery status is maintained in
-> [PETS-ARCHITECTURE.md](PETS-ARCHITECTURE.md). The installed version is .23 (562 frozen source files);
+> [PETS-ARCHITECTURE.md](PETS-ARCHITECTURE.md). The installed version is .24 (571 frozen source files);
 > native presentation/hotplug acceptance is incomplete. The five LLM cards passed count checks in .17. Own System sound mute
 > and unmute passed on a temporary virtual output in .18. Later version notes below are
 > historical evidence, not confirmation that every requested capability shipped.

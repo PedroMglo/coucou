@@ -337,6 +337,7 @@ fn asr_vocabulary(config:&crate::pet_config::Configuration,settings:&crate::sett
     let names=dialogue::Pet::ALL.into_iter()
         .filter(|pet|!matches!(pet,dialogue::Pet::Claude|dialogue::Pet::Gemini))
         .map(dialogue::Pet::pill)
+        .filter(|id|!crate::pet_config::retired(id))
         .filter(|id|settings.main_pill==*id||settings.active_integrations.iter().any(|active|active.as_str()==*id))
         .filter_map(|id|config.pets.get(id).map(|pet|pet.name.as_str()));
     for name in names.chain(ASR_TECHNICAL_TERMS.iter().copied()){

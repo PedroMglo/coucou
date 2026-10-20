@@ -6,9 +6,11 @@ const source=JSON.parse(readFileSync(new URL('../src-tauri/pets.factory.json',im
 function merge(base,extra){const out=structuredClone(base);for(const[key,value]of Object.entries(extra)){if(['__proto__','prototype','constructor'].includes(key))throw Error('Invalid factory key');out[key]=value&&typeof value==='object'&&!Array.isArray(value)&&out[key]&&typeof out[key]==='object'&&!Array.isArray(out[key])?merge(out[key],value):structuredClone(value);}return out;}
 const protectedKeys=['name','aliases','provider','permissions','localExecution'];
 for(const recipe of [source.base,...Object.values(source.molds),...Object.values(source.extensions)]){
+ if(Object.hasOwn(recipe,'retired'))throw Error('Retirement must be explicit per pet');
  if(recipe.preferences&&protectedKeys.some(k=>Object.hasOwn(recipe.preferences,k)))throw Error('Identity and access policy must be explicit per pet');
 }
 const pets=Object.fromEntries(Object.entries(source.pets).map(([id,pet])=>{
+ if(pet.retired!==undefined&&typeof pet.retired!=='boolean')throw Error('Invalid retirement flag');
  if(!['llm','application'].includes(pet.mold))throw Error('Invalid mold');
  if(!['name','aliases','provider','permissions'].every(k=>Object.hasOwn(pet.preferences,k)))throw Error('Missing explicit identity/access policy');
  let value=merge(source.base,source.molds[pet.mold]).preferences;

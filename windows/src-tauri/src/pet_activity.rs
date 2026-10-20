@@ -118,9 +118,9 @@ pub fn codex_progress(value: &Value) -> Option<(&'static str, String)> {
         assert!(chat.tasks().is_empty());
     }
     #[test] fn service_target_keeps_its_logical_owner_and_unknown_provider_is_not_ollama() {
-        let chat=crate::chat::Chat::default();let turn=chat.begin_cli("integration_github",Arc::default()).unwrap();let _lease=chat.lease(&turn);
+        let chat=crate::chat::Chat::default();let turn=chat.begin_cli("integration_notion",Arc::default()).unwrap();let _lease=chat.lease(&turn);
         let context=Context::capture(chat,turn,false);let target=context.target.unwrap();
-        assert_eq!(target.pet_id,"integration_github");assert_eq!(target.provider,"integration_github");
+        assert_eq!(target.pet_id,"integration_notion");assert_eq!(target.provider,"integration_notion");
         assert_eq!(pet("lmstudio"),"ai_lmstudio");assert_eq!(pet("unknown-provider"),"");
     }
     #[test] fn long_public_reply_keeps_the_persistence_warning_visible() {

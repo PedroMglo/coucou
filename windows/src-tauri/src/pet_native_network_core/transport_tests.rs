@@ -239,3 +239,6 @@ fn process_stat_start_time_handles_parentheses_in_names() {
     fields[19] = "invalid";
     assert_eq!(process_start_time(&format!("123 (name) {}", fields.join(" "))), None);
 }
+
+#[path="../pet_bluetooth/transport_tests.rs"]
+mod bluetooth_read_tests;

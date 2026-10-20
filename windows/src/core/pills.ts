@@ -10,6 +10,7 @@
 
 import type { AgentSource } from "./state";
 import { N_ } from "../i18n/i18n";
+import { petRetired } from "./pet-factory";
 
 export type PillCategory = "workspace" | "agent" | "ai" | "service";
 
@@ -151,7 +152,7 @@ export function pillDefinition(id: string): PillDefinition | undefined {
 }
 
 function offeredOn(def: PillDefinition, os: HostOs): boolean {
-  return def.support === "yes" || def.support === "soon" || def.support === os;
+  return !petRetired(def.id)&&(def.support === "yes" || def.support === "soon" || def.support === os);
 }
 
 /** The pills this build offers, in catalog order. */

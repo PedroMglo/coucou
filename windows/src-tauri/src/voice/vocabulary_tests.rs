@@ -25,3 +25,9 @@ fn settings()->crate::settings::Settings{let mut s=crate::settings::Settings::de
   assert!(matches!(dialogue::parse_with_aliases(text,&std::collections::BTreeMap::new()),dialogue::Command::Message(ref message)if message==text));
  }
 }
+
+#[test]fn retired_github_is_not_added_to_asr_even_with_old_declarations(){
+ let mut s=settings();s.active_integrations.push("integration_github".into());let mut c=crate::pet_config::defaults();
+ c.pets.get_mut("integration_github").unwrap().name="Git antigo".into();
+ let terms=asr_vocabulary(&c,&s);assert!(!terms.contains(&"Git antigo".into()));assert!(terms.contains(&"Copilot CLI".into()));
+}

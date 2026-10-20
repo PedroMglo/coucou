@@ -1,3 +1,4 @@
+import {petRetired} from "./pet-factory";
 // App state — mirror of AppState.swift (the parts the island needs).
 
 import type { BotEmoteName, BotStateName, IslandMode, IslandViewName } from "./layout";
@@ -505,6 +506,7 @@ class AppState {
    * Safe to call any number of times. AppState.loadIntegrationTasks on macOS.
    */
   loadIntegrationTasks() {
+    this.tasks=this.tasks.filter(t=>!petRetired(t.id));
     const d = sanitizeDeclared(this.settings, this.os);
     this.settings.mainPill = d.mainPill;
     this.settings.activeIntegrations = d.activeIntegrations;

@@ -1,7 +1,7 @@
 # Arquitetura dos pets companheiros — Linux
 
 Este é o guia de estado e aceitação do fork. O quadro seguinte prevalece sobre
-as notas históricas no fim do documento. Última revisão: 20 de outubro de 2026.
+as notas históricas no fim do documento. Última revisão: 21 de outubro de 2026.
 
 ## Prioridade de desenvolvimento atual
 
@@ -12,36 +12,79 @@ bloqueantes necessárias à entrega nem elimina os requisitos já registados.
 Não iniciar novas melhorias visuais por iniciativa. Os incrementos funcionais
 já preparados conservam a sua revisão e o seu critério de aceitação.
 
-### Divisão de trabalho por grupos completos
+### Responsável único e organização por unidades
 
-Por correção expressa do utilizador, trabalham apenas dois agentes, com
-responsabilidade exclusiva por unidades completas: o integrador assume todo o
-**Sistema** (rede/Wi-Fi, Bluetooth, som, energia/sessão), instalação, sysworkspace
-e este guia; o outro agente assume todo o **backend dos pets LLM** (sessões,
-execução, conversa, memória e utilização). Não dividir Wi-Fi e Bluetooth entre
-os dois. Alterações comuns de registo/protocolo só são conciliadas na integração;
-as features novas são desenvolvidas em áreas privadas sobre a fonte .23.
+Por pedido explícito mais recente do utilizador, a sessão
+`01a1505c-e9e3-7bd2-87c0-fd9424be0538` assume sozinha o objetivo integral:
+**Sistema** (rede/Wi-Fi, Bluetooth, som, energia/sessão), **pets LLM** (sessões,
+execução, conversa, memória e utilização), arquitetura, integração, release e
+registo do anfitrião em sysworkspace. A sessão integradora anterior parou o seu
+trabalho. Não criar novos agentes. As unidades completas continuam a organizar
+as implementações; a divisão anterior entre dois executores terminou.
 
-O trabalho seguinte do grupo Sistema reúne a leitura Bluetooth própria e a
+O objetivo ativo é «quero transformar os pets em asisstentes digitais sempre
+prontos e poderosos já que temos a possibilidade de usar AI». Terminar um
+incremento ou passar uma suite não conclui este objetivo. Os pacotes fechados
+mantêm-se imutáveis; a composição .24 parte da fonte exata .23; os incrementos seguintes partem da fonte congelada .24.
+
+O incremento Sistema integrado na .24 reúne a leitura Bluetooth própria e a
 operação explícita de desativação Wi-Fi. A leitura Bluetooth passou 1368 testes
 Rust, dez ignorados e cargo check; o conjunto com a desativação passou **1400
 testes Rust, dez ignorados e cargo check**, com 569 inputs inalterados. O delta
-fechado contém 12 ficheiros existentes e sete novos, ainda privado.
+fechado contém 12 ficheiros existentes e sete novos, adotados na .24.
 A leitura usa o contexto original de Sistema e o transporte autenticado existente,
 com limites de dados/tempo e uma consulta de cada vez; não publica endereços,
 caminhos nativos, tokens de emparelhamento ou alvos de comandos. Desativar Wi-Fi
 reutiliza o mesmo ator, autoridade e slot físico da rede, com scope e ACK próprios.
-Nenhum destes dois incrementos está instalado ou foi usado para alterar a rede.
+Os dois incrementos foram integrados na .24, sem serem usados para alterar a rede.
 
-No grupo LLM está em desenvolvimento a correlação obrigatória do `turn.id`
-aninhado no evento final do Codex. Os testes devem provar que uma notificação de
-outro turno da mesma thread não conclui a resposta atual. A revisão dos outros
-providers e a desativação temporária do pet GitHub, preservando histórico e sem
-ensaios reais de CLI que gastem quota, fazem parte do mesmo grupo.
+A correlação obrigatória do `turn.id` aninhado no evento final do Codex está
+fechada e revista num pacote que foi integrado na .24: seis casos novos, 1362 testes Rust,
+dez ignorados e cargo check. A composição .24 reúne essa correção com o
+incremento Sistema e a desativação temporária do pet GitHub. A identidade
+`integration_github`, os seus perfis, conversas e tarefas antigas permanecem;
+ficam bloqueados novos pedidos e consultas do pet. O pet Copilot CLI permanece.
+Não realizar ensaios reais GitHub CLI/Copilot que consumam quota. Os restantes
+pets também fazem parte do desenvolvimento e da aceitação.
+
+Desativar Wi-Fi é um controlo explícito que o utilizador poderá acionar no
+Sistema. Não é uma mudança na configuração desejada da estação nem uma ação
+automática: não foi desligada a ligação e não houve testes de escrita na rede.
+O ACK de software continua sem provar o efeito físico no rádio.
 
 ## Estado da entrega
 
-A **0.5.1-mochi.23 está instalada e ativa permanentemente**, RPM
+A **0.5.1-mochi.24 está instalada e ativa permanentemente**, com Bluetooth de leitura, o controlo
+explícito de desativação Wi-Fi, a correlação do turno Codex e a desativação
+temporária do pet GitHub. Passaram **1413 testes Rust, zero falhas e dez
+ignorados**, cargo check, **1010 JavaScript**, TypeScript, Vite e quatro Python,
+com 571 fontes iguais durante verificação e empacotamento. RPM `04ea788d9da2…`,
+prefixo `~/.local/opt/coucou/0.5.1-mochi.24`; executável, socket, XDG e DMS reais
+confirmados. Não houve chamadas
+a modelos, testes de quota ou ações reais de rede/Bluetooth neste incremento.
+
+A política de desativação é explícita por instância na fábrica, separada dos
+25 perfis guardados. Mantém a classificação da conta e as rotas de identidade
+necessárias para ler o histórico antigo. Bloqueia admissão, seleção de modelos,
+retoma de tarefas, voz, ingestão de documentos e polling do pet GitHub; não
+concede a outro pet os seus pedidos ou dados. O plano do anfitrião retira apenas
+`integration_github` da lista de pets ativos, preservando todos os outros campos.
+A migração foi aplicada com backup e comparação dos outros campos: os 25
+perfis ficaram byte a byte iguais, assim como o journal. O Ollama recuperou
+automaticamente os 73 caracteres na CID original, apresentou o estado de
+rascunho recuperado e passou fechar/reabrir sem escrita ou envio. Codex abriu
+a conversa, mas a retoma do seletor pela acessibilidade não encontrou a linha
+para reabrir; Copilot e esse percurso Codex conservam aceitação gráfica pendente,
+sem regressão demonstrada. Os quatro rascunhos dos pets anteriormente ativos
+ficaram guardados privadamente. A configuração concorrente que deixou Gravity
+inativo foi preservada, sem reativação. O rascunho GitHub
+foi guardado privadamente antes da troca; não foi reaberto depois da retirada,
+e não há código novo de eliminação/migração dos seus dados IndexedDB. A conversa
+e as tarefas antigas GitHub permanecem no journal com o mesmo dono. A .23 fica
+disponível para recuperação. Apresentação/hotplug e os sete widgets direitos
+conservam os limites anteriores; `ownUiComplete=false`.
+
+A **0.5.1-mochi.23 foi a versão ativa anterior**, RPM
 `62d2bd67e39c…`, com 562 fontes congeladas e prefixo
 `~/.local/opt/coucou/0.5.1-mochi.23`. Passaram **1356 testes Rust, zero falhas e
 dez ignorados**, cargo check, **1007 JavaScript**, TypeScript, Vite e quatro
@@ -246,14 +289,14 @@ aprovações conservam os checks nativos de dono, sessão, pedido e prazo.
 
 | Área | Estado e próximo critério de conclusão |
 | --- | --- |
-| Barra e ilha | .23 ativa; blocos e sete widgets direitos preservados. Só retirar controlCenterButton após paridade própria completa. |
+| Barra e ilha | .24 ativa; blocos e sete widgets direitos preservados. Só retirar controlCenterButton após paridade própria completa. |
 | Som próprio | Leitura/navegação e silenciar/repor saída de teste aceites. Faltam volume/balanço/portas/perfis/microfone e regressão Spoty no executável novo. |
-| Rede, Bluetooth e energia | Ligação GTK/Tauri R2 revista e integrada na .20 ativa, com UI de leitura/pesquisa Wi-Fi; aceitação nativa em curso. A .23 inclui ativação Wi-Fi explícita, ainda sem ensaio real da ação. A leitura Bluetooth própria e a desativação Wi-Fi estão no sucessor privado do grupo Sistema; energia/ligações e restantes controlos próprios precisam de implementação e aceitação. |
-| Sessões e consumo | Contagens com fontes reais disponíveis. .22 ativa inclui atividade da conta Codex, revista e compilada; falta completar a leitura/aceitação pela UI. Falta identidade inequívoca para controlo das sessões CLI, ledger de tokens e matriz completa de retoma/interação em background. |
+| Rede, Bluetooth e energia | Ligação GTK/Tauri R2 revista e integrada na .20 ativa, com UI de leitura/pesquisa Wi-Fi; aceitação nativa em curso. A .23 inclui ativação Wi-Fi explícita, ainda sem ensaio real da ação. A .24 inclui leitura Bluetooth própria e o backend de desativação Wi-Fi explícita, sem aceitação de ação real; energia/ligações e restantes controlos próprios precisam de implementação e aceitação. |
+| Sessões e consumo | Contagens com fontes reais disponíveis. .24 inclui atividade da conta Codex, revista e compilada; falta completar a leitura/aceitação pela UI. Falta identidade inequívoca para controlo das sessões CLI, ledger de tokens e matriz completa de retoma/interação em background. |
 | Execução pelos pets | CLIs conservam capacidades/permissões nativas. Ollama recebeu política de propostas com aprovação por ação, preservando o modelo atual; falta escolher modelo com ferramentas e aceitar o percurso completo. |
 | Definições | .19 inclui FE41 e backend Recap + FE46; arranque/rascunho aceites, mutadores Recap testados apenas em dados sintéticos. Reconciliar definições gerais/Chat44 e completar ensaios nativos de perfis. |
 | Voz e documentos | Qualidade PT/EN com o microfone efetivo, pronúncia e latência Raquel ainda pendentes. Preservar email só Ollama e repetir regressões de documentos por capacidade ao fechar a entrega. |
-| Interação prioritária | Resolver cartão invisível após hotplug e integrar/aceitar os candidatos 52-r2 e 57; nenhum deles concede autorização. |
+| Interação prioritária | As correções 52-r2/57 estão integradas desde a .22 e preservadas na .24; falta aceitar o percurso real após hotplug. Nenhuma delas concede autorização. |
 | Fábrica de pets | Integrada na .23, com moldes LLM/aplicação e extensão de serviço; os 25 defaults ficaram iguais. Identidade, provider, grants e execução local não são herdáveis. Novos pets e mudanças de permissões continuam explícitos. |
 | Aceitação final | Completar monitores/hotplug/foco/tarefas por provider e alterações de permissões; rever fontes e realizar os commits assinados no fim pedido. |
 

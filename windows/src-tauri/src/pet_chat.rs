@@ -209,6 +209,14 @@ mod target_tests {
     }
 
     fn seed(chat: &Chat, provider: &str, native: &str, label: &str) -> String {
+        if crate::pet_config::require_active_provider(provider).is_err(){
+            let id=crate::assistant_memory::new_id();
+            chat.fixture_restore_saved(provider,crate::chat::SavedConversation{
+                id:id.clone(),messages:vec![json!({"role":"user","content":format!("synthetic {label} question")}),json!({"role":"assistant","content":format!("synthetic {label} answer")})],
+                session:Some(crate::chat::CliSession{id:native.into(),cwd:"/fixture/work".into(),full_access:false}),..Default::default()
+            });
+            return id;
+        }
         let turn = chat.begin_cli(provider, Arc::default()).unwrap();
         let _lease = chat.lease(&turn);
         chat.remember_session(&turn, native, "/fixture/work", false);

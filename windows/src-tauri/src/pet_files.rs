@@ -6,6 +6,7 @@ fn local_unsupported(provider:&str,path:&Path)->bool{
  ["ollama","lmstudio"].contains(&provider) && path.is_file() && path.extension().and_then(|e|e.to_str()).is_some_and(|e|["png","jpg","jpeg","gif","webp","mp3","mp4","wav","ogg","zip","doc","docx","xls","xlsx","ppt","pptx","exe","bin"].contains(&e.to_ascii_lowercase().as_str()))
 }
 pub fn ingest(provider:&str,source:&str)->Result<crate::files::DroppedFile,String>{
+ crate::pet_config::require_active_provider(provider)?;
  let pet=crate::pet_config::integration_pet(provider).ok_or("Este pet não recebe documentos.")?;
  let config=crate::pet_config::read()?;let p=config.permissions(pet)?;
  let folder=std::fs::symlink_metadata(source).is_ok_and(|m|m.is_dir());
