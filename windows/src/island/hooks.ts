@@ -35,7 +35,7 @@ export function handoffPendingApproval(island:Island,event:ApprovalHandoff):bool
   const session=State.petSessions.entries.get(sessionKey(request.pillId,request.backend??'claude',request.sessionId));
   const task=session??State.tasks.find(t=>t.id===request.pillId&&t.sessionId===request.sessionId);
   dropPendingCard(island);
-  if(task){task.decisionInTerminal=true;task.state=request.questions?'question':'approval';}
+  if(task&&event.reason!=='native-source-ended'){task.decisionInTerminal=true;task.state=request.questions?'question':'approval';}
   State.projectSessions(request.pillId);State.notify();return true;
 }
 

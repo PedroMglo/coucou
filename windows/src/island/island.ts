@@ -1,3 +1,5 @@
+import {receiveDocumentDrop,documentBatchMessage} from '../core/document-collection';
+import {refreshDocumentState} from '../core/document-state';
 import {taskPet} from "../mochi/tasks";
 import { emitToWindow } from "../core/bridge";
 // The island: DOM shell, sizing animation, Mochi placement, mouse handling.
@@ -189,7 +191,8 @@ export class Island {
     const cliRequests = new Set<string>();
     let wasPinned = false;
     if(this.cardsOnly)initializeRequestDestinations();
-    void onEvent<{ id: string; provider: string;origin?:string;target?:import('../core/session-chat').SessionTarget }>("agent-request", ({ id, provider,origin,target }) => {
+    void onEvent<import('../core/bridge').AgentRequest>("agent-request", ({ id, provider,origin,target,goalTarget }) => {
+      if(goalTarget)return; // Background recipe decisions remain in the pet's chat; no selection effect.
       if(this.cardsOnly){
         const destination=requestDestinations.add({id,target});
         if(destination)void presentRequest(destination);
@@ -820,13 +823,13 @@ export class Island {
       case "drop": {
         State.fileDragOver = false;
         const owner=this.dragOwner;this.dragOwner=null;this.dragHeight=null;
-        const path = e.paths?.[0];
-        if (!path) {
+        const paths = e.paths??[];
+        if (!paths.length) {
           this.engine.animateMorph(0);
           this.setView(State.defaultView());
           return;
         }
-        void this.swallow(path,e.dropId,owner);
+        void this.swallow(paths,e.dropId,owner);
         break;
       }
     }
@@ -840,16 +843,19 @@ export class Island {
   private dropSequence=0;
   private providerDrops=new Map<string,number>();
   private providerDropTokens=new Map<string,string>();
-  private async swallow(path: string,dropId?:string,owner:{provider:string;conversationId:string|undefined;pet:string|null}|null=null) {
+  private async swallow(_paths: string[],dropId?:string,owner:{provider:string;conversationId:string|undefined;pet:string|null}|null=null) {
     const sequence=++this.dropSequence,provider=owner?.provider??State.chatProvider;
     this.cardIngesting++;
     this.providerDrops.set(provider,sequence);
     if(dropId)this.providerDropTokens.set(provider,dropId);
     try {
-      const file=await Bridge.ingestFile(path,provider,owner?owner.conversationId:dialogueId(provider),dropId);
-      if(this.providerDrops.get(provider)!==sequence)return;
-      if(file.conversationId){const current=await Bridge.chatConversation(provider);if(current.id!==file.conversationId)return;}
-      State.setFileContext(provider,file);State.chatFeedback.set(provider,`${file.name} recebido.`);State.notify();
+      const batch=await receiveDocumentDrop(Bridge,provider,dropId,owner?owner.conversationId:dialogueId(provider));
+      const cid=batch.attachments[0]?.conversationId??owner?.conversationId??dialogueId(provider);
+      const refreshed=await refreshDocumentState(provider,cid);
+      State.chatFeedback.set(provider,documentBatchMessage(batch));State.notify();
+      if(!batch.attachments.length)throw Error(documentBatchMessage(batch));
+      if(sequence===this.dropSequence)UploadSeq.deactivate();
+      if(!refreshed.applied){if(sequence===this.dropSequence&&provider===State.chatProvider&&State.view==='upload'&&State.pendingApproval?.pillId!==State.focusId){this.engine.animateMorph(0);this.setView(State.fileFor(provider)?'choose':'prompt');}return;}
       // The file is ready. Retire the pre-drop canvas so it cannot cover the
       // real document actions while still waiting for performDrop().
       if(sequence===this.dropSequence)UploadSeq.deactivate();
@@ -871,12 +877,10 @@ export class Island {
   private discardDrop() {
     this.dropSequence++;
     this.providerDrops.delete(State.chatProvider);
-    const provider=State.chatProvider,dropId=this.providerDropTokens.get(provider),file=State.fileFor(provider);
+    const provider=State.chatProvider,dropId=this.providerDropTokens.get(provider),file=State.fileFor(provider),uploading=State.view==='upload';
     this.providerDropTokens.delete(provider);
-    if(dropId)void Bridge.petDocumentCancelDrop(provider,dropId).catch(()=>{});
-    if(file?.conversationId&&file.sequence!==undefined)void Bridge.petDocumentClear(provider,file.conversationId,file.sequence).catch(()=>{});
-    State.droppedFile = null;
-    State.promptContext = null;
+    const action=uploading&&dropId?Bridge.petDocumentCancelDrop(provider,dropId):file?.id&&file.conversationId?Bridge.petDocumentRemove(provider,file.conversationId,file.id):null;
+    if(action)void action.then(()=>refreshDocumentState(provider)).catch(error=>{State.chatFeedback.set(provider,String(error).replace(/^Error:\s*/,''));State.notify();});
     this.setView(State.defaultView());
   }
 

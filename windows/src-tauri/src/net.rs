@@ -17,6 +17,37 @@ pub const MAX_BODY: usize = 8 * 1024 * 1024;
 /// Ceiling for an error body: only its message is shown.
 pub const MAX_ERROR_BODY: usize = 64 * 1024;
 
+pub(crate) const CANCELLED: &str = "A tarefa foi interrompida ou o contexto deixou de estar autorizado.";
+
+/// The factory is called only while this exact caller-owned scope is valid.
+/// Dropping its future closes our wait/transport; it cannot undo remote work
+/// that a server already accepted. No retries or provider substitutions occur.
+pub(crate) async fn while_current<T, F>(
+    current: impl Fn() -> bool,
+    work: impl FnOnce() -> F,
+) -> Result<T, String>
+where F: std::future::Future<Output = Result<T, String>> {
+    if !current() { return Err(CANCELLED.into()); }
+    let pending = work();
+    tokio::pin!(pending);
+    let cancelled = async {
+        loop {
+            if !current() { break; }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::pin!(cancelled);
+    tokio::select! {
+        biased;
+        _ = &mut cancelled => Err(CANCELLED.into()),
+        result = &mut pending => if current() { result } else { Err(CANCELLED.into()) },
+    }
+}
+
+#[cfg(test)]
+#[path = "net_cancel_tests.rs"]
+pub(crate) mod cancel_tests;
+
 /// True for an address that is this machine: `localhost`, 127.0.0.0/8, ::1,
 /// and the unspecified addresses (0.0.0.0, ::), which connect to this machine.
 pub fn is_loopback_host(host: &str) -> bool {
@@ -119,6 +150,13 @@ pub fn client(url: &Url, timeout: Duration) -> Result<reqwest::Client, String> {
         builder = builder.no_proxy();
     }
     builder.build().map_err(|e| e.to_string())
+}
+
+/// Autonomous local-model requests never follow redirects or proxy off host.
+pub(crate)fn local_client(url:&Url,timeout:Duration)->Result<reqwest::Client,String>{
+ if !is_loopback_url(url){return Err("O servidor local aprovado mudou.".into());}
+ reqwest::Client::builder().connect_timeout(Duration::from_secs(10).min(timeout)).timeout(timeout)
+  .no_proxy().redirect(reqwest::redirect::Policy::none()).build().map_err(|e|e.to_string())
 }
 
 /// The body of `response`, refused past `limit` bytes.

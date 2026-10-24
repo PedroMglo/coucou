@@ -1,3 +1,4 @@
+import {receiveDocumentDrop} from '../core/document-collection';
 import {Bridge,onDragDrop,emitToWindowOrThrow} from '../core/bridge';
 import {PetDrop} from '../core/pet-drop';
 import {petCapabilities} from '../mochi/capabilities';
@@ -12,8 +13,8 @@ export function controlDocuments(surface:HTMLElement,options:{pets:()=>PetIdenti
  let over=false,hovered:string|null=null,timer:ReturnType<typeof setTimeout>|undefined;
  const recipient=(id:string)=>{const pet=options.pets().find(p=>p.id===id),provider=pet&&petCapabilities(id).chat;return pet&&provider&&PetPreferences.config?.pets[id]?.permissions?.documents?{provider,name:pet.name}:null;};
  const drop=new PetDrop({recipient,providers:()=>options.pets().flatMap(p=>{const r=recipient(p.id);return r?[r.provider]:[];}),
-  ingest:(path,provider,dropId)=>Bridge.ingestFile(path,provider,undefined,dropId),
-  deliver:async(pet,file)=>{await emitToWindowOrThrow('island','pet-document',{pet,file});options.collapse();},cancel:Bridge.petDocumentCancelDrop,
+  ingest:(_paths,provider,dropId)=>receiveDocumentDrop(Bridge,provider,dropId),
+  deliver:async(pet,files,message)=>{await emitToWindowOrThrow('island','pet-document',{pet,files,message});options.collapse();},cancel:Bridge.petDocumentCancelDrop,
  },render);
  function render(){
   const target=hovered&&recipient(hovered);

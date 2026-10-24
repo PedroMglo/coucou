@@ -1,3 +1,8 @@
+import {refreshDocumentState,invalidateDocumentState} from '../core/document-state';
+import {attachmentControls} from './attachment-controls';
+import {conversationPurge} from './conversation-purge';
+import {documentRetention} from './document-retention';
+import {attachmentContext} from '../core/document-collection';
 import {PetPreferences,profileModels,profileProvider,profileLabel,profileSummary} from "../mochi/pet-preferences";
 // Chat view — DOM port of PromptView / ChatBubble / TypingDotsView /
 // ModelPickerView from IslandViewContent.swift.
@@ -12,7 +17,7 @@ import {buildTaskNotice} from "./task-notice";
 import {buildRequestHistory} from "./request-history";
 import { ICONS } from "./icons";
 import { renderMarkdown } from "./markdown";
-import { Bridge, emitToWindow, onEvent, type ChatContext, type ModelInfo,type ChatTurnState,type ConversationView } from "../core/bridge";
+import { Bridge, emitToWindow, onEvent,  type ModelInfo,type ChatTurnState,type ConversationView } from "../core/bridge";
 import {
   activeModel, isCliProvider, pickModel, providerDef, providerForPill, visibleProviders, withModel, type ProviderDef,
 } from "../core/providers";
@@ -24,6 +29,8 @@ import {petCapabilities} from "../mochi/capabilities";
 import {dialogueId,rememberDialogue,resetDialogue,restoreDialogue} from "../core/chat-dialogue";
 import {SessionChat,sessionTargetKey,sessionOrigin,type SessionTarget} from "../core/session-chat";
 import {buildAgentRequests} from './agent-requests';
+import {approvalActions} from './approval-actions';
+import {approvalQuestions} from './approval-questions';
 import {OllamaModelSelection} from '../core/ollama-selection';
 import {commandReview} from './command-review';
 import {LocalCapabilities,type LocalCapabilityEvent} from '../core/local-capabilities';
@@ -64,13 +71,6 @@ function typingDots(): HTMLElement {
     { class: "chat-row" },
     h("div", { class: "typing" }, h("i"), h("i"), h("i")),
   );
-}
-
-/** The coloured chip showing what the question is about (a dropped file). */
-function contextChip(label: string): HTMLElement {
-  const chip = h("div", { class: "chip" }, h("i", { class: "chip-dot" }), h("span", { text: label }));
-  requestAnimationFrame(() => chip.classList.add("settled"));
-  return chip;
 }
 
 function saveSettings() {
@@ -276,7 +276,10 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   watchCapabilities();
   if(session)return buildSessionPrompt(onHeightChange,session,draftStatus);
   const chipRow = h("div", { class: "chip-row" });
-  let documentActionsButton:HTMLButtonElement|null=null;
+  const attachmentPanel=attachmentControls({refresh:async o=>{await refreshDocumentState(o.provider,o.conversationId);},changed:onHeightChange,
+    activate:async o=>{if((await Bridge.chatConversation(o.provider)).id!==o.conversationId)throw Error('A conversa mudou. Volta a abrir os anexos da conversa atual.');},
+    ...(onDocumentActions?{actions:(file:import('../core/document-collection').DisplayFile,o:import('./attachment-controls').AttachmentOwner|null)=>{if(o&&o.provider!==State.chatProvider)return;State.chooseFile(o?.provider??State.chatProvider,file);onDocumentActions();}}:{}),
+  });chipRow.append(attachmentPanel.el);
   const log = h("div", { class: "chat-log" });
   const input = h("textarea", {
     rows:1,
@@ -324,8 +327,11 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   const library=h("div",{class:"chat-library",style:"max-height:210px;overflow:auto;border:1px solid #ffffff24;border-radius:8px;padding:8px"},librarySearch,newConversation,libraryStatus,libraryList);library.hidden=true;
   modelRow.append(libraryBtn);
   let libraryOwner="",libraryTicket=0;
+  let libraryPurges:Array<ReturnType<typeof conversationPurge>>=[];
+  let copyRetention:ReturnType<typeof documentRetention>|null=null;
+  function clearPurgeReviews(){for(const control of libraryPurges)control.dispose();libraryPurges=[];copyRetention?.dispose();copyRetention=null;}
   async function loadLibrary() {
-    const owner=State.chatProvider,ticket=++libraryTicket;libraryOwner=owner;
+    clearPurgeReviews();const owner=State.chatProvider,ticket=++libraryTicket;libraryOwner=owner;
     libraryStatus.textContent="A carregar conversas…";
     try {
       const conversations=await Bridge.chatConversations(owner,librarySearch.value.trim());
@@ -341,12 +347,19 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
           else if(owner===State.chatProvider)void loadLibrary();
           onHeightChange();
         });});
-        libraryList.append(row);
+        const purge=conversationPurge({provider:owner,conversationId:c.id,current:()=>ticket===libraryTicket&&owner===State.chatProvider&&!library.hidden,locked:()=>State.chatResettingProviders.has(owner)||c.current&&State.chatBusyProviders.has(owner),changed:onHeightChange,done:async()=>{await refreshHistory(owner);if(owner===State.chatProvider&&!library.hidden)await loadLibrary();}});libraryPurges.push(purge);
+        libraryList.append(h('div',{},row,purge.el));
+      }
+      copyRetention=documentRetention({provider:owner,current:()=>ticket===libraryTicket&&owner===State.chatProvider&&!library.hidden,changed:onHeightChange,title:cid=>conversations?.find(c=>c.id===cid)?.title});libraryList.append(copyRetention.el);
+      const recoveries=await Bridge.chatPurgeRecoveries();
+      if(ticket!==libraryTicket||owner!==State.chatProvider||library.hidden)return;
+      for(const r of recoveries.filter(r=>r.target.provider===owner)){
+        const purge=conversationPurge({provider:owner,conversationId:r.target.conversationId,recoveryId:r.id,current:()=>ticket===libraryTicket&&owner===State.chatProvider&&!library.hidden,changed:onHeightChange,done:async()=>{await refreshHistory(owner);if(owner===State.chatProvider&&!library.hidden)await loadLibrary();}});libraryPurges.push(purge);libraryList.append(h('div',{},h('strong',{text:`Recuperação · ${r.target.title}`}),purge.el));
       }
     } catch(error) {if(ticket===libraryTicket && owner===State.chatProvider)libraryStatus.textContent=String(error).replace(/^Error:\s*/,"");}
     onHeightChange();
   }
-  libraryBtn.addEventListener("click",()=>{library.hidden=!library.hidden;if(!library.hidden){librarySearch.value="";void loadLibrary();}onHeightChange();});
+  libraryBtn.addEventListener("click",()=>{library.hidden=!library.hidden;if(!library.hidden){librarySearch.value="";void loadLibrary();}else clearPurgeReviews();onHeightChange();});
   const sessionsBtn=h('button',{class:'picker-link chat-sessions',text:'Todas as sessões',title:'Conversas do pet e sessões de terminal na barra lateral',onclick:()=>{if(State.focusId)void Bridge.petChatOpen(State.focusId,undefined,true);}});
   modelRow.append(sessionsBtn);
   librarySearch.addEventListener("input",()=>void loadLibrary());
@@ -377,36 +390,26 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
 
   const requestCards = new Map<string, HTMLElement>();
   const endedRequests=new Set<string>();
-  const addRequest=(request:{ id: string; provider: string; kind: string; detail: string;origin?:string;approvalScope?:'turn'|'once';
-    questions?: { id: string; question: string; isSecret?: boolean; options?: { label: string }[] }[] | null
-    target?:import('../core/session-chat').SessionTarget
-  }) => {
+  const addRequest=(request:import('../core/bridge').AgentRequest) => {
     if(request.target?.origin==='external')return;
     if (requestCards.has(request.id)||endedRequests.has(request.id)) return;
     const card = h("div", { class: "cli-request", style: "padding:10px;border:1px solid #F5A524;border-radius:10px;margin:6px 0" },
       h("strong", { text: t("{provider} needs your answer", { provider: isCliProvider(request.provider.toLowerCase())?providerDef(request.provider.toLowerCase()).name:request.provider }) }));
     card.append(h('p',{class:'session-origin',text:request.origin??'Mochi · conversa própria'}));
-    const fields = new Map<string, HTMLInputElement>();
+    if(request.goalTarget&&request.voiceCode)card.append(h('p',{text:`Voz: rever receita ${request.voiceCode} · aprovar receita ${request.voiceCode} · recusar receita ${request.voiceCode}`}));
+    const questions=approvalQuestions(request.kind==='question'?request:{questions:[],detail:''});
     if (request.kind === "question") {
-      for (const question of request.questions ?? []) {
-        const input = h("input", { class: "chat-input", type: question.isSecret ? "password" : "text", autocomplete: "off" }) as HTMLInputElement;
-        fields.set(question.id, input);
-        card.append(h("label", { text: question.question }), input);
-        for (const option of question.options ?? []) {
-          card.append(h("button", { text: option.label, onclick: () => { input.value = option.label; } }));
-        }
-      }
+      card.append(questions.el);
     } else { card.append(commandReview(request.detail,request.provider==='ollama'&&request.approvalScope==='once')); }
-    const reply = (allow: boolean) => {
-      allowButton.disabled=denyButton.disabled=true;requestError.textContent='';
-      const answers = Object.fromEntries([...fields].map(([id, input]) => [id, allow ? [input.value] : []]));
-      void Bridge.cliAgentAnswer(request.id, { allow, answers },request.target).then(() => {
+    const reply = (allow: boolean,nativeChoice?:string) => {
+      actions.setDisabled(true);questions.setDisabled(true);requestError.textContent='';
+      const answers = questions.answers(allow);
+      void Bridge.cliAgentAnswer(request.id, { allow, answers,...(nativeChoice?{nativeChoice}:{}) },request.goalTarget??request.target).then(() => {
         card.remove(); requestCards.delete(request.id);
-      }).catch(error=>{requestError.textContent=String(error).replace(/^Error:\s*/,'');allowButton.disabled=denyButton.disabled=false;onHeightChange();});
+      }).catch(error=>{requestError.textContent=String(error).replace(/^Error:\s*/,'');actions.setDisabled(false);questions.setDisabled(false);onHeightChange();});
     };
-    const allowButton=h("button", { class: "cli-allow", text: request.kind === "question" ? t("Send") : request.approvalScope==='turn'?'Permitir neste turno':t("Allow once"), onclick: () => reply(true) });
-    const denyButton=h("button", { class: "cli-deny", text: t("Deny"), onclick: () => reply(false) });
-    const requestError=h('p',{class:'chat-feedback',role:'status'});card.append(allowButton,denyButton,requestError);
+    const actions=approvalActions(request,reply);
+    const requestError=h('p',{class:'chat-feedback',role:'status'});card.append(actions.el,requestError);
     requestCards.set(request.id, card);
     card.dataset.provider = request.provider.toLowerCase();
     card.dataset.conversationId=request.target?.conversationId??(request.target?.origin==='mochi'?request.target.sessionId:'');
@@ -446,6 +449,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       if(provider===State.chatProvider)input.value="";
     }
     rememberDialogue(provider,snapshot);
+    void refreshDocumentState(provider,snapshot.id).catch(()=>{});
     if(provider==='ollama')localCapabilities.observe(snapshot.id,snapshot.turn??0,snapshot.localExecution);
     const running=observed.get(provider);
     if(snapshot.turn!==undefined && running && running.id===snapshot.id && running.turn>snapshot.turn)return;
@@ -517,18 +521,10 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     State.notify();onHeightChange();
     if(!event.busy)void refreshHistory(provider);
   });
-  const documentReads=new Map<string,number>();
   void onEvent<{provider:string|null;conversationId:string|null}>('pet-document-context-changed',async event=>{
-    if(!event.provider){State.clearAllDialogueContexts();State.notify();return;}
-    const provider=event.provider,ticket=(documentReads.get(provider)??0)+1;documentReads.set(provider,ticket);
-    if(!event.conversationId){State.clearDialogueContext(provider);State.notify();return;}
-    try{
-      const current=await Bridge.chatConversation(provider);
-      const file=await Bridge.petDocumentContext(provider,current.id);
-      if(documentReads.get(provider)!==ticket)return;
-      if(file)State.setFileContext(provider,file);else State.clearDialogueContext(provider);
-      State.notify();
-    }catch{/* The receiving surface reports copy errors without changing another owner. */}
+    if(!event.provider){invalidateDocumentState();return;}
+    if(!event.conversationId){invalidateDocumentState(event.provider);return;}
+    try{await refreshDocumentState(event.provider);onHeightChange();}catch{/* The original receiving surface reports the failure. */}
   });
   void onEvent<string | {provider:string;text:string;conversationId?:string;turn?:number}>("chat-delta", (delta) => {
     // Old unscoped events are accepted only when there is exactly one owner.
@@ -571,18 +567,17 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     State.notify();
     onHeightChange();
 
-    const file = State.fileFor(sendingProvider);
+    const files = State.filesFor(sendingProvider),capturedCid=dialogueId(sendingProvider)??files[0]?.conversationId;
 
     try {
       if(!dialogueId(sendingProvider)) {
         const snapshot=await Bridge.chatConversation(sendingProvider);
         if(snapshot?.id)rememberDialogue(sendingProvider,snapshot);
       }
-      if(file?.conversationId&&file.conversationId!==dialogueId(sendingProvider))throw new Error('O documento pertence a outra conversa. Volta a entregá-lo ao pet.');
-      const context:ChatContext|null=file?{kind:'file',name:file.name,path:file.path}:null;
-      const reply = await Bridge.chatSend(query, context, sendingProvider,dialogueId(sendingProvider),expectedModel,file?.sequence);
-      history.push({ id: nextId++, role: "assistant", content: reply.text });
-      if(file&&State.fileFor(sendingProvider)===file){State.clearDialogueContext(sendingProvider);if(file.sequence!==undefined&&file.conversationId)void Bridge.petDocumentClear(sendingProvider,file.conversationId,file.sequence).catch(()=>{});}
+      const cid=capturedCid??dialogueId(sendingProvider);if(files.length&&!cid)throw Error('A conversa ainda não está disponível.');
+      const context=files.length?attachmentContext(sendingProvider,cid!,files):null;
+      const reply = await Bridge.chatSend(query,context,sendingProvider,cid,expectedModel);
+      history.push({id:nextId++,role:'assistant',content:reply.text});
       notifyReply("Your answer is ready.");
       State.stateOverride = pending.size>1 ? "thinking" : null;
       Sound.play("finish");
@@ -654,7 +649,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       libraryBtn.hidden=!!noChat;
       sessionsBtn.hidden=!!noChat||!State.focusId||document.body.classList.contains('floating-chat');
       expandChat.hidden=!!noChat || !State.focusId || document.body.classList.contains("floating-chat");
-      if(noChat || (libraryOwner && libraryOwner!==State.chatProvider)){library.hidden=true;libraryTicket++;}
+      if(noChat || (libraryOwner && libraryOwner!==State.chatProvider)){library.hidden=true;libraryTicket++;clearPurgeReviews();}
       folderBtn.hidden=!isCliProvider(State.chatProvider) || !!noChat;
       const path=State.settings.cliWorkspaces[State.chatProvider]??State.settings.cliWorkspace;
       folderBtn.textContent=`Pasta: ${path.split(/[\\/]/).filter(Boolean).at(-1)??"pessoal"}`;folderBtn.title=path||"Pasta pessoal · usa as instruções da tua conta";
@@ -668,19 +663,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
         void refreshHistory(renderedProvider);
       }
       for (const card of requestCards.values()) card.hidden = card.dataset.provider !== State.chatProvider || !!card.dataset.conversationId&&card.dataset.conversationId!==dialogueId(State.chatProvider);
-      const file = State.droppedFile;
-      const wantChip = file?.name ?? "";
-      if (chipRow.dataset.label !== wantChip) {
-        chipRow.dataset.label = wantChip;
-        clear(chipRow);
-        documentActionsButton=null;
-        if (wantChip) chipRow.append(contextChip(wantChip));
-        if(wantChip&&onDocumentActions){
-          documentActionsButton=h('button',{class:'picker-link',text:'Ações do documento','aria-label':'Ações para o documento anexado',onclick:()=>{if(State.pendingApproval?.pillId!==State.focusId)onDocumentActions();}});
-          chipRow.append(documentActionsButton);
-        }
-      }
-      if(documentActionsButton)documentActionsButton.disabled=State.pendingApproval?.pillId===State.focusId;
+      attachmentPanel.sync(dialogueId(State.chatProvider)?{provider:State.chatProvider,conversationId:dialogueId(State.chatProvider)!}:null,State.filesFor(State.chatProvider),State.chatResettingProviders.has(State.chatProvider)||State.pendingApproval?.pillId===State.focusId);
 
       const thinking = busy(State.chatProvider);
       const draft=State.preparedChat?.provider===State.chatProvider?State.preparedChat:null;
@@ -736,7 +719,9 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
   }});
   const modelRow=h('div',{class:'model-row'},modelButton,profiles);
   const executionBadge=h('p',{class:'local-execution-capability',role:'status'});executionBadge.hidden=true;
-  const attachments=h('div',{class:'chips'});
+  const attachmentPanel=attachmentControls({changed:onHeightChange,refresh:async o=>{const target=session.target;if(target?.origin==='mochi'&&target.provider===o.provider&&target.sessionId===o.conversationId)await session.refresh();},
+    activate:async o=>{const current=await Bridge.chatConversation(o.provider);if(current.id!==o.conversationId)await Bridge.chatRestoreConversation(o.provider,o.conversationId);},
+  });const attachments=attachmentPanel.el;
   const taskStatus=buildTaskNotice(),requestHistory=buildRequestHistory();
   const failedText=h('pre',{class:'failed-request-text'});
   const failedReview=h('details',{class:'failed-request-review'},h('summary',{text:'Rever pedido original · confirma o histórico antes de repetir'}),failedText);failedReview.hidden=true;
@@ -777,8 +762,7 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
     const waiting=session.sending||!!snapshot?.busy;
     requestHistory.sync(target,snapshot?.requestHistory,snapshot?.messages.length??0);
     taskStatus.sync(target,snapshot?{...snapshot,taskNotice:requestHistory.coversTask(snapshot.taskNotice?.taskId)?undefined:snapshot.taskNotice}:null,session.sending);
-    const attachment=snapshot?.attachment,label=attachment?`${attachment.name}:${attachment.sequence??''}`:'';
-    if(attachments.dataset.label!==label){attachments.dataset.label=label;clear(attachments);if(attachment){attachments.append(contextChip(attachment.name),h('button',{class:'picker-link',text:'Retirar anexo',onclick:()=>void session.clearAttachment()}));}}
+    attachmentPanel.sync(target?.origin==='mochi'?{provider:target.provider,conversationId:target.sessionId}:null,target?.origin==='mochi'?snapshot?.attachments??[]:[]);
     failedReview.hidden=!session.failure;failedText.textContent=session.failure?.query??'';
     const messages=snapshot?.messages??[];
     // Preserve scroll position during live updates if the user is reading older

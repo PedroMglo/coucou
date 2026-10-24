@@ -1,3 +1,4 @@
+import {attachmentContext,receiveDocumentDrop,documentBatchMessage} from '../core/document-collection';
 import {IndexedDraftStorage,SessionDrafts,draftBroadcast,DRAFT_LIMITS} from '../core/session-drafts';
 import {requestHistoryFor,containsPendingRequest} from '../core/request-history';
 import '../style.css';import './pet-chat.css';
@@ -35,7 +36,7 @@ function fromLocal(target:SessionTarget,value:ConversationView):SessionSnapshot 
  const messages=value.messages.map((m,i)=>({id:`${value.id}:${i}`,role:m.role,content:m.content}));
  if(value.busy&&value.query&&!containsPendingRequest(requestHistoryFor(target,value.requestHistory,value.messages.length),value.query))messages.push({id:`${value.id}:query`,role:'user',content:value.query});
  if(value.busy&&value.stream)messages.push({id:`${value.id}:stream`,role:'assistant',content:value.stream});
- return {target,messages,notice:value.notice,taskNotice:value.taskNotice,requestHistory:value.requestHistory,localExecution:value.localExecution,busy:!!value.busy,turn:value.turn===undefined?undefined:String(value.turn),capabilities:{history:true,send:true,cancel:true}};
+ return {target,messages,notice:value.notice,taskNotice:value.taskNotice,requestHistory:value.requestHistory,attachmentHistory:value.attachmentHistory,localExecution:value.localExecution,busy:!!value.busy,turn:value.turn===undefined?undefined:String(value.turn),capabilities:{history:true,send:true,cancel:true}};
 }
 const draftStatus=node('section');draftStatus.id='draft-persistence';draftStatus.className='composer-hint';draftStatus.setAttribute('aria-label','Estado do rascunho desta conversa');draftStatus.hidden=true;
 const draftMessage=node('p');draftMessage.setAttribute('role','status');
@@ -50,22 +51,19 @@ draftChannel=draftBroadcast(drafts);
 const session=new SessionChat({
  history:async target=>{
   if(target.origin==='external')return invoke<SessionSnapshot>('session_chat_history',{target});
-  const[value,attachment]=await Promise.all([Bridge.chatReadConversation(target.provider,target.sessionId),Bridge.petDocumentContext(target.provider,target.sessionId)]);
-  return {...fromLocal(target,value),attachment};
+  const[value,attachments]=await Promise.all([Bridge.chatReadConversation(target.provider,target.sessionId),Bridge.petDocumentContexts(target.provider,target.sessionId)]);
+  return {...fromLocal(target,value),attachments};
  },
- send:async(target,query,model,attachment)=>{
-  if(target.origin==='external'&&attachment)throw new Error('Esta ligação de terminal não recebe anexos. Entrega o documento à conversa Mochi deste pet.');
+ send:async(target,query,model,attachments=[])=>{
+  if(target.origin==='external'&&attachments.length)throw new Error('Esta ligação de terminal não recebe anexos. Entrega o documento à conversa Mochi deste pet.');
   if(target.origin==='external')return invoke('session_chat_send',{target,query,...(model?{model}:{})});
   // Reading an archive does not make it current. Replying does, with a busy
   // guard in Rust and a second identity check when the send reserves its turn.
   const current=await Bridge.chatConversation(target.provider);
   if(current.id!==target.sessionId)await Bridge.chatRestoreConversation(target.provider,target.sessionId);
-  if(attachment?.conversationId&&attachment.conversationId!==target.sessionId)throw new Error('O documento pertence a outra conversa.');
-  const reply=await Bridge.chatSend(query,attachment?{kind:'file',name:attachment.name,path:attachment.path}:null,target.provider,target.sessionId,model,attachment?.sequence);
-  if(attachment?.sequence!==undefined)void Bridge.petDocumentClear(target.provider,target.sessionId,attachment.sequence).catch(()=>{});
-  return reply;
+  return Bridge.chatSend(query,attachmentContext(target.provider,target.sessionId,attachments),target.provider,target.sessionId,model);
  },
- clearAttachment:(target,attachment)=>attachment.sequence===undefined?Promise.resolve():Bridge.petDocumentClear(target.provider,target.sessionId,attachment.sequence),
+ removeAttachment:(target,attachment)=>Bridge.petDocumentRemove(target.provider,target.sessionId,attachment.id),
  cancel:async(target,turn)=>{
   if(target.origin==='external'){await invoke('session_chat_cancel',{target,turn});return true;}
   const value=Number(turn);if(!Number.isSafeInteger(value)||value<0)throw new Error('Turno inválido.');
@@ -196,7 +194,9 @@ PetPreferences.subscribe(()=>chat.sync());
 await onEvent<{context:Context;rect:Rect}>('pet-chat-opened',value=>{acceptRect(value.rect);void open(value.context);});
 let refreshTimer:ReturnType<typeof setTimeout>|undefined;
 function invalidate(target?:SessionTarget){
- if(target&&!sameSession(target,session.target)||refreshTimer)return;
+ if(target&&!sameSession(target,session.target))return;
+ session.invalidate(target);
+ if(refreshTimer)return;
  refreshTimer=setTimeout(()=>{refreshTimer=undefined;if(!document.hidden)void session.refresh();},80);
 }
 async function refreshManaged(target?:SessionTarget){
@@ -224,11 +224,11 @@ await onDragDrop(event=>{
  if(event.type==='rejected'){report(event.error||'O documento não foi recebido. Volta a tentar.');return;}
  if(event.type!=='drop')return;
  if(!target||target.origin!=='mochi'){report('Esta sessão de terminal não recebe anexos. Abre uma conversa do pet para anexar o documento.');return;}
- if(event.paths?.length!==1){report('Entrega um documento ou uma pasta de cada vez.');return;}
- report('A receber o documento…');
- void Bridge.ingestFile(event.paths[0],target.provider,target.sessionId,event.dropId).then(async file=>{
+ if(!event.paths?.length)return;
+ report('A receber os anexos…');
+ void receiveDocumentDrop(Bridge,target.provider,event.dropId,target.sessionId).then(async batch=>{
   if(!sameSession(target,session.target))return;
-  report(`${file.name} anexado a esta conversa.`);await session.refresh();
+  report(documentBatchMessage(batch));await session.refresh();
  }).catch(error=>{if(sameSession(target,session.target))report(String(error).replace(/^Error:\s*/,''));});
 });
 const initialRect=await invoke<Rect|null>('pet_chat_rect');if(initialRect)acceptRect(initialRect);

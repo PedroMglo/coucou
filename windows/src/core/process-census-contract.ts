@@ -9,8 +9,11 @@ export interface ProcessCensus {
  refreshing:boolean;
  reason:string|null; // stable backend code, never raw paths/environ/stderr
  counts:{
+  processStates?:{foreground:number;background:number;suspended:number;headless:number};
+  terminalStates?:{foreground:number;backgroundOnly:number;suspendedOnly:number}|null;
   clientsObserved:number; // verified CLI clients after exact launcher/native-child dedup
   terminalClientsObserved:number;
+  terminalInstancesObserved?:number|null;pausedClientsObserved?:number|null;
   foregroundClientsObserved:number;
   identifiedNativeSessionsObserved:number;
   clientsWithUnknownSession:number;
@@ -39,7 +42,9 @@ export interface PetLiveWork {
 export interface ProviderCensusExtension { processCensus?:ProcessCensus|null }
 export interface SnapshotLiveWorkExtension {
  // Snapshot top level. Separate logical-owner evidence, not a process count.
- livePetWork?:{status:'observed'|'unavailable';observedAt:number;reason:string|null;rows:PetLiveWork[]};
+ livePetWork?:{status:'observed'|'unavailable';observedAt:number;reason:string|null;rows:PetLiveWork[];
+  sessionStates?:{schemaVersion:1;scope:'loadedPetConversations';rows:{owner:string;petId:string;conversationId:string;turn:string|null;state:'idle'|'reserved'|'busy'|'waiting'|'stopping'|'unknown';reason:string|null}[]}|null;
+ };
 }
 // native(codexDaemon), mochi(library) and usage retain their current semantics.
 // Historical index/archive totals remain separate sources with their own coverage.

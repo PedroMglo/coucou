@@ -130,7 +130,7 @@ fn prepare_path() -> Result<std::path::PathBuf, LedgerError> {
         }
         Ok(())
     }
-    let data = crate::platform::local_dir();
+    let data = crate::platform::data_dir();
     if !data.is_absolute() { return Err(LedgerError::InvalidInput); }
     ancestors(data.parent().ok_or(LedgerError::InvalidInput)?, uid)?;
     let assistant = data.join("assistant");

@@ -27,6 +27,8 @@ pub struct Snapshot {
     pets: Vec<PetObservation>,
     providers: Vec<ProviderObservation>,
     live_pet_work: super::process_census::LiveWork,
+    /// Nested capability dates are milliseconds; inventory dates remain seconds.
+    pet_capabilities: Option<crate::pet_capabilities::Snapshot>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,11 +94,12 @@ fn native_snapshot(app: &AppHandle, provider: &str, enabled: bool) -> Inventory 
 pub async fn pet_observability(window: tauri::WebviewWindow, app: AppHandle) -> Result<Snapshot, String> {
     allowed(&window)?;
     let app_for_metadata = app.clone();
-    let (bindings, library, live_pet_work) = tauri::async_runtime::spawn_blocking(move || {
+    let (bindings, library, live_pet_work, pet_capabilities) = tauri::async_runtime::spawn_blocking(move || {
         let bindings = bindings(&app_for_metadata)?;
         let library = app_for_metadata.state::<crate::chat::Chat>().observability_metadata(&bindings, now());
         let live_pet_work=app_for_metadata.state::<crate::chat::Chat>().process_census_live_work(&bindings);
-        Ok::<_, String>((bindings, library, live_pet_work))
+        let pet_capabilities=crate::pet_capabilities::passive_snapshot(&app_for_metadata).ok();
+        Ok::<_, String>((bindings, library, live_pet_work, pet_capabilities))
     }).await.map_err(|_| "Não foi possível consultar as sessões.".to_string())??;
     let generated_at = now();
     let process_census=super::process_census_runtime::snapshots(&app);
@@ -119,5 +122,5 @@ pub async fn pet_observability(window: tauri::WebviewWindow, app: AppHandle) -> 
         let usage = super::runtime::summarize(&app, &provider, None);
         ProviderObservation { process_census:process_census.get(&provider).cloned(), provider, pet_ids, native, usage }
     }).collect();
-    Ok(Snapshot { schema_version: core::SCHEMA_VERSION, generated_at, pets, providers, live_pet_work })
+    Ok(Snapshot { schema_version: core::SCHEMA_VERSION, generated_at, pets, providers, live_pet_work, pet_capabilities })
 }

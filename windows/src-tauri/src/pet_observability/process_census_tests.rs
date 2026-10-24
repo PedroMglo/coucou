@@ -38,3 +38,42 @@ impl Drop for Fixture{fn drop(&mut self){let _=fs::remove_dir_all(&self.root);}}
 #[test]fn zero_budget_is_partial_not_complete_empty(){let f=Fixture::new();f.process(1,0,&["codex"]);let mut cfg=f.config();cfg.budget=Duration::ZERO;let s=scan(&cfg).remove("codex").unwrap();assert_eq!(s.coverage,"partial");assert_eq!(s.reason.as_deref(),Some("processScanTimeout"));}
 #[test]fn failed_refresh_preserves_last_positive_reading_and_its_timestamp(){let mut cache=Cache::default();cache.rows.insert("codex".into(),summarize("codex",vec![client(1,0,false)],"completeWithinUserProcessScan",Some(10),None));cache.finish(BTreeMap::from([("codex".into(),summarize("codex",vec![],"unavailable",None,Some("processScanUnavailable".into())))]));let s=&cache.rows["codex"];assert_eq!(s.counts.clients_observed,1);assert_eq!(s.observed_at,Some(10));assert!(s.stale);assert!(!cache.inflight);}
 #[test]fn complete_empty_refresh_can_replace_an_old_positive_count(){let mut cache=Cache::default();cache.rows.insert("codex".into(),summarize("codex",vec![client(1,0,false)],"completeWithinUserProcessScan",Some(10),None));cache.finish(BTreeMap::from([("codex".into(),summarize("codex",vec![],"completeWithinUserProcessScan",Some(20),None))]));assert_eq!(cache.rows["codex"].counts.clients_observed,0);assert_eq!(cache.rows["codex"].observed_at,Some(20));}
+
+#[test]fn several_clients_on_one_tty_are_one_terminal_and_paused_is_not_foreground_work(){
+ let a=client(1,0,false);let mut b=client(2,0,false);b.paused=true;let mut c=client(3,0,false);c.tty=34820;
+ let counts=summarize("codex",vec![a,b,c],"completeWithinUserProcessScan",Some(1),None).counts;
+ assert_eq!(counts.terminal_clients_observed,3);assert_eq!(counts.terminal_instances_observed,Some(2));assert_eq!(counts.paused_clients_observed,1);assert_eq!(counts.foreground_clients_observed,2);
+}
+#[test]fn missing_tty_identity_never_fabricates_a_distinct_terminal_count(){
+ let mut c=client(1,0,false);c.tty=0;let counts=summarize("codex",vec![c],"partial",Some(1),None).counts;assert_eq!(counts.terminal_clients_observed,1);assert!(counts.terminal_instances_observed.is_none());
+}
+
+#[test]fn mixed_foreground_and_suspended_clients_share_a_foreground_terminal(){
+ let a=client(1,0,false);let mut b=client(2,0,false);b.paused=true;let mut c=client(3,0,false);c.tty=34820;
+ let counts=summarize("codex",vec![a,b,c],"completeWithinUserProcessScan",Some(1),None).counts;
+ let terminals=counts.terminal_states.unwrap();assert_eq!((terminals.foreground,terminals.background_only,terminals.suspended_only),(2,0,0));
+ assert_eq!((counts.process_states.foreground,counts.process_states.background,counts.process_states.suspended,counts.process_states.headless),(2,0,1,0));
+}
+#[test]fn background_and_suspended_only_terminals_are_distinct_from_headless_clients(){
+ let mut a=client(1,0,false);a.foreground=false;let mut b=client(2,0,false);b.paused=true;b.tty=34820;
+ let mut c=client(3,0,false);c.channel="headless".into();c.tty=0;
+ let mut d=client(4,0,false);d.channel="headless".into();d.tty=0;d.paused=true;
+ let counts=summarize("codex",vec![a,b,c,d],"partial",Some(1),None).counts;
+ let terminals=counts.terminal_states.unwrap();assert_eq!((terminals.foreground,terminals.background_only,terminals.suspended_only),(0,1,1));
+ assert_eq!((counts.process_states.foreground,counts.process_states.background,counts.process_states.suspended,counts.process_states.headless),(0,1,2,1));
+}
+#[test]fn missing_terminal_identity_keeps_process_states_but_not_terminal_states(){
+ let mut c=client(1,0,false);c.tty=0;let census=summarize("codex",vec![c],"partial",Some(1),None);
+ assert!(census.counts.terminal_states.is_none());assert_eq!(census.counts.process_states.foreground,1);assert_eq!(census.turns,"notObservedByProcessCensus");
+}
+#[test]fn lifecycle_projection_is_shared_across_all_declared_process_providers(){
+ for(provider,_)in PROVIDERS{let mut c=client(1,0,false);c.provider=(*provider).into();c.paused=true;
+  let census=summarize(provider,vec![c],"partial",Some(1),None);
+  assert_eq!(census.counts.process_states.suspended,1);assert_eq!(census.counts.terminal_states.unwrap().suspended_only,1);assert_eq!(census.turns,"notObservedByProcessCensus");
+ }
+}
+#[test]fn failed_refresh_preserves_previous_lifecycle_without_claiming_freshness(){
+ let mut c=client(1,0,false);c.paused=true;let mut cache=Cache::default();cache.rows.insert("codex".into(),summarize("codex",vec![c],"partial",Some(10),None));
+ cache.finish(BTreeMap::from([("codex".into(),summarize("codex",vec![],"unavailable",None,Some("processScanUnavailable".into())))]));
+ let old=&cache.rows["codex"];assert!(old.stale);assert_eq!(old.observed_at,Some(10));assert_eq!(old.counts.process_states.suspended,1);assert_eq!(old.counts.terminal_states.as_ref().unwrap().suspended_only,1);
+}

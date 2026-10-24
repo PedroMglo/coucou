@@ -162,6 +162,7 @@ pub fn snapshot(thread: &Value, target: Target, turns: &[Value]) -> Result<Snaps
         notice,
         model,
         control_conflict: active.conflict,
+        capability_descriptor: None,
     })
 }
 

@@ -8,6 +8,9 @@ use tokio_tungstenite::{client_async_with_config,tungstenite::{Message,protocol:
 
 #[path="native_settings.rs"]
 pub(crate) mod native_settings;
+#[path="request_sources.rs"]mod request_sources;
+#[path="native_write.rs"]mod native_write;
+use crate::pet_native_decisions::Ticket;
 
 const IO_TIMEOUT:Duration=Duration::from_secs(20);
 const MAX_FRAME:usize=64*1024*1024;
@@ -22,9 +25,9 @@ impl Error {
 }
 impl std::fmt::Display for Error{fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{f.write_str(&self.message)}}
 
-struct Packet {message:Value,written:oneshot::Sender<Result<(),()>>,deadline:Instant,cancel:Option<Arc<AtomicBool>>}
+struct Packet {message:Value,written:oneshot::Sender<Result<(),()>>,scope:Arc<native_write::Scope>}
 impl Packet {
-    fn expired(&self)->bool{self.written.is_closed()||Instant::now()>=self.deadline||self.cancel.as_ref().is_some_and(|c|c.load(Ordering::Acquire))}
+    fn expired(&self)->bool{self.written.is_closed()||self.scope.expired()}
 }
 struct PendingEntry {
     identity: Arc<()>,
@@ -57,6 +60,7 @@ pub struct Client {
     next:AtomicU64,connected:Arc<AtomicBool>,stop:tokio::sync::watch::Sender<bool>,
     endpoint:PathBuf,endpoint_identity:(u64,u64,i64,i64),
     settings:Arc<Mutex<native_settings::Cache>>,
+    sources:request_sources::Sources,
 }
 
 /// Default control socket only; a caller cannot route a pet to a remote endpoint.
@@ -89,17 +93,20 @@ impl Client {
         let stream=timeout(IO_TIMEOUT,UnixStream::connect(&path)).await.map_err(|_|Error::local("O daemon Codex não respondeu à ligação."))?.map_err(|_|Error::local("Não foi possível ligar ao daemon Codex."))?;
         if stream.peer_cred().map_err(|_|Error::local("Não foi possível verificar o daemon Codex."))?.uid()!=unsafe{libc::geteuid()}{return Err(Error::local("O daemon Codex pertence a outro utilizador."));}
         if socket_identity(&path)?!=endpoint_identity{return Err(Error::local("O daemon Codex mudou durante a ligação. Atualiza as sessões."));}
+        let write_slot:native_write::Slot=Arc::default();let stream=native_write::Socket::new(stream,write_slot.clone());
         let mut config=WebSocketConfig::default();config.max_message_size=Some(MAX_FRAME);config.max_frame_size=Some(MAX_FRAME);
         let(ws,_)=timeout(IO_TIMEOUT,client_async_with_config("ws://localhost/",stream,Some(config))).await.map_err(|_|Error::local("O daemon Codex não concluiu a ligação."))?.map_err(|_|Error::local("A ligação WebSocket local do Codex não está disponível."))?;
+        let sources=request_sources::Sources::new().map_err(|_|Error::local("Não foi possível identificar a origem nativa Codex."))?;
         let(mut sink,mut source)=ws.split();
         let(writer,mut packets)=mpsc::channel::<Packet>(32);
         let(events,_)=broadcast::channel(256);
         let(stop,mut stopped)=tokio::sync::watch::channel(false);
         let pending:Pending=Arc::default();let connected=Arc::new(AtomicBool::new(true));
         let settings:Arc<Mutex<native_settings::Cache>>=Arc::default();
-        let client=Arc::new(Self{writer,pending:pending.clone(),events:events.clone(),next:AtomicU64::new(1),connected:connected.clone(),stop,endpoint:path,endpoint_identity,settings:settings.clone()});
-        let out_pending=pending.clone();let out_connected=connected.clone();let out_settings=settings.clone();
+        let client=Arc::new(Self{writer,pending:pending.clone(),events:events.clone(),next:AtomicU64::new(1),connected:connected.clone(),stop,endpoint:path,endpoint_identity,settings:settings.clone(),sources:sources.clone()});
+        let out_pending=pending.clone();let out_connected=connected.clone();let out_settings=settings.clone();let out_sources=sources.clone();let out_stop=client.stop.clone();
         tokio::spawn(async move{
+            let mut clean_close=true;
             loop {
                 tokio::select!{
                     _=stopped.changed()=>break,
@@ -108,17 +115,28 @@ impl Client {
                         // A timed-out caller or a decision resolved in another
                         // client cannot leave a delayed write in this queue.
                         if packet.expired(){let _=packet.written.send(Err(()));continue;}
+                        *write_slot.lock().unwrap_or_else(|p|p.into_inner())=Some(packet.scope.clone());
                         let data=packet.message.to_string();
-                        let ok=timeout(packet.deadline.saturating_duration_since(Instant::now()),sink.send(Message::Text(data.into()))).await.is_ok_and(|r|r.is_ok());
+                        let expired=async{while !packet.expired(){tokio::time::sleep(Duration::from_millis(2)).await;}};
+                        let ok=tokio::select!{biased;
+                            _=stopped.changed()=>false,
+                            _=expired=>false,
+                            result=timeout(packet.scope.gate.deadline.saturating_duration_since(Instant::now()),sink.send(Message::Text(data.into())))=>result.is_ok_and(|r|r.is_ok()),
+                        };
+                        if ok{*write_slot.lock().unwrap_or_else(|p|p.into_inner())=None;}
+                        else{packet.scope.retire();clean_close=false;}
                         let _=packet.written.send(if ok{Ok(())}else{Err(())});
                         if !ok{break;}
                     }
                 }
             }
-            out_connected.store(false,Ordering::Release);
+            let _=out_stop.send(true);
+            out_sources.disconnect();out_connected.store(false,Ordering::Release);
             out_settings.lock().unwrap_or_else(|p|p.into_inner()).disconnect();
             fail_pending(&out_pending).await;
-            let _=timeout(Duration::from_millis(200),sink.close()).await;
+            // Closing tungstenite flushes its output buffer. An abandoned
+            // send retains its retired low-level guard and is dropped instead.
+            if clean_close{let _=timeout(Duration::from_millis(200),sink.close()).await;}
         });
         let mut stopped=client.stop.subscribe();
         tokio::spawn(async move{
@@ -126,8 +144,9 @@ impl Client {
                 let message=tokio::select!{_=stopped.changed()=>break,message=source.next()=>message};
                 let Some(Ok(message))=message else{break;};
                 let Message::Text(data)=message else{if matches!(message,Message::Close(_)){break;}continue;};
-                let Ok(value)=serde_json::from_str::<Value>(&data)else{break;};
-                let settings_event=settings.lock().unwrap_or_else(|p|p.into_inner()).event(&value,settings_now());
+                let Ok(mut value)=serde_json::from_str::<Value>(&data)else{break;};
+                let at=settings_now();
+                let settings_event={let mut cache=settings.lock().unwrap_or_else(|p|p.into_inner());let event=cache.event(&value,at);sources.observe(&mut value,&cache,at);event};
                 if value.get("method").is_none(){
                     if let Some(id)=value["id"].as_str(){
                         let answer = {
@@ -148,7 +167,7 @@ impl Client {
                     if let Some(event)=settings_event{let _=events.send(event);}
                 }else if allowed_event(&value){let _=events.send(value);}
             }
-            connected.store(false,Ordering::Release);settings.lock().unwrap_or_else(|p|p.into_inner()).disconnect();fail_pending(&pending).await;
+            sources.disconnect();connected.store(false,Ordering::Release);settings.lock().unwrap_or_else(|p|p.into_inner()).disconnect();fail_pending(&pending).await;
             let _=events.send(json!({"method":"mochi/disconnected","params":{}}));
         });
         client.call("initialize",json!({"clientInfo":{"name":"coucou_mochi_sessions","title":"Mochi · Sessões","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await?;
@@ -180,11 +199,13 @@ impl Client {
     async fn write(&self,message:Value)->Result<(),Error>{
         self.write_guarded(message,None).await
     }
-    async fn write_guarded(&self,message:Value,cancel:Option<Arc<AtomicBool>>)->Result<(),Error>{
+    async fn write_guarded(&self,message:Value,cancel:Option<Arc<AtomicBool>>)->Result<(),Error>{self.write_native_guarded(message,cancel,None).await}
+    async fn write_native_guarded(&self,message:Value,cancel:Option<Arc<AtomicBool>>,native:Option<Ticket>)->Result<(),Error>{
         if !self.connected(){return Err(Error::local("A ligação ao daemon Codex terminou. Atualiza a sessão; o pedido não será reenviado."));}
         if message.to_string().len()>MAX_REQUEST{return Err(Error::local("A mensagem excede o limite de envio ao Codex."));}
-        let(tx,rx)=oneshot::channel();
-        timeout(IO_TIMEOUT,self.writer.send(Packet{message,written:tx,deadline:Instant::now()+IO_TIMEOUT,cancel})).await.map_err(|_|Error::local("O daemon Codex não recebeu o pedido dentro do prazo. Confirma o histórico antes de repetir."))?.map_err(|_|Error::local("A ligação ao Codex terminou antes do envio."))?;
+        let(tx,rx)=oneshot::channel();let caller=native_write::Caller(Arc::new(AtomicBool::new(true)));
+        let scope=native_write::Scope::new(crate::pet_native_write::Guard{deadline:Instant::now()+IO_TIMEOUT,cancel,caller:Some(caller.0.clone()),source:native.map(|t|(t,crate::pet_native_write::Use::Decision))});
+        timeout(IO_TIMEOUT,self.writer.send(Packet{message,written:tx,scope})).await.map_err(|_|Error::local("O daemon Codex não recebeu o pedido dentro do prazo. Confirma o histórico antes de repetir."))?.map_err(|_|Error::local("A ligação ao Codex terminou antes do envio."))?;
         timeout(IO_TIMEOUT,rx).await.map_err(|_|Error::local("Não foi possível confirmar o envio ao Codex. Confirma o histórico antes de repetir."))?.map_err(|_|Error::local("O envio ao Codex foi interrompido. Confirma o histórico antes de repetir."))?.map_err(|_|Error::local("A ligação terminou durante o envio ao Codex. Confirma o histórico antes de repetir."))
     }
 
@@ -208,12 +229,21 @@ impl Client {
         match result{Ok(Ok(answer))=>answer.map_err(|mut error|{if let Some(code)=error.code{error.message=format!("O daemon Codex recusou {method} (código{code}). Atualiza a sessão antes de continuar.");}error}),_=>Err(Error::local("O daemon Codex não confirmou o resultado. Consulta o histórico antes de repetir o pedido."))}
     }
     pub async fn notify(&self,method:&str,params:Value)->Result<(),Error>{self.write(json!({"method":method,"params":params})).await}
+    pub(crate)fn native_request(&self,event:&Value)->Option<Ticket>{self.verified_endpoint().ok()?;self.sources.lookup(event)}
+    /// Retain the opaque capture until the writer checks it at the actual send.
+    /// Any uncertain attempt retires it; it is never retried automatically.
+    pub(crate)async fn respond_native(&self,ticket:&Ticket,result:Value,cancel:Arc<AtomicBool>)->Result<(),Error>{
+        self.verified_endpoint()?;
+        if !self.sources.owns(ticket){return Err(Error::local("O pedido nativo já não está pendente nesta ligação."));}
+        let result=self.write_native_guarded(json!({"id":ticket.identity().request_id,"result":result}),Some(cancel),Some(ticket.clone())).await;
+        self.sources.finish(ticket);result
+    }
     /// Called only after a human broker decision for the exact native request.
     pub async fn respond(&self,id:Value,result:Value)->Result<(),Error>{self.write(json!({"id":id,"result":result})).await}
-    pub async fn respond_guarded(&self,id:Value,result:Value,cancel:Arc<AtomicBool>)->Result<(),Error>{self.write_guarded(json!({"id":id,"result":result}),Some(cancel)).await}
+    #[cfg(test)]pub async fn respond_guarded(&self,id:Value,result:Value,cancel:Arc<AtomicBool>)->Result<(),Error>{self.write_guarded(json!({"id":id,"result":result}),Some(cancel)).await}
 }
 
-impl Drop for Client{fn drop(&mut self){let _=self.stop.send(true);}}
+impl Drop for Client{fn drop(&mut self){self.sources.disconnect();let _=self.stop.send(true);}}
 async fn fail_pending(pending:&Pending){
     let entries: Vec<_> = {
         let mut pending = pending.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -244,6 +274,7 @@ mod endpoint_tests {
     include!("rpc_cancel_tests.rs");
     include!("list_budget_rpc_tests.rs");
     include!("native_settings_rpc_tests.rs");
+    include!("request_sources_rpc_tests.rs");
 
     struct Scratch(PathBuf);
     impl Scratch {

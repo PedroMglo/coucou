@@ -98,6 +98,9 @@ pub struct Snapshot {
     pub notice: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Backend-authored passive metadata. Peers cannot inject this projection.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub capability_descriptor: Option<crate::pet_capabilities::TargetDescriptor>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

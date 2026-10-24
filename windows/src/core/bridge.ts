@@ -1,3 +1,4 @@
+import {captureAttachments} from './document-collection';
 // Thin wrapper over the Tauri commands/events. Every call is a no-op when the
 // page is opened in a plain browser, so the island can be iterated on with
 // `npm run dev` alone.
@@ -40,15 +41,36 @@ export interface BootInfo {
   cursorPoll: boolean;
 }
 
-export interface ConversationView {id:string;messages:{role:"user"|"assistant";content:string}[];busy?:boolean;turn?:number;stream?:string;query?:string;notice?:string;taskNotice?:import('./task-notice').TaskNotice;requestHistory?:import('./request-history').RequestRecord[];localExecution?:import('./local-capabilities').LocalExecutionCapability}
+/** Historical references are display/provenance data and grant no file access. */
+export interface AttachmentTurnRecord {
+ id:string;provider:string;petId:string;conversationId:string;taskId?:string;
+ started:number;updated:number;messageIndex:number;messagesAdded:0|2;
+ phase:'pending'|'done'|'failed'|'stopped'|'interrupted';
+ attachments:Array<{id:string;name:string;kind:'file'|'folder';size:number;entries:number;sequence:number}>;
+}
+export interface ConversationView {id:string;messages:{role:"user"|"assistant";content:string}[];busy?:boolean;turn?:number;stream?:string;query?:string;notice?:string;taskNotice?:import('./task-notice').TaskNotice;requestHistory?:import('./request-history').RequestRecord[];localExecution?:import('./local-capabilities').LocalExecutionCapability;attachmentHistory?:AttachmentTurnRecord[]}
 export interface ChatTurnState {provider:string;conversationId:string;turn:number;busy:boolean;query:string}
+export interface NativeApprovalChoice {id:string;label:string;scope:'once'|'turn'|'session'|'policy'|'turnCancellation'|'nativeRemembered';allow:boolean;detail?:string|null}
 export interface AgentRequest {
   id:string;provider:string;kind:string;detail:string;origin?:string;
-  approvalScope?:'turn'|'once';
+  approvalScope?:'turn'|'once'|'recipe';
+  goalTarget?:GoalRecipeTarget;goalReview?:{recipe:RuntimeRecipeProposal;budget:unknown;approvalScope:'exactReviewedRecipe';executionStarted:false;modelPlanningGranted:false};voiceCode?:string;
+  nativeChoices?:NativeApprovalChoice[];nativeChoicesSource?:'nativeAdvertised'|'protocolFallback'|'nativePermissionProtocol'|'nativeOptions'|'nativeLegacyProtocol';
   target?:import('./session-chat').SessionTarget;
-  questions?:{id:string;question:string;isSecret?:boolean;options?:{label:string}[]}[]|null;
+  nativeForm?:'mcp';
+  questions?:AgentQuestion[]|null;
+}
+export interface GoalRecipeTarget {origin:'goal';petId:string;provider:string;goalId:string;contextId:string;leaseId:string;controllerId:string;recipeId:string;planId:string;revision:string}
+export type DecisionTarget=import('./session-chat').SessionTarget|GoalRecipeTarget;
+export interface AgentQuestion {
+  id:string;question:string;isSecret?:boolean;required?:boolean;hint?:string;
+  inputType?:'text'|'number'|'integer'|'boolean'|'enum'|'multi';
+  options?:{label:string;value?:string}[]|null;
 }
 export interface ConversationSummary {id:string;provider:string;title:string;preview:string;created:number;updated:number;messageCount:number;current:boolean}
+export interface ConversationPurgeReview {reviewId:string;kind:'conversation'|'recovery';provider:string;conversationId:string;title:string;messageCount:number;taskCount:number;attachmentCount:number;current:boolean;expiresInSeconds:number}
+export interface ConversationPurgeRecovery {id:string;revision:string;target:{provider:string;conversationId:string;title:string;messageCount:number;taskCount:number;attachmentCount:number;current:boolean;revision:string}}
+export type ConversationPurgeOutcome={kind:'conversation';receipt:{provider:string;removedConversationId:string;current:ConversationView|null;recoveryId:string|null;durable:boolean};copySelectionCleared:boolean}|{kind:'recovery';recoveryId:string;finished:boolean;restored:boolean};
 
 /** The phone link (src-tauri/src/phone_link): how it is, never its secrets. */
 export interface PhoneLinkStatus {
@@ -196,6 +218,16 @@ export interface PhoneAnswersStatus {
   enabled: boolean;
 }
 
+/** Stable request IDs survive retries; these draft APIs never dispatch work. */
+function runtimeBudget(b:RuntimeBudget):RuntimeBudget{return {deadlineAt:b.deadlineAt,maxModelCalls:b.maxModelCalls,maxToolCalls:b.maxToolCalls,maxOutputBytes:b.maxOutputBytes,maxTokens:b.maxTokens??null,maxCostMicros:b.maxCostMicros??null,payment:b.payment};}
+function runtimeDraftAction(action:RuntimeDraftAction):RuntimeDraftAction{
+ switch(action.kind){
+  case 'proposeTask':return {kind:action.kind,description:action.description};
+  case 'proposePlan':return {kind:action.kind,taskId:action.taskId,steps:action.steps.map(step=>({description:step.description,postcondition:step.postcondition,...(step.operation===undefined?{}:{operation:step.operation===null?null:{operationId:step.operation.operationId,version:step.operation.version,arguments:structuredClone(step.operation.arguments)}})}))};
+  case 'pause':case 'resumeDraft':case 'cancel':return {kind:action.kind};
+  default:throw Error('Esta operação não está disponível no repositório de objetivos.');
+ }
+}
 export const Bridge = {
   petModelSelect:(model:string,selectionId:string)=>callOrThrow<{provider:string;model:string;selectionId:string;generation:number}>('pet_model_select',{model,selectionId}),
   petFocusSession:(provider:string,id:string)=>callOrThrow<{message?:string}>('pet_focus_session',{provider,id}),
@@ -205,10 +237,11 @@ export const Bridge = {
   setSystemLanguages: (languages: string[]) => call<void>("set_system_languages", { languages }),
 
   saveSettings: (settings: Settings) => callOrThrow<void>("save_settings", { settings }),
+  petRosterSettingsPatch:(request:import('./pet-roster-settings').PetRosterRequest)=>callOrThrow<import('./pet-roster-settings').PetRosterValues>('pet_roster_settings_patch',{request:request.action==='setMain'?{action:request.action,id:request.id}:{action:request.action,id:request.id,enabled:request.enabled}}),
   petCenterSettingsPatch:(request:import('./island-availability').IslandAvailabilityPatch)=>callOrThrow<import('./island-availability').IslandAvailabilityValues>('pet_center_settings_patch',{request:{...(request.petControlBar!==undefined?{petControlBar:request.petControlBar}:{}),...(request.petSystemCenter!==undefined?{petSystemCenter:request.petSystemCenter}:{})}}),
   reportSettingsError,
 
-  cliAgentAnswer: (id: string, answer: Record<string, unknown>,target?:import('./session-chat').SessionTarget) => invoke<void>("cli_agent_answer", { id, answer,...(target?{target}:{}) }),
+  cliAgentAnswer: (id: string, answer: Record<string, unknown>,target?:DecisionTarget) => invoke<void>("cli_agent_answer", { id, answer,...(target?{target}:{}) }),
   cliAgentPending:()=>callOrThrow<AgentRequest[]>("cli_agent_pending"),
 
   /** Shrink the window down to the invisible wake strip (hidden) or back to full. */
@@ -372,6 +405,11 @@ export const Bridge = {
   chatConversation:(provider:string)=>callOrThrow<ConversationView>("chat_conversation",{provider}),
   chatReadConversation:(provider:string,id:string)=>callOrThrow<ConversationView>("chat_read_conversation",{provider,id}),
   chatConversations:(provider:string,query="")=>callOrThrow<ConversationSummary[]>("chat_conversations",{provider,query}),
+  chatPurgeReview:(provider:string,conversationId:string)=>callOrThrow<ConversationPurgeReview>('chat_purge_review',{provider,conversationId}),
+  chatPurgeCommit:(provider:string,conversationId:string,reviewId:string,consent:'deleteLocalConversation'|'deleteRecoveryCopy'|'restoreRecoveryConversation')=>callOrThrow<ConversationPurgeOutcome>('chat_purge_commit',{provider,conversationId,reviewId,consent}),
+  chatPurgeCancel:(provider:string,conversationId:string,reviewId:string)=>callOrThrow<void>('chat_purge_cancel',{provider,conversationId,reviewId}),
+  chatPurgeRecoveries:()=>callOrThrow<ConversationPurgeRecovery[]>('chat_purge_recoveries'),
+  chatPurgeRecoveryReview:(recoveryId:string)=>callOrThrow<ConversationPurgeReview>('chat_purge_recovery_review',{recoveryId}),
   sessionChatList:(petId:string)=>callOrThrow<import('./session-chat').SessionSummary[]>('session_chat_list',{petId}),
   petObservability:()=>callOrThrow<import('./pet-observability-contract').PetObservabilitySnapshot>('pet_observability'),
   petSessionLookup:(request:import('./session-lookup-contract').SessionLookupRequest)=>callOrThrow<import('./session-lookup-contract').SessionLookupResult>('pet_session_lookup',{request:{provider:request.provider,nativeSessionId:request.nativeSessionId}}),
@@ -431,6 +469,18 @@ export const Bridge = {
   ingestFile: (path: string,provider?:string,conversationId?:string,dropId?:string) => callOrThrow<DroppedFile>("ingest_file", { path,provider,...(conversationId===undefined?{}:{conversationId}),...(dropId===undefined?{}:{dropId}) }),
   petDocumentCancelDrop:(provider:string,dropId:string)=>callOrThrow<void>('pet_document_cancel_drop',{provider,dropId}),
   petDocumentContext:(provider:string,conversationId:string)=>callOrThrow<DroppedFile|null>('pet_document_context',{provider,conversationId}),
+  petDocumentContexts:(provider:string,conversationId:string)=>callOrThrow<PetAttachment[]>('pet_document_contexts',{provider,conversationId}).then(files=>captureAttachments(provider,conversationId,files)),
+  petDocumentIngestDrop:(provider:string,conversationId:string,dropId:string)=>callOrThrow<DocumentBatch>('pet_document_ingest_drop',{provider,conversationId,dropId}),
+  petDocumentRemove:(provider:string,conversationId:string,attachmentId:string)=>callOrThrow<void>('pet_document_remove',{provider,conversationId,attachmentId}),
+  petDocumentInventory:(provider:string,conversationId:string)=>callOrThrow<DocumentInventory>('pet_document_inventory',{provider,conversationId}),
+  petDocumentReview:(provider:string,conversationId:string,attachmentIds:string[],expectedRevision:string)=>callOrThrow<DocumentReview>('pet_document_review',{provider,conversationId,attachmentIds,expectedRevision}),
+  petDocumentRenew:(provider:string,conversationId:string,reviewId:string)=>callOrThrow<PetAttachment[]>('pet_document_renew',{provider,conversationId,reviewId,consent:'readSelectedCopies'}).then(files=>captureAttachments(provider,conversationId,files)),
+  petDocumentReviewCancel:(provider:string,conversationId:string,reviewId:string)=>callOrThrow<void>('pet_document_review_cancel',{provider,conversationId,reviewId}),
+  petDocumentRetentionInventory:()=>callOrThrow<DocumentRetentionInventory>('pet_document_retention_inventory'),
+  petDocumentPurgeReview:(provider:string,conversationId:string,attachmentIds:string[],expectedRevision:string)=>callOrThrow<DocumentPurgeReview>('pet_document_purge_review',{provider,conversationId,attachmentIds,expectedRevision}),
+  petDocumentPurgeRecoveryReview:(recoveryId:string)=>callOrThrow<DocumentPurgeReview>('pet_document_purge_recovery_review',{recoveryId}),
+  petDocumentPurgeCommit:(provider:string,conversationId:string,reviewId:string,consent:DocumentPurgeConsent)=>callOrThrow<DocumentPurgeReceipt>('pet_document_purge_commit',{provider,conversationId,reviewId,consent}),
+  petDocumentPurgeCancel:(provider:string,conversationId:string,reviewId:string)=>callOrThrow<void>('pet_document_purge_cancel',{provider,conversationId,reviewId}),
   petDocumentClear:(provider:string,conversationId:string,sequence:number)=>callOrThrow<void>('pet_document_clear',{provider,conversationId,sequence}),
   petMailDraft:(provider:string,path:string,recipient:string,subject:string,body:string)=>callOrThrow<string>("pet_mail_draft",{provider,path,recipient,subject,body}),
   /** Only ever tells you whether a key exists — never its value. */
@@ -473,6 +523,38 @@ export const Bridge = {
   companionsAnchor: (x: number, y: number) => call<void>("companions_anchor", {x,y}),
   companionsInput: (rects: number[][]) => call<void>("companions_input", { rects }),
   petConfiguration: () => callOrThrow<PetDocument>("pet_configuration"),
+  petCapabilities:(petId?:string)=>callOrThrow<PetCapabilitiesSnapshot>('pet_capabilities_snapshot',{petId}),
+  petRuntimeCreate:(input:RuntimeCreateInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_create',{input:{petId:input.petId,requestId:input.requestId,intent:input.intent,criteria:[...input.criteria],conversationId:input.conversationId??null}}),
+  petRuntimeGoalPending:()=>callOrThrow<AgentRequest[]>('pet_runtime_goal_pending'),
+  petRuntimeGoalAnswer:(id:string,approve:boolean,target:GoalRecipeTarget)=>callOrThrow<void>('pet_runtime_goal_answer',{input:{id,approve,target:structuredClone(target)}}),
+  petRuntimeRefreshReadiness:(petId:string,goalId:string)=>callOrThrow<PetCapabilityDescriptor>('pet_runtime_refresh_readiness',{petId,goalId}),
+  petRuntimeList:(petId?:string)=>callOrThrow<RuntimeListing>('pet_runtime_list',{petId}),
+  petRuntimePrepareContext:(input:RuntimePrepareContextInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_prepare_context',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,mode:input.mode}}),
+  petRuntimeContextRead:(petId:string,goalId:string)=>callOrThrow<RuntimeContextView>('pet_runtime_context_read',{petId,goalId}),
+  petRuntimeClaim:(input:RuntimeClaimInput)=>callOrThrow<RuntimeClaimResult>('pet_runtime_claim',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId}}),
+  petRuntimeClaimStatus:(petId:string,goalId:string)=>callOrThrow<RuntimeLeaseStatus>('pet_runtime_claim_status',{petId,goalId}),
+  petRuntimeReleaseClaim:(petId:string,goalId:string,leaseId:string)=>callOrThrow<RuntimeReceipt>('pet_runtime_release_claim',{input:{petId,goalId,leaseId}}),
+  petRuntimeRespondOnce:(input:RuntimeRespondInput)=>callOrThrow<RuntimeRespondResult>('pet_runtime_respond_once',{input:{petId:input.petId,goalId:input.goalId,leaseId:input.leaseId,revision:input.revision,requestId:input.requestId}}),
+  petRuntimePrepareStep:(input:RuntimeStepPrepareInput)=>callOrThrow<RuntimeStepTicket>('pet_runtime_prepare_step',{input:{petId:input.petId,goalId:input.goalId,leaseId:input.leaseId,revision:input.revision,planId:input.planId,stepId:input.stepId,requestId:input.requestId}}),
+  petRuntimeConfirmStep:(input:RuntimeStepConfirmInput)=>callOrThrow<RuntimeStepConfirmResult>('pet_runtime_confirm_step',{input:{petId:input.petId,goalId:input.goalId,leaseId:input.leaseId,revision:input.revision,token:input.token,approve:input.approve}}),
+  petRuntimeRunStep:(input:RuntimeStepRunInput)=>callOrThrow<RuntimeStepView>('pet_runtime_run_step',{input:{petId:input.petId,goalId:input.goalId,leaseId:input.leaseId,grantId:input.grantId,planId:input.planId,stepId:input.stepId}}),
+  petRuntimeStepResult:(input:RuntimeStepReadInput)=>callOrThrow<RuntimeStepView|null>('pet_runtime_step_result',{input:{petId:input.petId,goalId:input.goalId,decisionId:input.decisionId,planId:input.planId,stepId:input.stepId}}),
+  petRuntimeRecoverStep:(input:RuntimeStepRecoverInput)=>callOrThrow<RuntimeStepView>('pet_runtime_recover_step',{input:{petId:input.petId,goalId:input.goalId,decisionId:input.decisionId,planId:input.planId,stepId:input.stepId,revision:input.revision,grantId:input.grantId}}),
+  petRuntimePrepareRecipe:(input:RuntimeRecipePrepareInput)=>callOrThrow<RuntimeRecipeTicket>('pet_runtime_prepare_recipe',{input:{petId:input.petId,goalId:input.goalId,leaseId:input.leaseId,revision:input.revision,planId:input.planId,requestId:input.requestId,...(input.criteria===undefined?{}:{criteria:input.criteria.map(c=>({criterionIndex:c.criterionIndex,predicate:structuredClone(c.predicate)}))})}}),
+  petRuntimeRequestRecipe:(input:RuntimeRecipePrepareInput)=>callOrThrow<RuntimeRecipeConfirmation>('pet_runtime_request_recipe',{input:{petId:input.petId,goalId:input.goalId,leaseId:input.leaseId,revision:input.revision,planId:input.planId,requestId:input.requestId,...(input.criteria===undefined?{}:{criteria:input.criteria.map(c=>({criterionIndex:c.criterionIndex,predicate:structuredClone(c.predicate)}))})}}),
+  petRuntimeConfirmRecipe:(input:RuntimeRecipeConfirmInput)=>callOrThrow<RuntimeRecipeConfirmation>('pet_runtime_confirm_recipe',{input:{petId:input.petId,goalId:input.goalId,leaseId:input.leaseId,revision:input.revision,token:input.token,approve:input.approve}}),
+  petRuntimeRunRecipe:(input:RuntimeRecipeRunInput)=>callOrThrow<RuntimeRecipeResult>('pet_runtime_run_recipe',{input:{petId:input.petId,goalId:input.goalId,leaseId:input.leaseId,revision:input.revision,recipeId:input.recipeId}}),
+  petRuntimeRecipeProgress:(input:RuntimeRecipeReadInput)=>callOrThrow<RuntimeRecipeProgress|null>('pet_runtime_recipe_progress',{input:{petId:input.petId,goalId:input.goalId,decisionId:input.decisionId,planId:input.planId}}),
+  petRuntimeCompleteRecipe:(input:RuntimeRecipeCompleteInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_complete_recipe',{input:{petId:input.petId,goalId:input.goalId,decisionId:input.decisionId,planId:input.planId,recipeId:input.recipeId,revision:input.revision}}),
+  petRuntimeResult:(input:RuntimeResultInput)=>callOrThrow<RuntimeResult>('pet_runtime_result',{input:{petId:input.petId,goalId:input.goalId,decisionId:input.decisionId,requestId:input.requestId}}),
+  petRuntimeAdmissionStatus:(petId:string,goalId:string)=>callOrThrow<RuntimeProvenanceStatus>('pet_runtime_admission_status',{petId,goalId}),
+  petRuntimePrepareAdmission:(input:RuntimeAdmissionInput)=>callOrThrow<RuntimeAdmissionReview>('pet_runtime_prepare_admission',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,budget:runtimeBudget(input.budget)}}),
+  petRuntimeConfirmAdmission:(input:RuntimeAdmissionConfirm)=>callOrThrow<RuntimeAdmissionResult>('pet_runtime_confirm_admission',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,token:input.token,approve:input.approve}}),
+  petRuntimeRead:(petId:string,goalId:string)=>callOrThrow<RuntimeGoal>('pet_runtime_read',{petId,goalId}),
+  petRuntimeMutate:(input:RuntimeMutationInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_mutate',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,action:runtimeDraftAction(input.action)}}),
+  petRuntimeImportLegacy:(input:RuntimeImportInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_import_legacy',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,taskId:input.taskId}}),
+
+  petTargetCapabilities:(target:import('./session-chat').SessionTarget)=>callOrThrow<NativeTargetCapabilities>('pet_capabilities_target',{target}),
   petRoster:()=>callOrThrow<string[]>("pet_roster"),
   petConfigurationSave: (config:PetConfiguration,expectedRevision:string) => callOrThrow<PetDocument>("pet_configuration_save",{config,expectedRevision}),
   companionsOpen: (pillId: string, x: number, y: number, view?: string, manual=false) => call<void>("companions_open", { pillId, x, y, view, manual }),
@@ -560,6 +642,7 @@ export interface IntegrationUpdate {
 
 export type ChatContext =
   | { kind: "file"; name: string; path: string }
+  | { kind:"files"; files:Array<{id:string;name:string;path:string;sequence:number}> }
   | { kind: "window"; appName: string; title: string; url?: string };
 
 export interface ModelInfo {
@@ -576,6 +659,7 @@ export interface LocalServer {
 }
 
 export interface DroppedFile {
+  id?:string;
   provider?:string;
   conversationId?:string;
   sequence?:number;
@@ -585,6 +669,36 @@ export interface DroppedFile {
   path: string;
   size: number;
 }
+
+export interface PetAttachment extends DroppedFile {id:string;provider:string;conversationId:string;sequence:number}
+/** Passive metadata. A revision or ready capability is never an execution grant. */
+export interface PetCapability {
+ id:string;support:'supported'|'unsupported'|'unknown';availability:'ready'|'unavailable'|'unknown';reason:string|null;
+ source:Array<'bundledManifest'|'configuration'|'providerCatalog'|'runtimeObservation'>;observedAt:number|null;expiresAt:number|null;modelBinding:string|null;
+ decision:'none'|'nativeApproval'|'exactCommandApproval'|'scopedGrant';callers:Array<'nativeUser'|'taskRuntime'|'providerModel'>;
+ limits:{maxItems:number|null;maxBytes:number|null;maxCalls:number|null;timeoutMs:number|null};limitations:string[];
+}
+export interface PetCapabilityDescriptor {
+ schemaVersion:1;petId:string;kind:'llm'|'service'|'observer';name:string;lifecycle:'active'|'inactive'|'retired';
+ binding:{adapter:string|null;provider:string|null;model:string|null;profile:string|null};revision:string;observedAt:number|null;configurationAvailable:boolean;
+ capabilities:PetCapability[];concurrency:{scope:'provider'|null;maxActive:number|null};
+}
+export interface PetCapabilitiesSnapshot {schemaVersion:1;revision:string;observedAt:number;configurationAvailable:boolean;pets:PetCapabilityDescriptor[]}
+export interface NativeTargetCapabilities {
+ schemaVersion:1;target:import('./session-chat').SessionTarget;revision:string;
+ observedAt:number|null;expiresAt:number|null;busy:boolean|null;turn:string|null;model:string|null;capabilities:PetCapability[];
+}
+export interface DocumentBatch {attachments:PetAttachment[];failures:Array<{index:number;name:string;error:string}>;error:string|null}
+export interface DocumentRecord {id:string;name:string;kind:'file'|'folder';size:number;entries:number;selected:boolean;authorized:boolean;purging?:boolean}
+export interface DocumentInventory {revision:string;records:DocumentRecord[]}
+export interface DocumentReview {reviewId:string;items:Array<Pick<DocumentRecord,'id'|'name'|'kind'|'size'|'entries'>>;expiresInSeconds:number}
+export type DocumentPurgePhase='Prepared'|'Marked'|'Moved'|'Committed'|'Restoring'|'Restored'|'Cleaned';
+export type DocumentPurgeConsent='deleteOwnedCopies'|'finishCopyPurge'|'restoreOwnedCopies'|'clearCopyRecovery';
+export interface DocumentCopyRecovery {id:string;provider:string;conversationId:string;revision:string;phase:DocumentPurgePhase;items:DocumentReview['items']}
+export interface DocumentRetentionOwner {provider:string;conversationId:string;revision:string;busy:boolean;items:Array<Omit<DocumentRecord,'authorized'> & {purging:boolean;historyReferences:number}>}
+export interface DocumentRetentionInventory {owners:DocumentRetentionOwner[];recoveries:{recoveries:DocumentCopyRecovery[];unavailable:string[]}}
+export interface DocumentPurgeReview {reviewId:string;provider:string;conversationId:string;items:DocumentReview['items'];recovery:DocumentCopyRecovery|null;expiresInSeconds:number}
+export interface DocumentPurgeReceipt {provider:string;conversationId:string;operation:DocumentPurgeConsent;complete:boolean;recoveryId:string|null;error:string|null}
 
 export interface HookStatus {
   installed: boolean;
@@ -726,3 +840,79 @@ export async function onEvent<T>(name: string, handler: (payload: T) => void, we
   if (!IS_TAURI) return () => {};
   return listen<T>(name, (e) => handler(e.payload), webview ? { target: { kind: "Webview", label: webview } } : undefined);
 }
+
+/** RUN-01 v1 stores proposals and recovery references. It has no execution grant. */
+export type RuntimeState='draft'|'paused'|'cancelled'|'recoveryRequired'|'queued'|'leased'|'stopping'|'completed';
+export type RuntimeWorkState='proposed'|'cancelled'|'recoveryRequired';
+export interface RuntimeOperationProposal {operationId:string;version:number;arguments:unknown}
+export interface RuntimeStepInput {description:string;postcondition:string;operation?:RuntimeOperationProposal|null}
+export interface RuntimeReviewedProposals {tasks:Array<{id:string;description:string;planId:string|null}>;plans:Array<{id:string;taskId:string;steps:Array<RuntimeStepInput&{id:string}>}>}
+export type RuntimeDraftAction={kind:'proposeTask';description:string}|{kind:'proposePlan';taskId:string;steps:RuntimeStepInput[]}|{kind:'pause'|'resumeDraft'|'cancel'};
+export interface RuntimeCreateInput {petId:string;requestId:string;intent:string;criteria:string[];conversationId?:string|null}
+export interface RuntimeMutationInput {petId:string;goalId:string;revision:string;requestId:string;action:RuntimeDraftAction}
+export interface RuntimeImportInput {petId:string;goalId:string;revision:string;requestId:string;taskId:string}
+export interface RuntimeGoal {
+ schemaVersion:1|2|3|4|5|6|7;id:string;revision:string;sequence:number;createdAt:number;updatedAt:number;executionContext?:RuntimeContextBinding;admissions?:Array<{spec:RuntimeAdmissionSpec;phase:'queued'|'paused'|'cancelled'|'leased'|'stopRequested'|'recoveryRequired'|'completed';proof?:RuntimeConsentProof;lease?:RuntimeLease;stopReason?:'pause'|'cancel'|'expired'}>;
+ spec:{requestId:string;owner:{petId:string;provider:string;adapter:string;modelHint:string|null};context:{kind:'unbound'}|{kind:'mochi';conversationId:string};intent:string;criteria:string[]};
+ completion?:RuntimeCompletionRef;state:RuntimeState;tasks:Array<{id:string;description:string;state:RuntimeWorkState;planId:string|null}>;
+ plans:Array<{id:string;taskId:string;steps:Array<RuntimeStepInput&{id:string;state:RuntimeWorkState}>}>;
+ events:Array<{sequence:number;at:number;requestId:string;fingerprint:string;kind:'created'|'taskProposed'|'planProposed'|'paused'|'draftResumed'|'cancelled'|'cancelRequested'|'legacyImported'|'contextPrepared'|'admissionQueued'|'leaseClaimed'|'stopRequested'|'leaseDrained'|'claimAbandoned'|'goalCompleted'}>;
+ legacy:Array<{taskId:string;provider:string;backend:string;conversationId:string|null;phase:string;intentMayBeIncomplete:true;receipts:import('../mochi/tasks').LocalStepReceipt[]}>;
+}
+export interface RuntimeLease {schemaVersion:1;id:string;controllerId:string;requestId:string;decisionId:string;goalId:string;provider:string;conversationId:string;model:string;policyRevision:string;capabilityRevision:string;sourceRevision:string;claimedAt:number;deadlineAt:number}
+export interface RuntimeClaimInput {petId:string;goalId:string;revision:string;requestId:string}
+export interface RuntimeClaimResult {receipt:RuntimeReceipt;lease:RuntimeLease;owned:boolean;reservationOwned:boolean;executionAvailable:false}
+export interface RuntimeLeaseStatus {record:RuntimeGoal;lease:RuntimeLease|null;owned:boolean;reservationOwned:boolean;source:'liveController'|'storedLease'|'none';current:boolean;workers:number|null;executionAvailable:false}
+export interface RuntimeConsentProof {schemaVersion:1;keyId:string;operation:'conversationRespond';tag:string}
+export interface RuntimeProvenanceStatus {verified:boolean;reason:'missing'|'unsafe'|'changed'|'invalid'|'wrongKey'|'revoked'|'expired'|'notQueued'|'capacity'|'unavailable'|'uncertain'|'busy'|'recoveryRequired'|null;executionAvailable:false}
+export interface RuntimeBudget {deadlineAt:number;maxModelCalls:number;maxToolCalls:number;maxOutputBytes:number;maxTokens?:number|null;maxCostMicros?:number|null;payment:'localOnly'|'existingAccount'}
+export interface RuntimeAdmissionInput {petId:string;goalId:string;revision:string;requestId:string;budget:RuntimeBudget}
+export interface RuntimeAdmissionConfirm {petId:string;goalId:string;revision:string;token:string;approve:boolean}
+export interface RuntimeAdmissionSpec {schemaVersion:1|2;proposalHash?:string|null;requestId:string;decisionId:string;goalId:string;sourceRevision:string;sourceSequence:number;owner:RuntimeGoal['spec']['owner'];context:RuntimeContextBinding;contextHash:string;intentHash:string;resolvedModel:string;descriptorRevision:string;policyRevision:string;evidenceHash:string;approvedAt:number;budget:RuntimeBudget}
+export interface RuntimeAdmissionProposal {proposals:RuntimeReviewedProposals;operation:'conversationRespond';toolExecutionAvailable:false;goalId:string;revision:string;requestId:string;owner:RuntimeGoal['spec']['owner'];context:RuntimeContextBinding;intent:string;criteria:string[];resolvedModel:string;policyRevision:string;descriptorRevision:string;budget:RuntimeBudget;preparedAt:number;expiresAt:number}
+export type RuntimeAdmissionDenial='invalid'|'ownerChanged'|'contextRequired'|'contextChanged'|'notDraft'|'inactive'|'unsupported'|'notReady'|'stale'|'modelUnresolved'|'policyChanged'|'budget'|'paymentPolicy'|'meteringUnavailable'|'expired'|'revisionChanged'|'inputLimit';
+export type RuntimeAdmissionReview={status:'review';ticket:{token:string;proposal:RuntimeAdmissionProposal}}|{status:'blocked';reason:RuntimeAdmissionDenial};
+export type RuntimeAdmissionResult={status:'queued';receipt:RuntimeReceipt}|{status:'declined'}|{status:'blocked';reason:RuntimeAdmissionDenial}|{status:'authorityBlocked';reason:NonNullable<RuntimeProvenanceStatus['reason']>};
+export interface RuntimeReceipt {status:'durable'|'uncertain'|'unchanged';record:RuntimeGoal}
+export interface RuntimeRespondInput {petId:string;goalId:string;leaseId:string;revision:string;requestId:string}
+export interface RuntimeRespondResult {text:string;criteriaVerified:false;goalComplete:false}
+export interface RuntimeResultInput {petId:string;goalId:string;decisionId:string;requestId:string}
+export interface RuntimeModelResult {schemaVersion:1;goalId:string;petId:string;provider:string;decisionId:string;leaseId:string;requestId:string;attemptId:string;model:string;inputHash:string;intentHash:string;text:string;acceptedOutputBytes:number;completedAt:number;recordedAt:number}
+export type RuntimeResult=({status:'notStarted'}|{status:'recoveryRequired';phase:'reserved'|'started'|'uncertain'|'settledReceiptMissing'}|{status:'available';receipt:RuntimeModelResult})&{criteriaVerified:false;goalComplete:false};
+export interface RuntimeListing {schemaVersion:1;goals:Array<{id:string;revision:string;petId:string;state:RuntimeState;updatedAt:number;intentPreview:string;tasks:number;steps:number}>;unavailable:number;pendingArtifacts:number;complete:boolean}
+
+export interface RuntimePrepareContextInput {petId:string;goalId:string;revision:string;requestId:string;mode:'dedicated'|'snapshot'}
+export interface RuntimeContextBinding {schemaVersion:1;goalId:string;petId:string;provider:string;conversationId:string;requestId:string;mode:'dedicated'|'snapshot';sourceConversationId:string|null;sourceMessages:number;copiedMessages:number;seedHash:string;preparedAt:number}
+export interface RuntimeContextView {binding:RuntimeContextBinding;messages:Array<{role:'user'|'assistant';content:string}>;messageCount:number;truncated:boolean}
+
+/** Step receipts are observations, never reconstructible execution permits. */
+export interface RuntimeStepPrepareInput {petId:string;goalId:string;leaseId:string;revision:string;planId:string;stepId:string;requestId:string}
+export interface RuntimeStepConfirmInput {petId:string;goalId:string;leaseId:string;revision:string;token:string;approve:boolean}
+export interface RuntimeStepRunInput {petId:string;goalId:string;leaseId:string;grantId:string;planId:string;stepId:string}
+export interface RuntimeStepReadInput {petId:string;goalId:string;decisionId:string;planId:string;stepId:string}
+export interface RuntimeStepRecoverInput extends RuntimeStepReadInput {revision:string;grantId:string}
+export interface RuntimeStepScope {schemaVersion:1;grantId:string;requestId:string;goalId:string;petId:string;provider:string;decisionId:string;leaseId:string;controllerId:string;mainSpecHash:string;contextHash:string;proposalHash:string;policyRevision:string;planId:string;stepId:string;operationId:'spotify.control';version:1;argumentsHash:string;resource:{schemaVersion:1;busId:string;owner:string;uid:number;pid:number;identity:string};approvedAt:number;deadlineAt:number;maxOutputBytes:number}
+export interface RuntimeStepProposal {scope:RuntimeStepScope;goalRevision:string;intent:string;criteria:string[];arguments:unknown;postcondition:string;preparedAt:number;expiresAt:number;maxUses:1;goalCriteriaVerified:false}
+export interface RuntimeStepTicket {token:string;proposal:RuntimeStepProposal}
+export type RuntimeStepConfirmResult={status:'granted';scope:RuntimeStepScope}|{status:'declined'}|{status:'blocked';reason:NonNullable<RuntimeProvenanceStatus['reason']>};
+export interface RuntimeStepSnapshot {playbackStatus:'Playing'|'Paused'|'Stopped';volume:number;observedAt:number}
+export interface RuntimeStepReceipt {observation:{delivery:'notDispatched'|'accepted'|'uncertain';before:RuntimeStepSnapshot|null;after:RuntimeStepSnapshot|null;effectVerified:boolean;scopeCurrent:boolean;failure:'invalidAddress'|'unavailable'|'changed'|'invalidState'|'cancelled'|'deadline'|'invalidAction'|'notAuthorized'|'transport'|null};finishedAt:number;criteriaVerified:false;goalComplete:false}
+export interface RuntimeStepRecovery {status:'prepared'|'reserved'|'resultMissing'|'resultRecorded'|'finished';budgetPhase:'reserved'|'started'|'settled'|'uncertain'|null;recordedEffectVerified:boolean|null;reconciliationAvailable:boolean}
+export interface RuntimeStepView {scope:RuntimeStepScope;phase:'approved'|'reserved'|'started'|'finished';result:RuntimeStepReceipt|null;recovery:RuntimeStepRecovery;executionAvailable:false}
+export interface RuntimeRecipePrepareInput {petId:string;goalId:string;leaseId:string;revision:string;planId:string;requestId:string;criteria?:RuntimeCriterionInput[]}
+export type RuntimeRecipeConfirmInput=RuntimeStepConfirmInput;
+export interface RuntimeRecipeRunInput {petId:string;goalId:string;leaseId:string;revision:string;recipeId:string}
+export interface RuntimeRecipeReadInput {petId:string;goalId:string;decisionId:string;planId:string}
+export interface RuntimeRecipeScope {schemaVersion:1|2;id:string;requestId:string;goalId:string;petId:string;provider:string;decisionId:string;leaseId:string;controllerId:string;planId:string;proposalHash:string;approvedAt:number;deadlineAt:number;steps:RuntimeStepScope[];verification?:RuntimeCriteriaBinding}
+export interface RuntimeRecipeProposal {scope:RuntimeRecipeScope;goalRevision:string;intent:string;criteria:string[];steps:RuntimeStepProposal[];preparedAt:number;expiresAt:number;criteriaVerified:false;goalComplete:false}
+export interface RuntimeRecipeTicket {token:string;proposal:RuntimeRecipeProposal}
+export type RuntimeRecipeConfirmation={status:'granted';scope:RuntimeRecipeScope}|{status:'declined'}|{status:'ended'}|{status:'blocked';reason:NonNullable<RuntimeProvenanceStatus['reason']>};
+export interface RuntimeRecipeProgress {scope:RuntimeRecipeScope;phase:'reviewed'|'partial'|'verified'|'recoveryRequired';verifiedSteps:number;totalSteps:number;steps:Array<{stepId:string;phase:RuntimeStepView['phase']|null;recovery:RuntimeStepRecovery|null;result:RuntimeStepReceipt|null}>;verification:RuntimeVerification|null;criteriaVerified:boolean;goalComplete:boolean;executionAvailable:false}
+export interface RuntimeRecipeResult {outcome:'verified'|'blocked'|'invalidated'|'recoveryRequired'|'criteriaUnmet'|'criteriaIncomplete'|'goalCompleted';progress:RuntimeRecipeProgress;completion:'durable'|'uncertain'|'unchanged'|null}
+
+export type RuntimeCriterionPredicate={kind:'spotifyPlayback';status:'playing'|'paused'|'stopped'}|{kind:'spotifyVolume';percent:number};
+export interface RuntimeCriterionInput {criterionIndex:number;predicate:RuntimeCriterionPredicate}
+export interface RuntimeCriteriaBinding {schemaVersion:1;specHash:string;criteriaCount:number;maxObservations:1;conditions:Array<RuntimeCriterionInput&{criterionHash:string}>}
+export interface RuntimeCompletionRef {schemaVersion:1;goalId:string;petId:string;recipeId:string;decisionId:string;leaseId:string;planId:string;sourceRevision:string;targetRevision:string;reportHash:string;observedAt:number}
+export interface RuntimeVerification {schemaVersion:1;reference:RuntimeCompletionRef;recipeHash:string;specHash:string;sourceSequence:number;sourceUpdatedAt:number;sourceRecordHash:string;snapshot:RuntimeStepSnapshot|null;scopeCurrent:boolean;recordedAt:number;results:Array<{criterionIndex:number;criterionHash:string;status:'met'|'unmet'|'unknown'}>;criteriaVerified:boolean}
+export interface RuntimeRecipeCompleteInput extends RuntimeRecipeReadInput {recipeId:string;revision:string}

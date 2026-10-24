@@ -13,15 +13,17 @@ const originalInvoke=internals.invoke;
 const originalSound=Sound.enabled;
 const originalViewport=window.innerHeight;window.innerHeight=560;
 let ingest;
-let currentIds;
+let currentIds;let nativeFiles;
 const flush=async()=>{for(let i=0;i<16;i++)await Promise.resolve();};
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 internals.invoke=async(cmd,args)=>{
-  if(cmd==='ingest_file'){
+  if(cmd==='pet_document_ingest_drop'){
     calls.push([cmd,args]);
     assert.ok(ingest,'test must explicitly supply an ingest outcome');
-    return await ingest(args);
+    const result=await ingest(args);if(result&&'attachments'in result)return result;const inputs=Array.isArray(result)?result:[result];const files=inputs.map((file,i)=>({id:`native-${file.sequence??1}-${i}`,provider:args.provider,kind:'file',size:3,entries:1,...file}));nativeFiles[args.provider]=[...(nativeFiles[args.provider]??[]),...files].sort((a,b)=>a.sequence-b.sequence);return {attachments:files,failures:[],error:null};
   }
+  if(cmd==='pet_document_remove'){calls.push([cmd,args]);nativeFiles[args.provider]=(nativeFiles[args.provider]??[]).filter(a=>a.id!==args.attachmentId);return null;}
+  if(cmd==='pet_document_contexts'){calls.push([cmd,args]);return nativeFiles[args.provider]??[];}
   if(cmd==='chat_conversation'){
     calls.push([cmd,args]);
     return {id:currentIds[args.provider],messages:[],busy:false};
@@ -32,7 +34,7 @@ Sound.setEnabled(false);
 
 function reset(){
   UploadSeq.deactivate();calls.length=0;ingest=undefined;
-  currentIds={ollama:'fixture-ollama-A',codex:'fixture-codex-B'};
+  nativeFiles={};currentIds={ollama:'fixture-ollama-A',codex:'fixture-codex-B'};
   for(const [provider,id] of Object.entries(currentIds))rememberDialogue(provider,{id,messages:[]});
   State.settings={...DEFAULT_SETTINGS,companionMode:true};
   State.mode='expanded';State.view='overview';State.focusId='ai_ollama';
@@ -134,12 +136,12 @@ try{
     State.setFocus('agent_codex');
     card.onDragDrop({type:'drop',paths:['/fixture/document.txt'],dropId:'fixture-drop-1'});
     await flush();
-    assert.deepEqual(sent('ingest_file'),[{path:'/fixture/document.txt',provider:'ollama',conversationId:'fixture-ollama-A',dropId:'fixture-drop-1'}]);
+    assert.deepEqual(sent('pet_document_ingest_drop'),[{provider:'ollama',conversationId:'fixture-ollama-A',dropId:'fixture-drop-1'}]);
     gate.resolve({name:'document.txt',path:'/fixture/inbox/document.txt',conversationId:'fixture-ollama-A',sequence:1});
     await flush();
     assert.equal(State.fileFor('ollama')?.name,'document.txt');
     assert.equal(State.fileFor('codex'),null);assert.equal(State.droppedFile,null);
-    assert.equal(State.chatFeedback.get('ollama'),'document.txt recebido.');
+    assert.equal(State.chatFeedback.get('ollama'),'1 anexo recebido.');
     assert.equal(State.chatFeedback.has('codex'),false);
     assert.equal(State.focusId,'agent_codex');assert.equal(effects.gulp,0);
     assert.notEqual(State.view,'choose');
@@ -153,7 +155,7 @@ try{
     currentIds.ollama='fixture-ollama-new';
     card.onDragDrop({type:'drop',paths:['/fixture/document.txt'],dropId:'fixture-drop-reset'});
     await flush();
-    assert.equal(sent('ingest_file')[0].conversationId,'fixture-ollama-A');
+    assert.equal(sent('pet_document_ingest_drop')[0].conversationId,'fixture-ollama-A');
     // Simulate the required native identity rejection; never attach to the new dialogue.
     gate.reject(new Error('fixture: conversation changed'));await flush();
     assert.equal(State.fileFor('ollama'),null);
@@ -197,11 +199,29 @@ try{
   await run('empty-drop-cleans-without-ingestion',async({card,effects})=>{
     card.onDragDrop({type:'over'});
     card.onDragDrop({type:'drop',paths:[],dropId:'fixture-empty'});await flush();
-    assert.equal(sent('ingest_file').length,0);
+    assert.equal(sent('pet_document_ingest_drop').length,0);
     assert.equal(State.fileDragOver,false);assert.equal(card.dragOwner,null);assert.equal(card.dragHeight,null);
     assert.equal(UploadSeq.isActive,false);assert.equal(effects.morph.at(-1),0);
     assert.equal(State.view,'overview');
     return {ingestionCalls:0,dragStateCleared:true,view:State.view};
+  });
+  await run('one native multi-path drop selects both documents without a caller path list in IPC',async({card})=>{
+    ingest=async()=>[{name:'same.txt',path:'/fixture/inbox/one.txt',conversationId:'fixture-ollama-A',sequence:1},{name:'same.txt',path:'/fixture/inbox/two.txt',conversationId:'fixture-ollama-A',sequence:1}];card.onDragDrop({type:'enter'});card.onDragDrop({type:'drop',paths:['/fixture/one','/fixture/two'],dropId:'batch'});await flush();
+    assert.deepEqual(sent('pet_document_ingest_drop'),[{provider:'ollama',conversationId:'fixture-ollama-A',dropId:'batch'}]);assert.equal(State.filesFor('ollama').length,2);assert.equal(new Set(State.filesFor('ollama').map(f=>f.id)).size,2);assert.equal(State.view,'choose');
+  });
+  await run('reverse copy completion appends both native batches in capture order',async({card})=>{
+    const first=deferred(),second=deferred();ingest=({dropId})=>dropId==='first'?first.promise:second.promise;
+    card.onDragDrop({type:'enter'});card.onDragDrop({type:'drop',paths:['/fixture/first'],dropId:'first'});card.onDragDrop({type:'enter'});card.onDragDrop({type:'drop',paths:['/fixture/second'],dropId:'second'});
+    second.resolve({name:'same.txt',path:'/fixture/inbox/second.txt',conversationId:'fixture-ollama-A',sequence:2});await flush();first.resolve({name:'same.txt',path:'/fixture/inbox/first.txt',conversationId:'fixture-ollama-A',sequence:1});await flush();
+    assert.deepEqual(State.filesFor('ollama').map(f=>f.path),['/fixture/inbox/first.txt','/fixture/inbox/second.txt']);assert.equal(sent('pet_document_ingest_drop').length,2);
+  });
+  await run('cancel from a delivered-document chooser removes only its selected ID without a local drop token',async({card})=>{
+    nativeFiles.ollama=[{id:'a',name:'same',path:'/fixture/inbox/a',provider:'ollama',conversationId:'fixture-ollama-A',sequence:1,kind:'file',size:3,entries:1},{id:'b',name:'same',path:'/fixture/inbox/b',provider:'ollama',conversationId:'fixture-ollama-A',sequence:2,kind:'file',size:3,entries:1}];State.setFilesContext('ollama',nativeFiles.ollama);State.view='choose';card.discardDrop();await flush();
+    assert.deepEqual(sent('pet_document_remove'),[{provider:'ollama',conversationId:'fixture-ollama-A',attachmentId:'b'}]);assert.deepEqual(State.filesFor('ollama').map(f=>f.id),['a']);assert.equal(sent('pet_document_cancel_drop').length,0);
+  });
+  await run('a wholly failed native batch preserves earlier attachments and releases the upload canvas',async({card})=>{
+    const previous={id:'old',name:'old.txt',path:'/fixture/inbox/old',provider:'ollama',conversationId:'fixture-ollama-A',sequence:1,kind:'file',size:3,entries:1};nativeFiles.ollama=[previous];State.setFilesContext('ollama',[previous]);ingest=async()=>({attachments:[],failures:[{index:0,name:'bad.bin',error:'Formato indisponível'}],error:null});
+    card.onDragDrop({type:'enter'});card.onDragDrop({type:'drop',paths:['/fixture/bad.bin'],dropId:'failed'});await flush();assert.deepEqual(State.filesFor('ollama').map(f=>f.id),['old']);assert.equal(UploadSeq.isActive,false);assert.equal(State.view,'prompt');assert.match(State.chatFeedback.get('ollama'),/Formato indisponível/);assert.equal(sent('chat_send').length,0);
   });
 }finally{
   UploadSeq.deactivate();Sound.setEnabled(originalSound);window.innerHeight=originalViewport;internals.invoke=originalInvoke;

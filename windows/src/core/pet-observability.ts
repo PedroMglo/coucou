@@ -1,5 +1,8 @@
+import {petSessionStatesSummary,type PetSessionStateSummary} from './pet-session-states';
 import {inventoryFeedback,tokenFeedback,hasInventoryEvidence,type TokenFeedback} from './pet-observability-feedback';
 import type {SessionTarget} from './session-chat';
+import type {PetCapabilityDescriptor} from './bridge';
+import {capabilityDescriptorFor} from './pet-capabilities';
 import type {Coverage,Inventory,SessionRow,PetObservabilitySnapshot,UsageSummary,UsageDimension} from './pet-observability-contract';
 import {parseProcessCensus,livePetWorkSummary,type CensusPresentation,type LiveWorkSummary} from './process-census';
 /** Public presentation model. Missing measurements are never inferred from
@@ -19,6 +22,7 @@ export interface ObservationHistorySource {
  total:ObservationCount;archived:ObservationCount;detail:string;
 }
 export interface PetObservation {
+ capabilityDescriptor:PetCapabilityDescriptor|null;
  petId:string;provider:string;providerName:string;updatedAt:number|null;stale:boolean;refreshing:boolean;
  active:ObservationCount;total:ObservationCount;archived:ObservationCount;
  working:ObservationCount;waiting:ObservationCount;
@@ -27,6 +31,7 @@ export interface PetObservation {
  primaryScope:'pet'|'provider';externalStatus:string;tokenStatus:TokenFeedback;
  scopeLabel:string;scopeDetail:string;
  opened:ObservationCount;history:ObservationHistorySource[];
+ sessionStates?:PetSessionStateSummary|null;
  processCensus:CensusPresentation|null;liveWork:LiveWorkSummary|null;
  nativeCoverage:Coverage|null;
 }
@@ -123,7 +128,7 @@ export function petObservation(snapshot:PetObservabilitySnapshot|null,petId:stri
   {key:'external',label:native?observationScope(native.scope):'Histórico externo',updatedAt:native?.observedAt??null,stale:!!native?.stale,total:countFrom(native,'total'),archived:countFrom(native,'archived'),detail:inventoryFeedback(native)},
   {key:'pet',label:'Biblioteca deste pet no Coucou',updatedAt:library.observedAt,stale:library.stale,total:local('total'),archived:local('archived'),detail:'Só as conversas guardadas neste pet. Pode sobrepor-se ao histórico externo; os valores não são somados.'},
  ];
- return {petId,provider:pet.provider,providerName:pet.provider,primaryScope,externalStatus:inventoryFeedback(native),tokenStatus:tokenFeedback(providers.length===1?providers[0].usage:undefined,pet.provider),updatedAt:primary?.observedAt??null,opened,history,processCensus:providers.length===1?parseProcessCensus(providers[0].processCensus,pet.provider):null,liveWork:livePetWorkSummary(snapshot.livePetWork,petId),nativeCoverage:native?.coverage??null,
+ return {capabilityDescriptor:capabilityDescriptorFor(snapshot.petCapabilities,petId,pet.provider),petId,provider:pet.provider,providerName:pet.provider,primaryScope,externalStatus:inventoryFeedback(native),tokenStatus:tokenFeedback(providers.length===1?providers[0].usage:undefined,pet.provider),updatedAt:primary?.observedAt??null,opened,history,processCensus:providers.length===1?parseProcessCensus(providers[0].processCensus,pet.provider):null,liveWork:livePetWorkSummary(snapshot.livePetWork,petId),sessionStates:petSessionStatesSummary(snapshot.livePetWork,petId),nativeCoverage:native?.coverage??null,
   refreshing:!!primary?.refreshing,stale:!!primary?.stale,active:count('confirmedActive'),total:count('total'),archived:count('archived'),working:count('working'),waiting:count('waiting'),
   sessions:sorted,sessionsComplete:!native?.truncated&&!library.truncated,tokens:tokensFrom(providers.length===1?providers[0].usage:undefined,pet.provider),notes,
   library:{updatedAt:library.observedAt,total:local('total'),active:local('confirmedActive'),working:local('working'),waiting:local('waiting'),archived:local('archived')},

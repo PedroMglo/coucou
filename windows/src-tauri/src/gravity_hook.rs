@@ -9,11 +9,13 @@ pub const OWNED_ENV:&str="COUCOU_ASSISTANT_GATE";
 
 fn request(raw:&Value)->Option<Value> {
     if raw["toolCall"]["name"]!="run_command" {return None;}
-    let session=raw["conversationId"].as_str().filter(|s|!s.is_empty() && s.len()<=512)?;
+    let session=raw["conversationId"].as_str().filter(|s|!s.is_empty() && s.len()<=512&&!s.chars().any(char::is_control))?;
     let command=raw["toolCall"]["args"]["CommandLine"].as_str()?;
-    Some(json!({"hook_event_name":"PermissionRequest","coucou_agent":"antigravity","coucou_assistant_gate":true,
+    let mut payload=json!({"hook_event_name":"PermissionRequest","coucou_agent":"antigravity","coucou_assistant_gate":true,
         "session_id":session,"cwd":raw["toolCall"]["args"]["Cwd"].as_str().or_else(||raw["workspacePaths"][0].as_str()).unwrap_or(""),
-        "tool_name":"Bash","tool_input":{"command":command}}))
+        "tool_name":"Bash","tool_input":{"command":command},"coucou_native_call":{"name":"run_command","args":raw["toolCall"]["args"]}});
+    if let Some(step)=raw["stepIdx"].as_u64(){payload["coucou_native_step"]=json!(step);}
+    Some(payload)
 }
 fn decision(reply:&str)->Value {
     match reply.trim() {
@@ -70,10 +72,15 @@ pub fn maybe_run()->bool {
         assert_eq!(decision("allow\n")["decision"],"auto_approve");assert_eq!(decision("deny")["decision"],"deny");
         for reply in ["","always","true","unowned","allow\ndeny","{\"allow\":true}"] {assert_eq!(decision(reply)["decision"],"ask");}
     }
-    #[test]fn only_the_exact_shell_call_is_forwarded_without_private_transcript_or_other_fields(){
+    #[test]fn exact_native_arguments_are_preserved_privately_without_transcript_or_model_metadata(){
         let mut raw=json!({"conversationId":"owned-id","toolCall":{"name":"run_command","args":{"CommandLine":"pwd","Cwd":"/tmp/project","private":"secret"}},"transcriptPath":"private","modelName":"model"});
-        let p=request(&raw).unwrap();assert_eq!(p["session_id"],"owned-id");assert_eq!(p["tool_input"],json!({"command":"pwd"}));assert!(!p.to_string().contains("private"));
+        let p=request(&raw).unwrap();assert_eq!(p["session_id"],"owned-id");assert_eq!(p["tool_input"],json!({"command":"pwd"}));assert!(p.get("transcriptPath").is_none()&&p.get("modelName").is_none());assert_eq!(p["coucou_native_call"]["args"],raw["toolCall"]["args"]);assert!(p.get("nativeIdentity").is_none());
         raw["toolCall"]["name"]=json!("view_file");assert!(request(&raw).is_none());raw["toolCall"]["name"]=json!("run_command");raw["conversationId"]=json!("");assert!(request(&raw).is_none());
+    }
+    #[test]fn a_native_step_index_is_optional_evidence_never_a_request_or_turn_id(){
+        let mut raw=json!({"conversationId":"native-session","stepIdx":7,"toolCall":{"id":"unadvertised-id","name":"run_command","args":{"CommandLine":"synthetic"}}});
+        let p=request(&raw).unwrap();assert_eq!(p["coucou_native_step"],7);assert!(p.get("requestId").is_none()&&p.get("turnId").is_none());assert!(p["coucou_native_call"].get("id").is_none());
+        raw["stepIdx"]=json!(-1);assert!(request(&raw).unwrap().get("coucou_native_step").is_none());raw["conversationId"]=json!("bad\nidentity");assert!(request(&raw).is_none());
     }
     #[cfg(target_os="linux")]
     #[test]fn a_private_socket_carries_one_exact_request_and_disconnect_never_grants_it(){

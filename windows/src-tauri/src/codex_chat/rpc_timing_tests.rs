@@ -27,7 +27,7 @@ for line in sys.stdin:
  if m is not None and 'id' in v:send({'id':v['id'],'result':result})
  if m=='turn/start':
   send({'method':'item/agentMessage/delta','params':{'threadId':'foreign-thread','turnId':'foreign-turn','itemId':'foreign','delta':'PRIVATE_FOREIGN_SECRET'}})
-  if mode=='tool':send({'id':77,'method':'item/tool/call','params':{'threadId':'fixture-thread','turnId':'fixture-turn','tool':'fixture_tool','arguments':{'private':'PRIVATE_TOOL_ARGS_SECRET'}}})
+  if mode=='tool':send({'id':77,'method':'item/tool/call','params':{'threadId':'fixture-thread','turnId':'fixture-turn','callId':'fixture-call','tool':'fixture_tool','arguments':{'private':'PRIVATE_TOOL_ARGS_SECRET'}}})
   else:send({'id':78,'method':'item/commandExecution/requestApproval','params':{'threadId':'fixture-thread','turnId':'fixture-turn','command':'PRIVATE_APPROVAL_COMMAND_SECRET'}})
  if 'method' not in v and v.get('id')==77:
   send({'id':78,'method':'item/commandExecution/requestApproval','params':{'threadId':'fixture-thread','turnId':'fixture-turn','command':'PRIVATE_APPROVAL_COMMAND_SECRET'}})
@@ -103,7 +103,7 @@ fn assert_metadata_only(report: &Report) {
     assert!(events.windows(2).all(|p| p[0]["atMicros"].as_u64() <= p[1]["atMicros"].as_u64()));
 }
 fn answer(client: &mut Client, resume: bool, history: &[Value], tool: bool) -> Result<Reply, String> {
-    let tools = if tool { vec![json!({"name":"fixture_tool","inputSchema":{"type":"object"}})] } else { vec![] };
+    let tools = if tool { vec![json!({"type":"function","name":"fixture_tool","inputSchema":{"type":"object"}})] } else { vec![] };
     client.answer(TurnOptions {
         model: "PRIVATE_MODEL_SECRET", system: "PRIVATE_SYSTEM_SECRET", history,
         query: "PRIVATE_QUERY_SECRET", tools: &tools,

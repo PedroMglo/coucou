@@ -1,0 +1,20 @@
+{
+  "legacyFreezeSha256": "a271c38b299d59ba95b9fd3a97e12436794cd709efccd53e7a227f52e0796f4c",
+  "fixtures": [
+    {
+      "source": "windows/src-tauri/src/assistant_memory.rs",
+      "sourceSha256": "80622517e019ec965706642c81354c72349f53b54eef33b0616fa767b5dfb6dc",
+      "fixture": "legacy30_memory.rs",
+      "fixtureSha256": "aee996eeacdd11b68a2e164f70a5ce6ee751187978b3da39128f46d8e608d2c5",
+      "selection": "Exact prefix before first #[cfg(test)] test module; unmodified production reader/writer and helpers."
+    },
+    {
+      "source": "windows/src-tauri/src/files.rs",
+      "sourceSha256": "0e56fc9cada7455eeb1da0a3a5f846d3a46ed7f1690d3ff031e38234b027ae5a",
+      "fixture": "legacy30_sweep.rs",
+      "fixtureSha256": "711a351afba69cf6369c82afddb481c033a7c582af07f2c9b42cd60489abeb53",
+      "selection": "Exact KEEP_FOR constant and sweep function; wrapper imports and test-only public adapter are separate."
+    }
+  ],
+  "note": "Historical execution canaries only, not production code. The memory reader uses current SavedConversation/pet identity types; v1-v4/v5 format branch and sweep code are exact pinned .30 source. No full legacy application or legacy permission engine acceptance is claimed."
+}

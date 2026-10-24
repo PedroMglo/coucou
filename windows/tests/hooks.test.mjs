@@ -817,3 +817,18 @@ test('a late terminal handoff cannot close a newer request from the same session
  emit('approval-handoff',{requestId:'old-request',sessionId:'same-session',agent:'codex',provider:null,reason:'timeout'});
  assert.equal(State.pendingApproval.requestId,'new-request');assert.notEqual(State.petSessions.list('agent_codex')[0].decisionInTerminal,true);
 });
+
+
+test('withdrawn native hook removes only its card without changing the current session activity',()=>{
+ const payload={hook_event_name:'PermissionRequest',coucou_agent:'antigravity',coucou_pet_provider:'gemini-cli',coucou_assistant_gate:true,request_id:'native-hook',session_id:'native-session',tool_name:'Bash',tool_input:{command:'synthetic'}};
+ hook(payload);assert.equal(State.pendingApproval.requestId,'native-hook');
+ const session=State.petSessions.list('agent_gemini').find(s=>s.sessionId==='native-session');session.state='working';delete session.decisionInTerminal;
+ emit('approval-handoff',{requestId:'native-hook',sessionId:'native-session',reason:'native-source-ended'});
+ assert.equal(State.pendingApproval,null);assert.equal(session.state,'working');assert.notEqual(session.decisionInTerminal,true);assert.deepEqual(sent('approval_decision'),[]);
+});
+test('late withdrawn Gravity hook cannot close a later review from the same native session',()=>{
+ const payload={hook_event_name:'PermissionRequest',coucou_agent:'antigravity',coucou_pet_provider:'gemini-cli',coucou_assistant_gate:true,session_id:'native-session',tool_name:'Bash',tool_input:{command:'synthetic'}};
+ hook({...payload,request_id:'new-native-hook'});
+ emit('approval-handoff',{requestId:'old-native-hook',sessionId:'native-session',reason:'native-source-ended'});
+ assert.equal(State.pendingApproval.requestId,'new-native-hook');assert.notEqual(State.petSessions.list('agent_gemini')[0].decisionInTerminal,true);
+});

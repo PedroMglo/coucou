@@ -189,7 +189,7 @@ pub fn today() -> Day {
 
 impl Store {
     pub fn folder() -> PathBuf {
-        crate::settings::local_dir().join("Flow")
+        crate::settings::data_dir().join("Flow")
     }
 
     pub fn load() -> Store {

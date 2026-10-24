@@ -21,7 +21,13 @@ pub(crate) struct Client {
 pub(crate) struct SessionIdentity {pub state:String,pub native_session_id:Option<String>,pub sources:Vec<String>}
 #[derive(Clone,Debug,Serialize)]
 #[serde(rename_all="camelCase")]
-pub(crate) struct Counts {pub clients_observed:usize,pub terminal_clients_observed:usize,pub foreground_clients_observed:usize,pub identified_native_sessions_observed:usize,pub clients_with_unknown_session:usize,pub clients_with_conflicting_session:usize,pub distinct_native_sessions:Option<usize>}
+pub(crate) struct ProcessStates {pub foreground:usize,pub background:usize,pub suspended:usize,pub headless:usize}
+#[derive(Clone,Debug,Serialize)]
+#[serde(rename_all="camelCase")]
+pub(crate) struct TerminalStates {pub foreground:usize,pub background_only:usize,pub suspended_only:usize}
+#[derive(Clone,Debug,Serialize)]
+#[serde(rename_all="camelCase")]
+pub(crate) struct Counts {pub process_states:ProcessStates,pub terminal_states:Option<TerminalStates>,pub clients_observed:usize,pub terminal_clients_observed:usize,pub terminal_instances_observed:Option<usize>,pub paused_clients_observed:usize,pub foreground_clients_observed:usize,pub identified_native_sessions_observed:usize,pub clients_with_unknown_session:usize,pub clients_with_conflicting_session:usize,pub distinct_native_sessions:Option<usize>}
 #[derive(Clone,Debug,Serialize)]
 #[serde(rename_all="camelCase")]
 pub(crate) struct Census {pub schema_version:u32,pub provider:String,pub scope:&'static str,pub coverage:String,pub observed_at:Option<u64>,pub stale:bool,pub refreshing:bool,pub reason:Option<String>,pub counts:Counts,pub turns:&'static str,pub clients:Vec<Client>}
@@ -30,12 +36,40 @@ pub(crate) struct Census {pub schema_version:u32,pub provider:String,pub scope:&
 pub(crate) struct PetLiveWork {pub owner:String,pub pet_id:String,pub conversation_id:String,pub turn:String,pub phase:&'static str,pub native_provider:Option<String>,pub native_session_id:Option<String>}
 #[derive(Clone,Debug,Serialize)]
 #[serde(rename_all="camelCase")]
-pub(crate) struct LiveWork {pub status:&'static str,pub observed_at:u64,pub reason:Option<String>,pub rows:Vec<PetLiveWork>}
-impl LiveWork {pub(crate) fn unavailable(reason:&str)->Self{Self{status:"unavailable",observed_at:stamp(),reason:Some(reason.into()),rows:vec![]}}}
+pub(crate) struct PetConversationState {
+ pub owner:String,pub pet_id:String,pub conversation_id:String,pub turn:Option<String>,
+ pub state:&'static str,pub reason:Option<&'static str>,
+}
+#[derive(Clone,Debug,Serialize)]
+#[serde(rename_all="camelCase")]
+pub(crate) struct PetConversationStates {pub schema_version:u32,pub scope:&'static str,pub rows:Vec<PetConversationState>}
+#[derive(Clone,Debug,Serialize)]
+#[serde(rename_all="camelCase")]
+pub(crate) struct LiveWork {pub session_states:Option<PetConversationStates>,pub status:&'static str,pub observed_at:u64,pub reason:Option<String>,pub rows:Vec<PetLiveWork>}
+impl LiveWork {pub(crate) fn unavailable(reason:&str)->Self{Self{session_states:None,status:"unavailable",observed_at:stamp(),reason:Some(reason.into()),rows:vec![]}}}
 pub(crate) fn summarize(provider:&str,clients:Vec<Client>,coverage:&str,observed_at:Option<u64>,reason:Option<String>)->Census{
  let ids:BTreeSet<_>=clients.iter().filter_map(|c|c.session_identity.native_session_id.as_deref()).collect();
  let unknown=clients.iter().filter(|c|c.session_identity.state=="unknown").count();let conflicts=clients.iter().filter(|c|c.session_identity.state=="conflicting").count();
- let counts=Counts{clients_observed:clients.len(),terminal_clients_observed:clients.iter().filter(|c|c.channel=="terminal").count(),foreground_clients_observed:clients.iter().filter(|c|c.foreground&&c.channel=="terminal").count(),identified_native_sessions_observed:ids.len(),clients_with_unknown_session:unknown,clients_with_conflicting_session:conflicts,distinct_native_sessions:(unknown==0&&conflicts==0&&matches!(coverage,"completeWithinUserProcessScan"|"partial")).then_some(ids.len())};
+ let terminals=clients.iter().filter(|c|c.channel=="terminal").collect::<Vec<_>>();
+ let terminal_instances=terminals.iter().all(|c|c.tty!=0).then(||terminals.iter().map(|c|c.tty).collect::<BTreeSet<_>>().len());
+ // OS foreground/background/suspension is independent of model activity.
+ let process_states=ProcessStates{
+  foreground:clients.iter().filter(|c|!c.paused&&c.channel=="terminal"&&c.foreground).count(),
+  background:clients.iter().filter(|c|!c.paused&&c.channel=="terminal"&&!c.foreground).count(),
+  suspended:clients.iter().filter(|c|c.paused).count(),
+  headless:clients.iter().filter(|c|!c.paused&&c.channel!="terminal").count(),
+ };
+ let terminal_states=terminal_instances.map(|_|{
+  let mut by_tty:BTreeMap<i64,Vec<&Client>>=BTreeMap::new();
+  for c in &terminals{by_tty.entry(c.tty).or_default().push(c);}
+  let mut states=TerminalStates{foreground:0,background_only:0,suspended_only:0};
+  for rows in by_tty.values(){
+   if rows.iter().any(|c|!c.paused&&c.foreground){states.foreground+=1;}
+   else if rows.iter().any(|c|!c.paused){states.background_only+=1;}
+   else{states.suspended_only+=1;}
+  }states
+ });
+ let counts=Counts{process_states,terminal_states,terminal_instances_observed:terminal_instances,paused_clients_observed:clients.iter().filter(|c|c.paused).count(),clients_observed:clients.len(),terminal_clients_observed:clients.iter().filter(|c|c.channel=="terminal").count(),foreground_clients_observed:clients.iter().filter(|c|c.foreground&&!c.paused&&c.channel=="terminal").count(),identified_native_sessions_observed:ids.len(),clients_with_unknown_session:unknown,clients_with_conflicting_session:conflicts,distinct_native_sessions:(unknown==0&&conflicts==0&&matches!(coverage,"completeWithinUserProcessScan"|"partial")).then_some(ids.len())};
  Census{schema_version:1,provider:provider.into(),scope:"localProcesses",coverage:coverage.into(),observed_at,stale:false,refreshing:false,reason,counts,turns:"notObservedByProcessCensus",clients}
 }
 fn deduplicate_wrappers(rows:Vec<Client>)->Vec<Client>{

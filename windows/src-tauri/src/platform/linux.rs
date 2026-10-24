@@ -40,9 +40,13 @@ fn xdg(var: &str, fallback: &str) -> PathBuf {
 }
 
 /// ~/.config/coucou — preferences.
-pub fn config_dir() -> PathBuf {
+pub fn legacy_config_dir() -> PathBuf {
     xdg("XDG_CONFIG_HOME", ".config").join("coucou")
 }
+
+/// Mutable preferences are read only after native profile admission.
+pub fn config_dir() -> PathBuf { crate::pet_data::bootstrap::config_dir() }
+pub fn data_dir() -> PathBuf { crate::pet_data::bootstrap::data_dir() }
 
 /// ~/.local/share/coucou — where coucou-hook, the inbox and the log live. The
 /// relay has to sit at a stable path: an AppImage is mounted somewhere new on

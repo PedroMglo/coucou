@@ -12,6 +12,8 @@ use tokio::time::{timeout_at, Instant};
 
 #[path="strict_json.rs"]
 mod strict_json;
+#[path="discovery.rs"]
+mod discovery;
 
 const MAX_BYTES: usize = 512 * 1024;
 const MAX_FRAMES: usize = 8;
@@ -44,28 +46,32 @@ pub(crate) struct Config {
     trusted_executable: PathBuf,
     trusted_executable_uid: u32,
     deadline: Duration,
+    discovery: Option<discovery::Native>,
 }
 
 impl Config {
     pub(crate) fn from_environment() -> Result<Self, Error> {
-        let uid = unsafe { libc::geteuid() };
+        Self::from_inherited(unsafe { libc::geteuid() }, std::env::var_os("DMS_SOCKET"))
+    }
+    fn from_inherited(uid: u32, inherited: Option<std::ffi::OsString>) -> Result<Self, Error> {
         let runtime = PathBuf::from(format!("/run/user/{uid}"));
-        let socket = std::env::var_os("DMS_SOCKET")
-            .map(PathBuf::from).ok_or(Error::Unavailable)?;
-        let name = socket.file_name().and_then(|n| n.to_str()).ok_or(Error::Unavailable)?;
-        let digits = name.strip_prefix("danklinux-")
-            .and_then(|s| s.strip_suffix(".sock")).ok_or(Error::Unavailable)?;
-        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit())
-            || socket.parent() != Some(runtime.as_path()) {
+        let socket = inherited.map(PathBuf::from).unwrap_or_default();
+        // Absence can recover on the first scoped read; never invent a PID or
+        // let an explicit malformed endpoint expand the native trust boundary.
+        if !socket.as_os_str().is_empty() && !native_socket_path(&socket, &runtime) {
             return Err(Error::UntrustedPeer);
         }
-        Ok(Self {
-            socket, runtime, uid,
-            trusted_executable: PathBuf::from("/usr/bin/dms"),
-            trusted_executable_uid: 0,
-            deadline: Duration::from_secs(3),
-        })
+        Ok(Self { socket, runtime, uid, trusted_executable: PathBuf::from("/usr/bin/dms"),
+            trusted_executable_uid: 0, deadline: Duration::from_secs(3),
+            discovery: Some(discovery::Native::current()) })
     }
+}
+
+fn native_socket_path(socket: &std::path::Path, runtime: &std::path::Path) -> bool {
+    let Some(name) = socket.file_name().and_then(|n| n.to_str()) else { return false; };
+    let Some(digits) = name.strip_prefix("dms-").or_else(|| name.strip_prefix("danklinux-"))
+        .and_then(|s| s.strip_suffix(".sock")) else { return false; };
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) && socket.parent() == Some(runtime)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,11 +129,11 @@ async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, bytes: &[u8], state:
     writer.write_all(bytes).await.map_err(|_| Error::Unavailable)
 }
 
-// The reviewed upstream v1.6.3 server declares API34 and this exact scan wire
-// contract. Other versions remain readable but do not grant scan protocol proof.
-const SCAN_API: u64 = 34;
+// The reviewed API34/API38 requests, framing and ACKs share this exact contract.
+// Keep the same explicit protocol gate as software enable/disable evidence.
+// Other versions remain readable and cannot grant an action proof.
 fn scan_supported(version: Option<u64>, capabilities: &[String]) -> bool {
-    version == Some(SCAN_API) && capabilities.iter().any(|s| s == "network")
+    crate::lifecycle::wifi_protocol_supported(version, capabilities)
 }
 
 fn next_request_id(counter: &AtomicU64) -> Result<u64, Error> {
@@ -146,6 +152,36 @@ async fn connect(config: &Config) -> Result<(UnixStream, Source), Error> {
     let peer = peer_incarnation(pid, config)?;
     if check_socket(config)? != endpoint { return Err(Error::OriginChanged); }
     Ok((stream, Source { peer, uid: credentials.uid(), socket: config.socket.clone(), endpoint }))
+}
+
+async fn connect_read(config: &Config, deadline: Instant) -> Result<(UnixStream, Source, Config), Error> {
+    check_runtime(config)?;
+    let mut selected = config.clone();
+    if let Some(path) = config.discovery.as_ref().and_then(|d| d.remembered()) { selected.socket = path; }
+    match connect(&selected).await {
+        Ok((stream, source)) => return Ok((stream, source, selected)),
+        Err(Error::Unavailable) => {},
+        Err(error) => return Err(error),
+    }
+    let discovery = config.discovery.as_ref().ok_or(Error::Unavailable)?;
+    selected.socket = discovery.endpoint(&config.runtime, deadline).await?;
+    let (stream, source) = connect(&selected).await?;
+    Ok((stream, source, selected))
+}
+
+fn action_config(config: &Config, origin: &Origin) -> Result<Config, Error> {
+    let mut selected = config.clone();
+    if config.discovery.is_some() {
+        if !native_socket_path(&origin.source.socket, &config.runtime) { return Err(Error::OriginChanged); }
+        // Use only the endpoint of this sealed read. A new daemon/path needs a
+        // new read and new scopes; an action never discovers or retries a target.
+        selected.socket = origin.source.socket.clone();
+    }
+    Ok(selected)
+}
+
+fn remember_read(config: &Config, source: &Source) {
+    if let Some(discovery) = &config.discovery { discovery.remember_authenticated(&source.socket); }
 }
 
 fn verify_source(stream: &UnixStream, source: &Source, config: &Config) -> Result<(), Error> {
@@ -225,7 +261,14 @@ where F: FnOnce(&Origin) -> Result<(), E> {
     let mut write = WriteState::NotStarted;
     let operation = async {
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
-        let (mut stream, source) = connect(config).await.map_err(|e| failure(e, write))?;
+        let (mut stream, source, selected) = if matches!(rpc, Rpc::Read) {
+            connect_read(config, deadline).await.map_err(|e| failure(e, write))?
+        } else {
+            let selected = action_config(config, expected.ok_or_else(|| failure(Error::Protocol, write))?)
+                .map_err(|e| failure(e, write))?;
+            let (stream, source) = connect(&selected).await.map_err(|e| failure(e, write))?;
+            (stream, source, selected)
+        };
         if let Some(origin) = expected {
             let proven=match rpc {Rpc::Scan=>origin.scan_proven,Rpc::EnableWifi=>origin.enable_wifi_proven,Rpc::DisableWifi=>origin.disable_wifi_proven,Rpc::Read=>false};
             if !proven { return Err(failure(Error::Unsupported, write)); }
@@ -242,7 +285,7 @@ where F: FnOnce(&Origin) -> Result<(), E> {
         // Wait before the final authority checks. The guard never precedes an
         // asynchronous wait for initial writability or native peer authentication.
         stream.writable().await.map_err(|_| failure(Error::Unavailable, write))?;
-        verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
+        verify_source(&stream, &source, &selected).map_err(|e| failure(e, write))?;
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
         let candidate = Origin { source: source.clone(), scan_proven: handshake.is_some(),
             enable_wifi_proven: expected.is_some_and(|o|o.enable_wifi_proven),
@@ -256,7 +299,7 @@ where F: FnOnce(&Origin) -> Result<(), E> {
         } else {
             read_reply(&mut stream, id).await.map_err(|e| failure(e, write))?
         };
-        verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
+        verify_source(&stream, &source, &selected).map_err(|e| failure(e, write))?;
         let origin = match rpc {
             Rpc::Read=>Origin {source,scan_proven:scan_supported(raw.api_version,&raw.capabilities),
                 enable_wifi_proven:crate::lifecycle::enable_wifi_supported(&raw.result,raw.api_version,&raw.capabilities),
@@ -268,7 +311,9 @@ where F: FnOnce(&Origin) -> Result<(), E> {
     let result = timeout_at(deadline, operation).await;
     // Tokio polls an already-ready inner future first, including after a slow
     // synchronous guard/final peer check. Keep the reviewed R2 final deadline gate.
-    finish_result(result.map_err(|_| failure(Error::Timeout, write))?, deadline, write)
+    let reply = finish_result(result.map_err(|_| failure(Error::Timeout, write))?, deadline, write)?;
+    if matches!(rpc, Rpc::Read) { remember_read(config, &reply.origin.source); }
+    Ok(reply)
 }
 
 /// The backend supplies a real authority guard; no current window/UI fact is
@@ -278,7 +323,7 @@ where F: FnOnce() -> Result<(), E> {
     request(config, Rpc::Read, None, |_| guard()).await
 }
 
-/// This client intentionally uses the no-device scan form; API34 also supports
+/// This client intentionally uses the no-device scan form; API34/API38 support
 /// optional device upstream. There is no targeted argument/fallback in this client.
 /// The callback is synchronous at the writer after current native authentication.
 pub(crate) async fn scan_wifi<E, F>(config: &Config, expected: &Origin, guard: F) -> Result<ScanAck, Failure<E>>
@@ -323,11 +368,16 @@ fn process_start_time(text: &str) -> Option<u64> {
     text.rsplit_once(") ")?.1.split_whitespace().nth(19)?.parse().ok()
 }
 
-fn check_socket(config: &Config) -> Result<Endpoint, Error> {
+fn check_runtime(config: &Config) -> Result<(), Error> {
     let directory = std::fs::symlink_metadata(&config.runtime).map_err(|_| Error::Unavailable)?;
     if !directory.is_dir() || directory.uid() != config.uid || directory.mode() & 0o077 != 0 {
         return Err(Error::UntrustedPeer);
     }
+    Ok(())
+}
+
+fn check_socket(config: &Config) -> Result<Endpoint, Error> {
+    check_runtime(config)?;
     let socket = std::fs::symlink_metadata(&config.socket).map_err(|_| Error::Unavailable)?;
     if config.socket.parent() != Some(config.runtime.as_path()) || !socket.file_type().is_socket()
         || socket.uid() != config.uid || socket.mode() & 0o777 != 0o600 {
@@ -405,10 +455,10 @@ async fn read_reply(stream: &mut UnixStream, id: u64) -> Result<WireReply, Error
 }
 
 
-// Executor harness only. Original R3 source above is an exact byte prefix.
+// Fixture constructor: no native metadata process can run in the default harness.
 #[cfg(test)]
 pub(crate) fn config_for_fixture(socket: PathBuf, runtime: PathBuf, trusted_executable: PathBuf, uid: u32, deadline: Duration) -> Config {
-    Config {socket,runtime,uid,trusted_executable,trusted_executable_uid:uid,deadline}
+    Config {socket,runtime,uid,trusted_executable,trusted_executable_uid:uid,deadline,discovery:None}
 }
 
 
@@ -427,21 +477,23 @@ where F: FnOnce() -> Result<(), E> {
     let deadline = Instant::now() + config.deadline;
     let mut write = WriteState::NotStarted;
     let operation = async {
-        let (mut stream, source) = connect(config).await.map_err(|e| failure(e, write))?;
+        let (mut stream, source, selected) = connect_read(config, deadline).await.map_err(|e| failure(e, write))?;
         let id = next_request_id(&NEXT_ID).map_err(|e| failure(e, write))?;
         let mut bytes = serde_json::to_vec(&json!({"id":id,"method":"bluetooth.getState"})).map_err(|_| failure(Error::Protocol, write))?;
         bytes.push(b'\n');
         stream.writable().await.map_err(|_| failure(Error::Unavailable, write))?;
-        verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
+        verify_source(&stream, &source, &selected).map_err(|e| failure(e, write))?;
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
         guard().map_err(Failure::Guard)?;
-        verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
+        verify_source(&stream, &source, &selected).map_err(|e| failure(e, write))?;
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
         write_frame(&mut stream, &bytes, &mut write).await.map_err(|e| failure(e, write))?;
         let reply = read_reply(&mut stream, id).await.map_err(|e| failure(e, write))?;
-        verify_source(&stream, &source, config).map_err(|e| failure(e, write))?;
-        Ok(BluetoothReply {api_version:reply.api_version,capabilities:reply.capabilities,result:reply.result})
+        verify_source(&stream, &source, &selected).map_err(|e| failure(e, write))?;
+        Ok((BluetoothReply {api_version:reply.api_version,capabilities:reply.capabilities,result:reply.result}, source))
     };
     let result = timeout_at(deadline, operation).await;
-    finish_result(result.map_err(|_| failure(Error::Timeout, write))?, deadline, write)
+    let (reply, source) = finish_result(result.map_err(|_| failure(Error::Timeout, write))?, deadline, write)?;
+    remember_read(config, &source);
+    Ok(reply)
 }

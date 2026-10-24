@@ -10,6 +10,62 @@ const legacy = JSON.parse(readFileSync(new URL("../src-tauri/pets.default.json",
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const identity = (id) => ({ id, name: id, color: "#2dd4bf", state: "idle", attention: false, busy: false, dancing: false, active: false, activity: "", outfit: "none", sessions: 0 });
 
+test("native services may declare an optional assistant without changing user defaults", () => {
+  const s=clone(source), row=clone(s.pets.integration_spotify);
+  row.preferences.name="Audio fixture"; row.preferences.aliases=["audio fixture"];
+  for(const key of ["chat","voice","taskProvider"]) row.routing[key]="integration_audio_fixture";
+  s.pets.integration_audio_fixture=row;
+  const factory=factoryModule.createPetFactory(s), native=factory.get("integration_audio_fixture");
+  assert.equal(native.runtime.adapter,"spotify"); assert.equal(native.runtime.assistantAdapter,"codex");
+  assert.equal(native.preferences.provider,""); assert.equal(native.routing.chat,"integration_audio_fixture");
+  assert.equal(factory.get("agent_codex").routing.chat,"codex");
+});
+
+test("an optional assistant cannot borrow another account or promote an unsupported runtime", () => {
+  for(const [id,adapter] of [["integration_spotify","copilot"],["ai_ollama","codex"],["integration_notion","codex"]]) {
+    const s=clone(source); s.pets[id].runtime.assistantAdapter=adapter;
+    assert.throws(()=>factoryModule.createPetFactory(s),/invalid bundled pet factory/i);
+  }
+  const s=clone(source); s.pets.integration_spotify.runtime.assistantAdapter=null;
+  assert.throws(()=>factoryModule.createPetFactory(s),/invalid bundled pet factory/i);
+});
+
+test("runtime metadata preserves independent logical pets and does not enable missing adapters", () => {
+  const factory = factoryModule.createPetFactory(source);
+  assert.deepEqual(factory.get("agent_codex").runtime, {kind:"llm",adapter:"codex"});
+  assert.deepEqual(factory.get("integration_notion").runtime, {kind:"service",adapter:"codex"});
+  assert.equal(factory.get("integration_notion").routing.taskProvider,"integration_notion");
+  assert.deepEqual(factory.get("integration_spotify").runtime, {kind:"service",adapter:"spotify",assistantAdapter:"codex"});
+  for(const id of ["ai_openai","ai_anthropic","ai_google","ai_lmstudio"]){assert.equal(factory.get(id).runtime.kind,"llm");assert.equal(factory.get(id).runtime.adapter,null);assert.equal(factory.get(id).routing.execute,false);}
+  assert.equal(factory.get("agent_gemini").runtime.kind,"observer");
+  assert.equal(factory.get("integration_github").routing.execute,false);
+  assert.deepEqual(factory.configuration(),legacy);
+});
+
+test("runtime declarations cannot be inherited or contain grants", () => {
+  for(const recipe of ["base","llm","application","codex-account"]){
+    for(const key of ["runtime","routing","service"]){const s=clone(source);const target=recipe==="base"?s.base:s.molds[recipe]??s.extensions[recipe];target[key]={};assert.throws(()=>factoryModule.createPetFactory(s),/invalid bundled pet factory/i);}
+  }
+  for(const key of ["kind","adapter"]){const s=clone(source);delete s.pets.agent_codex.runtime[key];assert.throws(()=>factoryModule.createPetFactory(s),/invalid bundled pet factory/i);}
+  const s=clone(source);s.pets.agent_codex.runtime.permissions={};assert.throws(()=>factoryModule.createPetFactory(s),/invalid bundled pet factory/i);
+});
+
+test("cross-channel owner collisions and incompatible adapter claims fail closed", () => {
+  for(const mutate of [s=>s.pets.ai_openai.routing.chat="gemini-cli",s=>s.pets.agent_copilot.runtime.adapter="codex",s=>s.pets.ai_openai.runtime.adapter="openai",s=>s.pets.ai_ollama.routing.execute=true,s=>s.pets.integration_spotify.runtime.adapter="codex",s=>s.pets.agent_cursor.runtime.kind="llm"]){const s=clone(source);mutate(s);assert.throws(()=>factoryModule.createPetFactory(s),/invalid bundled pet factory/i);}
+});
+
+test("a new application owner reuses the implemented adapter with explicit permissions", () => {
+  const s=clone(source),p=clone(s.pets.integration_notion);
+  for(const key of ["chat","voice","taskProvider"])p.routing[key]="integration_fixture";
+  p.preferences.name="Fixture";p.preferences.aliases=["fixture"];p.preferences.permissions={documents:false,emailDrafts:false,music:false,openApps:false};s.pets.integration_fixture=p;
+  const factory=factoryModule.createPetFactory(s);
+  assert.equal(factory.forTaskProvider("integration_fixture"),"integration_fixture");
+  assert.equal(factory.get("integration_fixture").runtime.adapter,"codex");
+  assert.ok(factory.services.includes("integration_fixture"));
+  assert.deepEqual(factory.get("integration_fixture").preferences.permissions,p.preferences.permissions);
+  assert.deepEqual(factory.get("integration_notion").preferences,legacy.pets.integration_notion);
+});
+
 test("all legacy pet preferences retain their defaults", () => {
   const { PetFactory } = factoryModule;
   assert.equal(Object.keys(legacy.pets).length, 25);
@@ -52,10 +108,11 @@ test("extensions apply to application services without changing their mold or se
   }
   const spoty = factory.get("integration_spotify");
   assert.equal(spoty.mold, "application");
-  assert.equal(spoty.presentation.profiles, false);
+  assert.equal(spoty.presentation.profiles, true);
   assert.equal(spoty.preferences.provider, "");
-  assert.equal(spoty.routing.chat, null);
-  assert.equal(spoty.routing.execute, false);
+  assert.equal(spoty.routing.chat, "integration_spotify");
+  assert.equal(spoty.routing.execute, true);
+  assert.equal(spoty.runtime.assistantAdapter, "codex");
 });
 
 test("factory results are immutable snapshots and configuration reads are isolated", () => {

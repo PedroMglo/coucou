@@ -16,10 +16,11 @@ import {
   recordPress, type Binding,
 } from "../core/shortcuts";
 import { DEFAULT_SETTINGS, type Settings } from "../core/state";
+import {PetRosterPreferences,type PetRosterRequest} from '../core/pet-roster-settings';
 import { SOUND_NAMES } from "../core/sound";
 import {
-  MAX_DECLARED, PILL_CATEGORIES, availablePills, chooseMainPill, isComingSoon, mainPillChoices,
-  sanitizeDeclared, toggleDeclared, type PillDefinition,
+  MAX_DECLARED, PILL_CATEGORIES, availablePills, isComingSoon, mainPillChoices,
+  sanitizeDeclared, type PillDefinition,
 } from "../core/pills";
 import { h, clear } from "../views/dom";
 import { startHub, type PageId,type HubContext } from "../hub/shell";
@@ -39,6 +40,14 @@ const KEY_STORE = navigator.userAgent.includes("Windows")
   : "Secret Service (GNOME Keyring, KWallet)";
 
 let settings: Settings = { ...DEFAULT_SETTINGS };
+let rosterSaving=false;
+const rosterPreferences=new PetRosterPreferences({save:request=>Bridge.petRosterSettingsPatch(request),adopt:roster=>{settings={...settings,...roster};for(const redraw of declaredViews)redraw();}});
+async function changeRoster(request:PetRosterRequest){
+ if(rosterSaving)return;
+ rosterSaving=true;for(const redraw of declaredViews)redraw();
+ try{await rosterPreferences.change(request);}catch(error){Bridge.reportSettingsError(error);}
+ finally{rosterSaving=false;for(const redraw of declaredViews)redraw();}
+}
 let version = "";
 let islandAvailability:ReturnType<typeof buildIslandAvailability>|null=null;
 let observedIslandAvailability:IslandAvailabilityValues|null=null;
@@ -440,11 +449,8 @@ function activePillsSection(connected: Record<string, boolean>): HTMLElement {
   const main = h("select", {}) as HTMLSelectElement;
   for (const def of mainPillChoices()) main.append(h("option", { value: def.id, text: def.name }));
   main.addEventListener("change", () => {
-    const next = chooseMainPill(settings, main.value);
-    if (!next) return;
-    settings.mainPill = next.mainPill;
-    settings.activeIntegrations = next.activeIntegrations;
-    declaredChanged();
+    const id=main.value;main.value=settings.mainPill;
+    void changeRoster({action:'setMain',id});
   });
   const groups = h("div", { style: "display:flex;flex-direction:column;gap:12px" });
 
@@ -472,12 +478,9 @@ function activePillsSection(connected: Record<string, boolean>): HTMLElement {
     const why = hint(def);
     el.append(h("span", { class: "state", text: why ?? "" }));
     const sw = h("button", { class: on ? "switch on" : "switch",'aria-label':`${def.name} · Mostrar pet`,'aria-pressed':on }) as HTMLButtonElement;
-    sw.disabled = full;
+    sw.disabled = full||rosterSaving;
     sw.addEventListener("click", () => {
-      const next = toggleDeclared(settings, def.id);
-      if (!next) return;
-      settings.activeIntegrations = next;
-      declaredChanged();
+      void changeRoster({action:'setActive',id:def.id,enabled:!settings.activeIntegrations.includes(def.id)});
     });
     el.append(sw);
     return el;
@@ -488,6 +491,7 @@ function activePillsSection(connected: Record<string, boolean>): HTMLElement {
     slots.textContent = t("{used}/{max} slots in use — the main tool doesn't take one.", { used, max: MAX_ACTIVE });
     slots.classList.toggle("full", used >= MAX_ACTIVE);
     main.value = settings.mainPill;
+    main.disabled=rosterSaving;
     clear(groups);
     for (const cat of PILL_CATEGORIES) {
       if (cat.id === "service") continue;
@@ -816,11 +820,6 @@ const MAX_ACTIVE = MAX_DECLARED;
 /** Everything that shows the declared pills, redrawn when any of them changes. */
 const declaredViews: (() => void)[] = [];
 
-function declaredChanged() {
-  for (const redraw of declaredViews) redraw();
-  void save().catch(Bridge.reportSettingsError);
-}
-
 function integrationsSection(present: Record<string, boolean>): HTMLElement {
   const note = h("div", { class: "hint" });
   const list = h("div", { style: "display:flex;flex-direction:column;gap:14px" });
@@ -835,18 +834,9 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
   for (const def of INTEGRATIONS.filter((d) => offered.has(d.id))) {
     const active = settings.activeIntegrations.includes(def.id);
     const sw = h("button", { class: active ? "switch on" : "switch",'aria-label':`${def.name} · Mostrar pet`,'aria-pressed':active });
-    sw.addEventListener("click", () => {
-      const on = settings.activeIntegrations.includes(def.id);
-      if (on) {
-        settings.activeIntegrations = settings.activeIntegrations.filter((x) => x !== def.id);
-      } else {
-        if (settings.activeIntegrations.length >= MAX_ACTIVE) return;
-        settings.activeIntegrations = [...settings.activeIntegrations, def.id];
-      }
-      sw.classList.toggle("on", !on);
-      sw.setAttribute('aria-pressed',String(!on));
-      declaredChanged();
-    });
+    const redraw=()=>{const on=settings.activeIntegrations.includes(def.id);sw.classList.toggle('on',on);sw.setAttribute('aria-pressed',String(on));sw.disabled=rosterSaving||(!on&&settings.activeIntegrations.length>=MAX_ACTIVE);};
+    declaredViews.push(redraw);redraw();
+    sw.addEventListener("click", () => {void changeRoster({action:'setActive',id:def.id,enabled:!settings.activeIntegrations.includes(def.id)});});
 
     const rows = h("div", { style: "display:flex;flex-direction:column;gap:6px;flex:1 1 auto;min-width:0" });
     for (const field of def.fields) {
@@ -1314,6 +1304,7 @@ function receiveSettings(s:Settings){
   settingsObservation++;
   const before = `${settings.chatProvider}|${settings.ollamaUrl}|${settings.lmstudioUrl}|${settings.customUrl}`;
   settings = OllamaModelSelection.applySettings({ ...settings, ...s });
+  rosterPreferences.observe(s);
   observedIslandAvailability=islandAvailabilityValues(s);
   islandAvailability?.observe(s);
   shortcutsListener?.settingsChanged();

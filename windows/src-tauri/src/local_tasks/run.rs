@@ -30,12 +30,14 @@ fn captured_effort(caps:&protocol::ModelCapabilities,selection:Option<&crate::pe
 
 #[allow(dead_code,clippy::too_many_arguments)]
 async fn plain_response(chat:&Chat,turn:&crate::chat::Turn,base:&reqwest::Url,model:&str,effort:Option<&str>,messages:&[serde_json::Value],user:serde_json::Value,plain:&str,deadline:Instant,delta:impl FnMut(String))->Result<(ChatReply,crate::pet_usage::Usage,Option<String>),String>{
- plain_response_captured(chat,turn,base,model,effort,messages,user,plain,deadline,None,delta).await
+ plain_response_captured(chat,turn,base,model,effort,messages,user,plain,deadline,None,None,delta).await
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn plain_response_captured(chat:&Chat,turn:&crate::chat::Turn,base:&reqwest::Url,model:&str,effort:Option<&str>,messages:&[serde_json::Value],user:serde_json::Value,plain:&str,deadline:Instant,origin:Option<&UsageOrigin>,delta:impl FnMut(String))->Result<(ChatReply,crate::pet_usage::Usage,Option<String>),String>{
+async fn plain_response_captured(chat:&Chat,turn:&crate::chat::Turn,base:&reqwest::Url,model:&str,effort:Option<&str>,messages:&[serde_json::Value],user:serde_json::Value,plain:&str,deadline:Instant,origin:Option<&UsageOrigin>,prepared:Option<&crate::local_chat::PreparedUser>,delta:impl FnMut(String))->Result<(ChatReply,crate::pet_usage::Usage,Option<String>),String>{
+ if let Some(prepared)=prepared{prepared.validate_contents().await?;}
  let round=protocol::round_captured(base,model,messages,false,effort,deadline,&turn.cancel,origin,delta).await?;
+ if let Some(prepared)=prepared{prepared.validate_contents().await?;}
  if !round.calls.is_empty()||round.text.is_empty(){return Err("O modelo não devolveu uma resposta de texto válida.".into());}
  let notice=chat.commit_observed_reply(turn,user,json!({"role":"assistant","content":round.text}),plain,&round.text)?;
  Ok((ChatReply{text:round.text},round.usage,notice))
@@ -69,12 +71,14 @@ pub(crate) async fn respond(app:&AppHandle,chat:&Chat,settings:&crate::settings:
  let reasoning_effort=captured_effort(&caps,selection,resume_from);
  if !chat.is_current(&turn){return Err("A tarefa foi interrompida.".into());}
  if chat.local_capability_changed(&turn,model,tools){if let Some((cid,epoch))=chat.usage_origin(&turn){let _=app.emit("local-execution-capability",json!({"provider":"ollama","conversationId":cid,"turn":epoch,"capability":{"model":model,"tools":tools}}));}}
- let user=json!({"role":"user","content":crate::local_chat::user_text(turn.first,context.as_ref(),&query)});
+ let prepared=crate::local_chat::user_text_for_turn(chat,&turn,context.as_ref(),&query).await?;
+ let user=json!({"role":"user","content":prepared.text});
  let plain=crate::chat::plain_question(turn.first,context.as_ref(),&query);
  let mut messages=vec![json!({"role":"system","content":system_prompt(&cwd,tools,&prompt)})];messages.extend(turn.history.clone());messages.push(user.clone());
+ prepared.validate_contents().await?;
  if !tools{
   if resume_from.is_some(){return Err("O modelo original não confirmou suporte a ferramentas. A tarefa anterior foi preservada; inicia explicitamente um novo pedido com um modelo compatível.".into());}
-  let(reply,usage,notice)=plain_response_captured(chat,&turn,&base,model,reasoning_effort.as_deref(),&messages,user,&plain,deadline,capture_origin.as_ref(),|s|{chat.publish_delta(app,&turn,&s);activity.update("message",s.rsplit("\n\n").next().unwrap_or(&s));}).await?;
+  let(reply,usage,notice)=plain_response_captured(chat,&turn,&base,model,reasoning_effort.as_deref(),&messages,user,&plain,deadline,capture_origin.as_ref(),Some(&prepared),|s|{if prepared.validate().is_ok(){chat.publish_delta(app,&turn,&s);activity.update("message",s.rsplit("\n\n").next().unwrap_or(&s));}}).await?;
   activity.finish_observed(&reply.text,notice.as_deref());
   crate::pet_usage::record(Some(app),chat,&turn,usage);return Ok(reply);
  }
@@ -82,20 +86,33 @@ pub(crate) async fn respond(app:&AppHandle,chat:&Chat,settings:&crate::settings:
  let(task_id,cid)=chat.local_task_identity(&turn)?;
  let scope=ExecutionScope{target:crate::session_chat::types::Target{pet_id:"ai_ollama".into(),provider:"ollama".into(),origin:crate::session_chat::types::Origin::Mochi,session_id:cid.clone(),conversation_id:Some(cid)},turn:turn.clone(),task_id,model:model.into(),base,deadline,policy,reasoning_effort};
  let activity=Arc::new(activity.track(chat.clone(),turn.clone()));
+ let calendar=prepared.calendar().and_then(|note|note.query());
  let mut budget=TurnOutputBudget::new(scope.policy.max_output_bytes);let mut count=0usize;let mut ids=HashSet::new();let mut usage=None::<crate::pet_usage::Usage>;let mut may_have_effects=false;let mut incomplete_round=None;
  let outcome:Result<String,String>=async{
-  for _ in 0..=scope.policy.max_calls{
+  for _ in 0..=scope.policy.max_calls+if calendar.is_some(){8}else{0}{
+   prepared.validate_contents().await?;
    if !chat.is_current(&turn){return Err("A tarefa foi interrompida.".into());}
    let offer_tools=count<scope.policy.max_calls&&budget.can_run();
    incomplete_round=Some(Instant::now());
-   let round=protocol::round_captured(&scope.base,&scope.model,&messages,offer_tools,scope.reasoning_effort.as_deref(),scope.deadline,&turn.cancel,capture_origin.as_ref(),|s|{chat.publish_delta(app,&turn,&s);activity.update("message",s.rsplit("\n\n").next().unwrap_or(&s));}).await?;
+   let round=protocol::round_calendar_captured(&scope.base,&scope.model,&messages,offer_tools,calendar.as_ref(),scope.reasoning_effort.as_deref(),scope.deadline,&turn.cancel,capture_origin.as_ref(),|s|{if prepared.validate().is_ok(){chat.publish_delta(app,&turn,&s);activity.update("message",s.rsplit("\n\n").next().unwrap_or(&s));}}).await?;
+   prepared.validate_contents().await?;
    incomplete_round=None;
    if let Some(total)=&mut usage{total.add(&round.usage);}else{usage=Some(round.usage.clone());}
-   if round.calls.is_empty(){if round.text.is_empty(){return Err("O modelo não devolveu uma conclusão de texto.".into());}return Ok(round.text);}
-   if !offer_tools||count+round.calls.len()>scope.policy.max_calls{return Err("O limite de propostas de comando foi atingido.".into());}
+   if round.calls.is_empty()&&round.calendar_calls.is_empty(){if round.text.is_empty(){return Err("O modelo não devolveu uma conclusão de texto.".into());}return Ok(round.text);}
+   if !round.calls.is_empty()&&(!offer_tools||count+round.calls.len()>scope.policy.max_calls){return Err("O limite de propostas de comando foi atingido.".into());}
    // Validate/freeze the entire batch before asking or executing any member.
-   let batch=freeze_batch(round.calls,count,&mut ids,&cwd,&scope.policy)?;
-   messages.push(round.message);let mut denied=false;
+   let mut batch_ids=ids.clone();
+   for call in &round.calendar_calls{if !batch_ids.insert(call.id.clone()){return Err("O modelo reutilizou um identificador de ferramenta.".into());}}
+   let batch=freeze_batch(round.calls,count,&mut batch_ids,&cwd,&scope.policy)?;
+   ids=batch_ids;
+   messages.push(round.message);
+   for call in round.calendar_calls{
+    let service=calendar.as_ref().ok_or("A consulta de calendário não foi autorizada neste pedido.")?;
+    let output=crate::net::while_current(||chat.is_current(&turn)&&prepared.validate().is_ok()&&Instant::now()<scope.deadline&&approval::policy_current(&scope),||service.call_named(&call.name,call.args)).await?;
+    prepared.validate_contents().await?;
+    messages.push(json!({"role":"tool","tool_call_id":call.id,"content":output}));
+   }
+   let mut denied=false;
    for (call_id,spec) in batch{
     count+=1;let mut receipt=StepReceipt::proposed(count as u8);chat.record_local_receipt(&scope,receipt.clone())?;
     let result=if denied{receipt.finish(ReceiptState::Skipped,Some(ReceiptCause::PreviousDenied));ProcessResult{receipt,stdout:vec![],stderr:vec![]}}else{
@@ -105,6 +122,7 @@ pub(crate) async fn respond(app:&AppHandle,chat:&Chat,settings:&crate::settings:
       approval::Outcome::Expired=>{denied=true;receipt.finish(ReceiptState::Expired,Some(if Instant::now()>=scope.deadline{ReceiptCause::TaskDeadline}else{ReceiptCause::ApprovalDeadline}));ProcessResult{receipt,stdout:vec![],stderr:vec![]}},
       approval::Outcome::Cancelled=>{receipt.finish(ReceiptState::Cancelled,Some(ReceiptCause::UserCancel));ProcessResult{receipt,stdout:vec![],stderr:vec![]}},
       approval::Outcome::Allowed(approved)=>{
+       prepared.validate_contents().await?;
        if !approval::policy_current(&scope){return Err("As permissões foram alteradas antes da execução.".into());}
        let permit=match chat.admit_local_step(&scope,approved,&receipt){Ok(p)=>p,Err(error)=>{if turn.cancel.load(Ordering::Acquire){receipt.finish(ReceiptState::Cancelled,Some(ReceiptCause::UserCancel));}else if Instant::now()>=scope.deadline{receipt.finish(ReceiptState::Expired,Some(ReceiptCause::TaskDeadline));}else{receipt.finish(ReceiptState::Skipped,None);}let _=chat.record_local_receipt(&scope,receipt);return Err(error);}};
        may_have_effects=true;activity.update("working","");
@@ -136,6 +154,7 @@ pub(crate) async fn respond(app:&AppHandle,chat:&Chat,settings:&crate::settings:
  if let Some(started)=incomplete_round{mark_incomplete_usage(&mut usage,&scope.model,started.elapsed());}
  let (phase,text)=match outcome{Ok(text)=>(LocalTerminal::Done,text),Err(error)=>(if turn.cancel.load(Ordering::Acquire){LocalTerminal::Stopped}else if Instant::now()>=scope.deadline{LocalTerminal::Interrupted}else{LocalTerminal::Failed},failure_notice(&error,may_have_effects))};
  if let Some(usage)=usage{crate::pet_usage::record(Some(app),chat,&turn,usage);}
+ prepared.validate_contents().await?;
  let committed=chat.commit_local_terminal(&scope,phase,user,&plain,&text)?;
  activity.publish_committed_terminal(committed.phase,&committed.text,committed.origin);
  let _=app.emit("assistant-history-changed","ollama");

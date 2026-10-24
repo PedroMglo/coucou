@@ -5,7 +5,7 @@
 // names are kept: the agent's pill ID and the project folder's last path
 // component. Never a command, a file path, file contents or a prompt.
 //
-// The history lives in recap.json under platform::local_dir()
+// The history lives in recap.json under platform::data_dir()
 // (%LOCALAPPDATA%\Coucou on Windows, ~/.local/share/coucou on Linux), keeps a
 // 12-week rolling window and a hard cap on its length, and is written whole to
 // a temporary file then renamed over the old one, so a crash never leaves half
@@ -479,6 +479,7 @@ fn read_history(path: &Path) -> History {
 
 /// Whole file to a temporary sibling, flushed, then renamed over the old one.
 fn write_history(path: &Path, history: &History) -> std::io::Result<()> {
+    #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed()?;
     if let Some(dir) = path.parent() {
         platform::ensure_private_dir(dir)?;
     }
@@ -733,7 +734,7 @@ fn now() -> i64 {
 }
 
 pub fn load() -> Store {
-    Store(Mutex::new(Recap::load(platform::local_dir().join("recap.json"), now())))
+    Store(Mutex::new(Recap::load(platform::data_dir().join("recap.json"), now())))
 }
 
 /// Called by the relay server for every hook event. An agent starting work is

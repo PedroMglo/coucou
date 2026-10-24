@@ -126,6 +126,8 @@ class FakeElement {
     const wanted = selector.split(".").filter(Boolean);
     return [...this.walk()].find((e) => wanted.every((c) => e.classList.contains(c))) ?? null;
   }
+  /** Standard DOM query used by functional management controls. */
+  querySelectorAll(selector) { return this.find(selector); }
   scrollIntoView() {}
   focus() {}
   select() {}

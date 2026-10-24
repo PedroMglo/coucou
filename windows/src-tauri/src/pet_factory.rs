@@ -1,6 +1,9 @@
-//! Bundled inheritance only. No runtime identity, permission or execution grant.
+//! Bundled preferences and typed route metadata. No permission or execution grant.
 use super::Configuration;
 use serde_json::{Map,Value};
+#[path="pet_factory_runtime.rs"]
+mod runtime;
+pub use runtime::{Adapter,Blueprint,RuntimeKind};
 
 fn invalid()->String{"Invalid bundled pet factory".into()}
 fn merge(base:&mut Value,overlay:&Value)->Result<(),String>{
@@ -13,14 +16,66 @@ fn merge(base:&mut Value,overlay:&Value)->Result<(),String>{
     }
     Ok(())
 }
-fn configuration(source:&Value)->Result<Configuration,String>{
-    if source.get("schemaVersion")!=Some(&serde_json::json!(1)){return Err(invalid());}
+
+#[cfg(test)]mod runtime_tests {
+ use super::*;
+ fn source()->Value{serde_json::from_str(include_str!("../pets.factory.json")).unwrap()}
+ #[test]fn catalog_covers_native_identities_without_conflating_logical_owners(){
+  assert_eq!(blueprints().count(),25);
+  for p in blueprints(){
+   for provider in [&p.routing.chat,&p.routing.voice,&p.routing.task_provider].into_iter().flatten(){assert_eq!(for_provider(provider),Some(p.id.as_str()));}
+   if let Some(provider)=&p.routing.task_provider{assert_eq!(for_task_provider(provider),Some(p.id.as_str()));}
+  }
+  let notion=blueprint("integration_notion").unwrap();assert!(notion.service);assert_eq!(notion.configured_adapter("codex"),Some(Adapter::Codex));assert_eq!(for_provider("integration_notion"),Some("integration_notion"));assert_eq!(for_provider("codex"),Some("agent_codex"));
+  assert_eq!(blueprint("integration_music").unwrap().runtime.kind,RuntimeKind::Service);assert!(!blueprint("integration_music").unwrap().service);assert!(!blueprint("integration_music").unwrap().history_owner());
+  for provider in ["","unknown","constructor"]{assert_eq!(for_provider(provider),None);assert_eq!(for_task_provider(provider),None);}
+ }
+ #[test]fn cross_channel_identity_ambiguity_is_rejected(){
+  let mut s=source();s["pets"]["ai_openai"]["routing"]["chat"]=serde_json::json!("gemini-cli");assert!(resolve(&s).is_err());
+ }
+ #[test]fn runtime_metadata_is_explicit_and_cannot_be_inherited(){
+  for key in ["runtime","routing","service"]{for place in ["base","llm","application","codex-account"]{
+   let mut s=source();let target=match place{"base"=>&mut s["base"],"llm"|"application"=>&mut s["molds"][place],_=>&mut s["extensions"][place]};target[key]=serde_json::json!({});assert!(resolve(&s).is_err());
+  }}
+  for key in ["kind","adapter"]{let mut s=source();s["pets"]["agent_codex"]["runtime"].as_object_mut().unwrap().remove(key);assert!(resolve(&s).is_err());}
+ }
+ #[test]fn adapter_claims_cannot_promote_unimplemented_or_incompatible_routes(){
+  for (id,field,value)in [("ai_openai","adapter",serde_json::json!("openai")),("agent_copilot","adapter",serde_json::json!("codex")),("integration_spotify","adapter",serde_json::json!("codex")),("agent_cursor","kind",serde_json::json!("llm"))]{let mut s=source();s["pets"][id]["runtime"][field]=value;assert!(resolve(&s).is_err());}
+  let mut s=source();s["pets"]["ai_ollama"]["routing"]["execute"]=serde_json::json!(true);assert!(resolve(&s).is_err());
+  let mut s=source();s["pets"]["agent_codex"]["runtime"]["permissions"]=serde_json::json!({});assert!(resolve(&s).is_err());
+ }
+ #[test]fn adding_a_service_owner_uses_the_existing_adapter_contract(){
+  let mut s=source();let mut p=s["pets"]["integration_notion"].clone();for k in ["chat","voice","taskProvider"]{p["routing"][k]=serde_json::json!("integration_fixture");}p["preferences"]["name"]=serde_json::json!("Fixture");p["preferences"]["aliases"]=serde_json::json!(["fixture"]);p["preferences"]["permissions"]=serde_json::json!({"documents":false,"emailDrafts":false,"music":false,"openApps":false});s["pets"]["integration_fixture"]=p;
+  let resolved=resolve(&s).unwrap();assert_eq!(resolved.entries.len(),26);let p=&resolved.entries["integration_fixture"];assert!(p.service);assert_eq!(p.configured_adapter("codex"),Some(Adapter::Codex));assert_eq!(p.configured_adapter("copilot"),None);assert_eq!(p.routing.task_provider.as_deref(),Some("integration_fixture"));assert!(!resolved.config.pets["integration_fixture"].permissions.as_ref().unwrap().open_apps);
+ }
+ #[test]fn retirement_and_missing_model_routes_never_grant_new_execution(){
+  let github=blueprint("integration_github").unwrap();assert!(github.retired);assert!(!github.routing.execute);assert_eq!(for_provider("integration_github"),Some("integration_github"));
+  for id in ["ai_openai","ai_anthropic","ai_google","ai_lmstudio"]{let p=blueprint(id).unwrap();assert_eq!(p.runtime.kind,RuntimeKind::Llm);assert!(p.runtime.adapter.is_none());assert!(!p.routing.execute);assert!(p.history_owner());}
+  for id in ["agent_gemini","integration_claude"]{let p=blueprint(id).unwrap();assert_eq!(p.runtime.kind,RuntimeKind::Observer);assert!(p.runtime.adapter.is_none());assert!(p.routing.voice.is_none());assert!(p.history_owner());}
+ }
+ #[test]fn native_service_and_optional_assistant_are_declared_without_changing_defaults(){
+  let p=blueprint("integration_spotify").unwrap();assert_eq!(p.runtime.adapter,Some(Adapter::Spotify));assert_eq!(p.runtime.assistant_adapter,Some(Adapter::Codex));
+  assert_eq!(p.configured_adapter(""),Some(Adapter::Spotify));assert_eq!(p.configured_adapter("codex"),Some(Adapter::Codex));assert_eq!(p.configured_adapter("copilot"),None);
+  assert_eq!(p.routing.chat.as_deref(),Some("integration_spotify"));assert_eq!(for_provider("codex"),Some("agent_codex"));assert!(bundled().pets["integration_spotify"].provider.is_empty());
+ }
+ #[test]fn optional_assistant_claims_cannot_promote_an_undeclared_account_or_runtime(){
+  for(id,adapter)in[("integration_spotify","copilot"),("ai_ollama","codex"),("integration_notion","codex")]{let mut s=source();s["pets"][id]["runtime"]["assistantAdapter"]=serde_json::json!(adapter);assert!(resolve(&s).is_err());}
+  let mut s=source();s["pets"]["integration_spotify"]["runtime"]["assistantAdapter"]=Value::Null;assert!(resolve(&s).is_err());
+ }
+ #[test]fn another_composite_service_can_use_the_same_factory_contract(){
+  let mut s=source();let mut p=s["pets"]["integration_spotify"].clone();for key in ["chat","voice","taskProvider"]{p["routing"][key]=serde_json::json!("integration_audio_fixture");}p["preferences"]["name"]=serde_json::json!("Audio fixture");p["preferences"]["aliases"]=serde_json::json!(["audio fixture"]);s["pets"]["integration_audio_fixture"]=p;
+  let catalog=resolve(&s).unwrap();let p=&catalog.entries["integration_audio_fixture"];assert_eq!(p.configured_adapter("codex"),Some(Adapter::Codex));assert_eq!(p.configured_adapter(""),Some(Adapter::Spotify));assert_eq!(p.routing.chat.as_deref(),Some("integration_audio_fixture"));assert!(p.recognizes_owner("integration_audio_fixture","codex"));assert!(p.recognizes_owner("integration_audio_fixture","spotify"));assert!(!p.recognizes_owner("codex","codex"));assert!(!p.recognizes_owner("integration_audio_fixture","copilot"));
+ }
+
+}
+fn resolve(source:&Value)->Result<Bundled,String>{
+    if source.get("schemaVersion")!=Some(&serde_json::json!(2)){return Err(invalid());}
     let molds=source.get("molds").and_then(Value::as_object).ok_or_else(invalid)?;
     if molds.len()!=2||!molds.contains_key("llm")||!molds.contains_key("application"){return Err(invalid());}
     let extensions=source.get("extensions").and_then(Value::as_object).ok_or_else(invalid)?;
     // Templates cannot provide identity, grants or an execution policy.
     for recipe in std::iter::once(source.get("base").ok_or_else(invalid)?).chain(molds.values()).chain(extensions.values()){
-        if !recipe.is_object()||recipe.get("retired").is_some(){return Err(invalid());}
+        if !recipe.is_object()||["retired","runtime","routing","service"].iter().any(|k|recipe.get(k).is_some()){return Err(invalid());}
         if let Some(prefs)=recipe.get("preferences"){
             let prefs=prefs.as_object().ok_or_else(invalid)?;
             if ["name","aliases","provider","permissions","localExecution"].iter().any(|k|prefs.contains_key(*k)){return Err(invalid());}
@@ -47,21 +102,25 @@ fn configuration(source:&Value)->Result<Configuration,String>{
     }
     let mut config=source.get("configuration").cloned().ok_or_else(invalid)?;
     config.as_object_mut().ok_or_else(invalid)?.insert("pets".into(),Value::Object(resolved));
-    serde_json::from_value(config).map_err(|_|invalid())
+    let config:Configuration=serde_json::from_value(config).map_err(|_|invalid())?;
+    let entries=runtime::parse(source,&config)?;
+    Ok(Bundled{config,entries})
 }
-struct Bundled {config:Configuration,retired:std::collections::BTreeSet<String>}
+#[cfg(test)]fn configuration(source:&Value)->Result<Configuration,String>{Ok(resolve(source)?.config)}
+struct Bundled {config:Configuration,entries:std::collections::BTreeMap<String,Blueprint>}
 fn catalog()->&'static Bundled {
     static CATALOG:std::sync::OnceLock<Bundled>=std::sync::OnceLock::new();
     CATALOG.get_or_init(||{
         let source:Value=serde_json::from_str(include_str!("../pets.factory.json")).expect("bundled pet factory JSON");
-        let config=configuration(&source).expect("bundled pet factory configuration");
-        let retired=source["pets"].as_object().unwrap().iter()
-            .filter(|(_,p)|p["retired"].as_bool()==Some(true)).map(|(id,_)|id.clone()).collect();
-        Bundled{config,retired}
+        resolve(&source).expect("bundled pet factory configuration and runtime metadata")
     })
 }
 pub(super) fn bundled()->Configuration {catalog().config.clone()}
-pub(super) fn retired(id:&str)->bool {catalog().retired.contains(id)}
+pub(super) fn retired(id:&str)->bool {blueprint(id).is_some_and(|p|p.retired)}
+pub(super) fn blueprint(id:&str)->Option<&'static Blueprint>{catalog().entries.get(id)}
+pub(super) fn blueprints()->impl Iterator<Item=&'static Blueprint>{catalog().entries.values()}
+pub(super) fn for_task_provider(provider:&str)->Option<&'static str>{blueprints().find(|p|p.routing.task_provider.as_deref()==Some(provider)).map(|p|p.id.as_str())}
+pub(super) fn for_provider(provider:&str)->Option<&'static str>{blueprints().find(|p|[&p.routing.chat,&p.routing.voice,&p.routing.task_provider].iter().any(|r|r.as_deref()==Some(provider))).map(|p|p.id.as_str())}
 #[cfg(test)]
 mod tests{
     use super::*;

@@ -13,7 +13,7 @@ fn enable_observe(s:&Service,w:&SystemWindowAuthority,now:Instant,enabled:bool){
 }
 #[test]fn enable_support_rejects_partial_malformed_unknown_or_unbounded_evidence(){
  let caps=vec!["network".into()];let good=enable_state(false);assert!(enable_wifi_supported(&good,Some(34),&caps));
- for api in [None,Some(29),Some(33),Some(35)]{assert!(!enable_wifi_supported(&good,api,&caps));}
+ for api in [None,Some(29),Some(33),Some(35),Some(36),Some(37),Some(39),Some(u64::MAX)]{assert!(!enable_wifi_supported(&good,api,&caps));}
  assert!(!enable_wifi_supported(&good,Some(34),&[]));
  let mut bad=Vec::new();
  for backend in [Value::Null,json!("iwd"),json!("iwd+networkd"),json!("networkd"),json!("wpa_supplicant"),json!("NetworkManager")]{let mut v=good.clone();v["backend"]=backend;bad.push(v);}
@@ -66,4 +66,24 @@ fn enable_observe(s:&Service,w:&SystemWindowAuthority,now:Instant,enabled:bool){
   if wrong_kind{assert_eq!(work.finish_scan(peer(1),now),Err(Reason::InvalidObservation));}else{assert_eq!(work.fail(NativeError::Unavailable,now),Err(Reason::NativeUnavailable));}
   let t=s.ticket(&w,&a.ticket.id,now).unwrap();assert_eq!(t.phase,Phase::Unknown);assert!(!t.effect_confirmed&&t.refresh_recommended);assert!(s.view(&w,now).unwrap().stale);
  }
+}
+
+#[test]
+fn api38_complete_nm_observation_mints_distinct_software_scopes_in_original_system_window() {
+    let (s, _, w, now) = environment(Config::default());
+    let mut work = s.read(&w, true, now).unwrap().work.unwrap();
+    work.begin_dispatch(peer(1), now).unwrap();
+    let mut o = observation(peer(1), vec![], ScanSupport::VerifiedByAdapter);
+    o.api_version = Some(38); o.result = enable_state(false);
+    work.finish_read(o, now).unwrap(); let v = s.view(&w, now).unwrap();
+    assert!(v.capabilities.scan && v.capabilities.enable_wifi && v.capabilities.disable_wifi);
+    assert!(!v.capabilities.radio);
+    assert!(v.enable_wifi_scope.is_some() && v.disable_wifi_scope.is_some());
+    assert_ne!(v.enable_wifi_scope, v.disable_wifi_scope);
+    assert_ne!(v.scan_scope, v.enable_wifi_scope);
+    let text = public(&v).to_string();
+    // Interface display labels are an intentional part of the existing read view;
+    // structural/backend metadata and dispatch identities are not exposed.
+    assert!(text.contains("wlan0"));
+    for private in ["networkmanager", "hwAddress", "apCapable"] { assert!(!text.contains(private)); }
 }

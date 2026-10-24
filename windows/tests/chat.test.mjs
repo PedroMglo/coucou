@@ -351,12 +351,13 @@ test('a Codex attachment cannot be sent with Gravity and a late copy keeps its o
   State.settings={...State.settings,chatProvider:'antigravity'};State.replaceChatHistory('antigravity',[]);State.clearDialogueContext('antigravity');view.sync();
   $('.chat-input').value='pedido Gravity';$('.send-btn').fire('click');await flush();
   assert.equal(sent('chat_send').at(-1).provider,'antigravity');assert.equal(sent('chat_send').at(-1).context,null);
-  State.setFileContext('codex',{name:'private.txt',path:'/tmp/inbox/private.txt'});view.sync();
+  const cid=(await import('../src/core/chat-dialogue.ts')).dialogueId('codex')??'fixture-codex';(await import('../src/core/chat-dialogue.ts')).rememberDialogue('codex',{id:cid,messages:[]});
+  State.setFilesContext('codex',[{id:'private-1',name:'private.txt',path:'/tmp/inbox/private.txt',provider:'codex',conversationId:cid,sequence:1,kind:'file',size:3,entries:1}]);view.sync();
   assert.equal(State.droppedFile,null);assert.ok(!$('.chip-row').textContent.includes('private.txt'));
   State.settings={...State.settings,chatProvider:'codex'};State.replaceChatHistory('codex',[]);view.sync();
   assert.match($('.chip-row').textContent,/private.txt/);
   $('.chat-input').value='pedido Codex';$('.send-btn').fire('click');await flush();
-  assert.deepEqual(sent('chat_send').at(-1).context,{kind:'file',name:'private.txt',path:'/tmp/inbox/private.txt'});
+  assert.deepEqual(sent('chat_send').at(-1).context,{kind:'files',files:[{id:'private-1',name:'private.txt',path:'/tmp/inbox/private.txt',sequence:1}]});
   assert.equal(sent('chat_send').at(-1).provider,'codex');State.clearDialogueContext('codex');
 });
 
@@ -460,4 +461,26 @@ test('a refused stop is visible on its own pet and keeps the next draft',async()
  $('.send-btn').fire('click');await flush();view.sync();
  assert.equal(State.chatFeedback.get('codex'),'Interrupção sintética recusada');assert.match($('.chat-feedback').textContent,/sintética recusada/);
  assert.equal($('.chat-input').value,'Próximo pedido');assert.equal(sent('chat_send').length,0);
+});
+test('inline chat captures every original ID and retains all current siblings after response',async()=>{
+ const {rememberDialogue}=await import('../src/core/chat-dialogue.ts');const cid='collection-inline';rememberDialogue('codex',{id:cid,messages:[]});State.settings={...State.settings,chatProvider:'codex'};State.clearAllDialogueContexts();
+ const a={id:'a',name:'same.txt',path:'/inbox/a',provider:'codex',conversationId:cid,sequence:1,kind:'file',size:3,entries:1},b={...a,id:'b',path:'/inbox/b'};let active=[a,b],finish;
+ answers.chat_conversation=()=>({id:cid,messages:[],busy:false});answers.pet_document_contexts=()=>active;answers.chat_send=()=>new Promise(r=>finish=r);
+ State.setFilesContext('codex',active);view.sync();await flush();view.sync();$('.chat-input').value='Read both';$('.send-btn').fire('click');await flush();
+ assert.deepEqual(sent('chat_send').at(-1).context.files.map(a=>a.id),['a','b']);active=[...active,{...a,id:'c',path:'/inbox/c'}];State.setFilesContext('codex',active);finish({text:'synthetic'});await flush();assert.deepEqual(State.filesFor('codex').map(a=>a.id),['a','b','c']);assert.equal(sent('pet_document_clear').length,0);
+});
+test('inline removal targets one ID while leaving the sibling selected and never starts inference',async()=>{
+ const {rememberDialogue}=await import('../src/core/chat-dialogue.ts');const cid='remove-inline';rememberDialogue('codex',{id:cid,messages:[]});State.settings={...State.settings,chatProvider:'codex'};State.clearAllDialogueContexts();
+ const a={id:'a',name:'same.txt',path:'/inbox/a',provider:'codex',conversationId:cid,sequence:1,kind:'file',size:3,entries:1};let active=[a,{...a,id:'b',path:'/inbox/b'}];answers.chat_conversation=()=>({id:cid,messages:[],busy:false});answers.pet_document_contexts=()=>active;answers.pet_document_remove=({attachmentId})=>{active=active.filter(a=>a.id!==attachmentId);};
+ State.setFilesContext('codex',active);view.sync();view.el.find('button').find(b=>b.textContent==='Retirar').fire('click');await flush();view.sync();assert.deepEqual(sent('pet_document_remove'),[{provider:'codex',conversationId:cid,attachmentId:'a'}]);assert.deepEqual(State.filesFor('codex').map(a=>a.id),['b']);assert.equal(sent('chat_send').length,0);
+});
+
+test('inline native approvals submit the explicit choice with the original conversation target',async()=>{
+ await flush();const target={petId:'agent_codex',provider:'codex',origin:'mochi',sessionId:'native-choice-cid',conversationId:'native-choice-cid'};
+ emit('agent-request',{id:'inline-native-choice',provider:'codex',kind:'permission',detail:'Synthetic command',target,nativeChoices:[{id:'inline-once',scope:'once',label:'Permitir uma vez',allow:true},{id:'inline-session',scope:'session',label:'Permitir nesta sessão',allow:true}]});const card=$('.cli-request');const controls=card.find('button');controls.find(b=>b.dataset.nativeChoice==='inline-session').fire('click');await flush();assert.deepEqual(sent('cli_agent_answer').at(-1),{id:'inline-native-choice',answer:{allow:true,answers:{},nativeChoice:'inline-session'},target});assert.equal($('.cli-request'),null);
+});
+
+test('inline typed MCP forms submit multiple captured values without including an omitted field',async()=>{
+ await flush();const target={petId:'agent_codex',provider:'codex',origin:'mochi',sessionId:'typed-form-cid',conversationId:'typed-form-cid'};
+ emit('agent-request',{id:'typed-inline',provider:'codex',kind:'question',nativeForm:'mcp',detail:'MCP fixture',target,questions:[{id:'many',question:'Multiple',inputType:'multi',required:true,options:[{label:'First',value:'first-id'},{label:'Second',value:'second-id'}]},{id:'optional',question:'Optional',inputType:'text',required:false}]});const card=$('.cli-request');const inputs=card.find('input');inputs[0].checked=true;inputs[1].checked=true;card.find('button').find(b=>b.classList.contains('cli-allow')).fire('click');await flush();assert.deepEqual(sent('cli_agent_answer').at(-1),{id:'typed-inline',answer:{allow:true,answers:{many:['first-id','second-id']}},target});assert.equal($('.cli-request'),null);
 });

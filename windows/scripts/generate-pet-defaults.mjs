@@ -3,10 +3,11 @@
 import {readFileSync,writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 const source=JSON.parse(readFileSync(new URL('../src-tauri/pets.factory.json',import.meta.url),'utf8'));
+if(source.schemaVersion!==2)throw Error('Invalid factory schema');
 function merge(base,extra){const out=structuredClone(base);for(const[key,value]of Object.entries(extra)){if(['__proto__','prototype','constructor'].includes(key))throw Error('Invalid factory key');out[key]=value&&typeof value==='object'&&!Array.isArray(value)&&out[key]&&typeof out[key]==='object'&&!Array.isArray(out[key])?merge(out[key],value):structuredClone(value);}return out;}
 const protectedKeys=['name','aliases','provider','permissions','localExecution'];
 for(const recipe of [source.base,...Object.values(source.molds),...Object.values(source.extensions)]){
- if(Object.hasOwn(recipe,'retired'))throw Error('Retirement must be explicit per pet');
+ if(['retired','runtime','routing','service'].some(k=>Object.hasOwn(recipe,k)))throw Error('Runtime identity must be explicit per pet');
  if(recipe.preferences&&protectedKeys.some(k=>Object.hasOwn(recipe.preferences,k)))throw Error('Identity and access policy must be explicit per pet');
 }
 const pets=Object.fromEntries(Object.entries(source.pets).map(([id,pet])=>{

@@ -33,58 +33,9 @@ pub struct Reply {
 }
 
 pub(crate) fn tools() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "pills",
-            "description": "Add, remove, set as main or list the pills shown in the island at the top of the screen. At most 6 pills besides the main one: remove one first if needed.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["add", "remove", "set_main", "list"] },
-                    "names": { "type": "array", "items": { "type": "string" }, "description": "Pill names as listed (e.g. Stripe, GitHub, Cursor). Empty for list." }
-                },
-                "required": ["action"]
-            }
-        }),
-        json!({
-            "name": "music",
-            "description": "Control Spotify: play or pause, next, previous, set the volume, or search a song, an artist or a playlist in Spotify.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["play_pause", "pause", "play", "next", "previous", "set_volume", "search", "play_item"] },
-                    "query": { "type": "string", "description": "What to search, for search. Search opens results; it does not start a track." },
-                    "uri": {"type":"string","description":"Exact spotify:track/album/playlist/episode URI, for play_item. Obtain a real item; never invent its ID."},
-                    "volume": { "type": "integer", "description": "0-100 for set_volume." }
-                },
-                "required": ["action"]
-            }
-        }),
-        json!({
-            "name": "service_info",
-            "description": "Read the user's real data that Coucou already has, as JSON: the active pills, the agent sessions (Claude Code, Codex…) and what they are doing, Claude or Codex plan usage, Spotify now playing, and the services' latest data (Stripe, GitHub, Vercel, Resend, n8n, Notion, Cal.com).",
-            "input_schema": { "type": "object", "properties": {} }
-        }),
-        json!({
-            "name": "open_app",
-            "description": "Open an app on this computer by name (Firefox, VS Code, Notion, Spotify…).",
-            "input_schema": { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] }
-        }),
-        json!({
-            "name": "prepare_email",
-            "description": "Open the user's mail app with an email filled in, for them to check and send (it is never sent automatically). The recipient must be an email address.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "recipient": { "type": "string", "description": "An email address." },
-                    "subject": { "type": "string" },
-                    "body": { "type": "string", "description": "The full email text, written for the user." }
-                },
-                "required": ["recipient", "subject", "body"]
-            }
-        }),
-        json!({ "type": "web_search_20250305", "name": "web_search", "max_uses": 3 }),
-    ]
+    let mut tools = crate::pet_operations::definitions();
+    tools.push(json!({"type":"web_search_20250305","name":"web_search","max_uses":3}));
+    tools
 }
 
 fn system_prompt(pills: &str) -> String {
@@ -121,12 +72,25 @@ impl Brain {
     /// provider. CLI context belongs to the logical pet in the shared Chat store.
     pub fn respond_as(&mut self, app: &AppHandle, transcript: &str, provider: &str, stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>) -> Option<Reply> {
         self.last = Instant::now();
+        #[cfg(target_os="linux")]if let Some(text)=crate::cli_chat::goal_recipe_voice(app,provider,transcript,stop.as_deref().unwrap_or(&AtomicBool::new(false))){return Some(Reply{text,acted:false,language:None});}
         let settings = app.try_state::<crate::Shared>().map(|s| {
             crate::cli_chat::voice_settings(&s.settings.lock().unwrap(), provider)
         });
         if let Some(settings) = settings.as_ref().filter(|s| s.chat_provider == "ollama") {
             self.messages.clear();
             let not_stopped = AtomicBool::new(false);
+            // Additive explicit route. Ordinary voice keeps its native music,
+            // pills, service data, app-opening and prepare-email actions.
+            if super::local_task::requested(transcript){
+                let config=match crate::pet_config::read_existing(){
+                    Ok(config)=>config,
+                    Err(text)=>return Some(Reply{text,acted:false,language:None}),
+                };
+                return Some(match super::local_task::respond(app,settings,&config,transcript,stop.as_deref().unwrap_or(&not_stopped)){
+                    Ok(reply)=>reply,
+                    Err(text)=>Reply{text,acted:false,language:None},
+                });
+            }
             let activity = crate::pet_activity::Reporter::new(app, provider, stop.clone());
             activity.update("working", "");
             let reply = self.local.respond(app, settings, transcript, stop.as_deref().unwrap_or(&not_stopped));
@@ -140,9 +104,9 @@ impl Brain {
             let reservation=match chat.reserve_conversation(provider,Some(&id)){Ok(r)=>r.broadcast(app,transcript),Err(text)=>return Some(Reply{text,acted:false,language:None})};
             let channel=reservation.channel();
             let settings=app.try_state::<crate::Shared>().map(|s|crate::cli_chat::voice_settings(&s.settings.lock().unwrap(),provider)).unwrap_or(settings);
-            let attachment=crate::pet_documents::context(provider,&id);
-            if let Some(file)=&attachment{if let Err(text)=crate::pet_documents::validate(provider,&id,&file.file.path,file.sequence){return Some(Reply{text,acted:false,language:None});}}
-            let context=attachment.as_ref().map(|file|file.chat_context());
+            let attachments=crate::pet_documents::contexts(provider,&id);
+            if let Err(text)=crate::pet_documents::validate_attachments(&attachments){return Some(Reply{text,acted:false,language:None});}
+            let context=crate::pet_documents::collection_context(&attachments);
             let selected=crate::chat::model_for(&settings,provider);
             let selected=if selected.is_empty() {self.family_models.get(provider).cloned().unwrap_or_default()} else {selected};
             let model=tauri::async_runtime::block_on(super::until_stopped(crate::cli_chat::resolve_model(&settings,provider,&selected),stop.as_deref()))?;
@@ -152,10 +116,9 @@ impl Brain {
             };
             if matches!(provider,"gemini-cli"|"claude-cli") {self.family_models.insert(provider.into(),model.clone());}
             let backend=crate::cli_chat::backend(provider)?;
-            if let Some(file)=&attachment{if let Err(text)=crate::pet_documents::validate(provider,&id,&file.file.path,file.sequence){return Some(Reply{text,acted:false,language:None});}}
+            if let Err(text)=crate::pet_documents::validate_attachments(&attachments){return Some(Reply{text,acted:false,language:None});}
             return match crate::cli_chat::run(app, &channel, &settings, backend, provider, &model, transcript, context.as_ref(), true, &tools(), stop.clone(), None, |_| {}) {
                 Ok((text, acted)) => {
-                    if let Some(file)=&attachment{crate::pet_documents::consume(app,file);}
                     Some(Reply { text: spoken_text(&text), acted, language: None })
                 }
                 Err(err) => {
@@ -218,7 +181,7 @@ impl Brain {
             let mut results = Vec::new();
             for u in uses {
                 if stop.as_ref().is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed)) { self.repair(); return None; }
-                let (result, did) = super::run_tool(app, u["name"].as_str().unwrap_or(""), &u["input"]);
+                let (result, did) = super::run_tool_for(app,"ai_anthropic",u["name"].as_str().unwrap_or(""),&u["input"],||!stop.as_ref().is_some_and(|s|s.load(std::sync::atomic::Ordering::Acquire)));
                 acted |= did;
                 results.push(json!({ "type": "tool_result", "tool_use_id": u["id"], "content": result }));
             }

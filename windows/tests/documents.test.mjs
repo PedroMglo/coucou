@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {documentActions} from '../src/mochi/documents.ts';
 import {providerForPill} from '../src/core/providers.ts';
+import {petRetired} from '../src/core/pet-factory.ts';
+import policy from '../src-tauri/documents.policy.json';
 import {installFakeDom} from './fakedom.mjs';
 import {Bridge} from '../src/core/bridge.ts';
 import {PetPreferences} from '../src/mochi/pet-preferences.ts';
@@ -12,6 +14,30 @@ import {buildPrompt} from '../src/views/chat.ts';
 const defaults=JSON.parse(readFileSync(new URL('../src-tauri/pets.default.json',import.meta.url),'utf8'));
 installFakeDom();
 const walk=el=>[el,...(el.children??[]).flatMap(walk)];
+test('API pets expose the same folder/text policy as ingestion and no email permission is inferred',()=>{
+ const config=structuredClone(defaults);
+ for(const[id,p]of Object.entries(config.pets)){
+  p.permissions.documents=true;p.permissions.emailDrafts=false;const provider=providerForPill(id),supported=!!policy.routes[provider]&&!petRetired(id);
+  assert.deepEqual(documentActions(config,id,'folder','folder.zip'),{analysis:supported,email:false},id);
+  if(!supported)continue;
+  const route=policy.routes[provider];assert.equal(documentActions(config,id,'file','REPORT.PDF').analysis,true,id);
+  assert.equal(documentActions(config,id,'file','image.PNG').analysis,route!=='local',id);
+  for(const ext of policy.unsupportedBinary)assert.equal(documentActions(config,id,'file',`file.${ext}`).analysis,route==='native',`${id}/${ext}`);
+ }
+});
+test('unsupported files can retain only a separately enabled email action and retired pets stay inactive',()=>{
+ const config=structuredClone(defaults);config.pets.ai_ollama.permissions.emailDrafts=true;
+ assert.deepEqual(documentActions(config,'ai_ollama','file','archive.zip'),{analysis:false,email:true});
+ assert.deepEqual(documentActions(config,'ai_ollama','folder','archive.zip'),{analysis:true,email:false});
+ config.pets.integration_github.permissions={documents:true,emailDrafts:true,music:true,openApps:true};assert.deepEqual(documentActions(config,'integration_github','file','notes.txt'),{analysis:false,email:false});
+});
+test('hidden filenames use the same extension semantics as the backend',()=>{
+ const config=structuredClone(defaults);config.pets.ai_ollama.permissions.documents=true;
+ assert.equal(documentActions(config,'ai_ollama','file','.docx').analysis,true);
+ assert.equal(documentActions(config,'ai_ollama','file','.hidden.docx').analysis,false);
+ assert.equal(documentActions(config,'ai_ollama','file','folder.zip/notes').analysis,true);
+ assert.equal(documentActions(config,'ai_ollama','file','notes.PDF').analysis,true);
+});
 beforeEach(()=>{PetPreferences.update(structuredClone(defaults));State.settings={...DEFAULT_SETTINGS,chatProvider:'ollama'};State.pendingApproval=null;State.focusId='ai_ollama';State.view='prompt';State.setFileContext('ollama',{name:'Teste.pdf',path:'/private/ollama/Teste.pdf',kind:'file'});});
 test('document actions remain reachable from the compact chat and preserve a waiting decision',()=>{
  let opened=0;State.tasks=[];State.pendingApproval=null;State.view='prompt';
@@ -26,7 +52,7 @@ test('every pet advertises only implemented document actions; only Ollama has em
  for(const [id,p]of Object.entries(defaults.pets)){
   const file=documentActions(defaults,id,'file'),folder=documentActions(defaults,id,'folder');
   assert.equal(file.email,id==='ai_ollama',id);assert.equal(folder.email,false,id);
-  assert.equal(file.analysis,!!providerForPill(id)&&p.permissions.documents,id);
+  assert.equal(file.analysis,!!providerForPill(id)&&!!policy.routes[providerForPill(id)]&&!petRetired(id)&&p.permissions.documents,id);
   if(!providerForPill(id))assert.deepEqual(folder,{analysis:false,email:false},id);
  }
  assert.deepEqual(documentActions(null,'agent_codex'),{analysis:false,email:false});

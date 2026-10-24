@@ -4,6 +4,9 @@ use std::{collections::{BTreeMap},hash::{Hash,Hasher},io::{Read,Write},path::{Pa
 use tauri::{AppHandle,Emitter};
 #[path="pet_factory.rs"]
 mod factory;
+pub use factory::{Adapter,Blueprint,RuntimeKind};
+pub fn blueprint(id:&str)->Option<&'static Blueprint>{factory::blueprint(id)}
+pub fn blueprints()->impl Iterator<Item=&'static Blueprint>{factory::blueprints()}
 const MAX_BYTES:u64=256*1024;
 static EDIT:Mutex<()>=Mutex::new(());
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
@@ -66,11 +69,14 @@ pub fn require_active_provider(provider:&str)->Result<(),String>{
  if let Some(id)=integration_pet(provider){require_active(id)?;}Ok(())
 }
 pub fn path()->PathBuf {crate::settings::config_dir().join("pets.json")}
-pub const SERVICE_PETS:&[&str]=&["integration_resend","integration_n8n","integration_vercel","integration_github","integration_notion","integration_calcom","integration_stripe","integration_spotify"];
-pub fn service(id:&str)->bool {SERVICE_PETS.contains(&id)}
-pub fn pet_id(provider:&str)->Option<&'static str> {match provider {"codex"=>Some("agent_codex"),"copilot"=>Some("agent_copilot"),"antigravity"=>Some("agent_antigravity"),"gemini-cli"=>Some("agent_gemini"),"claude-cli"=>Some("integration_claude"),"ollama"=>Some("ai_ollama"),"integration_resend"=>Some("integration_resend"),"integration_n8n"=>Some("integration_n8n"),"integration_vercel"=>Some("integration_vercel"),"integration_github"=>Some("integration_github"),"integration_notion"=>Some("integration_notion"),"integration_calcom"=>Some("integration_calcom"),"integration_stripe"=>Some("integration_stripe"),"integration_spotify"=>Some("integration_spotify"),_=>None}}
-pub fn integration_pet(provider:&str)->Option<&'static str>{pet_id(provider).or(match provider{"anthropic"=>Some("ai_anthropic"),"openai"=>Some("ai_openai"),"google"=>Some("ai_google"),"lmstudio"=>Some("ai_lmstudio"),_=>None})}
+pub fn service_ids()->impl Iterator<Item=&'static str>{blueprints().filter(|p|p.service).map(|p|p.id.as_str())}
+pub fn service(id:&str)->bool {blueprint(id).is_some_and(|p|p.service)}
+pub fn pet_id(provider:&str)->Option<&'static str>{factory::for_task_provider(provider)}
+pub fn integration_pet(provider:&str)->Option<&'static str>{factory::for_provider(provider)}
 impl Configuration {
+ pub fn uses_optional_assistant(&self,id:&str)->bool{
+  self.pets.get(id).zip(blueprint(id)).is_some_and(|(p,b)|b.runtime.assistant_adapter.is_some_and(|adapter|b.configured_adapter(&p.provider)==Some(adapter)))
+ }
  pub fn local_execution(&self)->LocalExecution{self.pets.get("ai_ollama").and_then(|p|p.local_execution.clone()).unwrap_or_default()}
  pub fn permissions(&self,id:&str)->Result<Permissions,String>{
   let pet=self.pets.get(id).ok_or("Pet desconhecido.")?;
@@ -84,14 +90,14 @@ pub fn require(id:&str,capability:&str)->Result<(),String>{
 }
 fn normalized(text:&str)->String {crate::voice::wake::normalize(text)}
 fn short_text(text:&str,max:usize)->bool {!text.trim().is_empty() && text.chars().count()<=max && !text.chars().any(char::is_control)}
-fn validate(c:&Configuration)->Result<(),String> {
+pub(crate) fn validate(c:&Configuration)->Result<(),String> {
  let base=defaults();
  if c.version!=1 || c.pets.len()!=base.pets.len() || !(200..=12000).contains(&c.reasoning_length) || c.reasoning_terms.len()>80 {return Err("Versão ou limites inválidos na configuração dos pets.".into());}
  let mut names=BTreeMap::<String,String>::new();
  for(id,p)in &base.pets {for name in std::iter::once(&p.name).chain(&p.aliases){names.insert(normalized(name),id.clone());}}
  for (id,p) in &c.pets {
-  let original=base.pets.get(id).ok_or("ID de pet desconhecido. Os IDs são estáveis; edita o nome apresentado.")?;
-  if p.provider!=original.provider {return Err(format!("O provider de {id} identifica a sua conta nativa e não pode ser trocado por outra conta."));}
+  base.pets.get(id).ok_or("ID de pet desconhecido. Os IDs são estáveis; edita o nome apresentado.")?;
+  if !blueprint(id).is_some_and(|b|b.accepts_provider(&p.provider)){return Err(format!("O provider de {id} identifica a sua conta nativa e não pode ser trocado por outra conta."));}
   if !short_text(&p.name,40) || p.aliases.len()>20 || !["auto","fast","reasoning"].contains(&p.mode.as_str()) {return Err(format!("Nome, aliases ou modo inválido em {id}."));}
   for name in std::iter::once(&p.name).chain(&p.aliases) {
    if !short_text(name,80) {return Err(format!("Nome de voz inválido em {id}."));}
@@ -100,7 +106,8 @@ fn validate(c:&Configuration)->Result<(),String> {
    if let Some(owner)=names.insert(key,id.clone()) {if owner!=*id {return Err(format!("Dois pets reconhecem o nome {name}. Escolhe nomes diferentes."));}}
   }
   for profile in [&p.fast,&p.reasoning] {
-   if profile.model.starts_with('@') || (id!="integration_spotify" && !matches!(p.provider.as_str(),"codex"|"copilot") && !profile.effort.is_empty()) || profile.model.len()>256 || profile.model.chars().any(char::is_control) || !["","low","medium","high","xhigh","max"].contains(&profile.effort.as_str()) {return Err(format!("Modelo ou esforço inválido em {id}."));}
+   let profile_adapter=blueprint(id).and_then(|b|if p.provider.is_empty(){b.runtime.assistant_adapter}else{b.configured_adapter(&p.provider)});
+   if profile.model.starts_with('@') || (!matches!(profile_adapter,Some(Adapter::Codex|Adapter::Copilot)) && !profile.effort.is_empty()) || profile.model.len()>256 || profile.model.chars().any(char::is_control) || !["","low","medium","high","xhigh","max"].contains(&profile.effort.as_str()) {return Err(format!("Modelo ou esforço inválido em {id}."));}
    if !profile.model.is_empty() && !crate::cli_chat::model_matches(&p.provider,&profile.model) {return Err(format!("O modelo de {id} não pertence à sua conta/família."));}
    if p.provider=="ollama" && (profile.model.ends_with(":cloud") || profile.model.ends_with("-cloud")) {return Err("O pet Ollama usa apenas os modelos locais.".into());}
   }
@@ -119,6 +126,7 @@ fn bytes(path:&Path)->Result<Vec<u8>,String> {
 }
 fn revision(data:&[u8])->String {let mut h=std::collections::hash_map::DefaultHasher::new();data.hash(&mut h);format!("{:016x}",h.finish())}
 fn write(path:&Path,c:&Configuration)->Result<(),String> {
+ #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed().map_err(|_|"O perfil está indisponível; a configuração anterior foi conservada.".to_string())?;
  validate(c)?;let dir=path.parent().ok_or("Falta a pasta dos pets.")?;
  std::fs::create_dir_all(dir).map_err(|e|e.to_string())?;
  if std::fs::symlink_metadata(dir).is_ok_and(|m|m.file_type().is_symlink()) || std::fs::symlink_metadata(path).is_ok_and(|m|m.file_type().is_symlink()) {return Err("A configuração dos pets não aceita symlinks.".into());}
@@ -139,8 +147,8 @@ fn read_at_policy(path:&Path,create_defaults:bool)->Result<Document,String> {
  let data=bytes(path)?;let mut c:Configuration=serde_json::from_slice(&data).map_err(|e|format!("Corrige pets.json: {e}"))?;
  // Upgrade the existing Copilot identity without replacing names, aliases or grants.
  if let Some(p)=c.pets.get_mut("agent_copilot") {if p.provider.is_empty(){let base=defaults();p.provider="copilot".into();if p.fast.model.is_empty(){p.fast=base.pets["agent_copilot"].fast.clone();}if p.reasoning.model.is_empty(){p.reasoning=base.pets["agent_copilot"].reasoning.clone();}}}
- // Spoty is an audio owner. Preserve its ID, names, grants and old profiles/history.
- if let Some(p)=c.pets.get_mut("integration_spotify"){if p.provider=="codex"{p.provider.clear();}}
+ // Native service controls and an explicitly configured assistant coexist.
+ // Preserve the backend choice, names, models and grants already stored.
  // Retain stable IDs/history while retiring the duplicated Gravity model pets.
  for(id,legacy)in[("agent_gemini","gemini-cli"),("integration_claude","claude-cli")]{if let Some(p)=c.pets.get_mut(id){if p.provider==legacy{p.provider.clear();}}}
  validate(&c)?;
@@ -151,8 +159,12 @@ pub fn read()->Result<Configuration,String> {let _edit=EDIT.lock().unwrap();Ok(r
 /// Read existing identities with the same in-memory upgrades/validation, without
 /// creating defaults, directories or files when configuration is unavailable.
 pub(crate) fn read_existing()->Result<Configuration,String> {
+ read_existing_at(&path())
+}
+/// Native callers supply this path; it is never taken from model arguments.
+pub(crate) fn read_existing_at(path:&Path)->Result<Configuration,String> {
  let _edit=EDIT.lock().map_err(|_|"As identidades dos pets estão indisponíveis.".to_string())?;
- Ok(read_at_policy(&path(),false)?.config)
+ Ok(read_at_policy(path,false)?.config)
 }
 #[cfg(test)]
 #[path = "pet_config_read_tests.rs"]
@@ -174,8 +186,10 @@ impl Configuration {
  }
  pub fn select(&self,provider:&str,requested:&str,query:&str)->Result<Selection,String> {
   require_active_provider(provider)?;let id=pet_id(provider).ok_or("Este pet não tem perfil de modelos.")?;let p=self.pets.get(id).ok_or("Falta o perfil deste pet.")?;
-  if id=="integration_spotify"{return Err("O Spoty controla música e som e não tem perfil de modelos.".into());}
-  if p.provider.is_empty(){return Err("Os modelos Gemini e Claude da conta Gravity estão no pet Gravity. Escolhe o modelo nesse pet.".into());}
+  if p.provider.is_empty(){
+   if blueprint(id).is_some_and(|b|b.runtime.assistant_adapter.is_some()){return Err("Este pet mantém os controlos nativos. Configura um backend de AI para conversar.".into());}
+   return Err("Os modelos Gemini e Claude da conta Gravity estão no pet Gravity. Escolhe o modelo nesse pet.".into());
+  }
   if !requested.is_empty() && !requested.starts_with('@') {return Ok(Selection{model:requested.into(),effort:String::new(),mode:"manual".into()});}
   let requested=if requested=="@default" || requested.is_empty(){p.mode.as_str()}else{requested.strip_prefix('@').unwrap_or(&p.mode)};
   let text=normalized(query);
@@ -264,16 +278,21 @@ pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revisi
 
 #[cfg(test)]mod spoty_audio_tests{
  use super::*;
+ #[test]fn optional_assistant_configuration_keeps_native_grants_and_rejects_another_account(){
+  let mut c=defaults();let before=c.pets["integration_spotify"].permissions.clone();
+  c.pets.get_mut("integration_spotify").unwrap().provider="codex".into();validate(&c).unwrap();assert!(c.uses_optional_assistant("integration_spotify"));assert_eq!(c.pets["integration_spotify"].permissions,before);
+  c.pets.get_mut("integration_spotify").unwrap().provider="copilot".into();assert!(validate(&c).is_err());
+ }
  #[test]fn spoty_retains_identity_and_profiles_without_an_llm_backend(){
   let config=defaults();let pet=&config.pets["integration_spotify"];assert!(pet.provider.is_empty());assert!(pet.aliases.iter().any(|a|a=="spoty"));
-  validate(&config).unwrap();assert!(config.select("integration_spotify","@fast","pausa").is_err());assert_eq!(crate::cli_chat::backend("integration_spotify"),None);
+  validate(&config).unwrap();assert!(config.select("integration_spotify","@fast","pausa").is_err());assert!(!config.uses_optional_assistant("integration_spotify"));assert_eq!(crate::cli_chat::backend("integration_spotify"),Some("codex"));
   assert!(matches!(crate::voice::dialogue::parse("Spoty, silenciar sistema"),crate::voice::dialogue::Command::Select(crate::voice::dialogue::Pet::Spotify,ref query)if query=="silenciar sistema"));
  }
- #[test]fn legacy_spotify_config_is_upgraded_in_memory_without_overwriting_private_file(){
+ #[test]fn legacy_spotify_backend_models_and_grants_are_preserved_without_overwriting_private_file(){
   let dir=std::env::temp_dir().join(format!("coucou-spoty-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
   std::fs::create_dir(&dir).unwrap();let path=dir.join("pets.json");let mut config=defaults();let p=config.pets.get_mut("integration_spotify").unwrap();p.provider="codex".into();p.name="Som pessoal".into();p.aliases.push("audio pessoal".into());let fast=p.fast.clone();let grants=p.permissions.clone();
   let bytes=serde_json::to_vec(&config).unwrap();std::fs::write(&path,&bytes).unwrap();let doc=read_at(&path).unwrap();let pet=&doc.config.pets["integration_spotify"];
-  assert!(pet.provider.is_empty());assert_eq!(pet.name,"Som pessoal");assert!(pet.aliases.iter().any(|a|a=="audio pessoal"));assert_eq!(pet.fast,fast);assert_eq!(pet.permissions,grants);assert_eq!(std::fs::read(&path).unwrap(),bytes);
+  assert_eq!(pet.provider,"codex");assert!(doc.config.uses_optional_assistant("integration_spotify"));assert_eq!(doc.config.select("integration_spotify","@fast","explica a playlist").unwrap().model,fast.model);assert_eq!(pet.name,"Som pessoal");assert!(pet.aliases.iter().any(|a|a=="audio pessoal"));assert_eq!(pet.fast,fast);assert_eq!(pet.permissions,grants);assert_eq!(std::fs::read(&path).unwrap(),bytes);
   std::fs::remove_dir_all(dir).unwrap();
  }
 }

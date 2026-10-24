@@ -88,3 +88,7 @@ pub enum MouseShape {
     /// A disc, in window-logical pixels: Mochi's body.
     Disc { cx: f64, cy: f64, r: f64 },
 }
+
+/// Non-Linux profiles keep the platform data location until their own migration.
+#[cfg(not(target_os="linux"))]
+pub fn data_dir()->PathBuf{local_dir()}

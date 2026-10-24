@@ -1,5 +1,6 @@
 import {Bridge,onEvent} from './bridge';
 import type {PetObservabilitySnapshot} from './pet-observability-contract';
+import {validPetCapabilities} from './pet-capabilities';
 type Snapshot=PetObservabilitySnapshot;
 
 /** One read per webview, shared by every card. Slow reads cannot block local
@@ -11,19 +12,21 @@ export class PetObservabilityResource {
  private lastAttempt=-Infinity;
  private pending:Promise<void>|null=null;
  private again=false;
+ private evidenceEpoch=0;
  private listeners=new Set<()=>void>();
  constructor(private load:()=>Promise<Snapshot>,private clock=()=>Date.now()){}
  subscribe(fn:()=>void){this.listeners.add(fn);return()=>this.listeners.delete(fn);}
  private changed(){for(const fn of this.listeners)fn();}
- invalidate(){this.lastAttempt=-Infinity;if(this.loading)this.again=true;}
+ invalidate(){this.lastAttempt=-Infinity;this.evidenceEpoch++;if(this.loading)this.again=true;if(this.snapshot?.petCapabilities){this.snapshot={...this.snapshot,petCapabilities:null};this.changed();}}
  refresh(force=false):Promise<void>{
   if(this.pending)return this.pending;
   if(!force&&this.clock()-this.lastAttempt<5000)return Promise.resolve();
-  this.lastAttempt=this.clock();this.loading=true;
+  this.lastAttempt=this.clock();this.loading=true;const epoch=this.evidenceEpoch;
   this.pending=Promise.resolve().then(()=>this.load()).then(value=>{
    if(value?.schemaVersion!==1||!Array.isArray(value.pets)||!Array.isArray(value.providers))throw Error('A informação das sessões não tem um formato compatível.');
-   this.snapshot=value;this.error='';
-  }).catch(()=>{this.error='Não foi possível atualizar as sessões e o consumo. Tenta Atualizar.';}).finally(()=>{
+   if(value.petCapabilities!=null&&!validPetCapabilities(value.petCapabilities))throw Error('As capacidades não têm um formato compatível.');
+   this.snapshot=epoch===this.evidenceEpoch||value.petCapabilities==null?value:{...value,petCapabilities:null};this.error='';
+  }).catch(()=>{if(this.snapshot?.petCapabilities)this.snapshot={...this.snapshot,petCapabilities:null};this.error='Não foi possível atualizar as sessões e o consumo. Tenta Atualizar.';}).finally(()=>{
    this.pending=null;this.loading=false;const again=this.again;this.again=false;this.changed();if(again)void this.refresh(true);
   });
   this.changed();return this.pending;

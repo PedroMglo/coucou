@@ -25,23 +25,7 @@ impl Pet {
         Self::ALL.into_iter().find(|p| p.provider() == provider)
     }
     pub fn provider(self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::Copilot => "copilot",
-            Self::Gravity => "antigravity",
-            Self::Claude => "claude-cli",
-            Self::Gemini => "gemini-cli",
-            Self::Ollama => "ollama",
-            Self::Spotify => "integration_spotify",
-            Self::GitHub => "integration_github",
-            Self::Notion => "integration_notion",
-            Self::Vercel => "integration_vercel",
-            Self::N8n => "integration_n8n",
-            Self::Resend => "integration_resend",
-            Self::Stripe => "integration_stripe",
-            Self::Calcom => "integration_calcom",
-
-        }
+        crate::pet_config::blueprint(self.pill()).and_then(|p|p.routing.task_provider.as_deref()).expect("native voice identity must have a catalog task owner")
     }
     pub fn name(self) -> &'static str {
         match self {

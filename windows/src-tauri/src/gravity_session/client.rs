@@ -103,7 +103,7 @@ impl Native{
         let(response,steps,metadata)=self.trajectory().await?;
         let messages=public_messages(&metadata["trajectoryId"],&steps)?;
         let idle=is_idle(&response["status"]);
-        Ok(Snapshot{target:target(&self.session_id),messages,busy:!idle,control_conflict:false,turn:None,capabilities:Capabilities{history:true,send:idle,cancel:false},notice:Some("As aprovações e a interrupção desta sessão continuam no cliente Gravity que a executa.".into()),model:None})
+        Ok(Snapshot{target:target(&self.session_id),messages,busy:!idle,control_conflict:false,turn:None,capabilities:Capabilities{history:true,send:idle,cancel:false},notice:Some("As aprovações e a interrupção desta sessão continuam no cliente Gravity que a executa.".into()),model:None,capability_descriptor:None})
     }
 
     pub async fn send(&self,query:&str,model:Option<&str>)->Result<Value,DeliveryError>{

@@ -5,7 +5,8 @@ import {taskPet} from "../mochi/tasks";
 
 import { invoke } from "@tauri-apps/api/core";
 import { Bridge, IS_TAURI, onEvent } from "../core/bridge";
-import { MAX_DECLARED, availablePills, chooseMainPill, pillDefinition, sanitizeDeclared, toggleDeclared } from "../core/pills";
+import { MAX_DECLARED, availablePills, pillDefinition, sanitizeDeclared } from "../core/pills";
+import {PetRosterPreferences} from '../core/pet-roster-settings';
 import { Spotify } from "../core/spotify";
 import { State } from "../core/state";
 import { serviceCards } from "./phone-services";
@@ -43,9 +44,14 @@ function describe(): string {
   });
 }
 
-function pills(input: Ask["input"]): string {
+const rosterPreferences=new PetRosterPreferences({save:request=>Bridge.petRosterSettingsPatch(request),adopt:roster=>{
+ const previousMain=State.mainPillId;State.settings={...State.settings,...roster};State.loadIntegrationTasks();if(State.mainPillId!==previousMain)State.setFocus(State.mainPillId);
+}});
+
+export async function pills(input: Ask["input"]): Promise<string> {
   const action = input.action ?? "list";
   if (action === "list") return describe();
+  if(!['set_main','add','remove'].includes(action))throw Error('Unknown pill action');
   const names = input.names ?? [];
   const done: string[] = [];
   const failed: string[] = [];
@@ -55,37 +61,12 @@ function pills(input: Ask["input"]): string {
       failed.push(`${spoken}: unknown pill`);
       continue;
     }
-    const d = sanitizeDeclared(State.settings, State.os);
     const label = pillDefinition(id)?.name ?? id;
     if (action === "set_main") {
-      const next = chooseMainPill(d, id, State.os);
-      if (!next) {
-        failed.push(`${label}: cannot be the main pill (only workspace tools can)`);
-        continue;
-      }
-      State.settings.mainPill = next.mainPill;
-      State.settings.activeIntegrations = next.activeIntegrations;
-      done.push(label);
+      try{await rosterPreferences.change({action:'setMain',id});done.push(label);}catch(error){failed.push(`${label}: ${String(error)}`);}
       continue;
     }
-    const shown = id === d.mainPill || d.activeIntegrations.includes(id);
-    if ((action === "add" && shown) || (action === "remove" && !shown)) {
-      done.push(label);
-      continue;
-    }
-    const next = toggleDeclared(d, id, State.os);
-    if (!next) {
-      failed.push(action === "add" ? `${label}: already ${MAX_DECLARED} pills, remove one first` : `${label}: the main pill cannot be removed`);
-      continue;
-    }
-    State.settings.activeIntegrations = next;
-    done.push(label);
-  }
-  if (done.length) {
-    const previousMain = State.mainPillId;
-    State.loadIntegrationTasks();
-    if (State.mainPillId !== previousMain) State.setFocus(State.mainPillId);
-    void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
+    try{await rosterPreferences.change({action:'setActive',id,enabled:action==='add'});done.push(label);}catch(error){failed.push(`${label}: ${String(error)}`);}
   }
   return JSON.stringify({ done, failed, now: JSON.parse(describe()) });
 }
@@ -112,6 +93,7 @@ function info(): string {
 
 export function registerVoiceHandlers() {
   if (!IS_TAURI) return;
+  void onEvent('settings-changed',settings=>rosterPreferences.observe(settings));
   void onEvent<string>("voice-pet", (provider) => {
     const pill = taskPet(provider) ?? (provider === "ollama" ? "ai_ollama" : null);
     if (!pill) return;
@@ -119,10 +101,10 @@ export function registerVoiceHandlers() {
     if (definition) State.upsertExternalAgent(pill, definition.name, definition.color);
     State.setFocus(pill);
   });
-  void onEvent<Ask>("voice-ask", (ask) => {
+  void onEvent<Ask>("voice-ask", async (ask) => {
     let text: string;
     try {
-      text = ask.kind === "pills" ? pills(ask.input ?? {}) : info();
+      text = ask.kind === "pills" ? await pills(ask.input ?? {}) : info();
     } catch (err) {
       text = `error: ${String(err)}`;
     }

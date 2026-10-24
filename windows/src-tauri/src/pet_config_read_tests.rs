@@ -31,7 +31,7 @@ fn read_only_legacy_upgrade_preserves_exact_file_bytes_identity_and_grants() {
     let bytes = serde_json::to_vec(&config).unwrap(); std::fs::write(&path, &bytes).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let doc = read_at_policy(&path, false).unwrap(); let pet = &doc.config.pets["integration_spotify"];
-    assert!(pet.provider.is_empty()); assert_eq!(pet.name, "Som pessoal sintético");
+    assert_eq!(pet.provider,"codex"); assert_eq!(pet.name, "Som pessoal sintético");
     assert!(pet.aliases.iter().any(|a| a == "som de teste"));
     assert_eq!(pet.fast, fast); assert_eq!(pet.permissions, grants);
     assert_eq!(std::fs::read(&path).unwrap(), bytes);

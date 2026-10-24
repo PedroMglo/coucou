@@ -23,6 +23,7 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 pub const PILL_ID: &str = "integration_spotify";
+#[cfg(target_os="linux")]#[path="spotify_goal.rs"]pub(crate) mod goal;
 /// Where "Get Spotify" leads when it isn't installed.
 #[cfg(not(windows))]
 pub const DOWNLOAD_URL: &str = "https://www.spotify.com/download/linux/";
@@ -459,7 +460,7 @@ pub async fn spotify_control(app: AppHandle, action: String, value: Option<f64>)
 }
 
 /// An explicit item selected by the user or the voice tool. Never arbitrary URLs.
-fn valid_item_uri(uri: &str) -> bool {
+pub(crate) fn valid_item_uri(uri: &str) -> bool {
     let parts: Vec<_> = uri.split(':').collect();
     parts.len()==3 && parts[0]=="spotify" && ["track","album","playlist","episode"].contains(&parts[1]) &&
         parts[2].len()==22 && parts[2].bytes().all(|b| b.is_ascii_alphanumeric())

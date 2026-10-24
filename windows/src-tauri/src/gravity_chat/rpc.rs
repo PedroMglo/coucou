@@ -14,6 +14,39 @@ use std::time::{Duration, Instant};
 const MAX_LINE: usize = 1024 * 1024;
 const MAX_TOTAL: usize = 32 * 1024 * 1024;
 
+struct SessionIdentity { requested:Option<String>,confirmed:Option<String>,cwd:std::path::PathBuf }
+fn native_id(v:&Value)->Option<&str>{v.as_str().filter(|s|!s.is_empty()&&s.len()<=512&&!s.chars().any(char::is_control))}
+impl SessionIdentity{
+    fn new(cwd:&Path,requested:Option<&str>)->Result<Self,String>{
+        if requested.is_some_and(|id|native_id(&json!(id)).is_none()){return Err("O identificador da sessão Gravity é inválido.".into());}
+        Ok(Self{requested:requested.map(str::to_string),confirmed:None,cwd:cwd.canonicalize().map_err(|_|"A pasta do Gravity já não está disponível.")?})
+    }
+    fn observe(&mut self,message:&Value)->Result<Option<String>,String>{
+        let event=message["event"].as_str().unwrap_or("");
+        if event=="init"{
+            let id=native_id(&message["conversation_id"]).ok_or("Gravity não confirmou um identificador de sessão válido.")?;
+            if self.confirmed.is_some(){return Err("Gravity repetiu a inicialização; a sessão original foi preservada.".into());}
+            if self.requested.as_deref().is_some_and(|expected|expected!=id){return Err("Gravity retomou outra sessão; a conversa pedida não foi substituída.".into());}
+            if let Some(raw)=message.pointer("/init/cwd"){
+                let path=raw.as_str().filter(|s|s.len()<=4096&&!s.chars().any(char::is_control)).ok_or("Gravity devolveu uma pasta nativa inválida.")?;
+                let path=Path::new(path);
+                if !path.is_absolute()||path.canonicalize().ok().as_ref()!=Some(&self.cwd){return Err("Gravity confirmou outra pasta; o contexto original foi preservado.".into());}
+            }
+            self.confirmed=Some(id.into());return Ok(Some(id.into()));
+        }
+        let failed=event=="result"&&message["result"]["status"].as_str().is_some_and(|s|s!="SUCCESS");
+        if self.confirmed.is_none()&&!failed{return Err("Gravity não confirmou a sessão antes dos eventos do turno.".into());}
+        if matches!(event,"step_update"|"result"){
+            for field in [message.get("conversation_id"),message.get(event).and_then(|v|v.get("conversation_id"))].into_iter().flatten(){
+                if failed&&(field.is_null()||field.as_str()==Some("")){continue;}
+                let id=native_id(field).ok_or("Gravity devolveu uma referência de sessão inválida.")?;
+                if self.confirmed.as_deref().or(self.requested.as_deref()).is_some_and(|expected|expected!=id){return Err("O evento Gravity pertence a outra sessão e não foi publicado.".into());}
+            }
+        }
+        Ok(None)
+    }
+}
+
 struct Process {
     child: Child,
     input: Option<ChildStdin>,
@@ -247,6 +280,7 @@ pub fn answer(
     mut on_event: impl FnMut(&Value),
 ) -> Result<Reply, String> {
     if cancel.as_ref().is_some_and(|flag|flag.load(Ordering::Relaxed)){return Err("The CLI request was cancelled.".into());}
+    let mut identity=SessionIdentity::new(cwd,session_id)?;
     let mut args = vec![
         "--input-format",
         "stream-json",
@@ -280,12 +314,8 @@ pub fn answer(
         let line = process.line()?;
         let message: Value = serde_json::from_str(&line)
             .map_err(|_| "Antigravity returned an invalid protocol message.")?;
+        if let Some(id)=identity.observe(&message)?{on_session(&id);}
         on_event(&message);
-        if message["event"] == "init" {
-            if let Some(id) = message["conversation_id"].as_str() {
-                on_session(id);
-            }
-        }
         let before=stream.text.len();
         if let Some(reply) = stream.event(&message)? {
             return Ok(reply);
@@ -375,3 +405,5 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test,unix))]#[path="rpc_session_tests.rs"]mod session_tests;

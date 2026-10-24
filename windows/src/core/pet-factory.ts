@@ -6,6 +6,9 @@ import catalog from '../../src-tauri/pets.factory.json';
 import type {PetConfiguration,PetPreference,PetPermissions} from '../mochi/pet-preferences';
 
 export type PetMold='llm'|'application';
+export type PetRuntimeKind='llm'|'service'|'observer';
+export type PetAdapter='codex'|'copilot'|'antigravity'|'ollama'|'spotify';
+export interface PetRuntime {readonly kind:PetRuntimeKind;readonly adapter:PetAdapter|null;readonly assistantAdapter?:PetAdapter|null;}
 export interface PetPresentation {
  readonly galleryAvatarSize:number;readonly overviewAvatarSize:number;
  readonly galleryCardRadius:number;readonly galleryCardGap:number;
@@ -20,6 +23,7 @@ export interface PetRouting {
 }
 export interface PetBlueprint {
  readonly id:string;readonly mold:PetMold;readonly service:boolean;readonly retired:boolean;
+ readonly runtime:PetRuntime;
  readonly preferences:PetPreference;readonly presentation:PetPresentation;readonly routing:PetRouting;
 }
 type Row=Record<string,unknown>;
@@ -52,19 +56,20 @@ function presentation(value:unknown):value is PetPresentation {
   &&strings(value.permissions)&&(value.permissions as string[]).every(k=>['documents','emailDrafts','music','openApps'].includes(k));
 }
 export function createPetFactory(input:unknown){
- if(!object(input)||input.schemaVersion!==1||!object(input.configuration)||!object(input.base)||!object(input.molds)||!object(input.extensions)||!object(input.pets))invalid();
+ if(!object(input)||input.schemaVersion!==2||!object(input.configuration)||!object(input.base)||!object(input.molds)||!object(input.extensions)||!object(input.pets))invalid();
  const source=structuredClone(input) as Row;
  const molds=source.molds as Row,extensions=source.extensions as Row,pets=source.pets as Row;
  if(Object.keys(molds).length!==2||!Object.hasOwn(molds,'llm')||!Object.hasOwn(molds,'application'))invalid();
  // Stable identity and access policy are always explicit for each pet.
  const protectedKeys=['name','aliases','provider','permissions','localExecution'];
  for(const recipe of [source.base,...Object.values(molds),...Object.values(extensions)]){
-  if(!object(recipe)||Object.hasOwn(recipe,'retired'))invalid();
+  if(!object(recipe)||['retired','runtime','routing','service'].some(k=>Object.hasOwn(recipe,k)))invalid();
   if(recipe.preferences!==undefined&&(!object(recipe.preferences)||protectedKeys.some(k=>Object.hasOwn(recipe.preferences as Row,k))))invalid();
  }
  const entries=new Map<string,PetBlueprint>();
  const routeOwners=new Map<string,string>();
  for(const[id,raw]of Object.entries(pets)){
+  if(!/^[a-zA-Z0-9_-]{1,128}$/.test(id)||['__proto__','prototype','constructor'].includes(id))invalid();
   if(!object(raw)||(raw.retired!==undefined&&typeof raw.retired!=='boolean')||(raw.mold!=='llm'&&raw.mold!=='application')||typeof raw.service!=='boolean'||!object(raw.preferences)||!object(raw.routing))invalid();
   if(!['name','aliases','provider','permissions'].every(k=>Object.hasOwn(raw.preferences as Row,k)))invalid();
   const mold=molds[raw.mold];if(!object(mold))invalid();
@@ -79,16 +84,34 @@ export function createPetFactory(input:unknown){
    ||!['fast','reasoning'].every(k=>object(p[k])&&typeof (p[k] as Row).model==='string'&&typeof (p[k] as Row).effort==='string')
    ||!object(p.permissions)||!['documents','emailDrafts','music','openApps'].every(k=>typeof (p.permissions as Row)[k]==='boolean')
    ||!presentation(effective.presentation)||!['chat','voice','taskProvider','role','taskName'].every(k=>r[k]===null||typeof r[k]==='string')||typeof r.execute!=='boolean')invalid();
+  if(Object.keys(r).some(k=>!['chat','voice','execute','taskProvider','role','taskName'].includes(k)))invalid();
+  const runtime=raw.runtime;
+  if(!object(runtime)||Object.keys(runtime).some(k=>!['kind','adapter','assistantAdapter'].includes(k))
+   ||typeof runtime.kind!=='string'||!['llm','service','observer'].includes(runtime.kind)
+   ||!(runtime.adapter===null||typeof runtime.adapter==='string'&&['codex','copilot','antigravity','ollama','spotify'].includes(runtime.adapter))
+   ||(runtime.kind==='service')!==(raw.mold==='application')||raw.service&&runtime.kind!=='service')invalid();
+  const assistant=runtime.assistantAdapter??null;
+  if(assistant!==null&&(!raw.service||runtime.adapter!=='spotify'||assistant!=='codex'))invalid();
+  if([r.role,r.taskName].some(s=>s!==null&&(typeof s!=='string'||!s.trim()||s.length>256||/[\u0000-\u001f\u007f]/.test(s))))invalid();
+  const logical=raw.service?id:p.provider;
+  if(runtime.adapter==='spotify'){
+   if(!raw.service||p.provider!==''||r.chat!==(assistant===null?null:logical)||r.voice!==logical||r.taskProvider!==logical||r.execute!==(assistant!==null))invalid();
+  }else if(runtime.adapter!==null){
+   if(runtime.kind==='observer'||p.provider!==runtime.adapter||raw.service&&runtime.adapter!=='codex'
+    ||r.chat!==logical||r.voice!==logical||r.taskProvider!==logical||r.execute!==(runtime.adapter!=='ollama'))invalid();
+  }else{
+   if(r.voice!==null||r.execute||raw.service||p.provider!==''||(runtime.kind==='llm')!==(r.chat!==null))invalid();
+  }
   // Logical owners are unique even when service adapters share a Codex account.
   for(const channel of ['chat','voice','taskProvider'] as const){
    const route=r[channel];if(route===null)continue;
-   if(typeof route!=='string'||!route||routeOwners.has(`${channel}:${route}`))invalid();
-   routeOwners.set(`${channel}:${route}`,id);
+   if(typeof route!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(route)||routeOwners.has(route)&&routeOwners.get(route)!==id)invalid();
+   routeOwners.set(route,id);
   }
   const retired=raw.retired===true;
   // Route identities remain usable for historical conversations. New work is gated separately.
   const routing=retired?{...r,execute:false}:r;
-  entries.set(id,freeze({id,mold:raw.mold,service:raw.service,retired,preferences:p,presentation:effective.presentation,routing}) as unknown as PetBlueprint);
+  entries.set(id,freeze({id,mold:raw.mold,service:raw.service,retired,runtime,preferences:p,presentation:effective.presentation,routing}) as unknown as PetBlueprint);
  }
  if(entries.size===0)invalid();
  const services=freeze([...entries.values()].filter(p=>p.service).map(p=>p.id));

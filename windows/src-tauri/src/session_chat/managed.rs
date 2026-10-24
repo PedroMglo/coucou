@@ -189,7 +189,7 @@ impl Registry {
         let turn = params["turn"]["id"].as_str();
         let flat_turn = params["turnId"].as_str();
         if turn.zip(flat_turn).is_some_and(|(a, b)| a != b) { return Vec::new(); }
-        if params.get("turnId").is_some_and(|id| id.as_str().is_none_or(|id| !valid_turn(id)))
+        if params.get("turnId").is_some_and(|id| !(method=="mcpServer/elicitation/request"&&id.is_null())&&id.as_str().is_none_or(|id| !valid_turn(id)))
             || params["turn"].get("id").is_some_and(|id| id.as_str().is_none_or(|id| !valid_turn(id)))
         { return Vec::new(); }
         let turn = turn.or(flat_turn).filter(|id| valid_turn(id));
@@ -220,6 +220,7 @@ impl Registry {
                         }
                     }
                 }
+                "mcpServer/elicitation/request" if crate::pet_mcp_form::Form::supported(params) => {},
                 "item/tool/call" | "mcpServer/elicitation/request" => {
                     if session.turn.is_none() || turn.is_none() || session.turn.as_deref() == turn {
                         if session.turn.is_none() { session.turn = turn.map(str::to_owned); }
@@ -414,6 +415,13 @@ mod tests {
             let retained = serde_json::to_string(&registry.list()).unwrap();
             assert!(!retained.contains("PRIVATE_")); assert!(!retained.contains("request-1"));
         }
+    }
+
+    #[test]fn supported_nullable_mcp_forms_do_not_claim_a_missing_native_client(){
+        let mut registry=Registry::default();let session=add(&mut registry,1,1);registry.event(1,&started(&session.target.session_id,"turn-1"));
+        let mut p=json!({"threadId":session.target.session_id,"turnId":null,"serverName":"fixture","mode":"form","message":"Synthetic","requestedSchema":{"type":"object","properties":{"x":{"type":"string","default":"PRIVATE_DEFAULT"}}}});
+        assert!(registry.event(1,&json!({"id":7,"method":"mcpServer/elicitation/request","params":p})).is_empty());assert_eq!(entry(&registry,&session.handle).phase,ManagedPhase::Active);
+        p["mode"]=json!("url");assert_eq!(registry.event(1,&json!({"id":8,"method":"mcpServer/elicitation/request","params":p})),vec![session.target.clone()]);assert_eq!(entry(&registry,&session.handle).phase,ManagedPhase::NeedsNativeClient);assert!(!serde_json::to_string(&registry.list()).unwrap().contains("PRIVATE_DEFAULT"));
     }
 
     #[test]

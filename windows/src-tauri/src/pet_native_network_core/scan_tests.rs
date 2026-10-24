@@ -34,7 +34,7 @@ impl Fixture {
         let socket=root.join("danklinux-123.sock");let listener=UnixListener::bind(&socket).unwrap();
         std::fs::set_permissions(&socket,std::fs::Permissions::from_mode(0o600)).unwrap();
         let executable=root.join("trusted-executable");symlink(std::env::current_exe().unwrap(),&executable).unwrap();
-        let config=Config {socket,runtime:root.clone(),uid:unsafe{libc::geteuid()},trusted_executable:executable,trusted_executable_uid:unsafe{libc::geteuid()},deadline:Duration::from_secs(2)};
+        let config=Config {socket,runtime:root.clone(),uid:unsafe{libc::geteuid()},trusted_executable:executable,trusted_executable_uid:unsafe{libc::geteuid()},deadline:Duration::from_secs(2),discovery:None};
         let requests=Arc::new(Mutex::new(Vec::new()));let captured=requests.clone();let directory=root.clone();
         let connections=Arc::new(AtomicU64::new(0));let count=connections.clone();
         let server=tokio::spawn(async move {
@@ -95,7 +95,7 @@ async fn slow_synchronous_guard_cannot_write_after_total_deadline() {
 }
 #[tokio::test]
 async fn every_unreviewed_version_or_missing_network_capability_is_read_only() {
-    for (version,caps) in [(json!(0),json!(["network"])),(json!(29),json!(["network"])),(json!(33),json!(["network"])),(json!(35),json!(["network"])),(json!(u64::MAX),json!(["network"])),(json!(34),json!([])),(json!(34),json!(["NETWORK"]))] {
+    for (version,caps) in [(json!(0),json!(["network"])),(json!(29),json!(["network"])),(json!(33),json!(["network"])),(json!(35),json!(["network"])),(json!(36),json!(["network"])),(json!(37),json!(["network"])),(json!(39),json!(["network"])),(json!(u64::MAX),json!(["network"])),(json!(34),json!([])),(json!(34),json!(["NETWORK"]))] {
         let mut step=Step::scan();step.greeting=greet(version,caps);let f=Fixture::start(vec![Step::read(),step]);let origin=f.origin().await;
         native(scan_wifi(&f.config,&origin,|_|panic!("guard before proof")).await,Error::Unsupported,WriteState::NotStarted);
         assert_eq!(f.scans().await,0);
@@ -271,3 +271,9 @@ async fn composed_window_revoked_during_greeting_is_denied_at_actual_writer() {
 include!("enable_transport_tests.rs");
 
 include!("disable_transport_tests.rs");
+
+#[path = "api38_tests.rs"]
+mod api38_tests;
+
+#[path = "recovery_tests.rs"]
+mod recovery_tests;

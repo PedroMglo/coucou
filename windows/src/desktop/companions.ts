@@ -1,3 +1,4 @@
+import {receiveDocumentDrop,documentBatchMessage} from '../core/document-collection';
 import {taskPet} from "../mochi/tasks";
 import {NativePetSpeech,nativeSpeechTarget,petDialogueOrigin,type NativeSpeech} from '../mochi/native-speech';
 import { shelterLayout, speechPlacement, speechText } from "../mochi/shelter";
@@ -609,14 +610,14 @@ void onDragDrop(event=>{
  const feedback=(text:string,view='prompt')=>{noticeQueue.push({key:`file:${pet}:${Date.now()}`,pet,text,urgent:false,view});showNextNotice();};
  const provider=petCapabilities(pet).chat;
  if(!provider){feedback('Este pet acompanha a aplicação, mas ainda não recebe documentos. Escolhe um pet com conversa.');return;}
- if(event.paths?.length!==1){feedback('Entrega um ficheiro de cada vez ao pet.');return;}
+ if(!event.paths?.length)return;
  const context=event.dropId??crypto.randomUUID();
  void (async()=>{
  await emitToWindow('island','pet-card-document-hold',{pillId:pet,context,holding:true});
- try{const file=await Bridge.ingestFile(event.paths![0],provider,undefined,event.dropId);
+ try{const batch=await receiveDocumentDrop(Bridge,provider,event.dropId);
   const p=world.pets.get(pet);if(p)world.touch(pet,performance.now()/1000);
-  await emitToWindow('island','pet-document',{pet,file});
-  feedback(`${file.name} recebido. Escolhe o que este pet deve fazer com o documento.`,'choose');
+  if(batch.attachments.length)await emitToWindow('island','pet-document',{pet,files:batch.attachments,message:documentBatchMessage(batch)});
+  feedback(documentBatchMessage(batch),batch.attachments.length?'choose':'prompt');
  }catch(error){feedback(String(error).replace(/^Error:\s*/,''));}
  finally{await emitToWindow('island','pet-card-document-hold',{pillId:pet,context,holding:false});}
  })();
@@ -785,9 +786,9 @@ async function start() {
     if(timer!==null)window.clearTimeout(timer);
     timer=null;wake();
   };
-  const rememberDecision=(request:{id:string;provider:string;kind:string;target?:import('../core/session-chat').SessionTarget})=>{
+  const rememberDecision=(request:import('../core/bridge').AgentRequest)=>{
     if(endedDecisions.has(request.id))return;
-    const pet=request.target?.petId??taskPet(request.provider.toLowerCase())??({copilot:"agent_copilot"} as Record<string,string>)[request.provider.toLowerCase()];
+    const pet=request.goalTarget?.petId??request.target?.petId??taskPet(request.provider.toLowerCase())??({copilot:"agent_copilot"} as Record<string,string>)[request.provider.toLowerCase()];
     if(pet&&!decisions.has(request.id))decisions.set(request.id,{pet,phase:request.kind==="question"?"question":"approval",target:request.target?Object.freeze({...request.target}):undefined});
     projectDecisions();
   };

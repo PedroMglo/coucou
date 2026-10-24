@@ -100,9 +100,9 @@ test("service pets use distinct logical conversations through the native account
  }
 });
 
-test("Spoty has sound commands and no LLM chat provider",async()=>{
+test("Spoty keeps sound commands and supports optional assistant chat profiles",async()=>{
  const {petCapabilities}=await import('../src/mochi/capabilities.ts');
  const {profileProvider}=await import('../src/mochi/pet-preferences.ts');
- assert.equal(providerForPill('integration_spotify'),null);assert.equal(profileProvider('integration_spotify'),false);
- const cap=petCapabilities('integration_spotify');assert.equal(cap.chat,null);assert.equal(cap.voice,'integration_spotify');assert.match(cap.role,/som do PC/);
+ assert.equal(providerForPill('integration_spotify'),'integration_spotify');assert.equal(profileProvider('integration_spotify'),true);
+ const cap=petCapabilities('integration_spotify');assert.equal(cap.chat,'integration_spotify');assert.equal(cap.voice,'integration_spotify');assert.match(cap.role,/som do PC/);
 });

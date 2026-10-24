@@ -1,4 +1,4 @@
-// Readonly IPC contract. All timestamps are Unix seconds. No inferred counters.
+// Readonly IPC contract. Inventory timestamps are Unix seconds. No inferred counters.
 import type {ProcessCensus,SnapshotLiveWorkExtension} from './process-census-contract';
 export type Coverage = 'complete' | 'partial' | 'unavailable' | 'notSupported';
 export type Activity = 'working' | 'waiting' | 'busy' | 'reserved' | 'idle' | 'notLoaded' | 'error' | 'unknown';
@@ -92,6 +92,8 @@ export type PetObservabilitySnapshot<U = UsageSummary> = {
   schemaVersion: 1; generatedAt: number;
   pets: PetObservability<U>[]; providers: ProviderObservability<U>[];
   livePetWork?:SnapshotLiveWorkExtension['livePetWork'];
+  // Capability dates use milliseconds, as specified by their own schema.
+  petCapabilities?:import('./bridge').PetCapabilitiesSnapshot|null;
 };
 
 // confirmedActive = known in-flight turn (working, waiting or busy).

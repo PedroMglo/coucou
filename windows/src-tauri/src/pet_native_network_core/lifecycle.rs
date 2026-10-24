@@ -8,6 +8,7 @@ use std::{collections::{BTreeMap,BTreeSet},sync::{Arc,Mutex},time::{Duration,Ins
 mod projection;
 #[path="enable_support.rs"]
 mod enable_support;
+pub(crate) fn wifi_protocol_supported(api:Option<u64>,caps:&[String])->bool{enable_support::protocol_supported(api,caps)}
 pub(crate) fn enable_wifi_supported(value:&Value,api:Option<u64>,caps:&[String])->bool{enable_support::supported(value,api,caps)}
 pub(crate) fn disable_wifi_supported(value:&Value,api:Option<u64>,caps:&[String])->bool{enable_support::supported(value,api,caps)}
 

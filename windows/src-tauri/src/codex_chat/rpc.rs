@@ -2,7 +2,7 @@
 //! are read here, and every child is reaped, including on timeout or failure.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -18,6 +18,19 @@ use serde_json::{json, Value};
 pub(crate) mod timing;
 use timing::{Stage, Trace};
 
+#[path="native_requests.rs"]pub(crate) mod native_requests;
+use native_requests::{Requests,Frame};
+// Match the actual DynamicToolSpec function/namespace union. Neither a group
+// name nor a same-named function in another namespace selects an executor.
+fn tool_available(tools:&[Value],name:&str,namespace:&Value)->bool{
+    if !namespace.is_null()&&namespace.as_str().is_none(){return false;}
+    tools.iter().map(|spec|{
+        if namespace.is_null(){usize::from(spec["type"]=="function"&&spec["name"]==name)}
+        else if spec["type"]=="namespace"&&spec["name"]==*namespace{
+            spec["tools"].as_array().map(|members|members.iter().filter(|t|t["type"]=="function"&&t["name"]==name).count()).unwrap_or(0)
+        }else{0}
+    }).sum::<usize>()==1
+}
 const MAX_LINE: usize = 1024 * 1024;
 const MAX_TOTAL: usize = 32 * 1024 * 1024;
 const MAX_ANSWER: usize = 4 * 1024 * 1024;
@@ -47,10 +60,11 @@ pub struct Reply {
 pub struct Client {
     child: Child,
     input: Option<ChildStdin>,
-    output: Receiver<Result<Value, String>>,
+    output: Receiver<Result<Frame, String>>,
+    requests:Requests,
     deadline: Instant,
     next_id: u64,
-    pending: VecDeque<Value>,
+    pending: VecDeque<Frame>,
     cancel: Option<Arc<AtomicBool>>,
     active_turn: Option<(String, String)>,
     observer: Option<Box<dyn FnMut(&Value) + Send>>,
@@ -80,6 +94,7 @@ impl Client {
         if cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return Err("The CLI request was cancelled.".into());
         }
+        let requests=Requests::new()?;
         let started = Instant::now();
         let deadline = started + timeout;
         let mut cmd = Command::new(exe);
@@ -135,17 +150,19 @@ impl Client {
             reap_failed_start(&mut child, timing.as_ref());
             return Err("Codex did not open stdout.".into());
         };
-        let (tx, output) = mpsc::sync_channel(32);
+        // The wire byte budget and frame cap bound this queue while allowing
+        // native resolutions to be read during a blocking human callback.
+        let (tx, output) = mpsc::channel();let reader_requests=requests.clone();
         std::thread::Builder::new().name("coucou-codex-reader".into()).spawn(move || {
             let mut reader = BufReader::new(stdout);
-            let mut total = 0;
+            let mut total = 0;let mut frames=0usize;
             loop {
-                let result = read_message(&mut reader, &mut total);
-                let failed = result.is_err();
-                if tx.send(result).is_err() || failed {
-                    break;
-                }
+                frames+=1;if frames>65_536{reader_requests.disconnect(true);let _=tx.send(Err("Codex event stream exceeded its frame budget.".into()));break;}
+                let result = read_message(&mut reader, &mut total).map(|value|reader_requests.observe(value));
+                let failed=result.is_err();
+                if tx.send(result).is_err()||failed{break;}
             }
+            reader_requests.disconnect(false);
         }).map_err(|_| {
             reap_failed_start(&mut child, timing.as_ref());
             "Cannot start the Codex response reader.".to_string()
@@ -154,6 +171,7 @@ impl Client {
             child,
             input,
             output,
+            requests,
             deadline: deadline.min(started + initialize_timeout),
             next_id: 0,
             pending: VecDeque::new(),
@@ -185,26 +203,33 @@ impl Client {
         self.write_frame(message,Instant::now()+Duration::from_millis(100),true)
     }
     fn write_frame(&mut self,message:Value,deadline:Instant,cleanup:bool)->Result<(),String>{
-        if !cleanup{self.check_cancel()?;}
+        match self.write_frame_guarded(message,deadline,cleanup,None,crate::pet_native_write::Use::Decision)?{
+            crate::pet_native_write::Outcome::Written=>Ok(()),
+            crate::pet_native_write::Outcome::Skipped(crate::pet_native_write::Reason::Cancelled)=>Err("The CLI request was cancelled.".into()),
+            crate::pet_native_write::Outcome::Skipped(_)=>Err("Codex did not receive the request in time.".into()),
+        }
+    }
+    fn write_frame_guarded(&mut self,message:Value,deadline:Instant,cleanup:bool,source:Option<&crate::pet_native_decisions::Ticket>,use_:crate::pet_native_write::Use)->Result<crate::pet_native_write::Outcome,String>{
+        if !cleanup{self.check_cancel()?;if self.requests.overflowed(){return Err("Codex event stream exceeded its bounds; the native request was not answered.".into());}}
         if self.write_incomplete{return Err("Codex input contains an interrupted frame.".into());}
+        if source.is_some_and(|t|message.get("id")!=Some(&t.identity().request_id)){return Err("The response does not belong to the captured native Codex request.".into());}
         let mut bytes=serde_json::to_vec(&message).map_err(|_|"Cannot encode Codex request.")?;
-        if bytes.len()>=MAX_TOTAL{return Err("Codex request exceeds the local transport limit.".into());}
-        bytes.push(b'\n');let mut offset=0;
-        while offset<bytes.len(){
-            if !cleanup{self.check_cancel()?;}
-            if Instant::now()>=deadline{return Err("Codex did not receive the request in time.".into());}
-            match self.input.as_mut().ok_or("Codex closed its input.")?.write(&bytes[offset..]){
-                Ok(0)=>return Err("Codex closed its input.".into()),
-                Ok(size)=>{offset+=size;self.write_incomplete=offset<bytes.len();},
-                Err(error) if error.kind()==std::io::ErrorKind::Interrupted=>continue,
-                Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>std::thread::sleep(Duration::from_millis(10)),
-                Err(_)=>return Err("Cannot write to Codex.".into()),
+        if bytes.len()>=MAX_TOTAL{return Err("Codex request exceeds the local transport limit.".into());}bytes.push(b'\n');
+        let guard=crate::pet_native_write::Guard{deadline,cancel:if cleanup{None}else{self.cancel.clone()},caller:None,source:source.map(|t|(t.clone(),use_))};
+        let result=crate::pet_native_write::frame(self.input.as_mut().ok_or("Codex closed its input.")?,&bytes,&guard);
+        match result{
+            Ok(outcome)=>Ok(outcome),
+            Err(fault)=>{
+                if fault.partial{self.write_incomplete=true;}
+                // A partial frame cannot be completed or followed by cleanup.
+                // Retire only this owned pipe; Drop reaps its original child.
+                self.input.take();self.requests.disconnect(false);
+                Err(if fault.reason==crate::pet_native_write::Reason::Cancelled{"The CLI request was cancelled."}else if fault.reason==crate::pet_native_write::Reason::Expired{"Codex did not receive the request in time; the owned transport was retired without retry."}else if fault.partial{"The native Codex response lost validity during a partial write; the owned transport was retired without retry."}else{"Cannot write to Codex."}.into())
             }
         }
-        Ok(())
     }
 
-    fn read(&mut self) -> Result<Value, String> {
+    fn read(&mut self) -> Result<Frame, String> {
         self.check_cancel()?;
         if let Some(message) = self.pending.pop_front() {
             return Ok(message);
@@ -212,9 +237,10 @@ impl Client {
         self.read_raw()
     }
 
-    fn read_raw(&self) -> Result<Value, String> {
+    fn read_raw(&self) -> Result<Frame, String> {
         loop {
             self.check_cancel()?;
+            if self.requests.overflowed(){return Err("Codex event stream exceeded its bounds; reconnect explicitly to inspect the original session.".into());}
             let left = self.deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return Err("Codex did not finish in time. Try again.".into());
@@ -252,8 +278,9 @@ impl Client {
     }
 
     fn request_inner(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        self.next_id += 1;
+        self.next_id=self.next_id.checked_add(1).ok_or("Codex request ID space is exhausted.")?;
         let id = self.next_id;
+        self.requests.expect_handshake(&json!(id),method,&params)?;
         self.write(json!({ "id": id, "method": method, "params": params }))?;
         timing::written(self.timing.as_ref(), method);
         loop {
@@ -268,7 +295,7 @@ impl Client {
                     .ok_or_else(|| "Invalid Codex response.".into());
             }
             let method = message["method"].as_str().unwrap_or("");
-            if method.starts_with("item/") || method.starts_with("turn/") {
+            if method.starts_with("item/") || method.starts_with("turn/") || crate::pet_codex_request_scope::supported(method) {
                 self.pending.push_back(message);
             } else {
                 self.reject_request(&message)?;
@@ -276,12 +303,16 @@ impl Client {
         }
     }
 
-    fn reject_request(&mut self, message: &Value) -> Result<(), String> {
+    fn reject_request(&mut self, message: &Frame) -> Result<(), String> {
         if message.get("id").is_some() && message.get("method").is_some() {
-            // Chat never grants shell, file, network, or account permissions.
-            self.write(json!({ "id": message["id"], "error": { "code": -32601, "message": "This request is unavailable in Mochi chat." } }))?;
+            let response=json!({ "id": message["id"], "error": { "code": -32601, "message": "This request is unavailable in Mochi chat." } });
+            self.write_frame_guarded(response,self.deadline,false,message.ticket.as_ref(),crate::pet_native_write::Use::Decision)?;
         }
         Ok(())
+    }
+
+    fn withdraw_policy_request(&mut self,message:&Frame)->Result<(),String>{
+        self.write_frame_guarded(json!({"id":message["id"],"error":{"code":-32000,"message":"The native session policy changed while this request was pending. Request a fresh native decision under the current policy; do not replay a previous effect."}}),Instant::now()+Duration::from_millis(100),true,message.ticket.as_ref(),crate::pet_native_write::Use::Withdrawal).map(|_|())
     }
 
     pub fn require_account(&mut self) -> Result<(), String> {
@@ -321,11 +352,19 @@ impl Client {
         Err("Codex returned too many model-list pages.".into())
     }
 
-    pub fn answer(
+    #[cfg(test)]
+    pub fn answer(&mut self,options:TurnOptions<'_>,on_tool:impl FnMut(&str,&Value)->(String,bool),mut on_request:impl FnMut(&str,&Value)->Option<Value>,on_session:impl FnMut(&str),on_delta:impl FnMut(String))->Result<Reply,String>{
+        self.answer_native(options,on_tool,|method,params,_|on_request(method,params),on_session,on_delta)
+    }
+    #[cfg(test)]
+    pub fn answer_native(&mut self,options:TurnOptions<'_>,mut on_tool:impl FnMut(&str,&Value)->(String,bool),on_request:impl FnMut(&str,&Value,Option<&native_requests::Ticket>)->Option<Value>,on_session:impl FnMut(&str),on_delta:impl FnMut(String))->Result<Reply,String>{
+        self.answer_native_tools(options,|name,args,_|on_tool(name,args),on_request,on_session,on_delta)
+    }
+    pub(crate) fn answer_native_tools(
         &mut self,
         options: TurnOptions<'_>,
-        on_tool: impl FnMut(&str, &Value) -> (String, bool),
-        on_request: impl FnMut(&str, &Value) -> Option<Value>,
+        on_tool: impl FnMut(&str, &Value,&crate::pet_native_invocation::Fence) -> (String, bool),
+        on_request: impl FnMut(&str, &Value,Option<&native_requests::Ticket>) -> Option<Value>,
         on_session: impl FnMut(&str),
         on_delta: impl FnMut(String),
     ) -> Result<Reply, String> {
@@ -338,8 +377,8 @@ impl Client {
     fn answer_inner(
         &mut self,
         options: TurnOptions<'_>,
-        mut on_tool: impl FnMut(&str, &Value) -> (String, bool),
-        mut on_request: impl FnMut(&str, &Value) -> Option<Value>,
+        mut on_tool: impl FnMut(&str, &Value,&crate::pet_native_invocation::Fence) -> (String, bool),
+        mut on_request: impl FnMut(&str, &Value,Option<&native_requests::Ticket>) -> Option<Value>,
         mut on_session: impl FnMut(&str),
         mut on_delta: impl FnMut(String),
     ) -> Result<Reply, String> {
@@ -388,6 +427,7 @@ impl Client {
             .as_str()
             .ok_or("Codex did not create a conversation.")?
             .to_string();
+        if session_id.is_some_and(|expected|expected!=thread_id){return Err("Codex resumed a different native thread; the requested session was not replaced.".into());}
         on_session(&thread_id);
         if let Some(name)=name {
             let existing=thread["thread"].get("name");
@@ -414,6 +454,7 @@ impl Client {
         let mut answer = Answer::default();
         let mut acted = false;
         let mut tool_calls = 0;
+        let mut seen_tool_calls=std::collections::HashSet::new();
         let mut first_event = true;
         let mut first_text = true;
         loop {
@@ -421,36 +462,65 @@ impl Client {
             let params = &message["params"];
             if message["method"] == "item/tool/call"
                 && message.get("id").is_some()
-                && params["threadId"] == thread_id
-                && params["turnId"] == turn_id
             {
+                if message.invalid_request||message.ticket.is_none()||crate::pet_codex_request_scope::extract("item/tool/call",params).is_none_or(|s|!s.matches(&thread_id,Some(&turn_id))){
+                    self.reject_request(&message)?;if let Some(ticket)=&message.ticket{self.requests.finish(ticket);}continue;
+                }
+                let source=message.ticket.as_ref().unwrap();
+                if !source.current(){if source.policy_invalidated(){self.withdraw_policy_request(&message)?;}self.requests.finish(source);continue;}
+                let Some(call)=crate::pet_native_invocation::Invocation::begin(source,self.deadline,self.cancel.clone())else{self.requests.finish(source);continue;};
                 tool_calls += 1;
                 let name = params["tool"].as_str().unwrap_or("");
-                let allowed = tool_calls <= 100 && tools.iter().any(|t| t["name"] == name);
-                let (text, did) = if allowed {
+                let fresh=tool_calls<=100&&seen_tool_calls.insert(params["callId"].as_str().unwrap().to_string());
+                let allowed = fresh && tool_available(tools,name,&params["namespace"]);
+                let (mut text, did) = if allowed {
                     let callback = timing::Span::new(self.timing.as_ref(), Stage::DynamicToolCallback);
-                    let result = on_tool(name, &params["arguments"]);
+                    let result = on_tool(name, &params["arguments"],call.fence());
                     callback.returned();
                     result
                 } else {
-                    ("This tool is unavailable.".into(), false)
+                    (if !fresh{"This native tool call has already been handled or the call limit was reached. It will not be executed again."}else{"This tool or namespace is unavailable."}.into(), false)
                 };
+                if !call.fence().current(){if source.policy_invalidated(){self.withdraw_policy_request(&message)?;}self.requests.finish(source);continue;}
                 acted |= did;
-                self.write(json!({ "id": message["id"], "result": {
-                    "contentItems": [{ "type": "inputText", "text": text }], "success": allowed
-                } }))?;
+                let oversized=text.len()>256*1024;
+                if oversized{text="The tool callback returned an oversized result; its effect is unconfirmed. Do not retry the operation automatically.".into();}
+                let mut response=json!({ "id": message["id"], "result": {
+                    "contentItems": [{ "type": "inputText", "text": text }], "success": allowed&&!oversized
+                } });
+                if serde_json::to_vec(&response).map_err(|_|"Invalid native tool response.")?.len()>256*1024{
+                    response=json!({"id":message["id"],"result":{"contentItems":[{"type":"inputText","text":"The tool callback returned an oversized result; its effect is unconfirmed. Do not retry the operation automatically."}],"success":false}});
+                }
+                let outcome=self.write_frame_guarded(response,self.deadline,false,Some(source),crate::pet_native_write::Use::Decision)?;
+                if matches!(outcome,crate::pet_native_write::Outcome::Skipped(_))&&source.policy_invalidated(){self.withdraw_policy_request(&message)?;}
+                self.requests.finish(source);
                 continue;
             }
             if message.get("id").is_some() && message.get("method").is_some() {
                 let method = message["method"].as_str().unwrap_or("");
+                let supported=crate::pet_codex_request_scope::supported(method);
+                let wrong_scope=if supported {
+                    message.ticket.is_none() || crate::pet_codex_request_scope::extract(method,params).is_none_or(|scope|!scope.matches(&thread_id,Some(&turn_id)))
+                }else{params.get("threadId").is_some_and(|v|v!=thread_id.as_str())||params.get("turnId").is_some_and(|v|v!=turn_id.as_str())};
+                if message.invalid_request||wrong_scope{
+                    self.reject_request(&message)?;if let Some(ticket)=&message.ticket{self.requests.finish(ticket);}continue;
+                }
+                if let Some(ticket)=message.ticket.as_ref().filter(|ticket|!ticket.current()){
+                    if ticket.policy_invalidated(){self.withdraw_policy_request(&message)?;self.requests.finish(ticket);}continue;
+                }
                 let callback = timing::Span::new(self.timing.as_ref(), Stage::NativeRequestCallback);
-                let result = on_request(method, params);
+                let result = on_request(method, params,message.ticket.as_ref());
                 callback.returned();
+                if let Some(ticket)=message.ticket.as_ref().filter(|ticket|!ticket.current()){
+                    if ticket.policy_invalidated(){self.withdraw_policy_request(&message)?;self.requests.finish(ticket);}continue;
+                }
                 if let Some(result) = result {
-                    self.write(json!({ "id": message["id"], "result": result }))?;
+                    let outcome=self.write_frame_guarded(json!({ "id": message["id"], "result": result }),self.deadline,false,message.ticket.as_ref(),crate::pet_native_write::Use::Decision)?;
+                    if matches!(outcome,crate::pet_native_write::Outcome::Skipped(_))&&message.ticket.as_ref().is_some_and(|t|t.policy_invalidated()){self.withdraw_policy_request(&message)?;}
                 } else {
                     self.reject_request(&message)?;
                 }
+                if let Some(ticket)=&message.ticket{self.requests.finish(ticket);}
                 continue;
             }
             if params["threadId"] != thread_id {
@@ -503,6 +573,7 @@ impl Client {
 
 impl Drop for Client {
     fn drop(&mut self) {
+        self.requests.disconnect(false);
         let cleanup = timing::Span::new(self.timing.as_ref(), Stage::Cleanup);
         if let Some((thread, turn)) = self.active_turn.take().filter(|_|!self.write_incomplete) {
             let _ = self.write_message(json!({ "id": self.next_id + 1, "method": "turn/interrupt", "params": { "threadId": thread, "turnId": turn } }));
@@ -830,6 +901,7 @@ for line in sys.stdin:
 #[cfg(all(test, unix))]
 mod initialize_cancel_tests {
     use super::*;
+    use std::io::Write;
     use super::tests::mock;
     use std::path::PathBuf;
 
@@ -1091,3 +1163,9 @@ mod timing_tests;
 #[cfg(all(test,unix))]
 #[path="rpc_turn_identity_tests.rs"]
 mod turn_identity_tests;
+
+#[cfg(all(test,unix))]#[path="rpc_native_requests_tests.rs"]mod native_request_tests;
+
+#[cfg(all(test,target_os="linux"))]#[path="rpc_native_policy_tests.rs"]mod native_policy_tests;
+
+#[cfg(all(test,unix))]#[path="rpc_native_tool_tests.rs"]mod native_tool_tests;

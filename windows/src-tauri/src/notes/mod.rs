@@ -135,7 +135,7 @@ pub struct NoteTaker {
 }
 
 pub fn folder() -> PathBuf {
-    crate::settings::local_dir().join("Notes")
+    crate::settings::data_dir().join("Notes")
 }
 
 fn note_dir(id: &str) -> PathBuf {

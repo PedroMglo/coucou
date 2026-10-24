@@ -4,6 +4,24 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 use std::sync::{Arc, Mutex};
 use tokio::net::UnixListener;
 
+#[test]
+fn current_and_legacy_native_socket_names_keep_the_same_runtime_boundary() {
+    let runtime = std::path::Path::new("/run/user/1000");
+    for name in ["dms-2096996.sock", "danklinux-7099.sock"] {
+        assert!(native_socket_path(&runtime.join(name), runtime));
+    }
+}
+
+#[test]
+fn alternate_socket_names_cannot_expand_the_native_trust_scope() {
+    let runtime = std::path::Path::new("/run/user/1000");
+    for path in ["/tmp/dms-1.sock", "/run/user/1001/dms-1.sock", "/run/user/1000/sub/dms-1.sock",
+        "/run/user/1000/dms-.sock", "/run/user/1000/dms-１２.sock", "/run/user/1000/dms-1.sock\n",
+        "/run/user/1000/other-1.sock", "/run/user/1000/danklinux-1.sock.extra"] {
+        assert!(!native_socket_path(std::path::Path::new(path), runtime), "{path}");
+    }
+}
+
 struct Fixture {
     root: PathBuf,
     config: Config,
@@ -29,7 +47,7 @@ impl Fixture {
         let config = Config {
             socket, runtime: root.clone(), uid: unsafe { libc::geteuid() },
             trusted_executable: executable, trusted_executable_uid: unsafe { libc::geteuid() },
-            deadline: Duration::from_secs(2),
+            deadline: Duration::from_secs(2), discovery: None,
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let captured = requests.clone();
@@ -222,7 +240,7 @@ fn fixture_peer_incarnation_is_stable() {
     let config = Config {
         socket: PathBuf::new(), runtime: PathBuf::new(), uid: unsafe { libc::geteuid() },
         trusted_executable: std::env::current_exe().unwrap(), trusted_executable_uid: unsafe { libc::geteuid() },
-        deadline: Duration::from_secs(1),
+        deadline: Duration::from_secs(1), discovery: None,
     };
     let first = peer_incarnation(std::process::id(), &config).unwrap();
     let second = peer_incarnation(std::process::id(), &config).unwrap();

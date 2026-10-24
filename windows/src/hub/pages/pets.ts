@@ -7,6 +7,7 @@ import {petCapabilities} from '../../mochi/capabilities';
 import {PetPreferences} from '../../mochi/pet-preferences';
 import {taskLabel,taskName,taskPet,taskRecoverable,taskCanStop,type AssistantTask} from '../../mochi/tasks';
 import {taskExecution} from '../../views/task-execution';
+import {buildRuntimeGoals} from '../../views/runtime-goals';
 import {activeSession,bytesLabel,inventoryProvider,sessionTree,uniqueManagedModels,matchesSearch,type ManagedInventory,type ManagedDetail,type ManagedResult} from '../../mochi/management';
 import type {HubContext} from '../shell';
 import {OllamaModelSelection} from '../../core/ollama-selection';
@@ -69,6 +70,7 @@ export async function petsPage(page:HTMLElement,ctx:HubContext,options:PetsPageO
   if(lookup.hasRetryWait)retryTimer=window.setTimeout(()=>{retryTimer=null;syncLookupControls();},1000);
  }
  const openPet=(pet:string)=>{void Bridge.petPanelHide().catch(()=>{});options.collapse?.();void emitToWindow('island',PET_EVENTS.summon,{pillId:pet});};
+ const goals=buildRuntimeGoals({initialPet:ctx.petSelection,openPet});
  let modelChoice=0;
  const converseWithModel=async(model:string)=>{
   const choice=++modelChoice;report(`A selecionar ${model}…`);
@@ -81,7 +83,7 @@ export async function petsPage(page:HTMLElement,ctx:HubContext,options:PetsPageO
  nav.setAttribute('aria-label','Áreas de gestão dos pets');
  for(const [id,label]of [['tasks','Tarefas'],['sessions','Sessões'],['providers','Providers e quotas'],['models','Modelos locais'],['profiles','Nomes e perfis']]){const b=button(label,()=>setTab(id));b.dataset.tab=id;nav.append(b);}
  content.className='pets-management-content';filters.className='pets-management-filters';confirmation.className='pets-management-confirmation';confirmation.setAttribute('role','alert');message.setAttribute('role','status');summary.className='pets-management-summary';
- root.append(title,favorites,nav,summary,filters,confirmation,message,content);page.append(root);
+ root.append(title,favorites,nav,summary,filters,confirmation,message,goals.el,content);page.append(root);
  if(options.embedded){root.dataset.embedded='true';nav.hidden=true;}
  let confirmationFocus:HTMLElement|null=null;
  const cancelConfirmation=()=>{confirmation.replaceChildren();if(document.hasFocus())confirmationFocus?.focus();};
@@ -126,6 +128,7 @@ export async function petsPage(page:HTMLElement,ctx:HubContext,options:PetsPageO
   providerFilter.value=provider;
  }
  function draw(controls=true){
+  goals.setActive(visible&&tab==='tasks');
   syncAccount();
   if(options.embedded)title.querySelector('h1')!.textContent=({tasks:'Tarefas',sessions:'Sessões',providers:'Providers e utilização',models:'Modelos locais',profiles:'Nomes, perfis e acessos'} as Record<string,string>)[tab]??'Os teus pets';
   for(const b of nav.querySelectorAll('button')){b.setAttribute('aria-pressed',String(b.dataset.tab===tab));b.setAttribute('aria-selected',String(b.dataset.tab===tab));}
@@ -236,8 +239,8 @@ export async function petsPage(page:HTMLElement,ctx:HubContext,options:PetsPageO
   }catch(error){if(alive)report(String(error).replace(/^Error:\s*/,''),true);}finally{loading=false;refreshButton.disabled=false;}
  }
  const unobserve=observePetObservability(()=>alive&&visible&&tab==='sessions'&&!document.hidden,()=>{if(alive&&visible&&tab==='sessions'){lastKey='';draw(false);}});
- let unlisten=()=>{},unprefs=()=>{};const timer=window.setInterval(()=>void refresh(),5000);ctx.onLeave=()=>{alive=false;account.dispose();prefs.setActive(false);window.clearInterval(timer);unlisten();unprefs();unobserve();lookup.dispose();if(retryTimer!==null)window.clearTimeout(retryTimer);};
- unlisten=await onEvent<boolean>(ctx.visibilityEvent??'hub-visible',value=>{visible=value;syncAccount();prefs.setActive(value&&tab==='profiles');if(!value){lookup.invalidate();}else{syncLookupControls();void refresh();}});if(!alive){unlisten();return;}
+ let unlisten=()=>{},unprefs=()=>{};const timer=window.setInterval(()=>void refresh(),5000);ctx.onLeave=()=>{alive=false;goals.dispose();account.dispose();prefs.setActive(false);window.clearInterval(timer);unlisten();unprefs();unobserve();lookup.dispose();if(retryTimer!==null)window.clearTimeout(retryTimer);};
+ unlisten=await onEvent<boolean>(ctx.visibilityEvent??'hub-visible',value=>{visible=value;goals.setActive(value&&tab==='tasks');syncAccount();prefs.setActive(value&&tab==='profiles');if(!value){lookup.invalidate();}else{syncLookupControls();void refresh();}});if(!alive){unlisten();return;}
  await PetPreferences.init();
  const drawFavorites=()=>{
   favorites.replaceChildren();for(const [id,p]of Object.entries(PetPreferences.config?.pets??{})){if(!PetPreferences.active(id))continue;const b=button(p.name,()=>openPet(id));b.title=`Abrir ${p.name}`;favorites.append(b);}

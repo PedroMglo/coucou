@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+#[cfg(all(test,target_os="linux"))]
+#[path="profile_compatibility_acceptance_tests.rs"]
+mod profile_compatibility_acceptance;
 
 /// A field the file lacks takes its value from `Default`, so a settings.json
 /// written by an older build still loads, whatever has been added since.
@@ -209,7 +212,7 @@ impl Default for Settings {
     }
 }
 
-pub use crate::platform::{config_dir, local_dir};
+pub use crate::platform::{config_dir, local_dir, data_dir};
 
 pub fn hook_exe_path() -> PathBuf {
     local_dir().join("bin").join(crate::platform::HOOK_EXE)
@@ -224,6 +227,7 @@ pub fn load() -> Settings {
 }
 
 pub fn save(settings: &Settings) -> std::io::Result<()> {
+    #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed()?;
     let dir = config_dir();
     crate::platform::ensure_private_dir(&dir)?;
     save_to(&settings_path(), settings)
@@ -310,7 +314,7 @@ fn unusable_field(key: &str) -> String {
 /// Only a file that is not there means "start from the defaults" with nothing
 /// more to do. One that cannot be read, or cannot be used, also gives the
 /// defaults, but it still holds what the user had: it is kept, not written over.
-fn load_from(path: &Path) -> Settings {
+pub(crate)fn load_from(path: &Path) -> Settings {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == ErrorKind::NotFound => return Settings::default(),
@@ -440,6 +444,7 @@ fn write_whole(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
 
 /// `save`, for the file at `path`, whose directory already exists.
 fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
+    #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed()?;
     keep_what_was_not_loaded(path)?;
     let json = serde_json::to_vec_pretty(settings)
         .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;

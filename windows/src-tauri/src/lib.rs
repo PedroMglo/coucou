@@ -1,16 +1,33 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
 mod assistant_memory;
+#[cfg(target_os="linux")]
+mod pet_data;
+mod attachment_history;
+mod conversation_purge;
 mod assistant_tasks;
 mod pet_management;
+mod startup_requests;
 mod pet_model;
+mod pet_capabilities;
+mod pet_runtime;
+mod pet_operations;
+mod pet_resources;
+mod pet_native_decisions;
+mod pet_codex_request_scope;
+mod pet_mcp_form;
+mod pet_native_choices;
+mod pet_native_write;
+mod pet_native_invocation;
 mod pet_usage;
 mod account_usage;
 mod account_usage_core;
 mod pet_observability;
 mod pet_panel;
 mod pet_system;
+mod pet_autostart;
 mod pet_center_settings;
+mod pet_roster_settings;
 mod pet_audio;
 mod local_tasks;
 mod agent_hooks;
@@ -45,6 +62,8 @@ mod document_text;
 mod document_folder;
 mod pet_files;
 mod pet_documents;
+mod pet_sources;
+mod pet_calendar;
 mod navigation;
 mod flow;
 mod github;
@@ -87,7 +106,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
+use tauri_plugin_autostart::MacosLauncher;
 
 use chat::{Chat, ChatContext, ChatReply, ModelInfo};
 use hooks::{HookPreview, HookStatus};
@@ -158,13 +177,19 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> R
         // These flags have a dedicated field patch. A settings page opened
         // earlier cannot overwrite a later confirmed pet-center change.
         pet_center_settings::preserve_incoming(current, &mut settings);
+        // Visibility/main-pet intentions have their own acknowledged command.
+        pet_roster_settings::preserve_incoming(current, &mut settings);
         *current = settings;
-    },settings::save,|settings|{pet_native_binding::settings_committed(&app,settings.pet_system_center);let _=app.emit("settings-changed",settings);})
+    },settings::save,|settings|{
+        pet_native_binding::settings_committed(&app,settings.pet_system_center);
+        let _=app.emit("settings-changed",settings);
+        integrations::settings_saved(&app, &settings.active_integrations);
+        spotify::sync(&app, &settings.active_integrations);
+    })
         .map_err(|err|{log::line(format!("could not save settings: {err}"));"Não foi possível guardar as definições. As preferências anteriores foram preservadas.".to_string()})?;
     pet_native_binding::publish_current(&app);
     if autostart_changed {
-        let manager = app.autolaunch();
-        let result = if settings.autostart { manager.enable() } else { manager.disable() };
+        let result = pet_autostart::set(&app,settings.autostart);
         if let Err(err) = result {
             eprintln!("[coucou] autostart: {err}");
         }
@@ -173,8 +198,6 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> R
         let collapsed = shared.gate.collapsed.load(Ordering::Relaxed);
         island::apply_geometry(&app, &settings.screen, collapsed);
     }
-    integrations::settings_saved(&app, &settings.active_integrations);
-    spotify::sync(&app, &settings.active_integrations);
     if shortcuts_changed {
         shortcuts::apply(&app, &settings.shortcuts);
     }
@@ -184,6 +207,26 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> R
     // Keep the other window in step (island ⇄ settings window).
     voice::sync(&app);
     Ok(())
+}
+
+#[tauri::command]
+async fn pet_roster_settings_patch(
+    app: AppHandle, window: tauri::WebviewWindow, request: pet_roster_settings::Request,
+) -> Result<pet_roster_settings::Roster, String> {
+    pet_roster_settings::authorize_window(window.label(), island::WINDOW_LABEL, HUB_LABEL)
+        .map_err(|_| "Esta janela não pode alterar os pets ativos.".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.try_state::<Shared>().ok_or("As preferências ainda não estão disponíveis.")?;
+        pet_roster_settings::apply_with(&shared.settings, request, settings::save, |fresh| {
+            let _ = app.emit("settings-changed", fresh);
+            integrations::settings_saved(&app, &fresh.active_integrations);
+            spotify::sync(&app, &fresh.active_integrations);
+        }).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::InvalidInput { return err.to_string(); }
+            log::line(format!("could not save pet roster: {err}"));
+            "Não foi possível guardar os pets ativos. As preferências anteriores foram preservadas.".to_string()
+        })
+    }).await.map_err(|_| "Não foi possível concluir a atualização dos pets ativos.".to_string())?
 }
 
 /// Confirm the requested flags after successful save. Existing settings events
@@ -591,10 +634,8 @@ async fn chat_send(
     // the race is visible here; an admitted turn prevents a later selection.
     let _conversation=chat.reserve_conversation(&provider,conversation_id.as_deref())?;
     let mut settings=shared.settings.lock().unwrap().clone();settings.chat_provider=provider;
-    if let Some(ChatContext::File{path,..})=&context{
-        let id=chat.conversation_id(&settings.chat_provider)?;
-        pet_documents::validate(&settings.chat_provider,&id,path,document_sequence.ok_or("Volta a entregar este documento à conversa antes de o enviar.")?)?;
-    }
+    if matches!(&context,Some(ChatContext::File{..}))&&document_sequence.is_none(){return Err("Volta a entregar este documento à conversa antes de o enviar.".into());}
+    let context=context.map(|context|pet_documents::checked_context(&settings.chat_provider,&chat.conversation_id(&settings.chat_provider)?,context,document_sequence)).transpose()?;
     if let Some(model)=selected_model {
         chat::select_for_turn(&mut settings,model)?;
     }
@@ -606,7 +647,9 @@ async fn chat_send(
 #[tauri::command]
 async fn chat_models(shared: State<'_, Shared>, provider: String) -> Result<Vec<ModelInfo>, String> {
     let settings = shared.settings.lock().unwrap().clone();
-    chat::models(&settings, &provider).await
+    let observation=pet_capabilities::begin_catalog(&settings,&provider);
+    let result=chat::models(&settings, &provider).await;
+    pet_capabilities::finish_catalog(observation,result.is_ok());result
 }
 
 /// Settings → Local models → Connect: does the server answer, and with which models?
@@ -846,30 +889,19 @@ fn voice_request(args: &[String]) -> bool {
 }
 
 pub fn run() {
+    #[cfg(target_os="linux")]
+    if pet_calendar::helper::entry() {return;}
     if gravity_hook::maybe_run() {return;}
     if agents::gravity_config_cli() {return;}
     platform::prepare_environment();
-    let loaded = settings::load();
-    i18n::set_picked(&loaded.language);
     let gate = Arc::new(PollGate::new());
 
     let mut builder = tauri::Builder::default()
-        .plugin(navigation::plugin())
+        .manage(startup_requests::Requests::initial(&std::env::args().collect::<Vec<_>>()))
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if argv.iter().any(|arg| arg == "--voice-preview") {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move { voice::voice_preview(app, None).await; });
-                return;
-            }
-            if voice_request(&argv) { voice::session::toggle(app); return; }
-            // `coucou --shortcut <action>`: what a desktop's own keyboard
-            // settings run where we can't listen for keys ourselves (Wayland).
-            match shortcuts::from_args(&argv) {
-                Some(action) => shortcuts::dispatch(app, action),
-                // Opening Coucou again (its shortcut, the Start menu) shows its window.
-                None => show_hub(app, None),
-            }
+            startup_requests::receive(app,&argv);
         }))
+        .plugin(navigation::plugin())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![AUTOSTART_ARG])));
     // Where no global shortcut can work, the plugin isn't even started.
     if platform::global_shortcuts_blocked().is_none() {
@@ -877,19 +909,14 @@ pub fn run() {
     }
 
     builder
-        .manage(Shared {
-            settings: Mutex::new(loaded.clone()),
-            gate: gate.clone(),
-        })
         .manage(Pending::default())
         .manage(account_usage::Runtime::default())
-        .manage(Chat::persistent(platform::local_dir().join("assistant").join("conversations.json")))
         .manage(shortcuts::Registry::default())
-        .manage(recap::load())
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
             pet_center_settings_patch,
+            pet_roster_settings_patch,
             pet_model::pet_model_select,
             pet_usage::pet_usage,
             account_usage::pet_account_usage,
@@ -939,6 +966,11 @@ pub fn run() {
             chat_read_conversation,
             chat_conversations,
             chat_restore_conversation,
+            conversation_purge::chat_purge_review,
+            conversation_purge::chat_purge_commit,
+            conversation_purge::chat_purge_cancel,
+            conversation_purge::chat_purge_recoveries,
+            conversation_purge::chat_purge_recovery_review,
             pet_management::pet_management,
             pet_management::pet_cached_usage,
             pet_management::station_history::pet_station_history,
@@ -947,14 +979,59 @@ pub fn run() {
             pet_panel::pet_panel_hide,
             pet_panel::pet_panel_context,
             pet_config::pet_configuration,
+            pet_capabilities::pet_capabilities_snapshot,
+            pet_capabilities::pet_capabilities_target,
+            pet_runtime::pet_runtime_create,
+            pet_runtime::pet_runtime_list,
+            pet_runtime::pet_runtime_read,
+            pet_runtime::pet_runtime_mutate,
+            pet_runtime::pet_runtime_import_legacy,
+            pet_runtime::pet_runtime_prepare_context,
+            pet_runtime::pet_runtime_context_read,
+            pet_runtime::pet_runtime_prepare_admission,
+            pet_runtime::pet_runtime_confirm_admission,
+            pet_runtime::pet_runtime_admission_status,
+            pet_runtime::pet_runtime_claim,
+            pet_runtime::pet_runtime_claim_status,
+            pet_runtime::pet_runtime_release_claim,
+            pet_runtime::pet_runtime_respond_once,
+            pet_runtime::pet_runtime_result,
+            pet_runtime::pet_runtime_prepare_step,
+            pet_runtime::pet_runtime_confirm_step,
+            pet_runtime::pet_runtime_run_step,
+            pet_runtime::pet_runtime_step_result,
+            pet_runtime::pet_runtime_recover_step,
+            pet_runtime::pet_runtime_prepare_recipe,
+            pet_runtime::pet_runtime_request_recipe,
+            pet_runtime::pet_runtime_goal_pending,
+            pet_runtime::pet_runtime_goal_answer,
+            pet_runtime::pet_runtime_refresh_readiness,
+            pet_runtime::pet_runtime_confirm_recipe,
+            pet_runtime::pet_runtime_run_recipe,
+            pet_runtime::pet_runtime_recipe_progress,
+            pet_runtime::pet_runtime_complete_recipe,
             pet_config::pet_roster,
             pet_config::pet_configuration_save,
+            pet_sources::pet_source_configuration,
+            pet_sources::pet_source_configuration_save,
             assistant_tasks::assistant_tasks,
             assistant_tasks::assistant_cancel_task,
             assistant_tasks::assistant_resume_task,
             ingest_file,
             pet_files::pet_mail_draft,
             pet_documents::pet_document_context,
+            pet_documents::pet_document_contexts,
+            pet_documents::pet_document_inventory,
+            pet_documents::pet_document_review,
+            pet_documents::pet_document_renew,
+            pet_documents::pet_document_review_cancel,
+            pet_documents::pet_document_retention_inventory,
+            pet_documents::pet_document_purge_review,
+            pet_documents::pet_document_purge_recovery_review,
+            pet_documents::pet_document_purge_commit,
+            pet_documents::pet_document_purge_cancel,
+            pet_documents::pet_document_ingest_drop,
+            pet_documents::pet_document_remove,
             pet_documents::pet_document_clear,
             pet_documents::pet_document_cancel_drop,
             secret_present,
@@ -1102,6 +1179,14 @@ pub fn run() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            #[cfg(target_os="linux")]
+            let loaded=pet_data::bootstrap::install(&handle)?;
+            #[cfg(not(target_os="linux"))]
+            let loaded=settings::load();
+            i18n::set_picked(&loaded.language);
+            app.manage(Shared {settings:Mutex::new(loaded.clone()),gate:gate.clone()});
+            app.manage(Chat::persistent(platform::data_dir().join("assistant").join("conversations.json")));
+            app.manage(recap::load());
             pet_native_binding::setup(&handle,loaded.pet_system_center);
             pet_observability::runtime::start(&handle);
             app.manage(phone_link::PhoneLink::new(handle.clone()));
@@ -1160,23 +1245,17 @@ pub fn run() {
             if loaded.autostart && register_autostart {
                 // Login items written before 0.5 start Coucou without --autostart:
                 // writing it again adds it, so the window stays hidden at login.
-                let _ = handle.autolaunch().enable();
+                let _ = pet_autostart::set(&handle,true);
             }
             let open_window = flow::get(&handle).map(|f| f.store.lock().unwrap().prefs.open_at_launch).unwrap_or(true);
             let arguments = std::env::args().collect::<Vec<_>>();
             let voice_requested = voice_request(&arguments);
             let preview_requested = arguments.iter().any(|arg| arg == "--voice-preview");
-            if voice_requested || preview_requested {
-                let voice_app = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                    if preview_requested { voice::voice_preview(voice_app, None).await; }
-                    else { voice::session::toggle(&voice_app); }
-                });
-            }
             if open_window && !launched_at_login() && !voice_requested && !preview_requested {
                 show_hub(&handle, None);
             }
+            startup_requests::ready(&handle);
+            if let Some(action)=shortcuts::from_args(&arguments){shortcuts::dispatch(&handle,action);}
             Ok(())
         })
         .build(tauri::generate_context!())

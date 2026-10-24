@@ -30,7 +30,7 @@ pub fn ingest(source:&str)->Result<crate::files::DroppedFile,String>{
  if !crate::files::take_dropped(source){return Err("Entrega a pasta arrastando-a para o pet.".into());}
  let src=Path::new(source);if !std::fs::symlink_metadata(src).is_ok_and(|m|m.is_dir()){return Err("Entrega uma pasta normal, sem ligação simbólica.".into());}
  let base=src.canonicalize().map_err(|e|e.to_string())?;let inbox=crate::files::inbox_dir();
- crate::platform::ensure_private_dir(&crate::settings::local_dir()).map_err(|e|e.to_string())?;crate::platform::ensure_private_dir(&inbox).map_err(|e|e.to_string())?;
+ crate::platform::ensure_private_dir(&crate::settings::data_dir()).map_err(|e|e.to_string())?;crate::platform::ensure_private_dir(&inbox).map_err(|e|e.to_string())?;
  if inbox.canonicalize().map_err(|e|e.to_string())?.starts_with(&base){return Err("Escolhe uma pasta de documentos específica, sem incluir a caixa de entrada dos pets.".into());}
  let name=base.file_name().ok_or("Pasta inválida.")?.to_string_lossy().to_string();let mut dest:Option<PathBuf>=None;
  for i in 1..10000{let p=inbox.join(if i==1{name.clone()}else{format!("{name} ({i})")});match private_dir(&p){Ok(())=>{dest=Some(p);break;},Err(e)if e.kind()==std::io::ErrorKind::AlreadyExists=>continue,Err(e)=>return Err(e.to_string())}}

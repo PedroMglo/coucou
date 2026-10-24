@@ -21,7 +21,7 @@
 // one place.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -35,6 +35,7 @@ use tokio::sync::mpsc;
 use crate::island::WINDOW_LABEL;
 use crate::log;
 use crate::session_window;
+#[path="pipe_native_source.rs"]mod native_source;
 
 /// Slightly under coucou-hook's own 110 s wait, so we always answer first.
 const DECISION_TIMEOUT: Duration = Duration::from_secs(108);
@@ -62,20 +63,20 @@ struct PendingRequest {
     ack_deadline:Instant, deadline:Instant,
     /// Set only by a scoped native card receipt, never by the old blind ACK.
     card_presented:bool,
+    native:Option<native_source::Review>,
 }
 impl PendingRequest {
     fn new(sender:mpsc::Sender<Reply>, session_id:String, pet_id:String, now:Instant)->Self {
         Self {sender,acknowledged:false,session_id,pet_id,
-            ack_deadline:now+ACK_TIMEOUT,deadline:now+DECISION_TIMEOUT,card_presented:false}
+            ack_deadline:now+ACK_TIMEOUT,deadline:now+DECISION_TIMEOUT,card_presented:false,native:None}
     }
     fn live(&self,now:Instant)->bool {
-        now < self.deadline && (self.acknowledged || now < self.ack_deadline)
+        now < self.deadline && self.native.as_ref().is_none_or(|n|n.source_current()) && (self.acknowledged || now < self.ack_deadline)
     }
 }
 #[derive(Default)]
 pub struct Pending(Mutex<HashMap<String, PendingRequest>>);
 
-static COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// `\\.\pipe\coucou-<sid>` — must match coucou-hook's `pipe_path()` exactly.
 #[cfg(windows)]
@@ -234,6 +235,7 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
     // Never trust a relay-supplied pet owner. The app's live session record is
     // the authority, so unrelated CLI sessions cannot be mistaken for our jobs.
     payload.as_object_mut().unwrap().remove("coucou_pet_provider");
+    payload.as_object_mut().unwrap().remove("nativeIdentity");
     let backend=payload["coucou_agent"].as_str().unwrap_or("").to_string();
     let session=payload["session_id"].as_str().unwrap_or("").to_string();
     let owner=app.state::<crate::chat::Chat>().hook_owner(&backend,&session);
@@ -249,6 +251,8 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         .unwrap_or_default()
         .to_string();
 
+    if gate&&event!="PermissionRequest"{pipe.finish();return;}
+
     note_session_window(&pipe, &payload, &event);
     // Counts for the weekly recap — never the command, path or prompt itself.
     crate::recap::observe(&app, &payload);
@@ -263,19 +267,23 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         return;
     }
 
-    if gate {
-        if !app.state::<crate::chat::Chat>().hook_activity(&backend,&session,"approval") {
-            let _=pipe.write_all(b"deny\n").await;let _=pipe.flush().await;pipe.finish();return;
-        }
-        let _=app.emit("assistant-tasks-changed",());
-    }
+    let native=if gate{
+        let chat=app.state::<crate::chat::Chat>();
+        let captured=chat.hook_binding(&backend,&session).and_then(|binding|native_source::Gate::capture(binding,&payload).ok());
+        let Some(captured)=captured else{pipe.finish();return;};
+        if !chat.hook_activity_bound(captured.binding(),"approval"){pipe.finish();return;}
+        captured.presentation(&mut payload);
+        let _=app.emit("assistant-tasks-changed",());Some(captured)
+    }else{None};
 
-    let id = format!("{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
+    let Some(id)=crate::cli_chat::next_native_request_id()else{pipe.finish();return;};
     let (tx, mut rx) = mpsc::channel::<Reply>(4);
     let started_at=Instant::now();
     {
         let pending = app.state::<Pending>();
-        pending.0.lock().unwrap().insert(id.clone(), PendingRequest::new(tx,session.clone(),request_pet(&payload),started_at));
+        let mut request=PendingRequest::new(tx,session.clone(),request_pet(&payload),started_at);
+        request.native=native.as_ref().map(|n|n.review());
+        let mut requests=pending.0.lock().unwrap();if requests.len()>=128||requests.contains_key(&id){pipe.finish();return;}requests.insert(id.clone(),request);
     }
     crate::recap::note_request(&app, &id, &payload);
     payload["request_id"] = json!(id);
@@ -284,12 +292,12 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
 
     // The human cannot answer a relay that has already gone away. This is
     // common to every supported hook, including questions: no orphaned card.
-    let outcome=until_relay_closed(&mut pipe,wait_for_decision(&id,&mut rx,started_at)).await;
+    let outcome=until_native_closed(&mut pipe,native.as_ref().map(|n|n.review()),wait_for_decision(&id,&mut rx,started_at)).await;
     if matches!(&outcome,DecisionOutcome::Handoff("relay-closed")) {
         log::line(format!("hook id={id} handed off reason=relay-closed"));
     }
     app.state::<Pending>().0.lock().unwrap().remove(&id);
-    let decision=match outcome{
+    let mut decision=match outcome{
         DecisionOutcome::Decision(decision)=>Some(decision),
         DecisionOutcome::Handoff(reason)=>{
             crate::recap::forget_request(&app,&id);
@@ -300,17 +308,18 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         }
     };
 
-    if gate {
-        app.state::<crate::chat::Chat>().hook_activity(&backend,&session,"working");
+    if let Some(native)=&native {
+        if !native.current(){decision=None;}
+        // A handoff is still a native decision, not a whole-turn Interrupt.
+        // Never let an old hook's cleanup reset a newer hook/session epoch.
+        if decision.is_some(){app.state::<crate::chat::Chat>().hook_activity_bound(native.binding(),"working");}
+        else{let reason=if native.current(){"native-fallback"}else{"native-source-ended"};let _=app.emit_to(WINDOW_LABEL,"approval-handoff",handoff_payload(&id,&session,&backend,owner.as_deref(),reason));}
         let _=app.emit("assistant-tasks-changed",());
-        if decision.is_none() {
-            let _=app.emit_to(WINDOW_LABEL,"hook",json!({"hook_event_name":"Interrupt","session_id":session,"coucou_agent":backend,"coucou_pet_provider":owner}));
-        }
     }
 
     // No decision: say nothing at all. coucou-hook then writes nothing to stdout
     // and Claude Code asks in the terminal, exactly as if Coucou were closed.
-    if let Some(d) = decision {
+    if let Some(d) = decision.filter(|_|native.as_ref().is_none_or(|n|n.current())) {
         let _ = pipe.write_all(format!("{d}\n").as_bytes()).await;
         let _ = pipe.flush().await;
     }
@@ -368,6 +377,12 @@ async fn relay_closed(relay:&mut impl Relay) {
 async fn until_relay_closed<R:Relay,F:std::future::Future<Output=DecisionOutcome>>(relay:&mut R,decision:F)->DecisionOutcome {
     // Actual closure/invalid extra input wins over a simultaneously ready reply.
     tokio::select! {biased;_=relay_closed(relay)=>DecisionOutcome::Handoff("relay-closed"),answer=decision=>answer}
+}
+
+async fn until_native_closed<R:Relay,F:std::future::Future<Output=DecisionOutcome>>(relay:&mut R,native:Option<native_source::Review>,decision:F)->DecisionOutcome{
+    let Some(native)=native else{return until_relay_closed(relay,decision).await;};
+    let invalid=async{while native.current(){tokio::time::sleep(Duration::from_millis(25)).await;}};
+    tokio::select!{biased;_=relay_closed(relay)=>DecisionOutcome::Handoff("relay-closed"),_=invalid=>DecisionOutcome::Handoff("native-source-ended"),answer=decision=>answer}
 }
 
 async fn wait_for_decision(id: &str, rx: &mut mpsc::Receiver<Reply>, started_at:Instant) -> DecisionOutcome {
@@ -448,6 +463,14 @@ fn dispatch(map:&mut HashMap<String,PendingRequest>,request_id:&str,reply:Reply)
     dispatch_at(map,request_id,reply,Instant::now())
 }
 fn dispatch_at(map:&mut HashMap<String,PendingRequest>,request_id:&str,reply:Reply,now:Instant)->bool{
+    let native=map.get(request_id).and_then(|r|r.native.clone());
+    if let Some(native)=native{
+        if matches!(&reply,Reply::Decision(s)if s!="allow"&&s!="deny"){return false;}
+        return native.with_current(||dispatch_current_at(map,request_id,reply,now)).unwrap_or(false);
+    }
+    dispatch_current_at(map,request_id,reply,now)
+}
+fn dispatch_current_at(map:&mut HashMap<String,PendingRequest>,request_id:&str,reply:Reply,now:Instant)->bool{
     // A delayed UI callback cannot beat expiry merely because async cleanup
     // has not removed the record yet. Duplicate ACKs never renew either clock.
     if !map.get(request_id).is_some_and(|request|request.live(now)){return false;}
@@ -882,5 +905,38 @@ mod card_receipt_tests {
         let started=tokio::time::Instant::now()-Duration::from_secs(2);
         assert!(matches!(wait_for_decision_from("synthetic",&mut rx,Duration::from_secs(1),Duration::from_secs(10),started).await,DecisionOutcome::Handoff("unacknowledged")));
         assert!(matches!(rx.try_recv(),Ok(Reply::Ack)));
+    }
+}
+
+#[cfg(test)]mod native_hook_lifecycle_tests{
+    use super::*;use crate::chat::{Chat,TurnLease};use std::sync::Arc;
+    fn owned()->(Chat,TurnLease,native_source::Gate){
+        let chat=Chat::default();let turn=chat.begin_cli("gemini-cli",Arc::default()).unwrap();let lease=chat.lease(&turn);chat.start_task(&turn,"synthetic","/fixture","antigravity","synthetic-model",None).unwrap();chat.remember_session(&turn,"native-session","/fixture",false);
+        let raw=json!({"coucou_assistant_gate":true,"coucou_pet_provider":"gemini-cli","coucou_agent":"antigravity","hook_event_name":"PermissionRequest","session_id":"native-session","tool_name":"Bash","tool_input":{"command":"synthetic"},"coucou_native_call":{"name":"run_command","args":{"CommandLine":"synthetic"}}});
+        let gate=native_source::Gate::capture(chat.hook_binding("antigravity","native-session").unwrap(),&raw).unwrap();(chat,lease,gate)
+    }
+    fn pending(gate:&native_source::Gate)->(HashMap<String,PendingRequest>,mpsc::Receiver<Reply>,Instant){let now=Instant::now();let(tx,rx)=mpsc::channel(4);let mut request=PendingRequest::new(tx,"native-session".into(),"agent_gemini".into(),now);request.native=Some(gate.review());(HashMap::from([("hook".into(),request)]),rx,now)}
+    #[test]fn native_hook_consumes_one_exact_card_decision_and_leaves_other_pets_untouched(){
+        let(_chat,_lease,gate)=owned();let(mut map,mut rx,now)=pending(&gate);let(tx,mut other)=mpsc::channel(4);map.insert("other".into(),PendingRequest::new(tx,"foreign".into(),"agent_copilot".into(),now));
+        assert!(!present_at(&mut map,"hook","foreign","agent_gemini",true,now));assert!(present_at(&mut map,"hook","native-session","agent_gemini",true,now));assert!(matches!(rx.try_recv(),Ok(Reply::Ack)));
+        assert!(!card_dispatch_at(&mut map,"hook",Reply::Decision("always".into()),true,now));assert!(!card_dispatch_at(&mut map,"hook",Reply::Decision("{\"answers\":{}}".into()),true,now));
+        assert!(card_dispatch_at(&mut map,"hook",Reply::Decision("allow".into()),true,now));assert!(!card_dispatch_at(&mut map,"hook",Reply::Decision("deny".into()),true,now));assert!(matches!(rx.try_recv(),Ok(Reply::Decision(s))if s=="allow"));assert!(map.contains_key("other")&&other.try_recv().is_err());
+    }
+    #[test]fn native_hook_stop_and_closed_source_refuse_delayed_ack_and_click_before_cleanup(){
+        for stop in [false,true]{let(chat,_lease,gate)=owned();let(mut map,mut rx,now)=pending(&gate);assert!(present_at(&mut map,"hook","native-session","agent_gemini",true,now));let _=rx.try_recv();if stop{chat.cancel_provider("gemini-cli");}else{drop(gate);}
+            assert!(!present_at(&mut map,"hook","native-session","agent_gemini",true,now));assert!(!card_dispatch_at(&mut map,"hook",Reply::Decision("allow".into()),true,now));assert!(rx.try_recv().is_err());}
+    }
+    #[tokio::test]async fn native_hook_stop_wins_over_a_simultaneously_ready_human_answer(){
+        let(chat,_lease,gate)=owned();let(mut server,_client)=tokio::io::duplex(64);chat.cancel_provider("gemini-cli");
+        let outcome=until_native_closed(&mut server,Some(gate.review()),async{DecisionOutcome::Decision("allow".into())}).await;assert!(matches!(outcome,DecisionOutcome::Handoff("native-source-ended")));
+    }
+    #[tokio::test]async fn native_hook_wait_is_withdrawn_when_the_exact_owner_turn_finishes(){
+        let(_chat,lease,gate)=owned();let(mut server,_client)=tokio::io::duplex(64);let dropper=tokio::spawn(async move{tokio::task::yield_now().await;drop(lease);});
+        let outcome=tokio::time::timeout(Duration::from_secs(2),until_native_closed(&mut server,Some(gate.review()),std::future::pending())).await.unwrap();dropper.await.unwrap();assert!(matches!(outcome,DecisionOutcome::Handoff("native-source-ended")));
+    }
+    #[tokio::test]async fn native_hook_relay_eof_wins_and_a_connected_gate_keeps_the_exact_once_result(){
+        let(_chat,_lease,gate)=owned();let(mut server,client)=tokio::io::duplex(64);drop(client);
+        assert!(matches!(until_native_closed(&mut server,Some(gate.review()),async{DecisionOutcome::Decision("allow".into())}).await,DecisionOutcome::Handoff("relay-closed")));
+        let(mut server,_client)=tokio::io::duplex(64);assert!(matches!(until_native_closed(&mut server,Some(gate.review()),async{DecisionOutcome::Decision("deny".into())}).await,DecisionOutcome::Decision(s)if s=="deny"));
     }
 }

@@ -13,7 +13,7 @@ fn disable_observe(s:&Service,w:&SystemWindowAuthority,now:Instant,enabled:bool)
 }
 #[test]fn disable_support_rejects_partial_malformed_unknown_or_unbounded_evidence(){
  let caps=vec!["network".into()];let good=disable_state(false);assert!(disable_wifi_supported(&good,Some(34),&caps));
- for api in [None,Some(29),Some(33),Some(35)]{assert!(!disable_wifi_supported(&good,api,&caps));}
+ for api in [None,Some(29),Some(33),Some(35),Some(36),Some(37),Some(39),Some(u64::MAX)]{assert!(!disable_wifi_supported(&good,api,&caps));}
  assert!(!disable_wifi_supported(&good,Some(34),&[]));
  let mut bad=Vec::new();
  for backend in [Value::Null,json!("iwd"),json!("iwd+networkd"),json!("networkd"),json!("wpa_supplicant"),json!("NetworkManager")]{let mut v=good.clone();v["backend"]=backend;bad.push(v);}

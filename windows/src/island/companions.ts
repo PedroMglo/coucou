@@ -1,3 +1,4 @@
+import {refreshDocumentState} from '../core/document-state';
 import {PetPreferences,petName} from "../mochi/pet-preferences";
 import {isCliProvider,providerDef, providerForPill } from "../core/providers";
 import {delegatedRequest} from "../mochi/delegation";
@@ -91,13 +92,13 @@ export class CompanionsLink {
       // no position until the new snapshot reaches the habitat.
       if(State.settings.companionMode)void emitToWindow('companions','companions-present',{id:def.id,view:value.view??'overview',manual:true});
     });
-    await onEvent<{pet:string;file:DroppedFile}>('pet-document',async value=>{
+    await onEvent<{pet:string;files?:DroppedFile[];file?:DroppedFile;message?:string}>('pet-document',async value=>{
       const def=pillDefinition(value.pet),provider=providerForPill(value.pet);
-      if((!State.settings.companionMode&&!State.petCardsOnly) || !def || !provider || !value.file?.path || !value.file.name)return;
-      if(value.file.conversationId){const current=await Bridge.chatConversation(provider);if(current.id!==value.file.conversationId)return;}
-      const previous=State.fileFor(provider);if(previous?.sequence!==undefined&&value.file.sequence!==undefined&&previous.sequence>value.file.sequence)return;
-      State.setFileContext(provider,value.file);
-      State.chatFeedback.set(provider,`${value.file.name} recebido por ${petName(def.id,def.name)}.`);
+      const files=value.files??(value.file?[value.file]:[]),cid=files[0]?.conversationId;
+      if((!State.settings.companionMode&&!State.petCardsOnly)||!def||!provider||!cid||!files.length)return;
+      let applied=false;try{applied=(await refreshDocumentState(provider,cid)).applied;}catch(error){State.chatFeedback.set(provider,String(error).replace(/^Error:\s*/,''));State.notify();return;}
+      if(!applied)return;
+      State.chatFeedback.set(provider,value.message??`${files.length} anexos recebidos por ${petName(def.id,def.name)}.`);
       State.upsertExternalAgent(def.id,petName(def.id,def.name),def.color);
       if(State.pendingApproval?.pillId!==value.pet){
         this.open(def.id,'choose',true);

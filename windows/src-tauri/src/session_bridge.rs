@@ -125,9 +125,15 @@ pub async fn list(backend: Backend) -> Vec<Summary> {
 }
 
 pub async fn history(backend: Backend, target: &Target) -> Result<Snapshot, String> {
-    let mut connection = Connection::open(backend, target, false).await?;
-    let value = connection.request("history", None, MAX_HISTORY).await?;
-    parse_snapshot(backend, target, value)
+    validate_target(backend, target)?;
+    let ticket = crate::pet_capabilities::begin_native(target);
+    let result = async {
+        let mut connection = Connection::open(backend, target, false).await?;
+        let value = connection.request("history", None, MAX_HISTORY).await?;
+        parse_snapshot(backend, target, value)
+    }.await;
+    crate::pet_capabilities::finish_native(ticket, result.as_ref().ok());
+    result
 }
 
 /// Sends once to the captured terminal session. An ambiguous disconnect is an
@@ -139,8 +145,13 @@ pub async fn send(backend: Backend, target: &Target, query: &str) -> Result<Valu
     if query.len() >= MAX_REQUEST {
         return Err(backend.error("O pedido {backend} excede o limite de 1 MiB."));
     }
-    let mut connection = Connection::open(backend, target, true).await?;
-    connection.request("send", Some(query), MAX_REQUEST).await
+    crate::pet_capabilities::invalidate_native(target);
+    let result = async {
+        let mut connection = Connection::open(backend, target, true).await?;
+        connection.request("send", Some(query), MAX_REQUEST).await
+    }.await;
+    crate::pet_capabilities::invalidate_native(target);
+    result
 }
 
 /// The installed SDK cannot cancel with a compare-and-swap turn identity.
@@ -179,6 +190,7 @@ pub async fn subscribe(backend: Backend, target: &Target) -> Result<Subscription
                 Err(_) => break,
             };
             if !updated(&packet, &connection.target) { break; }
+            crate::pet_capabilities::invalidate_native(&connection.target);
             // Coalesce repeated invalidations rather than storing transcripts.
             match updates.try_send(connection.target.clone()) {
                 Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
@@ -186,6 +198,7 @@ pub async fn subscribe(backend: Backend, target: &Target) -> Result<Subscription
             }
         }
         // Invalidate once on disconnect so the UI stops claiming a live link.
+        crate::pet_capabilities::invalidate_native(&connection.target);
         let _ = updates.try_send(connection.target.clone());
     });
     Ok(Subscription { updates: receiver, task })
@@ -228,6 +241,7 @@ impl Connection {
                     if !updated(&packet, &self.target) {
                         return Err(backend.error("A extensão {backend} devolveu uma notificação inválida."));
                     }
+                    crate::pet_capabilities::invalidate_native(&self.target);
                     continue;
                 }
                 if packet.get("id").and_then(Value::as_str) != Some(id.as_str()) {

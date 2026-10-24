@@ -3,6 +3,9 @@
 use std::{collections::HashMap, io::{Read, Write}, path::Path};
 use serde::{Deserialize, Serialize};
 use crate::chat::SavedConversation;
+#[path="assistant_memory_retained.rs"]
+mod retained;
+pub(crate) use retained::Retained;
 
 pub const MAX_BYTES:u64=128*1024*1024;
 pub const MAX_ARCHIVES:usize=100;
@@ -13,11 +16,14 @@ pub fn supported(provider:&str)->bool {crate::pet_config::service(provider) || m
 pub struct Library {
     pub pets:HashMap<String,SavedConversation>,
     #[serde(default)] pub archives:HashMap<String,Vec<SavedConversation>>,
+    #[serde(skip)] pub(crate) retained:Retained,
 }
 #[derive(Serialize,Deserialize)]
 struct Disk {
     version:u32,pets:HashMap<String,SavedConversation>,
     #[serde(default)] archives:HashMap<String,Vec<SavedConversation>>,
+    #[serde(default,rename="unavailableHistory",skip_serializing_if="Option::is_none")]
+    unavailable_history:Option<Retained>,
 }
 
 pub fn now()->u64 {std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64}
@@ -68,7 +74,7 @@ impl Write for Count<'_>{
 /// Captured positions refer to the original array. Filtering even one private
 /// entry could change which public pair a still-in-range anchor refers to.
 fn validate_captured_messages(c:&SavedConversation)->std::io::Result<()> {
-    if c.request_history.iter().any(|r|r.source=="captured")&&c.messages.iter().any(|m|
+    if (c.request_history.iter().any(|r|r.source=="captured")||!c.attachment_history.is_empty())&&c.messages.iter().any(|m|
         !m.as_object().is_some_and(|o|o.len()==2&&o.contains_key("role")&&o.contains_key("content"))
         ||!matches!(m["role"].as_str(),Some("user"|"assistant"))||!m["content"].is_string()){
         return Err(std::io::Error::other("captured history requires original public messages; array preserved"));
@@ -104,10 +110,12 @@ fn validate_request_history(library:&Library)->std::io::Result<()> {
             }
         }
     }
-    Ok(())
+    crate::attachment_history::validate(library)?;Ok(())
 }
 
-pub fn load(path:&Path)->std::io::Result<Library> {
+pub fn load(path:&Path)->std::io::Result<Library>{load_scoped(path,None)}
+pub(crate) fn load_goal(path:&Path,provider:&str,cid:&str)->std::io::Result<Library>{load_scoped(path,Some((provider,cid)))}
+fn load_scoped(path:&Path,goal:Option<(&str,&str)>)->std::io::Result<Library> {
     let result=(||->std::io::Result<_>{
         let mut options=std::fs::OpenOptions::new();options.read(true);
         #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.custom_flags(libc::O_NOFOLLOW);}
@@ -115,41 +123,35 @@ pub fn load(path:&Path)->std::io::Result<Library> {
         if !file.metadata()?.is_file(){return Err(std::io::Error::other("not a regular file"));}
         let mut bytes=Vec::new();file.take(MAX_BYTES+1).read_to_end(&mut bytes)?;
         if bytes.len() as u64>MAX_BYTES{return Err(std::io::Error::other("memory too large"));}
-        let disk:Disk=serde_json::from_slice(&bytes)?;
-        if !matches!(disk.version,1|2|3|4) {return Err(std::io::Error::other("unknown memory version"));}
-        // Validate before public() can remove or normalize any array entry.
-        for c in disk.pets.values().chain(disk.archives.values().flatten()){validate_captured_messages(c)?;}
-        let pets:HashMap<_,_>=disk.pets.into_iter().filter(|(p,_)|supported(p)).map(|(p,c)|{let mut c=public(c);c.tasks.retain(|t|t.provider==p && t.valid());(p,c)}).collect();
-        let mut archives=HashMap::new();
-        for (provider,conversations) in disk.archives.into_iter().filter(|(p,_)|supported(p)) {
-            if conversations.len()>MAX_ARCHIVES {return Err(std::io::Error::other("too many archived conversations"));}
-            let mut seen=std::collections::HashSet::new();
-            if let Some(current)=pets.get(&provider) {seen.insert(current.id.clone());}
-            let mut saved=Vec::new();
-            for conversation in conversations {
-                let mut c=public(conversation);c.tasks.clear();
-                if !seen.insert(c.id.clone()) {return Err(std::io::Error::other("duplicate conversation id"));}
-                saved.push(c);
-            }
-            archives.insert(provider,saved);
-        }
-        let library=Library{pets,archives};validate_request_history(&library)?;Ok(library)
+        retained::decode(&bytes,goal)
     })();
-    match result {Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Ok(Library::default()),other=>other}
+    match result {Err(error) if error.kind()==std::io::ErrorKind::NotFound&&goal.is_none()=>Ok(Library::default()),other=>other}
 }
 
 pub fn save(path:&Path,library:&Library)->std::io::Result<()> {
-    // Never truncate or silently discard malformed provenance. An old version
-    // cannot read v4 and therefore cannot overwrite data it does not understand.
+    let receipt=save_checked(path,library,||true)?;
+    if receipt.durable{Ok(())}else{Err(std::io::Error::other("library published but directory durability is uncertain"))}
+}
+pub(crate) struct SaveReceipt{pub durable:bool}
+pub(crate) fn save_checked(path:&Path,library:&Library,current:impl FnOnce()->bool)->std::io::Result<SaveReceipt>{
+    save_using(path,library,current,|dir|{
+        #[cfg(unix)]{std::fs::File::open(dir)?.sync_all()}
+        #[cfg(not(unix))]{let _=dir;Ok(())}
+    })
+}
+fn disk(library:&Library)->std::io::Result<Disk>{
     validate_request_history(library)?;
-    let pets=library.pets.iter().filter(|(p,_)|supported(p)).map(|(p,c)|(p.clone(),public(c.clone()))).collect();
-    let mut archives=HashMap::new();
-    for (p,conversations) in library.archives.iter().filter(|(p,_)|supported(p)) {
-        if conversations.len()>MAX_ARCHIVES {return Err(std::io::Error::other("too many archived conversations"));}
-        archives.insert(p.clone(),conversations.iter().map(|c|{let mut c=public(c.clone());c.tasks.clear();c}).collect());
-    }
-    let normalized=Library{pets,archives};validate_request_history(&normalized)?;
-    let disk=Disk{version:4,pets:normalized.pets,archives:normalized.archives};
+    let normalized=retained::normalize(library)?;validate_request_history(&normalized)?;
+    let version=if !normalized.retained.is_empty(){6}else if crate::attachment_history::has_records(&normalized){5}else{4};
+    let unavailable_history=if normalized.retained.is_empty(){None}else{Some(normalized.retained)};
+    Ok(Disk{version,pets:normalized.pets,archives:normalized.archives,unavailable_history})
+}
+#[cfg(test)]pub(crate)fn native_codec_projection(library:&Library)->std::io::Result<serde_json::Value>{Ok(serde_json::to_value(disk(library)?)?)}
+fn save_using(path:&Path,library:&Library,current:impl FnOnce()->bool,confirm:impl FnOnce(&Path)->std::io::Result<()>)->std::io::Result<SaveReceipt>{
+    #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed()?;
+    // Native validation precedes writes; older readers refuse formats they
+    // cannot preserve, including v5 attachments and v6 inactive history.
+    let disk=disk(library)?;
     let dir=path.parent().ok_or_else(||std::io::Error::other("missing memory directory"))?;
     std::fs::create_dir_all(dir)?;
     if std::fs::symlink_metadata(dir)?.file_type().is_symlink() || std::fs::symlink_metadata(path).is_ok_and(|m|m.file_type().is_symlink()) {return Err(std::io::Error::other("memory symlink rejected"));}
@@ -161,9 +163,13 @@ pub fn save(path:&Path,library:&Library)->std::io::Result<()> {
         let mut file=options.open(&temp)?;
         {let mut limited=Limited{inner:&mut file,written:0};serde_json::to_writer(&mut limited,&disk)?;}
         file.sync_all()?;drop(file);
+        if !current(){return Err(std::io::Error::other("library review expired before publication"));}
+        #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed()?;
         std::fs::rename(&temp,path)?;
-        #[cfg(unix)] std::fs::File::open(dir)?.sync_all()?;
-        Ok(())
+        // Once rename succeeds the new library is authoritative in this
+        // process. A caller performing deletion must not keep stale RAM or
+        // report that nothing changed if directory durability fails.
+        Ok(SaveReceipt{durable:confirm(dir).is_ok()})
     })();
     if result.is_err(){let _=std::fs::remove_file(temp);}
     result
@@ -179,6 +185,13 @@ impl<W:Write> Write for Limited<W>{
 }
 
 #[cfg(test)]mod tests {
+    #[test]
+    fn reviewed_save_checks_before_publication_and_reports_uncertain_commit(){
+        let files=crate::pet_documents::fixtures::Files::new();let path=files.root.join("conversations.json");let mut library=super::Library::default();super::save(&path,&library).unwrap();let original=std::fs::read(&path).unwrap();
+        library.pets.insert("codex".into(),crate::chat::SavedConversation{id:"new-id".into(),messages:vec![serde_json::json!({"role":"user","content":"new"})],..Default::default()});
+        assert!(super::save_checked(&path,&library,||false).is_err());assert_eq!(std::fs::read(&path).unwrap(),original);
+        let receipt=super::save_using(&path,&library,||true,|_|Err(std::io::Error::other("synthetic directory fsync failure"))).unwrap();assert!(!receipt.durable);assert_eq!(super::load(&path).unwrap().pets["codex"].messages[0]["content"],"new");
+    }
     use super::*;
     use serde_json::json;
     #[test]fn retains_public_dialogue_and_session_but_never_native_tool_blocks(){
@@ -275,7 +288,7 @@ mod captured_anchor_validation_tests {
         SavedConversation{id:"cid".into(),messages:all,request_history:vec![record("request-a",1,prefix,count)],..Default::default()}
     }
     fn library(c:SavedConversation,archived:bool)->Library{
-        if archived{Library{pets:HashMap::from([("codex".into(),SavedConversation{id:"current-cid".into(),..Default::default()})]),archives:HashMap::from([("codex".into(),vec![c])])}}
+        if archived{Library{pets:HashMap::from([("codex".into(),SavedConversation{id:"current-cid".into(),..Default::default()})]),archives:HashMap::from([("codex".into(),vec![c])]),..Default::default()}}
         else{Library{pets:HashMap::from([("codex".into(),c)]),..Default::default()}}
     }
     #[test]fn load_rejects_raw_private_prefix_even_when_shifted_anchor_is_in_range_and_another_valid_pair(){
@@ -284,7 +297,7 @@ mod captured_anchor_validation_tests {
             let c=conversation(prefix,count);
             assert!(prefix+count<=messages().len(),"range-only validation would accept after filtering");
             if prefix==2&&count==2{assert!(valid_request_span(&messages(),prefix,count),"even role checks alone would select B instead of A");}
-            let raw=library(c,archived);let disk=Disk{version:4,pets:raw.pets,archives:raw.archives};let original=serde_json::to_vec(&disk).unwrap();std::fs::write(&path,&original).unwrap();
+            let raw=library(c,archived);let disk=Disk{version:4,pets:raw.pets,archives:raw.archives,unavailable_history:None};let original=serde_json::to_vec(&disk).unwrap();std::fs::write(&path,&original).unwrap();
             assert!(load(&path).is_err(),"archived={archived} prefix={prefix} count={count}");
             let chat=Chat::persistent(path.clone());assert!(chat.reserve_conversation("codex",None).is_err());
             assert_eq!(std::fs::read(&path).unwrap(),original);

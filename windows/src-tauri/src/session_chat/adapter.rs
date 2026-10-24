@@ -46,12 +46,13 @@ fn validate(app:&AppHandle,target:&Target)->Result<(),String>{
     if owned(app,&target.session_id,&owners(&config)){return Err("Esta sessão pertence à biblioteca Mochi. Escolhe a conversa Mochi correspondente para manter a sua memória e tarefa.".into());}
     Ok(())
 }
-fn updated(app:&AppHandle,target:&Target){let _=app.emit("session-chat-updated",json!({"target":target}));}
+fn updated(app:&AppHandle,target:&Target){crate::pet_capabilities::invalidate_native(target);let _=app.emit("session-chat-updated",json!({"target":target}));}
 fn approval_key(thread:&str,id:&Value)->String{format!("{thread}:{}",id)}
 
 async fn client(app:&AppHandle)->Result<Arc<rpc::Client>,String>{
     let state=backend();let mut current=state.client.lock().await;
     if let Some(client)=current.as_ref().filter(|c|c.connected()){return Ok(client.clone());}
+    crate::pet_capabilities::invalidate_native_provider("codex");
     // Retire a disconnected observer before establishing its replacement.
     // Cache/approval locks make generation changes atomic with event mutation.
     let generation={
@@ -88,7 +89,7 @@ async fn events_loop(app:AppHandle,client:Arc<rpc::Client>,mut events:tokio::syn
         let event=match events.recv().await{
             Ok(event)=>event,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_))=>{
-                {let mut live=backend().live.lock().unwrap();if backend().generation.load(Ordering::Acquire)!=generation{break;}live.gap();}
+                {let mut live=backend().live.lock().unwrap();if backend().generation.load(Ordering::Acquire)!=generation{break;}live.gap();crate::pet_capabilities::invalidate_native_provider("codex");}
                 let changed=backend().managed.lock().unwrap().gap(generation);for target in changed{updated(&app,&target);}
                 let targets:Vec<_>=backend().tracked.lock().unwrap().values().cloned().collect();for target in targets{updated(&app,&target);}continue;
             },Err(_)=>break,
@@ -96,13 +97,16 @@ async fn events_loop(app:AppHandle,client:Arc<rpc::Client>,mut events:tokio::syn
         if backend().generation.load(Ordering::Acquire)!=generation{break;}
         let method=event["method"].as_str().unwrap_or("");let params=&event["params"];
         if method=="mochi/disconnected"{
+            crate::pet_capabilities::invalidate_native_provider("codex");
             {let pending=backend().approvals.lock().unwrap();if backend().generation.load(Ordering::Acquire)!=generation{break;}for flag in pending.values(){flag.store(true,Ordering::Release);}}
             let retired=backend().managed.lock().unwrap().disconnect(generation);for target in retired{updated(&app,&target);}
             let targets:Vec<_>=backend().tracked.lock().unwrap().values().cloned().collect();for target in targets{updated(&app,&target);}break;
         }
         let changed=backend().managed.lock().unwrap().event(generation,&event);for target in changed{updated(&app,&target);}
-        let Some(thread)=params["threadId"].as_str().or_else(||params["thread"]["id"].as_str())else{continue;};
+        let Some(thread)=crate::pet_codex_request_scope::extract(method,params).map(|s|s.session)
+            .or_else(||params["threadId"].as_str()).or_else(||params["thread"]["id"].as_str())else{continue;};
         let target=backend().tracked.lock().unwrap().get(thread).cloned();let Some(target)=target else{continue;};
+        crate::pet_capabilities::invalidate_native(&target);
         {let mut live=backend().live.lock().unwrap();if backend().generation.load(Ordering::Acquire)!=generation{break;}live.event(&event);}
         if method=="serverRequest/resolved"{
             if let Some(flag)=backend().approvals.lock().unwrap().get(&format!("{generation}:{}",approval_key(thread,&params["requestId"]))){flag.store(true,Ordering::Release);}
@@ -111,44 +115,43 @@ async fn events_loop(app:AppHandle,client:Arc<rpc::Client>,mut events:tokio::syn
             // A subscribed terminal may receive the same request. Observation
             // never answers it; only a human broker result may produce a reply.
             if validate(&app,&target).is_err(){continue;}
+            let Some(source)=client.native_request(&event)else{continue;};
             let key=format!("{generation}:{}",approval_key(thread,id));let flag=Arc::new(AtomicBool::new(false));
             {let mut pending=backend().approvals.lock().unwrap();if backend().generation.load(Ordering::Acquire)!=generation{break;}if pending.contains_key(&key)||pending.len()>=128{continue;}pending.insert(key.clone(),flag.clone());}
-            let app=app.clone();let client=client.clone();let method=method.to_string();let params=params.clone();let id=id.clone();
+            let app=app.clone();let client=client.clone();let method=method.to_string();let params=params.clone();
             tauri::async_runtime::spawn(async move{
-                let target2=target.clone();let flag2=flag.clone();
-                let answer=tauri::async_runtime::spawn_blocking(move||broker(&app,&target2,&method,&params,&flag2)).await.ok().flatten();
-                if backend().generation.load(Ordering::Acquire)==generation&&!flag.load(Ordering::Acquire){if let Some(answer)=answer{let _=client.respond_guarded(id,answer,flag.clone()).await;}}
+                let target2=target.clone();let flag2=flag.clone();let source2=source.clone();
+                let answer=tauri::async_runtime::spawn_blocking(move||broker(&app,&target2,&method,&params,&flag2,&source2)).await.ok().flatten();
+                if backend().generation.load(Ordering::Acquire)==generation&&!flag.load(Ordering::Acquire){if let Some(answer)=answer{let _=client.respond_native(&source,answer,flag.clone()).await;}}
                 backend().approvals.lock().unwrap().remove(&key);
             });
         }else{updated(&app,&target);}
     }
+    if backend().generation.load(Ordering::Acquire)==generation{crate::pet_capabilities::invalidate_native_provider("codex");}
 }
 
-fn broker(app:&AppHandle,target:&Target,method:&str,params:&Value,cancel:&AtomicBool)->Option<Value>{
-    if params["threadId"]!=target.session_id{return None;}
-    let turn=params["turnId"].as_str()?;
-    if turn.is_empty()||turn.len()>128{return None;}
+fn broker(app:&AppHandle,target:&Target,method:&str,params:&Value,cancel:&Arc<AtomicBool>,source:&crate::pet_native_decisions::Ticket)->Option<Value>{
+    if !source.current(){return None;}
+    let scope=crate::pet_codex_request_scope::extract(method,params)?;
+    if scope.session!=target.session_id||source.identity().session_id!=scope.session
+        ||source.identity().turn_id.as_deref()!=scope.turn||source.identity().method!=method{return None;}
+    if scope.turn.is_some_and(|turn|turn.len()>128){return None;}
     if serde_json::to_vec(params).ok()?.len()>64*1024{return None;}
-    let origin=json!({"kind":"external","petId":target.pet_id,"provider":target.provider,"sessionId":target.session_id,"conversationId":null,"turnId":turn});
+    let origin=json!({"kind":"external","petId":target.pet_id,"provider":target.provider,"sessionId":target.session_id,"conversationId":null,"turnId":scope.turn});
     match method{
-        "item/commandExecution/requestApproval"|"item/fileChange/requestApproval"=>{
-            let answer=crate::cli_chat::ask_target(app,&target.provider,method,params,cancel,origin)?;
-            let decision=if answer["allow"]==true{"accept"}else{"decline"};
-            if params["availableDecisions"].as_array().is_some_and(|choices|!choices.iter().any(|v|v==decision)){return None;}
-            // Never select acceptForSession or an exec/network policy amendment.
-            Some(json!({"decision":decision}))
-        },
-        "item/permissions/requestApproval"=>{
-            let mut prompt=params.clone();prompt["reason"]=json!(format!("Permissões até ao fim deste turno (não apenas uma operação):\n{}",serde_json::to_string_pretty(&params["permissions"]).ok()?));
-            let answer=crate::cli_chat::ask_target(app,&target.provider,method,&prompt,cancel,origin)?;
-            Some(json!({"permissions":if answer["allow"]==true{params["permissions"].clone()}else{json!({})},"scope":"turn"}))
+        "item/commandExecution/requestApproval"|"item/fileChange/requestApproval"|"item/permissions/requestApproval"|"execCommandApproval"|"applyPatchApproval"=>{
+            let mut prompt=params.clone();
+            if method=="item/permissions/requestApproval"{prompt["reason"]=json!(format!("Permissões pedidas pelo agente:\n{}",serde_json::to_string_pretty(&params["permissions"]).ok()?));}
+            let answer=crate::cli_chat::ask_native(app,&target.provider,method,&prompt,cancel,origin,source.clone())?;
+            crate::pet_native_choices::codex_response(method,params,Some(&answer))
         },
         "item/tool/requestUserInput"=>{
-            let answer=crate::cli_chat::ask_target(app,&target.provider,method,params,cancel,origin)?;
+            let answer=crate::cli_chat::ask_native(app,&target.provider,method,params,cancel,origin,source.clone())?;
             let mut answers=serde_json::Map::new();
             for question in params["questions"].as_array()?{let id=question["id"].as_str()?;answers.insert(id.into(),json!({"answers":answer["answers"][id].as_array().cloned().unwrap_or_default()}));}
             Some(json!({"answers":answers}))
         },
+        "mcpServer/elicitation/request"=>crate::cli_chat::codex_request_target(app,&target.provider,method,params,cancel,origin,Some(source.clone())),
         _=>None, // Unsupported native dialogs remain with their original client.
     }
 }
@@ -182,16 +185,27 @@ pub async fn session_chat_history(app:AppHandle,window:tauri::WebviewWindow,targ
     allowed_window(&window)?;validate(&app,&target)?;
     if target.provider=="copilot"{
         let snapshot=crate::copilot_session::history(&target).await?;
-        copilot_observer::observe(&app,&target);return Ok(snapshot);
+        copilot_observer::observe(&app,&target);
+        validate(&app,&target)?;
+        let mut snapshot=snapshot;snapshot.capability_descriptor=Some(crate::pet_capabilities::native_target_snapshot(&app,&target)?);return Ok(snapshot);
     }
     let client=client(&app).await?;observe(&app,&client,&target).await?;
-    let snapshot=codex::snapshot(&client,&target).await?;
-    Ok(backend().live.lock().unwrap().merge(snapshot))
+    // Pair publication with the exact current client while holding its lock.
+    let ticket={let current=backend().client.lock().await;
+        current.as_ref().filter(|c|Arc::ptr_eq(c,&client)&&c.connected()).and_then(|_|crate::pet_capabilities::begin_native(&target))};
+    let result=codex::snapshot(&client,&target).await;
+    let mut snapshot=match result{Ok(s)=>backend().live.lock().unwrap().merge(s),Err(e)=>{crate::pet_capabilities::finish_native(ticket,None);return Err(e);}};
+    validate(&app,&target)?;
+    {let current=backend().client.lock().await;
+        let valid=current.as_ref().is_some_and(|c|Arc::ptr_eq(c,&client)&&c.connected());
+        crate::pet_capabilities::finish_native(ticket,valid.then_some(&snapshot));}
+    snapshot.capability_descriptor=Some(crate::pet_capabilities::native_target_snapshot(&app,&target)?);
+    Ok(snapshot)
 }
 
 #[tauri::command]
 pub async fn session_chat_send(app:AppHandle,window:tauri::WebviewWindow,target:Target,query:String,model:Option<String>)->Result<Value,String>{
-    allowed_window(&window)?;validate(&app,&target)?;let _lease=Lease::acquire(&format!("{}:{}",target.provider,target.session_id))?;
+    allowed_window(&window)?;validate(&app,&target)?;crate::pet_capabilities::invalidate_native(&target);let _lease=Lease::acquire(&format!("{}:{}",target.provider,target.session_id))?;
     if target.provider=="copilot"{
         if model.is_some(){return Err("Muda o modelo no terminal Copilot desta sessão; o pet preserva a configuração nativa.".into());}
         let result=crate::copilot_session::send(&target,&query).await;updated(&app,&target);return result;
@@ -203,7 +217,7 @@ pub async fn session_chat_send(app:AppHandle,window:tauri::WebviewWindow,target:
 
 #[tauri::command]
 pub async fn session_chat_cancel(app:AppHandle,window:tauri::WebviewWindow,target:Target,turn:Option<String>)->Result<Value,String>{
-    allowed_window(&window)?;validate(&app,&target)?;
+    allowed_window(&window)?;validate(&app,&target)?;crate::pet_capabilities::invalidate_native(&target);
     if target.provider=="copilot"{return crate::copilot_session::cancel(&target,turn.as_deref()).await;}
     let turn=turn.ok_or("Escolhe o turno exato para interromper a sessão.")?;
     let client=client(&app).await?;

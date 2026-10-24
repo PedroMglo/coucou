@@ -2,29 +2,70 @@
 use std::{collections::BTreeMap,path::{Path,PathBuf},sync::{Mutex,OnceLock}};
 use tauri::{AppHandle,Manager};
 fn grants()->&'static Mutex<BTreeMap<PathBuf,String>>{static GRANTS:OnceLock<Mutex<BTreeMap<PathBuf,String>>>=OnceLock::new();GRANTS.get_or_init(||Mutex::new(BTreeMap::new()))}
-fn local_unsupported(provider:&str,path:&Path)->bool{
- ["ollama","lmstudio"].contains(&provider) && path.is_file() && path.extension().and_then(|e|e.to_str()).is_some_and(|e|["png","jpg","jpeg","gif","webp","mp3","mp4","wav","ogg","zip","doc","docx","xls","xlsx","ppt","pptx","exe","bin"].contains(&e.to_ascii_lowercase().as_str()))
+fn analysis_supported(provider:&str,path:&Path)->bool{
+ crate::pet_documents::policy::can_analyze(provider,&path.to_string_lossy(),std::fs::symlink_metadata(path).is_ok_and(|m|m.is_dir()))
 }
 pub fn ingest(provider:&str,source:&str)->Result<crate::files::DroppedFile,String>{
  crate::pet_config::require_active_provider(provider)?;
  let pet=crate::pet_config::integration_pet(provider).ok_or("Este pet não recebe documentos.")?;
  let config=crate::pet_config::read()?;let p=config.permissions(pet)?;
  let folder=std::fs::symlink_metadata(source).is_ok_and(|m|m.is_dir());
- let analysis=p.documents && !local_unsupported(provider,Path::new(source)) && (!folder || crate::cli_chat::backend(provider).is_some() || ["ollama","lmstudio"].contains(&provider));
+ let analysis=p.documents && analysis_supported(provider,Path::new(source));
  if !analysis && (!p.email_drafts || folder){return Err(format!("{} não tem nenhuma funcionalidade ativa para este {}. Revê os acessos deste pet.",config.pets[pet].name,if folder{"tipo de pasta"}else{"documento"}));}
  let file=if folder{crate::document_folder::ingest(source)?}else{crate::files::ingest(source)?};
  let mut g=grants().lock().unwrap();g.retain(|path,_|path.exists());
  g.insert(PathBuf::from(&file.path),pet.into());Ok(file)
 }
-pub fn check(provider:&str,path:&str)->Result<(),String>{
- let pet=crate::pet_config::integration_pet(provider).ok_or("Este pet não recebe documentos.")?;
- crate::pet_config::require(pet,"documents")?;
- if local_unsupported(provider,Path::new(path)){return Err("Este formato ainda não é analisado pelo chat local. Entrega texto ou um PDF com texto, ou escolhe um pet com ferramentas de documentos.".into());}
- owned(pet,path)
+/// Captured document requests never recreate defaults when a grant/config
+/// disappears. Read the permission once for the complete captured set.
+pub(crate) fn check_existing_many(provider:&str,paths:&[&str])->Result<(),String>{
+ let pet=crate::pet_config::integration_pet(provider).ok_or("Este pet não recebe documentos.")?;crate::pet_config::require_active(pet)?;
+ let config=crate::pet_config::read_existing()?;
+ if !config.permissions(pet)?.documents{return Err("Este pet não tem acesso aos documentos desta conversa.".into());}
+ for path in paths{if !analysis_supported(provider,Path::new(path)){return Err("Um dos formatos não é suportado por este pet.".into());}read_owned(pet,path)?;}Ok(())
 }
 fn owned(pet:&str,path:&str)->Result<(),String>{
  let path=Path::new(path).canonicalize().map_err(|_|"O documento já não está disponível. Volta a arrastá-lo para o pet.")?;
  if grants().lock().unwrap().get(&path).is_some_and(|owner|owner==pet){Ok(())}else{Err("Este documento não foi entregue a este pet. Arrasta-o para o pet que o deve receber.".into())}
+}
+// Renewing document reads is deliberately separate from the native drop grant
+// used by mail drafts. It cannot authorize email export or original source IO.
+fn read_grants()->&'static Mutex<BTreeMap<(PathBuf,String),String>>{static READ:OnceLock<Mutex<BTreeMap<(PathBuf,String),String>>>=OnceLock::new();READ.get_or_init(||Mutex::new(BTreeMap::new()))}
+fn read_owned(pet:&str,path:&str)->Result<(),String>{
+    if owned(pet,path).is_ok(){return Ok(());}
+    let path=Path::new(path).canonicalize().map_err(|_|"A cópia do documento está indisponível.".to_string())?;
+    if read_grants().lock().unwrap().contains_key(&(path,pet.into())){Ok(())}else{Err("Autoriza novamente a leitura deste anexo nesta conversa.".into())}
+}
+pub(crate) struct ReviewedReads{inserted:Vec<(PathBuf,String)>,token:String,keep:bool}
+impl ReviewedReads{pub(crate) fn keep(mut self){self.keep=true;}}
+impl Drop for ReviewedReads{fn drop(&mut self){if !self.keep{let mut grants=read_grants().lock().unwrap();for key in &self.inserted{if grants.get(key)==Some(&self.token){grants.remove(key);}}}}}
+fn stage_reads(pet:&str,paths:&[&str])->Result<ReviewedReads,String>{
+    let token=crate::assistant_memory::new_id();let paths=paths.iter().map(|p|Path::new(p).canonicalize().map_err(|_|"Uma cópia deixou de estar disponível.".to_string())).collect::<Result<Vec<_>,_>>()?;
+    let mut grants=read_grants().lock().unwrap();grants.retain(|(p,_),_|p.exists());
+    if grants.len().saturating_add(paths.iter().filter(|p|!grants.contains_key(&((*p).clone(),pet.into()))).count())>128{return Err("O limite de autorizações de documentos foi atingido. Reinicia a aplicação ou remove anexos antes de renovar.".into());}
+    let mut inserted=vec![];
+    for path in paths{let key=(path,pet.into());if !grants.contains_key(&key){grants.insert(key.clone(),token.clone());inserted.push(key);}}
+    Ok(ReviewedReads{inserted,token,keep:false})
+}
+pub(crate) fn grant_reviewed_reads_at(provider:&str,paths:&[&str],config_path:&Path)->Result<ReviewedReads,String>{
+    let pet=crate::pet_config::integration_pet(provider).ok_or("Pet desconhecido.")?;crate::pet_config::require_active(pet)?;
+    let config=crate::pet_config::read_existing_at(config_path)?;if !config.permissions(pet)?.documents{return Err("Este pet não tem acesso a documentos. Revê as permissões antes de renovar.".into());}
+    for path in paths{if !analysis_supported(provider,Path::new(path)){return Err("Um dos formatos não é suportado por este pet.".into());}}
+    stage_reads(pet,paths)
+}
+pub(crate) fn revoke_reviewed_reads(provider:Option<&str>,paths:Option<&[String]>){
+    let pet=provider.and_then(crate::pet_config::integration_pet);
+    let paths=paths.map(|paths|paths.iter().flat_map(|p|{let path=PathBuf::from(p);[Some(path.clone()),path.canonicalize().ok()]}).flatten().collect::<Vec<_>>());
+    read_grants().lock().unwrap().retain(|(path,owner),_|!((provider.is_none()||pet==Some(owner.as_str()))&&paths.as_ref().is_none_or(|ps|ps.contains(path))));
+}
+/// The retention coordinator already pins these canonical owned copies. Revoke
+/// both document and native mail authority, without resolving a replaced path.
+#[cfg(target_os="linux")]
+pub(crate) fn revoke_copy_grants(provider:&str,paths:&[String])->Result<(),String>{
+    let pet=crate::pet_config::integration_pet(provider).ok_or("Pet desconhecido.")?;
+    let paths=paths.iter().map(PathBuf::from).collect::<Vec<_>>();let mut native=grants().lock().unwrap();let mut reads=read_grants().lock().unwrap();
+    if native.iter().any(|(p,owner)|paths.contains(p)&&owner!=pet)||reads.keys().any(|(p,owner)|paths.contains(p)&&owner!=pet){return Err("Uma cópia tem uma autorização de outro pet. As cópias foram preservadas.".into());}
+    native.retain(|p,_|!paths.contains(p));reads.retain(|(p,_),_|!paths.contains(p));Ok(())
 }
 fn compose(to:&str,subject:&str,body:&str,attachment:&Path)->Result<String,String>{
  if to.len()>320 || subject.len()>500 || body.len()>32000 || to.chars().any(char::is_control) || subject.chars().any(char::is_control) || (!to.is_empty() && (!to.contains('@') || to.contains(['\'',',','"',' ']))){return Err("Revê o destinatário e o assunto do rascunho.".into());}
@@ -77,7 +118,33 @@ pub async fn pet_mail_draft(window:tauri::WebviewWindow,app:AppHandle,provider:S
  #[cfg(target_os="linux")]{let request=next_mail_request()?;crate::log::line(format!("mail draft {request}: received"));tauri::async_runtime::spawn_blocking(move||draft(request,&provider,&path,&recipient,&subject,&body)).await.map_err(|_|"A preparação do rascunho foi interrompida.".to_string())?}
  #[cfg(not(target_os="linux"))]{let _=(provider,path,recipient,subject,body);Err("Rascunhos com anexo ainda não estão disponíveis nesta plataforma.".into())}
 }
-#[cfg(test)]mod tests{use super::*;#[test]fn compose_cannot_inject_recipient_fields_or_drop_attachment(){
+#[cfg(test)]mod tests{use super::*;
+#[test]
+#[cfg(target_os="linux")]
+fn copy_retention_revokes_exact_native_mail_and_read_grants_and_keeps_other_paths(){
+ let root=std::env::temp_dir().join(format!("coucou-purge-grants-{}",crate::assistant_memory::new_id()));std::fs::create_dir(&root).unwrap();let a=root.join("a.txt");let b=root.join("b.txt");std::fs::write(&a,b"abc").unwrap();std::fs::write(&b,b"def").unwrap();
+ grants().lock().unwrap().extend([(a.clone(),"ai_ollama".into()),(b.clone(),"agent_codex".into())]);stage_reads("ai_ollama",&[a.to_str().unwrap()]).unwrap().keep();stage_reads("agent_codex",&[b.to_str().unwrap()]).unwrap().keep();
+ revoke_copy_grants("ollama",&[a.to_string_lossy().into_owned()]).unwrap();assert!(owned("ai_ollama",a.to_str().unwrap()).is_err());assert!(read_owned("ai_ollama",a.to_str().unwrap()).is_err());assert!(owned("agent_codex",b.to_str().unwrap()).is_ok());assert!(read_owned("agent_codex",b.to_str().unwrap()).is_ok());
+ revoke_copy_grants("codex",&[b.to_string_lossy().into_owned()]).unwrap();std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
+#[cfg(target_os="linux")]
+fn foreign_copy_grants_block_purge_without_revoking_either_owner(){
+ let path=std::env::temp_dir().join(format!("coucou-foreign-purge-grants-{}",crate::assistant_memory::new_id()));std::fs::write(&path,b"abc").unwrap();grants().lock().unwrap().insert(path.clone(),"ai_ollama".into());stage_reads("agent_codex",&[path.to_str().unwrap()]).unwrap().keep();
+ assert!(revoke_copy_grants("ollama",&[path.to_string_lossy().into_owned()]).is_err());assert!(owned("ai_ollama",path.to_str().unwrap()).is_ok());assert!(read_owned("agent_codex",path.to_str().unwrap()).is_ok());
+ revoke_reviewed_reads(Some("codex"),Some(&[path.to_string_lossy().into_owned()]));revoke_copy_grants("ollama",&[path.to_string_lossy().into_owned()]).unwrap();std::fs::remove_file(path).unwrap();
+}
+#[test]fn reviewed_read_grants_are_scoped_rollback_safe_and_do_not_authorize_mail(){
+ let path=std::env::temp_dir().join(format!("coucou-reviewed-read-{}",crate::assistant_memory::new_id()));std::fs::write(&path,b"synthetic").unwrap();let text=path.to_str().unwrap();
+ let staged=stage_reads("ai_ollama",&[text]).unwrap();assert!(read_owned("ai_ollama",text).is_ok());assert!(read_owned("agent_codex",text).is_err());assert!(owned("ai_ollama",text).is_err());drop(staged);assert!(read_owned("ai_ollama",text).is_err());
+ stage_reads("ai_ollama",&[text]).unwrap().keep();let again=stage_reads("ai_ollama",&[text]).unwrap();drop(again);assert!(read_owned("ai_ollama",text).is_ok());assert!(owned("ai_ollama",text).is_err());
+ read_grants().lock().unwrap().remove(&(path.clone(),"ai_ollama".into()));std::fs::remove_file(path).unwrap();
+}
+#[test]fn document_read_revocation_preserves_other_pets_with_the_same_copy(){
+ let path=std::env::temp_dir().join(format!("coucou-scoped-revoke-{}",crate::assistant_memory::new_id()));std::fs::write(&path,b"one").unwrap();let text=path.to_str().unwrap();stage_reads("ai_ollama",&[text]).unwrap().keep();stage_reads("agent_codex",&[text]).unwrap().keep();
+ revoke_reviewed_reads(Some("ollama"),Some(&[text.into()]));assert!(read_owned("ai_ollama",text).is_err());assert!(read_owned("agent_codex",text).is_ok());revoke_reviewed_reads(Some("codex"),Some(&[text.into()]));assert!(read_owned("agent_codex",text).is_err());std::fs::remove_file(path).unwrap();
+}
+#[test]fn compose_cannot_inject_recipient_fields_or_drop_attachment(){
  let text=compose("example@example.invalid","Olá, it's a test","PT & English\nattachment='evil'",Path::new("/tmp/Test document.pdf")).unwrap();
  assert!(text.contains("subject=\"Ol%C3%A1%2C%20it%27s%20a%20test\""));assert!(text.contains("attachment=\"file%3A%2F%2F%2Ftmp%2FTest%2520document.pdf\""));assert!(text.ends_with(",format=text"));
  assert!(compose("x@y,evil@example.invalid","test","",Path::new("/tmp/a.pdf")).is_err());assert!(compose("x@y\nBcc: evil@a","test","",Path::new("/tmp/a.pdf")).is_err());

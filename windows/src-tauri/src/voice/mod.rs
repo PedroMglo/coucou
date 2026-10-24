@@ -12,8 +12,11 @@
 // It stops listening while you dictate, while a call is recorded and while it
 // speaks itself.
 
+pub(crate) mod admission;
 pub mod brain;
 pub mod local;
+mod local_task;
+mod pill_action;
 pub mod manual;
 pub mod wake;
 pub mod dialogue;
@@ -530,91 +533,64 @@ pub fn ask_island(app: &AppHandle, kind: &str, input: Value) -> Option<String> {
 }
 
 /// Runs one of Claude's tools: what goes back to Claude, and whether something changed.
-pub fn run_tool(app: &AppHandle, name: &str, input: &Value) -> (String, bool) {
-    run_tool_for(app,"ai_anthropic",name,input)
+pub fn run_tool_for(app:&AppHandle,pet:&str,name:&str,input:&Value,current:impl Fn()->bool)->(String,bool){
+    crate::pet_operations::run(pet,name,input,current,crate::pet_config::read_existing,|call|run_native_tool(app,call)).legacy()
 }
-pub fn run_tool_for(app:&AppHandle,pet:&str,name:&str,input:&Value)->(String,bool){
-    let grant=match name{"prepare_email"=>Some("emailDrafts"),"music"=>Some("music"),"open_app"=>Some("openApps"),_=>None};
-    if let Some(grant)=grant{if let Err(error)=crate::pet_config::require(pet,grant){return(error,false);}}
-    match name {
-        "pills" => {
-            let answer = ask_island(app, "pills", input.clone()).unwrap_or_else(|| "the island did not answer".into());
-            let acted = input["action"].as_str() != Some("list") && !answer.contains("unknown");
-            (answer, acted)
-        }
-        "service_info" => (ask_island(app, "info", json!({})).unwrap_or_else(|| "no data".into()), false),
-        "music" => music(app, input),
-        "open_app" => open_app(input["name"].as_str().unwrap_or("")),
-        "prepare_email" => {
-            let to = input["recipient"].as_str().unwrap_or("").trim().to_string();
-            if !to.contains('@') {
-                return ("No email address: ask the user to spell it.".into(), false);
-            }
-            let enc = |s: &str| -> String {
-                s.bytes()
-                    .map(|b| match b {
-                        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
-                        _ => format!("%{b:02X}"),
-                    })
-                    .collect()
-            };
-            let url = format!(
-                "mailto:{}?subject={}&body={}",
-                enc(&to).replace("%40", "@"),
-                enc(input["subject"].as_str().unwrap_or("")),
-                enc(input["body"].as_str().unwrap_or(""))
-            );
-            crate::platform::open_url(&url);
-            (format!("The mail app opened with the email to {to}. Nothing is sent until the user sends it."), true)
-        }
-        _ => (format!("unknown tool {name}"), false),
-    }
+pub(crate) fn run_native_tool_for(app:&AppHandle,pet:&str,name:&str,input:&Value,native:&crate::pet_native_invocation::Fence,current:impl Fn()->bool)->(String,bool){
+    crate::pet_operations::run_native(native,pet,name,input,current,crate::pet_config::read_existing,|call|run_native_tool(app,call)).legacy()
 }
 
-fn music(app: &AppHandle, input: &Value) -> (String, bool) {
-    let action = input["action"].as_str().unwrap_or("");
-    let (control, value) = match action {
-        "play_pause" => ("playPause", None),
-        "pause" => ("pause",None),
-        "play" => ("play",None),
-        "next" => ("next", None),
-        "previous" => ("previous", None),
-        "set_volume" => ("volume", Some(input["volume"].as_f64().unwrap_or(50.0).clamp(0.0, 100.0))),
-        "play_item"=>{let ok=tauri::async_runtime::block_on(crate::spotify::spotify_play_item(app.clone(),input["uri"].as_str().unwrap_or("").into()));return(if ok{"Spotify accepted the playback request.".into()}else{"Spotify did not accept that item.".into()},ok);},
-        "search" => {
-            let q = input["query"].as_str().unwrap_or("").trim();
-            if q.is_empty() {
-                return ("missing query".into(), false);
-            }
-            let encoded: String = q.chars().map(|c| if c.is_alphanumeric() { c.to_string() } else { "%20".into() }).collect();
-            crate::platform::open_url(&format!("spotify:search:{encoded}"));
-            return (format!("Spotify opened on a search for {q}: the user picks what to play."), true);
-        }
-        _ => return ("unknown action".into(), false),
+fn run_native_tool(app:&AppHandle,call:&crate::pet_operations::Call)->crate::pet_operations::NativeOutcome {
+    use crate::pet_operations::{Arguments,Delivery as D,NativeOutcome as O};
+    match call.arguments() {
+        Arguments::Roster(input)=>{
+            let mut answered=false;
+            let (text,accepted)=pill_action::run(input,|request|{let answer=ask_island(app,"pills",request.clone());answered=answer.is_some();answer});
+            let delivery=if !answered{D::Uncertain}else if input["action"]=="list"{D::Returned}else if accepted{D::Accepted}else{D::Partial};
+            O::new(delivery,text)
+        },
+        Arguments::Snapshot=>match ask_island(app,"info",json!({})){
+            Some(text)=>O::new(D::Returned,text),
+            None=>O::new(D::Uncertain,"A ilha não respondeu; os dados não foram confirmados."),
+        },
+        Arguments::Music(request)=>music(app,request),
+        Arguments::OpenApp(name)=>open_app(name),
+        Arguments::Email(email)=>{
+            crate::platform::open_url(&email.uri());
+            O::new(D::Dispatched,format!("Foi pedido à aplicação de correio um rascunho para {}. A abertura não foi observada; este pedido não envia o email.",email.recipient))
+        },
+    }
+}
+fn music(app:&AppHandle,request:&crate::pet_operations::Music)->crate::pet_operations::NativeOutcome {
+    use crate::pet_operations::{Music,Delivery as D,NativeOutcome as O};
+    let (control,value)=match request{
+        Music::PlayPause=>("playPause",None), Music::Pause=>("pause",None), Music::Play=>("play",None),
+        Music::Next=>("next",None), Music::Previous=>("previous",None),
+        Music::SetVolume{volume}=>("volume",Some(f64::from(*volume))),
+        Music::PlayItem{uri}=>{
+            let accepted=tauri::async_runtime::block_on(crate::spotify::spotify_play_item(app.clone(),uri.clone()));
+            return if accepted{O::new(D::Accepted,"O Spotify aceitou o pedido de reprodução; o efeito ainda não foi verificado.")}
+                else{O::new(D::Uncertain,"O pedido não foi confirmado pelo Spotify. Verifica o estado antes de o repetir.")};
+        },
+        Music::Search{query}=>{
+            crate::platform::open_url(&format!("spotify:search:{}",crate::pet_operations::encode(query)));
+            return O::new(D::Dispatched,format!("Foi pedida a abertura da pesquisa Spotify por {query:?}; a abertura não foi observada e não foi pedido o início de uma faixa."));
+        },
     };
-    let app2 = app.clone();
-    let done = tauri::async_runtime::block_on(crate::spotify::spotify_control(app2, control.into(), value));
-    if done {
+    let accepted=tauri::async_runtime::block_on(crate::spotify::spotify_control(app.clone(),control.into(),value));
+    if accepted{
         let state=tauri::async_runtime::block_on(crate::spotify::spotify_refresh(app.clone()));
-        (state.map(|s|json!({"requestAccepted":true,"playing":s.playing,"volume":s.volume,"track":s.track.map(|t|json!({"title":t.title,"artist":t.artist}))}).to_string()).unwrap_or_else(||"Request accepted; playback state is not confirmed.".into()),true)
-    } else {
-        ("Spotify is not running or not playing: tell the user to open it.".into(), false)
-    }
+        O::new(D::Accepted,state.map(|s|json!({"requestAccepted":true,"playing":s.playing,"volume":s.volume,"track":s.track.map(|t|json!({"title":t.title,"artist":t.artist}))}).to_string()).unwrap_or_else(||"Pedido aceite; o estado de reprodução não foi confirmado.".into()))
+    }else{O::new(D::Uncertain,"O controlo Spotify não foi confirmado. Verifica o estado antes de repetir o pedido.")}
 }
 
-/// Opens an app whose name matches: a Start menu shortcut on Windows, a
-/// .desktop entry on Linux. Nothing else is ever run.
-fn open_app(name: &str) -> (String, bool) {
-    let wanted = wake::normalize(name);
-    if wanted.is_empty() {
-        return ("no name".into(), false);
-    }
-    match find_app(&wanted) {
-        Some((label, launch)) => {
-            launch();
-            (format!("{label} opened"), true)
-        }
-        None => (format!("No app named {name} on this computer."), false),
+/// The launcher request is not proof that a window was opened.
+fn open_app(name:&str)->crate::pet_operations::NativeOutcome{
+    use crate::pet_operations::{Delivery as D,NativeOutcome as O};
+    let wanted=wake::normalize(name);
+    match find_app(&wanted){
+        Some((label,launch))=>{launch();O::new(D::Dispatched,format!("Foi pedido o arranque de {label}; a abertura da janela não foi observada."))},
+        None=>O::new(D::NotDispatched,format!("Não foi encontrada uma aplicação com o nome {name:?}.")),
     }
 }
 

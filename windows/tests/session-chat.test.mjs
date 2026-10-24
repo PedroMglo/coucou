@@ -61,10 +61,10 @@ test('a committed public query replaces its optimistic bubble before the send pr
 });
 test('an attachment is captured with its conversation even if selection changes during delivery',async()=>{
  const job=deferred(),sent=[],a=target('a','mochi'),b=target('b','mochi');
- const attachment={name:'a.pdf',path:'/inbox/a.pdf',conversationId:'a',sequence:7};
- const chat=new SessionChat({history:async t=>snapshot(t,{attachment:t.sessionId==='a'?attachment:null}),send:(t,q,m,file)=>{sent.push({t,file});return job.promise;}},()=>{});
+ const attachment={id:'a-file',name:'a.pdf',path:'/inbox/a.pdf',provider:'codex',conversationId:'a',sequence:7,kind:'file',entries:1,size:3};
+ const chat=new SessionChat({history:async t=>snapshot(t,{attachments:t.sessionId==='a'?[attachment]:[]}),send:(t,q,m,file)=>{sent.push({t,file});return job.promise;}},()=>{});
  await chat.select(a);const pending=chat.send('Read this');await chat.select(b);job.resolve();await pending;
- assert.equal(sent[0].t.sessionId,'a');assert.equal(sent[0].file.path,'/inbox/a.pdf');assert.equal(chat.snapshot.attachment,null);
+ assert.equal(sent[0].t.sessionId,'a');assert.equal(sent[0].file[0].path,'/inbox/a.pdf');assert.equal(chat.snapshot.attachments.length,0);
 });
 test('an uncertain send keeps its original text for review without restoring or replaying the draft',async()=>{
  const t=target('a');let sends=0;
@@ -96,4 +96,9 @@ test('an unconfirmed cancellation of a still-running turn is visible without can
 test('a turn that finished before stop acknowledgement does not show a false cancellation error',async()=>{
  const t=target('already-finished');let busy=true;const chat=new SessionChat({history:async()=>snapshot(t,{busy,turn:'exact-8'}),cancel:async()=>{busy=false;return false;}},()=>{});
  await chat.select(t);await chat.cancel();assert.equal(chat.error,'');assert.equal(chat.snapshot.busy,false);
+});
+test('a request captures the complete set before changed callbacks or later mutations and retains attachments after reply',async()=>{
+ const t=target('cid','mochi'),a={id:'a',name:'same',path:'/inbox/a',provider:t.provider,conversationId:'cid',sequence:1,kind:'file',size:3,entries:1},b={...a,id:'b',path:'/inbox/b'},files=[a,b],gate=deferred(),received=[];
+ let chat=new SessionChat({history:async()=>snapshot(t,{attachments:files}),send:async(_t,_q,_m,attachments)=>{received.push(attachments);return gate.promise;}},()=>{});
+ await chat.select(t);const job=chat.send('both');a.path='/changed';files.push({...b,id:'c'});await chat.refresh();gate.resolve();await job;assert.deepEqual(received[0].map(f=>f.id),['a','b']);assert.equal(received[0][0].path,'/inbox/a');assert.equal(chat.snapshot.attachments.length,3);
 });

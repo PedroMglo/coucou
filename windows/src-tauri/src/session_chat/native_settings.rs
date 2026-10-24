@@ -7,22 +7,22 @@ use serde_json::Value;
 const MAX_THREADS:usize=128;
 const MAX_ROOT_BYTES:usize=16*1024;
 
-#[derive(Clone,Debug,PartialEq,Eq)]
+#[derive(Clone,Debug,PartialEq,Eq,serde::Serialize)]
 pub(crate) enum ApprovalPolicy {
     Untrusted,OnRequest,Never,
     Granular{sandbox_approval:bool,rules:bool,mcp_elicitations:bool,request_permissions:bool,skill_approval:bool},
 }
-#[derive(Clone,Debug,PartialEq,Eq)]
+#[derive(Clone,Debug,PartialEq,Eq,serde::Serialize)]
 pub(crate) enum Reviewer {User,AutoReview,GuardianSubagent}
-#[derive(Clone,Debug,PartialEq,Eq)]
+#[derive(Clone,Debug,PartialEq,Eq,serde::Serialize)]
 pub(crate) enum SandboxPolicy {
     DangerFullAccess,ReadOnly{network_access:bool},
     ExternalSandbox{network_access:String},
     WorkspaceWrite{network_access:bool,writable_roots:Vec<String>,exclude_tmpdir_env_var:bool,exclude_slash_tmp:bool},
 }
-#[derive(Clone,Debug,PartialEq,Eq)]
+#[derive(Clone,Debug,PartialEq,Eq,serde::Serialize)]
 pub(crate) struct Profile {pub id:String,pub extends:Option<String>}
-#[derive(Clone,Debug,PartialEq,Eq)]
+#[derive(Clone,Debug,PartialEq,Eq,serde::Serialize)]
 pub(crate) struct Settings {
     pub approval_policy:ApprovalPolicy,pub reviewer:Reviewer,pub sandbox_policy:SandboxPolicy,
     pub profile:Option<Profile>,pub cwd:String,
@@ -38,10 +38,10 @@ pub(crate) struct Observation {
     pub observed_at:Option<u64>,pub sequence:Option<u64>,pub stale:bool,pub reason:Option<Reason>,
 }
 struct Entry {last:Option<Settings>,at:Option<u64>,sequence:Option<u64>,reason:Option<Reason>,closed:bool}
-pub(super) struct Cache {entries:BTreeMap<String,Entry>,sequence:u64,retired:Option<Reason>}
+pub(crate) struct Cache {entries:BTreeMap<String,Entry>,sequence:u64,retired:Option<Reason>}
 impl Default for Cache {fn default()->Self{Self{entries:BTreeMap::new(),sequence:0,retired:None}}}
 
-pub(super) fn thread_id(id:&str)->Option<String>{
+pub(crate) fn thread_id(id:&str)->Option<String>{
     (id.len()==36&&id.bytes().enumerate().all(|(i,b)|if [8,13,18,23].contains(&i){b==b'-'}else{b.is_ascii_hexdigit()})
         &&id.bytes().any(|b|b.is_ascii_hexdigit()&&b!=b'0')).then(||id.to_ascii_lowercase())
 }
@@ -82,18 +82,33 @@ fn settings(value:&Value)->Option<Settings>{
     }};
     Some(Settings{approval_policy:approval(value.get("approvalPolicy")?)?,reviewer:match value.get("approvalsReviewer")?.as_str()?{"user"=>Reviewer::User,"auto_review"=>Reviewer::AutoReview,"guardian_subagent"=>Reviewer::GuardianSubagent,_=>return None},sandbox_policy:sandbox(value.get("sandboxPolicy")?)?,profile,cwd:path(value.get("cwd")?)?})
 }
+impl Settings{
+    pub(crate)fn fingerprint(&self)->Option<String>{let mut b=b"coucou-native-settings-observation-v1\0".to_vec();b.extend(serde_json::to_vec(self).ok()?);Some(ring::digest::digest(&ring::digest::SHA256,&b).as_ref().iter().map(|v|format!("{v:02x}")).collect())}
+}
 impl Cache {
+    /// Only the native reader supplies a matched thread/start or thread/resume
+    /// result. No RPC is issued here and raw instructions/model fields are dropped.
+    pub(crate)fn response(&mut self,expected:Option<&str>,result:&Value,now:u64)->Option<String>{
+        let parsed=result.pointer("/thread/id").and_then(Value::as_str).and_then(thread_id);
+        let Some(id)=parsed else{self.invalidate_all(Reason::InvalidNotification);return None;};
+        if expected.is_some_and(|raw|thread_id(raw).as_ref()!=Some(&id)){self.invalidate_all(Reason::InvalidNotification);return None;}
+        let event=serde_json::json!({"method":"thread/settings/updated","params":{"threadId":id,"threadSettings":{
+            "approvalPolicy":result["approvalPolicy"],"approvalsReviewer":result["approvalsReviewer"],"sandboxPolicy":result["sandbox"],"cwd":result["cwd"],"activePermissionProfile":result["activePermissionProfile"]
+        }}});
+        self.event(&event,now);Some(id)
+    }
+
     fn entry(&mut self,id:&str)->Option<&mut Entry>{
         if !self.entries.contains_key(id)&&self.entries.len()>=MAX_THREADS{return None;}
         Some(self.entries.entry(id.into()).or_insert(Entry{last:None,at:None,sequence:None,reason:Some(Reason::NotObserved),closed:false}))
     }
     fn invalidate_all(&mut self,reason:Reason){for entry in self.entries.values_mut(){entry.reason=Some(reason);}}
-    pub(super) fn disconnect(&mut self){if self.retired.is_none(){self.retired=Some(Reason::Disconnected);self.invalidate_all(Reason::Disconnected);}}
+    pub(crate) fn disconnect(&mut self){if self.retired.is_none(){self.retired=Some(Reason::Disconnected);self.invalidate_all(Reason::Disconnected);}}
     /// Called in the RPC reader, before the bounded broadcast. Consumer lag
     /// cannot make this cache miss a settings event already read on this Client.
     /// Returns only a public invalidation marker; raw settings/instructions are
     /// never forwarded to consumers by this path.
-    pub(super) fn event(&mut self,event:&Value,now:u64)->Option<Value>{
+    pub(crate) fn event(&mut self,event:&Value,now:u64)->Option<Value>{
         if self.retired.is_some()||event.get("id").is_some(){return None;}
         let method=event.get("method")?.as_str()?;
         if method=="thread/closed"||method=="thread/started"{
@@ -112,7 +127,7 @@ impl Cache {
         }
         Some(serde_json::json!({"method":"mochi/threadSettingsObserved","params":{"threadId":id,"sequence":sequence.to_string(),"observationOnly":true}}))
     }
-    pub(super) fn snapshot(&self,raw:&str,now:u64,max_age:u64)->Observation{
+    pub(crate) fn snapshot(&self,raw:&str,now:u64,max_age:u64)->Observation{
         let id=thread_id(raw);let entry=id.as_ref().and_then(|id|self.entries.get(id));
         let mut reason=if id.is_none(){Some(Reason::InvalidThread)}else if let Some(reason)=self.retired{Some(reason)}else{entry.and_then(|e|e.reason).or_else(||entry.is_none().then_some(if self.entries.len()>=MAX_THREADS{Reason::Capacity}else{Reason::NotObserved}))};
         if reason.is_none()&&entry.is_some_and(|e|e.at.is_none_or(|at|at>now||now-at>max_age)){reason=Some(Reason::Expired);}

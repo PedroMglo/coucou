@@ -7,30 +7,31 @@ import { CompanionsLink } from "../src/island/companions.ts";
 import { PET_EVENTS } from "../src/mochi/companions.ts";
 
 test('a completed document replaces an older pending summon with its action chooser',async()=>{
- const configure=Bridge.companionsConfigure,conversation=Bridge.chatConversation,opened=[];
+ const configure=Bridge.companionsConfigure,conversation=Bridge.chatConversation,documents=Bridge.petDocumentContexts,opened=[];
  try{
   Bridge.companionsConfigure=async()=>({width:1440,height:320,top:0});
   Bridge.chatConversation=async()=>({id:'ollama-doc-chat',messages:[]});
   State.settings={...DEFAULT_SETTINGS,companionMode:true,mainPill:'agent_codex',activeIntegrations:['ai_ollama']};
   State.tasks=[task('agent_codex'),task('ai_ollama')];State.pendingApproval=null;State.clearAllDialogueContexts();
   const link=new CompanionsLink((id,view)=>opened.push({id,view}),()=> 'none');await link.init();
-  const file={name:'a.pdf',path:'/private/inbox/a.pdf',conversationId:'ollama-doc-chat',sequence:11};
-  emit('pet-document',{pet:'ai_ollama',file});await settle();
+  let file={id:'a',provider:'ollama',kind:'file',size:3,entries:1,name:'a.pdf',path:'/private/inbox/a.pdf',conversationId:'ollama-doc-chat',sequence:11};
+  Bridge.petDocumentContexts=async()=>[file];
+  emit('pet-document',{pet:'ai_ollama',files:[file]});await settle();
   assert.deepEqual(opened.at(-1),{id:'ai_ollama',view:'choose'});
   assert.ok(sent('plugin:event|emit_to').some(e=>e.event==='companions-present'&&e.payload.id==='ai_ollama'&&e.payload.view==='choose'));
   assert.equal(State.fileFor('ollama').sequence,11);assert.equal(State.fileFor('codex'),null);
   const before=opened.length;State.pendingApproval={pillId:'agent_codex',requestId:'native-decision'};
-  emit('pet-document',{pet:'ai_ollama',file:{...file,sequence:12}});await settle();
+  file={...file,sequence:12};emit('pet-document',{pet:'ai_ollama',files:[file]});await settle();
   assert.equal(opened.length,before+1,'another pet waiting for approval must not block document actions');
   assert.deepEqual(opened.at(-1),{id:'ai_ollama',view:'choose'});
   assert.equal(State.pendingApproval.requestId,'native-decision');
   assert.equal(State.fileFor('ollama').sequence,12);
   State.pendingApproval={pillId:'ai_ollama',requestId:'own-decision'};
-  emit('pet-document',{pet:'ai_ollama',file:{...file,sequence:13}});await settle();
+  file={...file,sequence:13};emit('pet-document',{pet:'ai_ollama',files:[file]});await settle();
   assert.equal(opened.length,before+1,'the receiving pet keeps its own pending decision');
   assert.equal(State.pendingApproval.requestId,'own-decision');
   assert.deepEqual(sent('chat_send'),[]);assert.deepEqual(sent('approval_decision'),[]);
- }finally{Bridge.companionsConfigure=configure;Bridge.chatConversation=conversation;State.pendingApproval=null;}
+ }finally{Bridge.companionsConfigure=configure;Bridge.chatConversation=conversation;Bridge.petDocumentContexts=documents;State.pendingApproval=null;}
 });
 
 const task = id => ({ id, name: id, state: "idle", color: "#88aaff", steps: [], stepIndex: 0, source: "agent", isIntegration: true });

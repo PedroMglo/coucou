@@ -276,15 +276,25 @@ class AppState {
   fileDragOver = false;
 
   private chatContexts = new Map<string,PromptContext>();
-  private chatFiles = new Map<string,PetFile>();
+  private chatFiles = new Map<string,PetFile[]>();
+  private documentChoices=new Map<string,string>();
   get promptContext():PromptContext|null {return this.chatContexts.get(this.chatProvider)??null;}
   set promptContext(value:PromptContext|null) {if(value)this.chatContexts.set(this.chatProvider,value);else this.chatContexts.delete(this.chatProvider);}
-  get droppedFile():PetFile|null {return this.chatFiles.get(this.chatProvider)??null;}
-  set droppedFile(value:PetFile|null) {if(value)this.chatFiles.set(this.chatProvider,value);else this.chatFiles.delete(this.chatProvider);}
-  fileFor(provider:string) {return this.chatFiles.get(provider)??null;}
-  setFileContext(provider:string,file:PetFile) {this.chatFiles.set(provider,file);this.chatContexts.set(provider,{kind:"file",name:file.name,path:file.path});}
-  clearDialogueContext(provider:string) {this.chatContexts.delete(provider);this.chatFiles.delete(provider);}
-  clearAllDialogueContexts(){this.chatContexts.clear();this.chatFiles.clear();}
+  get droppedFile():PetFile|null {return this.fileFor(this.chatProvider);}
+  set droppedFile(value:PetFile|null) {if(value)this.setFileContext(this.chatProvider,value);else this.clearDialogueContext(this.chatProvider);}
+  filesFor(provider:string):PetFile[]{return (this.chatFiles.get(provider)??[]).map(a=>({...a}));}
+  fileFor(provider:string):PetFile|null {const files=this.chatFiles.get(provider)??[],choice=this.documentChoices.get(provider);return files.find(a=>(a.id??a.path)===choice)??files.at(-1)??null;}
+  chooseFile(provider:string,file:PetFile){if(this.chatFiles.get(provider)?.some(a=>(a.id??a.path)===(file.id??file.path))){this.documentChoices.set(provider,file.id??file.path);this.chatContexts.set(provider,{kind:'file',name:file.name,path:file.path});}}
+  setFilesContext(provider:string,files:PetFile[]){
+    this.chatFiles.set(provider,files.map(a=>({...a})));const file=this.fileFor(provider);
+    if(file)this.chatContexts.set(provider,{kind:'file',name:file.name,path:file.path});else{this.chatContexts.delete(provider);this.documentChoices.delete(provider);}
+  }
+  setFileContext(provider:string,file:PetFile){
+    const previous=this.filesFor(provider).filter(a=>!file.conversationId||!a.conversationId||a.conversationId===file.conversationId);
+    this.setFilesContext(provider,[...previous.filter(a=>(a.id??a.path)!==(file.id??file.path)),file]);this.chooseFile(provider,file);
+  }
+  clearDialogueContext(provider:string) {this.chatContexts.delete(provider);this.chatFiles.delete(provider);this.documentChoices.delete(provider);}
+  clearAllDialogueContexts(){this.chatContexts.clear();this.chatFiles.clear();this.documentChoices.clear();}
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
   get chatProvider(): ProviderId { return (this.settings.companionMode || this.petCardsOnly ? providerForPill(this.focusId ?? undefined) : null) ?? this.settings.chatProvider; }

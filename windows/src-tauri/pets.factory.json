@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "configuration": {
     "version": 1,
     "reasoningTerms": [
@@ -84,6 +84,10 @@
         "taskProvider": "claude-cli",
         "role": null,
         "taskName": "Claude"
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
       }
     },
     "agent_cursor": {
@@ -109,6 +113,10 @@
         "taskProvider": null,
         "role": null,
         "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
       }
     },
     "agent_antigravity": {
@@ -140,6 +148,10 @@
         "taskProvider": "antigravity",
         "role": "Tarefas no PC · conta Gravity",
         "taskName": "Gravity"
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": "antigravity"
       }
     },
     "agent_codex": {
@@ -166,6 +178,10 @@
         "taskProvider": "codex",
         "role": "Tarefas no PC · conta Codex",
         "taskName": "Codex"
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": "codex"
       }
     },
     "agent_gemini": {
@@ -197,6 +213,10 @@
         "taskProvider": "gemini-cli",
         "role": null,
         "taskName": "Gemini"
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
       }
     },
     "agent_copilot": {
@@ -231,6 +251,10 @@
         "taskProvider": "copilot",
         "role": "Tarefas no PC · conta GitHub Copilot",
         "taskName": "Copilot"
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": "copilot"
       }
     },
     "agent_muse": {
@@ -256,6 +280,10 @@
         "taskProvider": null,
         "role": null,
         "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
       }
     },
     "agent_opencode": {
@@ -281,6 +309,10 @@
         "taskProvider": null,
         "role": null,
         "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
       }
     },
     "agent_amp": {
@@ -306,6 +338,10 @@
         "taskProvider": null,
         "role": null,
         "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
       }
     },
     "agent_hermes": {
@@ -331,6 +367,10 @@
         "taskProvider": null,
         "role": null,
         "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
       }
     },
     "agent_claude-desktop": {
@@ -356,6 +396,10 @@
         "taskProvider": null,
         "role": null,
         "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
       }
     },
     "ai_anthropic": {
@@ -381,6 +425,10 @@
         "taskProvider": null,
         "role": "Chat por API · requer chave própria",
         "taskName": null
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": null
       }
     },
     "ai_google": {
@@ -406,6 +454,10 @@
         "taskProvider": null,
         "role": "Chat por API · requer chave própria",
         "taskName": null
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": null
       }
     },
     "ai_openai": {
@@ -431,6 +483,10 @@
         "taskProvider": null,
         "role": "Chat por API · requer chave própria",
         "taskName": null
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": null
       }
     },
     "ai_ollama": {
@@ -465,6 +521,10 @@
         "taskProvider": "ollama",
         "role": "Conversa local · ações limitadas do Mochi",
         "taskName": "Ollama"
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": "ollama"
       }
     },
     "ai_lmstudio": {
@@ -490,6 +550,10 @@
         "taskProvider": null,
         "role": "Conversa no servidor local",
         "taskName": null
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": null
       }
     },
     "integration_resend": {
@@ -516,6 +580,10 @@
         "taskProvider": "integration_resend",
         "role": "service",
         "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
       }
     },
     "integration_n8n": {
@@ -542,6 +610,10 @@
         "taskProvider": "integration_n8n",
         "role": "service",
         "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
       }
     },
     "integration_vercel": {
@@ -568,6 +640,10 @@
         "taskProvider": "integration_vercel",
         "role": "service",
         "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
       }
     },
     "integration_github": {
@@ -595,7 +671,11 @@
         "role": "service",
         "taskName": null
       },
-      "retired": true
+      "retired": true,
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
+      }
     },
     "integration_notion": {
       "mold": "application",
@@ -621,6 +701,10 @@
         "taskProvider": "integration_notion",
         "role": "service",
         "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
       }
     },
     "integration_calcom": {
@@ -647,6 +731,10 @@
         "taskProvider": "integration_calcom",
         "role": "service",
         "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
       }
     },
     "integration_stripe": {
@@ -673,6 +761,10 @@
         "taskProvider": "integration_stripe",
         "role": "service",
         "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
       }
     },
     "integration_music": {
@@ -698,6 +790,10 @@
         "taskProvider": null,
         "role": null,
         "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": null
       }
     },
     "integration_spotify": {
@@ -726,9 +822,9 @@
         "provider": ""
       },
       "routing": {
-        "chat": null,
+        "chat": "integration_spotify",
         "voice": "integration_spotify",
-        "execute": false,
+        "execute": true,
         "taskProvider": "integration_spotify",
         "role": "Música e som do PC · controlos de áudio",
         "taskName": null
@@ -741,7 +837,15 @@
           "music",
           "openApps"
         ],
-        "musicLabel": "Controlar música e som do PC"
+        "musicLabel": "Controlar música e som do PC",
+        "profiles": true,
+        "sessions": true,
+        "metrics": true
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "spotify",
+        "assistantAdapter": "codex"
       }
     }
   },

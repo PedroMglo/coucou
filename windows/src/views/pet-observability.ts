@@ -17,7 +17,7 @@ export function buildPetObservability(actions:{sessions:()=>void;library?:()=>vo
   button.dataset.metric=key;counters.append(button);metrics.set(key,{button,value,caption,observed});
  }
  const breakdown=h('p',{class:'pet-observation-breakdown'});
- const censusDetail=h('p',{class:'pet-observation-scope'}),censusInfo=h('details',{class:'pet-observation-source-details'},h('summary',{text:'Sobre estes terminais'}),censusDetail);
+ const censusDetail=h('p',{class:'pet-observation-scope'}),censusInfo=h('details',{class:'pet-observation-source-details'},h('summary',{text:'Sobre a deteção CLI'}),censusDetail);
  const history=h('section',{class:'pet-observation-history','aria-label':'Biblioteca deste pet no Coucou'}),historyNote=h('p',{class:'pet-observation-scope',text:'Só as conversas guardadas neste pet. Podem sobrepor-se ao histórico externo; os valores não são somados.'}),historyList=h('div',{class:'pet-observation-history-list'});history.append(historyList,historyNote);
  const histories=new Map<string,{button:HTMLButtonElement;label:HTMLElement;counts:HTMLElement;detail:HTMLElement}>();
  const list=h('div',{class:'pet-observation-list'}),empty=h('p',{class:'pet-observation-empty'});
@@ -56,7 +56,7 @@ export function buildPetObservability(actions:{sessions:()=>void;library?:()=>vo
   for(const[key,m]of metrics){
    const count=key==='opened'?value?.opened:nativeHistory?.[key as 'total'|'archived'];m.value.textContent=observationCount(count);m.button.disabled=pending;
    if(key==='opened'&&census)m.value.textContent=census.count;
-   m.caption.textContent=key==='opened'?census?'Terminais abertos':'Sessões abertas':key==='total'?localHistory?'Histórico no Coucou':'Histórico conhecido':localHistory?'Arquivo no Coucou':'Arquivadas';
+   m.caption.textContent=key==='opened'?census?(census.unit==='terminals'?'Terminais detetados':'Clientes CLI'):'Sessões abertas':key==='total'?localHistory?'Histórico no Coucou':'Histórico conhecido':localHistory?'Arquivo no Coucou':'Arquivadas';
    m.observed.hidden=false;m.observed.textContent=key==='opened'?census?.caption??'Pet e terminal':`${count?.coverage==='unavailable'?'Por confirmar':localHistory?'Só neste pet':'Nesta fonte'}${count?.coverage==='partial'?' · parcial':''}${nativeHistory?.stale?' · leitura anterior':''}`;
    m.button.title=key==='opened'&&census?census.detail:[count?.scope,count?.detail,count?.coverage==='partial'?'Contagem parcial; podem existir mais sessões.':''].filter(Boolean).join(' · ')||'Contagem por apurar. Abrir gestão de sessões.';
    m.button.setAttribute('aria-label',`${m.caption.textContent}: ${m.value.textContent}${m.observed.hidden?'':' · '+m.observed.textContent}. ${localHistory&&key!=='opened'?'Consultar esta biblioteca no chat':'Abrir gestão de sessões'}`);

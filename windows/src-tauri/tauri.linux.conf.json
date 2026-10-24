@@ -25,14 +25,16 @@
         "depends": [
           "libgtk-layer-shell0 (>= 0.6)",
           "libasound2t64 | libasound2",
-          "libpipewire-0.3-0"
+          "libpipewire-0.3-0",
+          "poppler-utils"
         ]
       },
       "rpm": {
         "depends": [
           "gtk-layer-shell",
           "alsa-lib",
-          "pipewire-libs"
+          "pipewire-libs",
+          "poppler-utils"
         ]
       }
     }

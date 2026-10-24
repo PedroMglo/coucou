@@ -1,6 +1,14 @@
-//! Private API34 structural evidence only, never a public dispatch grant.
+//! Private API34/API38 structural evidence, never a public dispatch grant.
+//! API38 reviewed at dux-shell v2.0.0 (9b413296b167): server.go:42,
+//! network/handlers.go:156,268,276 and types.go:33,50,134; IPC at dux-go
+//! e2ca52bdf500 (ipc/models.go, server.go, writer.go). Requests and ACKs match
+//! the already reviewed API34 contract. Never infer compatibility from >=.
+//! https://github.com/duxlabs-dev/dux-shell/tree/9b413296b16721f7679fb62e624cb1ed2433fa58/core/internal/server
 use serde_json::Value;
 use std::collections::BTreeSet;
+pub(super) fn protocol_supported(api:Option<u64>,caps:&[String])->bool {
+    matches!(api,Some(34 | 38)) && caps.iter().any(|s|s=="network")
+}
 fn text(row:&Value,key:&str,max:usize,nonempty:bool)->bool {
     row.get(key).and_then(Value::as_str).is_some_and(|s|s.len()<=max&&(!nonempty||!s.is_empty())
         &&!s.chars().any(|c|c.is_control()||matches!(c,'\u{202a}'..='\u{202e}'|'\u{2066}'..='\u{2069}')))
@@ -28,7 +36,7 @@ fn device(row:&Value)->bool {
     }
 }
 pub(super) fn supported(value:&Value,api:Option<u64>,caps:&[String])->bool {
-    if api!=Some(34)||!caps.iter().any(|s|s=="network")||value.get("backend").and_then(Value::as_str)!=Some("networkmanager")
+    if !protocol_supported(api,caps)||value.get("backend").and_then(Value::as_str)!=Some("networkmanager")
         ||!flag(value,"wifiEnabled"){return false;}
     let Some(rows)=value.get("wifiDevices").and_then(Value::as_array)else{return false;};
     if rows.is_empty()||rows.len()>32||!rows.iter().all(device){return false;}

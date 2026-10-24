@@ -127,7 +127,7 @@ pub fn voice_session_toggle(app: AppHandle) {
 #[tauri::command]
 pub fn voice_session_start(app:AppHandle,provider:String)->Result<(),String> {
     let pet=Pet::from_provider(&provider).ok_or("Este pet não tem conversa por voz.")?;
-    if !available(&app,pet) {return Err("Liga a conta deste pet nas definições antes de conversar.".into());}
+    admit_pet(&app,pet).map_err(|e|e.message().to_owned())?;
     let previous=SESSION.lock().unwrap().clone();
     if let Some(previous)=previous {stop_audio_for(&app,Some(&previous));}
     begin(&app,Some(pet))
@@ -187,19 +187,19 @@ fn view(app: &AppHandle, stop:&Arc<AtomicBool>, phase: &str, heard: &str, answer
     );
 }
 
-fn available(app: &AppHandle, pet: Pet) -> bool {
-    if crate::pet_config::require_active_provider(pet.provider()).is_err(){return false;}
-    let configured={let shared=app.state::<crate::Shared>();let s=shared.settings.lock().unwrap();crate::pet_config::pet_id(pet.provider()).is_some_and(|id|s.main_pill==id || s.active_integrations.iter().any(|active|active==id))};
-    if !configured{return false;}
-    match pet {
-        Pet::Codex => crate::codex_chat::installed(),
-        Pet::Copilot=>crate::copilot_chat::executable().is_ok(),
-        Pet::Gravity => crate::gravity_chat::executable().is_ok(),
-        Pet::Claude | Pet::Gemini => false, // Models now belong to the single Gravity pet.
-        Pet::Spotify=>true, // PC audio remains useful without the Spotify application.
-        Pet::GitHub|Pet::Notion|Pet::Vercel|Pet::N8n|Pet::Resend|Pet::Stripe|Pet::Calcom=>crate::codex_chat::installed(),
-        Pet::Ollama => super::local::config(&app.state::<crate::Shared>().settings.lock().unwrap()).is_some(),
-    }
+fn admit_pet(app:&AppHandle,pet:Pet)->Result<(),super::admission::Failure>{
+    use super::admission::{self,Route,Failure};
+    let descriptor=crate::pet_capabilities::provider_descriptor(app,pet.provider()).map_err(|_|Failure::StateUnavailable)?;
+    admission::admit(pet.provider(),&descriptor,|candidate|match candidate.route{
+        Route::Codex=>crate::codex_chat::installed(),
+        Route::Copilot=>crate::copilot_chat::executable().is_ok(),
+        Route::Gravity=>crate::gravity_chat::executable().is_ok(),
+        Route::Spotify=>true,
+        Route::Ollama=>{
+            let shared=app.state::<crate::Shared>();let settings=shared.settings.lock().unwrap();
+            crate::pet_config::read_existing().ok().is_some_and(|config|admission::local_ready(candidate,&settings,&config))
+        },
+    }).map(|_|())
 }
 
 /// Returns one speech segment or None on stop/inactivity. Bounded queues and
@@ -302,22 +302,24 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
             .voice_pet_aliases
             .clone();
         if let Ok(configured)=crate::pet_config::aliases(){for(provider,names)in configured{aliases.entry(provider).or_default().extend(names);}}
-        if let Some(name)=crate::pet_config::read().ok().and_then(|c|c.unavailable_address(&transcript)) {
+        let command=dialogue::parse_with_aliases(&transcript,&aliases);
+        if let Some(name)=(!super::admission::known_voice_address(&command)).then(||crate::pet_config::read_existing().ok().and_then(|c|c.unavailable_address(&transcript))).flatten() {
             answer=format!("{name} ainda não tem conversa de voz integrada. Escolhe Codex, Gravity ou outro pet com conversa disponível.");
             view(app,stop,"speaking",&transcript,&answer,selected);super::speak_stoppable(app,&answer,Some(stop),None);
             idle.touch(Instant::now());continue;
         }
-        let question = match dialogue::parse_with_aliases(&transcript, &aliases) {
+        let question = match command {
             Command::Stop => break,
             Command::Dictate => return true,
             Command::CancelTask => "interromper tarefa".into(),
             Command::TaskStatus => "estado da tarefa".into(),
             Command::Select(pet, question) => {
-                if !available(app, pet) {
-                    answer = crate::i18n::t("Connect this pet in Settings → Chat first.");
+                if super::admission::uses_pet_response(&question){if let Err(reason)=admit_pet(app, pet) {
+                    answer = reason.message().into();
+                    view(app,stop,"speaking",&transcript,&answer,selected);super::speak_stoppable(app,&answer,Some(stop),None);
                     idle.touch(Instant::now());
                     continue;
-                }
+                }}
                 selected = Some(pet);
                 select_pet(app,stop,pet);
                 if question.is_empty() {
@@ -354,9 +356,19 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
                 idle.touch(Instant::now());continue;
             },_=>{},
         }
+        #[cfg(target_os="linux")]if let Some(text)=crate::cli_chat::goal_recipe_voice(app,pet.provider(),&question,stop){
+            answer=text;view(app,stop,"speaking",&question,&answer,Some(pet));super::speak_stoppable(app,&answer,Some(stop),Some(pet.provider()));idle.touch(Instant::now());continue;
+        }
+        if let Err(reason)=admit_pet(app,pet){
+            answer=reason.message().into();
+            view(app,stop,"speaking",&question,&answer,Some(pet));
+            super::speak_stoppable(app,&answer,Some(stop),Some(pet.provider()));
+            idle.touch(Instant::now());continue;
+        }
         view(app, stop, "received", &question, "", Some(pet));
         let direct=if pet==Pet::Spotify {super::services::spotify(app,&question)}else{None};
-        let reply = if let Some(reply)=direct {Some(reply)}else if pet==Pet::Spotify {Some(super::brain::Reply{text:"Posso controlar a música e o som do PC. Diz, por exemplo, pausa, próxima música, volume do sistema 40 ou silenciar microfone.".into(),acted:false,language:Some("pt-PT".into())})}else{brains.entry(pet).or_default().respond_as(
+        let optional_assistant=direct.is_none()&&pet==Pet::Spotify&&crate::pet_config::read_existing().is_ok_and(|c|c.uses_optional_assistant(pet.pill()));
+        let reply = if let Some(reply)=direct {Some(reply)}else if pet==Pet::Spotify&&!optional_assistant {Some(super::brain::Reply{text:"Posso controlar a música e o som do PC. Diz, por exemplo, pausa, próxima música, volume do sistema 40 ou silenciar microfone.".into(),acted:false,language:Some("pt-PT".into())})}else{brains.entry(pet).or_default().respond_as(
             app,
             &question,
             pet.provider(),

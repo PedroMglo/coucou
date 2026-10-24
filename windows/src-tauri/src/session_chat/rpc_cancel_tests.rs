@@ -66,7 +66,7 @@ fn queued_client() -> (Client, mpsc::Receiver<Packet>) {
     let (writer, packets) = mpsc::channel(1);
     let (events, _) = broadcast::channel(4); let (stop, _) = tokio::sync::watch::channel(false);
     (Client { writer, pending: Arc::default(), events, next: AtomicU64::new(1),
-        connected: Arc::new(AtomicBool::new(true)), stop, endpoint: PathBuf::new(), endpoint_identity:(0,0,0,0),settings:Arc::default() }, packets)
+        connected: Arc::new(AtomicBool::new(true)), stop, endpoint: PathBuf::new(), endpoint_identity:(0,0,0,0),settings:Arc::default(),sources:request_sources::Sources::new().unwrap() }, packets)
 }
 
 #[tokio::test]
@@ -77,7 +77,7 @@ async fn cancellation_before_send_and_before_writer_ack_cleans_only_its_own_slot
     assert!(matches!(packets.try_recv(), Err(mpsc::error::TryRecvError::Empty)));
     let (written, _ack) = oneshot::channel();
     assert!(client.writer.try_send(Packet { message:json!({"method":"fixture/blocker"}), written,
-        deadline:Instant::now()+Duration::from_secs(5), cancel:None }).is_ok());
+        scope:native_write::Scope::new(crate::pet_native_write::Guard{deadline:Instant::now()+Duration::from_secs(5),cancel:None,caller:None,source:None}) }).is_ok());
     assert!(timeout(Duration::from_millis(5), client.call("fixture/before-send",json!({}))).await.is_err());
     assert!(client.pending.lock().unwrap().is_empty());
     assert_eq!(packets.try_recv().unwrap().message["method"], "fixture/blocker");
