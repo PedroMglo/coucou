@@ -2,24 +2,26 @@
 //! checks are still required before any execution permit can be constructed.
 use super::{admission::AdmissionSpec,model};
 use serde::{Deserialize,Serialize};
-#[cfg(target_os="linux")]pub(super)use super::authority_store::{Authority,Certified};
+#[cfg(target_os="linux")]pub(super)use super::authority_store::{Authority,Certified,PlanCertified};
 #[cfg(target_os="linux")]pub(super)use super::authority_store::CompletionCertified;
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]#[serde(rename_all="camelCase")]
 pub enum Failure{Missing,Unsafe,Changed,Invalid,WrongKey,Revoked,Expired,NotQueued,Capacity,Unavailable,Uncertain,Busy,RecoveryRequired}
 pub(super)type Result<T>=std::result::Result<T,Failure>;
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
-pub enum Operation{ConversationRespond}
+pub enum Operation{ConversationRespond,GoalPlanning}
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct ConsentProof{pub schema_version:u32,pub key_id:String,pub operation:Operation,pub tag:String}
 impl ConsentProof{
-    pub(super)fn valid(&self)->bool{self.schema_version==1&&model::token(&self.key_id)&&decode(&self.tag).is_some()}
+    pub(super)fn valid(&self)->bool{matches!((self.schema_version,self.operation),(1,Operation::ConversationRespond)|(2,Operation::GoalPlanning))&&model::token(&self.key_id)&&decode(&self.tag).is_some()}
+    pub(super)fn matches(&self,spec:&AdmissionSpec)->bool{spec.binding_format()&&if spec.schema_version==3{self.schema_version==2&&self.operation==Operation::GoalPlanning}else{self.schema_version==1&&self.operation==Operation::ConversationRespond}}
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
 pub(super)enum GrantPhase{Issued,Revoked,Claimed,Draining,Closed}
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super)struct Grant{
     #[serde(default,skip_serializing_if="Option::is_none")]pub budget_usage:Option<super::effect_budget::Ledger>,
+    #[serde(default,skip_serializing_if="Option::is_none")]pub planning_usage:Option<super::planning_journal::Ledger>,
     pub schema_version:u32,pub decision_id:String,pub goal_id:String,pub operation:Operation,
     pub spec_hash:String,pub phase:GrantPhase,pub revision:String,pub approved_at:u64,pub updated_at:u64,
     #[serde(default,skip_serializing_if="Option::is_none")]pub lease:Option<super::leases::Lease>,
@@ -32,9 +34,11 @@ impl Grant{
     pub(super)fn valid(&self)->bool{
         if !model::token(&self.decision_id)||!model::goal_id(&self.goal_id)||decode(&self.spec_hash).is_none()||!model::token(&self.revision)||self.approved_at==0||self.updated_at<self.approved_at||self.updated_at>8_640_000_000_000_000{return false;}
         if self.budget_usage.as_ref().is_some_and(|u|!u.valid()){return false;}
+        if self.planning_usage.as_ref().is_some_and(|u|!u.valid(self.budget_usage.as_ref()))||self.planning_usage.is_some()!=(self.operation==Operation::GoalPlanning){return false;}
+        let planning=self.planning_usage.is_some();
         match &self.lease{
-            None=>self.budget_usage.is_none()&&self.schema_version==1&&matches!(self.phase,GrantPhase::Issued|GrantPhase::Revoked)&&self.stop_reason.is_none()&&self.closed_at.is_none(),
-            Some(l)=>self.schema_version==(if self.budget_usage.is_some(){3}else{2})&&l.basic()&&l.goal_id==self.goal_id&&l.decision_id==self.decision_id
+            None=>self.budget_usage.is_none()&&self.schema_version==(if planning{4}else{1})&&matches!(self.phase,GrantPhase::Issued|GrantPhase::Revoked)&&self.stop_reason.is_none()&&self.closed_at.is_none(),
+            Some(l)=>self.schema_version==(if planning{4}else if self.budget_usage.is_some(){3}else{2})&&l.basic()&&l.goal_id==self.goal_id&&l.decision_id==self.decision_id
                 &&match self.phase{
                     GrantPhase::Claimed=>self.stop_reason.is_none()&&self.closed_at.is_none(),
                     GrantPhase::Draining=>self.stop_reason.is_some()&&self.closed_at.is_none(),
@@ -50,10 +54,11 @@ pub(super)fn decode(text:&str)->Option<[u8;32]>{
     let mut bytes=[0u8;32];for(i,b)in bytes.iter_mut().enumerate(){*b=u8::from_str_radix(&text[i*2..i*2+2],16).ok()?;}Some(bytes)
 }
 pub(super)fn consent_message(proof:&ConsentProof,spec:&AdmissionSpec)->Result<Vec<u8>>{
-    let mut bytes=b"coucou-native-goal-consent-v1\0".to_vec();bytes.extend(serde_json::to_vec(&(proof.schema_version,&proof.key_id,proof.operation,spec)).map_err(|_|Failure::Invalid)?);Ok(bytes)
+    if !proof.matches(spec){return Err(Failure::Invalid);}
+    let mut bytes=if proof.operation==Operation::GoalPlanning{b"coucou-native-goal-planning-consent-v1\0".to_vec()}else{b"coucou-native-goal-consent-v1\0".to_vec()};bytes.extend(serde_json::to_vec(&(proof.schema_version,&proof.key_id,proof.operation,spec)).map_err(|_|Failure::Invalid)?);Ok(bytes)
 }
 pub(super)fn grant_message(body:&Grant)->Result<Vec<u8>>{
-    let mut bytes=b"coucou-native-goal-grant-state-v1\0".to_vec();bytes.extend(serde_json::to_vec(body).map_err(|_|Failure::Invalid)?);Ok(bytes)
+    let mut bytes=if body.planning_usage.is_some(){b"coucou-native-goal-planning-grant-state-v1\0".to_vec()}else{b"coucou-native-goal-grant-state-v1\0".to_vec()};bytes.extend(serde_json::to_vec(body).map_err(|_|Failure::Invalid)?);Ok(bytes)
 }
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct ProvenanceStatus{pub verified:bool,pub reason:Option<Failure>,pub execution_available:bool}

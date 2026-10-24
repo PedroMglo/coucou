@@ -83,7 +83,7 @@ pub async fn pet_runtime_claim_status(window:tauri::WebviewWindow,pet_id:String,
 #[tauri::command]
 pub async fn pet_runtime_release_claim(window:tauri::WebviewWindow,input:ReleaseInput)->model::Result<model::Receipt>{
     check(&window)?;tauri::async_runtime::spawn_blocking(move||{
-        let store=Store::existing_native(&root())?.ok_or(Error::NotFound)?;let goal=store.read(&input.goal_id,&input.pet_id)?;
+        let store=Store::existing_native(&root())?.ok_or(Error::NotFound)?;let goal=store.read_control(&input.goal_id,&input.pet_id)?;
         let mut service=service()?.lock().map_err(|_|Error::StorageUnavailable)?;let entry=service.entries.get(&goal.id).ok_or(Error::Conflict)?;
         if entry.pending.lease().id!=input.lease_id{return Err(Error::Conflict);}
         // The public API cannot assert native effect completion. Actual future

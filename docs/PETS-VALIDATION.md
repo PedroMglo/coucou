@@ -1,13 +1,13 @@
 # Validação da composição dos pets — 24/10/2026
 
-O código está no commit assinado [6798584](https://github.com/PedroMglo/coucou/commit/67985842fd904296c7c82aee55d2e29a1ef9cfb1),
+A composição anterior foi publicada no commit assinado [6798584](https://github.com/PedroMglo/coucou/commit/67985842fd904296c7c82aee55d2e29a1ef9cfb1),
 branch `feat/mochi-cli-accounts`. A assinatura SSH ED25519-SK foi verificada
 localmente. Esta composição é desenvolvimento integrado; a aplicação instalada
 continua na `0.5.1-mochi.30` e o objetivo completo permanece aberto.
 
 | Verificação | Resultado | Âmbito |
 | --- | --- | --- |
-| Fontes de trabalho | 759 | Raiz, SDK e mapa de fontes com bytes iguais |
+| Fontes da composição anterior | 759 | Snapshot e mapa da publicação6798584 preservados |
 | Inputs compilados | 400 nativos; 774 na composição completa | Snapshot imutável; inputs iguais antes/depois dos comandos |
 | Rust | 2373 passaram; 20 ignorados | Biblioteca completa, com fixtures privadas |
 | JavaScript | 1153 passaram | Bridge, controladores e controlos funcionais com DOM/IPC simulado |
@@ -22,8 +22,48 @@ pais. Os restantes testes ignorados não são declarados como aceitação satisf
 O fixture `legacy30_memory.rs` conserva os bytes históricos, incluindo a linha
 vazia final, porque os testes verificam o seu hash com `include_bytes!`.
 
-Mapa local de fontes: SHA-256 `da1929bd5652695a8aa9e465d1a4508c7b1a6322d75aab9fb2da8ab812f38f45`. O snapshot e os logs completos
+Mapa da composição anterior: SHA-256 `da1929bd5652695a8aa9e465d1a4508c7b1a6322d75aab9fb2da8ab812f38f45`. O snapshot e os logs completos
 permanecem locais; o resumo versionado identifica os resultados e os limites.
+
+## Planeamento integrado769
+
+O incremento está integrado na branch `feat/mochi-cli-accounts`, com os mesmos
+bytes validados no SDK e no snapshot congelado. A política/consentimento próprios,
+o writer limitado e os recibos autenticados evoluíram para publicação canónica
+com gate do controlador original, zero workers, CAS, readback durável e ACK no
+journal. A recuperação preserva o orçamento e a autorização originais.
+
+| Verificação | Resultado | Âmbito |
+| --- | --- | --- |
+| Fontes | 769 | Raiz, SDK e mapa com bytes iguais |
+| Inputs | 410 nativos; snapshot de 784 ficheiros | Bytes iguais antes/depois dos comandos |
+| Rust | 2401 passaram; 20 ignorados | Biblioteca completa, incluindo 10 casos novos de publicação/recuperação |
+| cargo check | Passou | Mesmas fontes |
+| Anfitrião privado | 305 passaram | Runtime 265, leitor 9, operações 28, voz determinística 2, registo/admissão 1 |
+| Avisos | 77 no check; 41 nos testes | Caminhos ainda sem ativação pública; sem novos avisos nos testes |
+| Web | Fontes inalteradas | 1153 JS/TSC/Vite herdados da composição759; não repetidos neste incremento apenas Rust |
+| Modelos/quota reais | 0 | Protocolos/HTTP/bus privados e respostas sintéticas |
+
+Os casos novos cobrem preparação, gravação e ACK incertos, falta do gate original,
+workers ativos, deriva da origem, remoção de recibos/histórico/referências,
+substituição de conteúdo e Stop/drain durante publicação. Abandonar uma preparação
+exige ausência canónica e concessão encerrada; recuperar um plano já guardado
+estabiliza o mesmo ACK sem reabrir a concessão. O teste de falha anterior à
+publicação do recibo também está coberto.
+
+O executor continua a recusar efeitos para planos gerados enquanto faltarem os
+novos âmbitos de passo/receita. Também faltam a ativação operacional e o dispatcher
+com feedback/replaneamento nativo. Não é aceitação de app/GUI/áudio, paridade real
+dos providers, migração/backup/rollback ou entrega. A aplicação .30, os dados e
+preferências originais, host, Wi-Fi e PostgreSQL não foram alterados; o objetivo
+completo e a unidade RUN/EXE permanecem abertos.
+
+Mapa local: SHA-256 `02240c7e5234c63b4f7404a0d12f753cbcc680efc89b559349d67564f6978190`.
+Evidência local: `.build/pet-goal-execution-next-r1/`, snapshot
+`canonical-plan-r6-source`, mapas `source-canonical-plan769-r6.json`, logs
+`canonical-plan-full-r6`/`canonical-plan-check-r6` e
+`HOST-NATIVE-CANONICAL-PLAN-R6.json`. O anterior núcleo privado764 fica preservado
+em `PLANNING-EVIDENCE-PRIVATE-CHECKPOINT-R3.json` (2391 Rust/295 ensaios privados).
 
 ## Evidencia local
 

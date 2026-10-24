@@ -9,12 +9,15 @@ const KEY:&str=".key.json";
 const MAX_GRANT_BYTES:usize=128*1024;
 #[path="authority_budget.rs"]mod budget;
 #[path="authority_results.rs"]mod results;
+#[path="authority_planning.rs"]mod planning;
+#[path="authority_plan_commit.rs"]mod plan_commit;
+pub(in crate::pet_runtime)use plan_commit::PlanCertified;
 #[cfg(target_os="linux")]#[path="authority_steps.rs"]mod steps;
 pub(in crate::pet_runtime)use steps::CompletionCertified;
 #[derive(Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 struct KeyFile{schema_version:u32,key_id:String,key:String}
 pub(super)struct Authority{dir:Dir,stamp:Stamp,lock_stamp:Stamp,key_id:String,key:hmac::Key,#[cfg(test)]pub(super)fault:Fault}
-#[cfg(test)]#[derive(Clone,Copy,Default)]pub(super)enum Fault{#[default]None,BeforeGrantPublish,AfterGrantPublish,BeforeResultPublish,AfterResultPublish,BeforeStepPublish,AfterStepPublish,BeforeStepResultPublish,AfterStepResultPublish,BeforeStepEvidencePublish,AfterStepEvidencePublish,BeforeStepBudgetFinish,AfterStepBudgetFinish,BeforeRecipePublish,AfterRecipePublish,BeforeVerificationPublish,AfterVerificationPublish}
+#[cfg(test)]#[derive(Clone,Copy,Default)]pub(super)enum Fault{#[default]None,BeforeGrantPublish,AfterGrantPublish,BeforeResultPublish,AfterResultPublish,BeforeStepPublish,AfterStepPublish,BeforeStepResultPublish,AfterStepResultPublish,BeforeStepEvidencePublish,AfterStepEvidencePublish,BeforeStepBudgetFinish,AfterStepBudgetFinish,BeforeRecipePublish,AfterRecipePublish,BeforeVerificationPublish,AfterVerificationPublish,BeforePlanningOutputPublish,AfterPlanningOutputPublish}
 pub(super)struct Certified<'a>{authority:&'a Authority,approved:&'a Approved,proof:ConsentProof}
 impl Authority{
     pub(super)fn existing(path:&Path)->Result<Self>{
@@ -50,11 +53,12 @@ impl Authority{
         if a.dev()!=b.dev()||a.ino()!=b.ino(){return Err(Failure::Changed);}self.fence()?;Ok(guard)
     }
     fn proof(&self,spec:&AdmissionSpec)->Result<ConsentProof>{
-        let mut proof=ConsentProof{schema_version:1,key_id:self.key_id.clone(),operation:Operation::ConversationRespond,tag:String::new()};
+        let planning=spec.schema_version==3;
+        let mut proof=ConsentProof{schema_version:if planning{2}else{1},key_id:self.key_id.clone(),operation:if planning{Operation::GoalPlanning}else{Operation::ConversationRespond},tag:String::new()};
         proof.tag=encode(hmac::sign(&self.key,&consent_message(&proof,spec)?).as_ref());Ok(proof)
     }
     fn verify_proof(&self,spec:&AdmissionSpec,proof:&ConsentProof)->Result<()>{
-        if !proof.valid(){return Err(Failure::Invalid);}if proof.key_id!=self.key_id{return Err(Failure::WrongKey);}
+        if !proof.valid()||!proof.matches(spec){return Err(Failure::Invalid);}if proof.key_id!=self.key_id{return Err(Failure::WrongKey);}
         hmac::verify(&self.key,&consent_message(proof,spec)?,&decode(&proof.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)
     }
     fn load(&self,spec:&AdmissionSpec,proof:&ConsentProof)->Result<Grant>{
@@ -62,7 +66,7 @@ impl Authority{
         let(raw,_)=self.dir.bytes(&format!("{}.json",spec.decision_id),MAX_GRANT_BYTES).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;
         let e:GrantEnvelope=serde_json::from_slice(&raw).map_err(|_|Failure::Invalid)?;
         hmac::verify(&self.key,&grant_message(&e.body)?,&decode(&e.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;
-        let b=e.body;if !b.valid()||b.budget_usage.as_ref().is_some_and(|u|!u.valid_for(spec))||b.lease.as_ref().is_some_and(|l|!l.valid(spec))||b.decision_id!=spec.decision_id||b.goal_id!=spec.goal_id||b.operation!=proof.operation||b.spec_hash!=model::fingerprint(spec).map_err(|_|Failure::Invalid)?||!model::token(&b.revision)||b.approved_at!=spec.approved_at||b.updated_at<b.approved_at{return Err(Failure::Invalid);}Ok(b)
+        let b=e.body;if !b.valid()||b.budget_usage.as_ref().is_some_and(|u|!u.valid_for(spec))||b.planning_usage.as_ref().is_some_and(|u|!u.valid_for(spec,b.lease.as_ref(),b.budget_usage.as_ref()))||b.lease.as_ref().is_some_and(|l|!l.valid(spec))||b.decision_id!=spec.decision_id||b.goal_id!=spec.goal_id||b.operation!=proof.operation||b.spec_hash!=model::fingerprint(spec).map_err(|_|Failure::Invalid)?||!model::token(&b.revision)||b.approved_at!=spec.approved_at||b.updated_at<b.approved_at{return Err(Failure::Invalid);}Ok(b)
     }
     fn publish(&self,body:Grant,new:bool)->Result<()>{
         if !body.valid(){return Err(Failure::Invalid);}self.fence()?;let tag=encode(hmac::sign(&self.key,&grant_message(&body)?).as_ref());let bytes=serde_json::to_vec(&GrantEnvelope{body:body.clone(),tag}).map_err(|_|Failure::Invalid)?;
@@ -81,7 +85,7 @@ impl Authority{
             self.dir.open_file(&file,libc::O_RDONLY).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?.sync_all().map_err(|_|Failure::Uncertain)?;self.dir.durable().map_err(|_|Failure::Uncertain)?;
         }else{
             if self.dir.names().map_err(|_|Failure::Capacity)?.len()>=4093{return Err(Failure::Capacity);}
-            self.publish(Grant{budget_usage:None,schema_version:1,decision_id:spec.decision_id.clone(),goal_id:spec.goal_id.clone(),operation:proof.operation,spec_hash:model::fingerprint(spec).map_err(|_|Failure::Invalid)?,phase:GrantPhase::Issued,revision:nonce().map_err(|_|Failure::Unavailable)?,approved_at:spec.approved_at,updated_at:spec.approved_at,lease:None,stop_reason:None,closed_at:None},true)?;
+            self.publish(Grant{budget_usage:None,planning_usage:if spec.schema_version==3{Some(super::planning_journal::Ledger::empty())}else{None},schema_version:if spec.schema_version==3{4}else{1},decision_id:spec.decision_id.clone(),goal_id:spec.goal_id.clone(),operation:proof.operation,spec_hash:model::fingerprint(spec).map_err(|_|Failure::Invalid)?,phase:GrantPhase::Issued,revision:nonce().map_err(|_|Failure::Unavailable)?,approved_at:spec.approved_at,updated_at:spec.approved_at,lease:None,stop_reason:None,closed_at:None},true)?;
         }
         self.fence()?;Ok(Certified{authority:self,approved,proof})
     }
@@ -117,7 +121,7 @@ impl Authority{
         if body.phase!=GrantPhase::Issued{return Err(if matches!(body.phase,GrantPhase::Claimed|GrantPhase::Draining){Failure::Busy}else{Failure::Revoked});}
         if self.active_unlocked()?.iter().any(|l|l.provider==lease.provider){return Err(Failure::Busy);}
         if now<body.updated_at{return Err(Failure::Invalid);}
-        body.schema_version=2;body.phase=GrantPhase::Claimed;body.lease=Some(lease.clone());body.updated_at=now;body.revision=nonce().map_err(|_|Failure::Unavailable)?;self.publish(body,false)
+        body.schema_version=if body.planning_usage.is_some(){4}else{2};body.phase=GrantPhase::Claimed;body.lease=Some(lease.clone());body.updated_at=now;body.revision=nonce().map_err(|_|Failure::Unavailable)?;self.publish(body,false)
     }
     pub(super)fn lease_current(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&super::leases::Lease,now:u64)->Result<()>{
         let _lock=self.lock()?;let body=self.load(spec,proof)?;
@@ -126,7 +130,7 @@ impl Authority{
     }
     pub(super)fn finish(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&super::leases::Lease,unstarted:bool,now:u64)->Result<Option<super::leases::StopReason>>{
         let _lock=self.lock()?;let mut body=self.load(spec,proof)?;
-        if unstarted&&body.phase==GrantPhase::Issued&&body.lease.is_none()&&lease.valid(spec){body.schema_version=2;body.lease=Some(lease.clone());body.phase=GrantPhase::Claimed;}
+        if unstarted&&body.phase==GrantPhase::Issued&&body.lease.is_none()&&lease.valid(spec){body.schema_version=if body.planning_usage.is_some(){4}else{2};body.lease=Some(lease.clone());body.phase=GrantPhase::Claimed;}
         if body.lease.as_ref()!=Some(lease)||now<lease.claimed_at||now<body.updated_at||now>8_640_000_000_000_000{return Err(Failure::Invalid);}
         if matches!(body.phase,GrantPhase::Closed|GrantPhase::Revoked){self.stabilize(&body)?;return Ok(body.stop_reason);}
         if !matches!(body.phase,GrantPhase::Claimed|GrantPhase::Draining){return Err(Failure::Invalid);}
@@ -157,7 +161,7 @@ impl Certified<'_>{
 /// Replays are receipt-only and must never revoke a newer admission.
 pub(super)fn mutate_with_authority(store:&impl crate::pet_runtime::Repository,path:&Path,id:&str,pet:&str,revision:&str,request:String,action:model::Action,now:u64)->model::Result<model::Receipt>{
     if matches!(action,model::Action::Pause|model::Action::Cancel){
-        let goal=store.read(id,pet)?;
+        let goal=store.read_control(id,pet)?;
         if goal.replay(&request,&action)?{return store.mutate(id,pet,revision,request,action,now);}
         if goal.revision!=revision{return Err(model::Error::Conflict);}
         if matches!(goal.state,State::Queued|State::Leased|State::Stopping){if let Some(row)=goal.admissions.last(){if let Some(proof)=&row.proof{

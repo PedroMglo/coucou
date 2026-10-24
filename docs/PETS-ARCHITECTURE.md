@@ -576,6 +576,35 @@ medida posterior não substitui a observação final original; texto do modelo n
 conclui critérios. O mesmo contrato da fábrica deve propagar estes comportamentos
 aos adaptadores, respeitando o suporte efetivamente implementado.
 
+**Incremento769 integrado em desenvolvimento — ciclo autónomo ainda pendente:**
+a política nativa e o consentimento próprio de planeamento reservam ronda e
+orçamento na mesma transação. O writer local Ollama mantém modelo/contexto e
+limites originais, sem ferramentas do modelo; a proposta tipada inclui todos os
+critérios originais. Saídas inválidas/bloqueadas consomem os limites aprovados.
+Recibos e propostas imutáveis autenticam origem, tentativa e conteúdo; repetir
+um pedido recupera a mesma prova sem inferência adicional.
+
+O plano canónico já segue preparação autenticada, CAS da origem completa,
+readback durável e ACK no journal. A preparação e o ACK exigem um objeto nativo
+que mantém o gate do controlador original, sem workers em curso. JSON ou uma
+concessão guardada não criam esse objeto. Leitores nativos comparam conteúdo e
+pertença ao journal e ao catálogo de concessões, mesmo se o JSON remover todas
+as referências ou tentar parecer um draft antigo.
+
+Stop/drain continuam disponíveis durante uma publicação pendente. Com o
+controlador original, recuperar um plano já guardado pode estabilizar o mesmo
+ACK após Stop, mantendo a concessão fechada. Abandonar uma preparação sem plano
+canónico exige prova nativa de ausência e encerramento/drain já registado; não
+elimina uma publicação confirmada nem renova orçamento. Os formatos anteriores
+conservam os campos omitidos e os seus domínios de assinatura.
+
+Isto ainda não ativa o planeador na app. Os âmbitos de passo/receita para planos
+gerados, a ligação à aprovação humana exata e o dispatcher com feedback nativo
+são o trabalho seguinte. A guarda do executor mantém os planos gerados sem
+acesso a efeitos até esses âmbitos estarem implementados. A aplicação .30
+permanece intacta; [a validação e os limites](PETS-VALIDATION.md#planeamento-integrado769)
+não concluem RUN/EXE, a entrega ou os 43 requisitos.
+
 ## 7. Fila, regras, limites e recursos
 
 ### 7.1 Preparação de contexto e reserva física — núcleo privado verificado

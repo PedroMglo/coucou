@@ -31,6 +31,7 @@ pub enum QueuePhase{Queued,Paused,Cancelled,Leased,StopRequested,RecoveryRequire
 #[derive(Clone,Debug,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct AdmissionSpec{
     #[serde(default,skip_serializing_if="Option::is_none")]pub proposal_hash:Option<String>,
+    #[serde(default,skip_serializing_if="Option::is_none")]pub planning_policy:Option<super::planning::Policy>,
     pub schema_version:u32,pub request_id:String,pub decision_id:String,pub goal_id:String,
     pub source_revision:String,pub source_sequence:u64,pub owner:Owner,pub context:ContextBinding,
     pub context_hash:String,pub intent_hash:String,pub resolved_model:String,pub descriptor_revision:String,
@@ -41,8 +42,13 @@ pub struct QueuedAdmission{pub spec:AdmissionSpec,pub phase:QueuePhase,#[serde(d
 fn hash(s:&str)->bool{s.len()==64&&s.bytes().all(|b|b.is_ascii_digit()||matches!(b,b'a'..=b'f'))}
 fn model_id(s:&str)->bool{!s.trim().is_empty()&&s.trim()==s&&s.len()<=256&&!s.starts_with(['@','/','~','\\'])&&!s.contains("://")&&!s.chars().any(|c|c.is_control())}
 impl AdmissionSpec{
-    fn binding_format(&self)->bool{
-        matches!((self.schema_version,self.proposal_hash.as_deref()),(1,None))||self.schema_version==2&&self.proposal_hash.as_deref().is_some_and(hash)
+    pub(super)fn binding_format(&self)->bool{
+        match (self.schema_version,self.proposal_hash.as_deref(),self.planning_policy.as_ref()){
+            (1,None,None)=>true,
+            (2,Some(h),None)=>hash(h),
+            (3,Some(h),Some(p))=>hash(h)&&p.valid_for(&self.budget)&&self.owner.provider=="ollama"&&self.owner.adapter=="ollama"&&self.budget.payment==Payment::LocalOnly,
+            _=>false,
+        }
     }
     pub fn valid(&self,record:&Record)->bool{
         self.binding_format()&&model::key(&self.request_id)&&model::token(&self.decision_id)
@@ -93,7 +99,7 @@ impl Evidence{
     }
 }
 #[derive(Clone,Serialize)]#[serde(rename_all="camelCase")]
-pub struct ReviewProposal{pub proposals:super::plans::Snapshot,pub operation:&'static str,pub tool_execution_available:bool,pub goal_id:String,pub revision:String,pub request_id:String,pub owner:Owner,pub context:ContextBinding,pub intent:String,pub criteria:Vec<String>,pub resolved_model:String,pub policy_revision:String,pub descriptor_revision:String,pub budget:Budget,pub prepared_at:u64,pub expires_at:u64}
+pub struct ReviewProposal{#[serde(skip_serializing_if="Option::is_none")]pub planning_policy:Option<super::planning::Policy>,pub proposals:super::plans::Snapshot,pub operation:&'static str,pub tool_execution_available:bool,pub goal_id:String,pub revision:String,pub request_id:String,pub owner:Owner,pub context:ContextBinding,pub intent:String,pub criteria:Vec<String>,pub resolved_model:String,pub policy_revision:String,pub descriptor_revision:String,pub budget:Budget,pub prepared_at:u64,pub expires_at:u64}
 pub(super)struct Review{spec:AdmissionSpec,expires_at:u64,evidence:Evidence,intent:String,criteria:Vec<String>,proposals:super::plans::Snapshot}
 pub(super)struct Approved{spec:AdmissionSpec,expires_at:u64}
 impl Review{
@@ -106,11 +112,21 @@ impl Review{
         if !model::key(&request_id)||!model::token(&decision_id)||goal.events.iter().any(|e|e.request_id==request_id){return Err(Denial::Invalid);}
         super::plans::reviewed_input(goal).map_err(|_|Denial::InputLimit)?;
         let expires_at=now.saturating_add(REVIEW_TTL).min(budget.deadline_at);
-        let spec=AdmissionSpec{schema_version:2,proposal_hash:Some(super::plans::fingerprint(goal).map_err(|_|Denial::Invalid)?),request_id,decision_id,goal_id:goal.id.clone(),source_revision:goal.revision.clone(),source_sequence:goal.sequence,owner:goal.spec.owner.clone(),context:evidence.context.clone(),context_hash:model::fingerprint(&evidence.context).map_err(|_|Denial::Invalid)?,intent_hash:model::fingerprint(&goal.spec).map_err(|_|Denial::Invalid)?,resolved_model:evidence.model.clone(),descriptor_revision:evidence.descriptor_revision.clone(),policy_revision:evidence.policy_revision.clone(),evidence_hash:evidence.fingerprint().map_err(|_|Denial::Invalid)?,approved_at:now,budget};
+        let spec=AdmissionSpec{schema_version:2,planning_policy:None,proposal_hash:Some(super::plans::fingerprint(goal).map_err(|_|Denial::Invalid)?),request_id,decision_id,goal_id:goal.id.clone(),source_revision:goal.revision.clone(),source_sequence:goal.sequence,owner:goal.spec.owner.clone(),context:evidence.context.clone(),context_hash:model::fingerprint(&evidence.context).map_err(|_|Denial::Invalid)?,intent_hash:model::fingerprint(&goal.spec).map_err(|_|Denial::Invalid)?,resolved_model:evidence.model.clone(),descriptor_revision:evidence.descriptor_revision.clone(),policy_revision:evidence.policy_revision.clone(),evidence_hash:evidence.fingerprint().map_err(|_|Denial::Invalid)?,approved_at:now,budget};
         Ok(Self{spec,expires_at,evidence,intent:goal.spec.intent.clone(),criteria:goal.spec.criteria.clone(),proposals:super::plans::snapshot(goal)})
     }
+    /// Called only with the native configuration/evidence snapshot. A caller
+    /// selects numeric bounds; it cannot supply the catalog or a grant.
+    pub(super)fn prepare_planning(goal:&Record,evidence:Evidence,budget:Budget,limits:super::planning::Limits,config:&crate::pet_config::Configuration,request_id:String,decision_id:String,now:u64)->Result<Self>{
+        if goal.spec.owner.provider!="ollama"||goal.spec.owner.adapter!="ollama"{return Err(Denial::Unsupported);}
+        if budget.payment!=Payment::LocalOnly{return Err(Denial::PaymentPolicy);}
+        if !config.permissions(&goal.spec.owner.pet_id).map_err(|_|Denial::Invalid)?.music{return Err(Denial::Unsupported);}
+        let policy=super::planning::Policy::native(limits,&budget).map_err(|_|Denial::Budget)?;
+        let mut review=Self::prepare(goal,evidence,budget,request_id,decision_id,now)?;
+        review.spec.schema_version=3;review.spec.planning_policy=Some(policy);Ok(review)
+    }
     /// Native UI should render this exact value and retain the original Review.
-    pub(super)fn proposal(&self)->ReviewProposal{ReviewProposal{proposals:self.proposals.clone(),operation:"conversationRespond",tool_execution_available:false,goal_id:self.spec.goal_id.clone(),revision:self.spec.source_revision.clone(),request_id:self.spec.request_id.clone(),owner:self.spec.owner.clone(),context:self.spec.context.clone(),intent:self.intent.clone(),criteria:self.criteria.clone(),resolved_model:self.spec.resolved_model.clone(),policy_revision:self.spec.policy_revision.clone(),descriptor_revision:self.spec.descriptor_revision.clone(),budget:self.spec.budget.clone(),prepared_at:self.spec.approved_at,expires_at:self.expires_at}}
+    pub(super)fn proposal(&self)->ReviewProposal{ReviewProposal{planning_policy:self.spec.planning_policy.clone(),proposals:self.proposals.clone(),operation:if self.spec.planning_policy.is_some(){"goalPlanning"}else{"conversationRespond"},tool_execution_available:false,goal_id:self.spec.goal_id.clone(),revision:self.spec.source_revision.clone(),request_id:self.spec.request_id.clone(),owner:self.spec.owner.clone(),context:self.spec.context.clone(),intent:self.intent.clone(),criteria:self.criteria.clone(),resolved_model:self.spec.resolved_model.clone(),policy_revision:self.spec.policy_revision.clone(),descriptor_revision:self.spec.descriptor_revision.clone(),budget:self.spec.budget.clone(),prepared_at:self.spec.approved_at,expires_at:self.expires_at}}
     /// Consumed only after native exact-review consent; latest observations must
     /// be rebuilt by the adapter. This cannot be called with a JSON approval.
     pub(super)fn approve(mut self,goal:&Record,latest:Evidence,now:u64)->Result<Approved>{

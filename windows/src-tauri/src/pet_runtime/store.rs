@@ -2,6 +2,8 @@
 use super::model::*;
 use std::{ffi::CString,fs::{File,OpenOptions},io::{Read,Write},os::{fd::{AsRawFd,FromRawFd},unix::fs::{MetadataExt,OpenOptionsExt}},path::{Path,PathBuf}};
 use ring::rand::{SecureRandom,SystemRandom};
+#[path="store_plan_commit.rs"]mod plan_commit;
+pub(in crate::pet_runtime)use plan_commit::{PlanPublished,PlanAbsent};
 const PROTOCOL:&[u8]=b"{\"version\":1,\"kind\":\"coucou-goals\"}\n";
 const MARKER:&str=".protocol.json";
 const LOCK:&str=".catalog.lock";
@@ -79,6 +81,7 @@ impl Drop for Guard{fn drop(&mut self){unsafe{libc::flock(self.0.as_raw_fd(),lib
 pub struct Store{dir:Dir,authority:Option<PathBuf>,#[cfg(test)]pub(super)fault:Fault}
 impl super::Repository for Store{
     fn read(&self,id:&str,pet_id:&str)->Result<Record>{Store::read(self,id,pet_id)}
+    fn read_control(&self,id:&str,pet_id:&str)->Result<Record>{Store::read_control(self,id,pet_id)}
     fn create(&self,spec:Spec,now:u64)->Result<Receipt>{Store::create(self,spec,now)}
     fn mutate(&self,id:&str,pet_id:&str,revision:&str,request:String,action:Action,now:u64)->Result<Receipt>{Store::mutate(self,id,pet_id,revision,request,action,now)}
     fn list(&self,pet_id:Option<&str>)->Result<Listing>{Store::list(self,pet_id)}
@@ -99,10 +102,18 @@ impl Store{
         let a=guard.0.metadata().map_err(|_|Error::UnsafePath)?;let b=current.metadata().map_err(|_|Error::UnsafePath)?;
         if a.dev()!=b.dev()||a.ino()!=b.ino(){return Err(Error::UnsafePath);}Ok(guard)
     }
-    fn load(&self,id:&str)->Result<Option<(Record,Stamp)>>{
+    fn load(&self,id:&str)->Result<Option<(Record,Stamp)>>{self.load_with_pending(id,false)}
+    fn load_with_pending(&self,id:&str,allow_pending:bool)->Result<Option<(Record,Stamp)>>{
         if !goal_id(id){return Err(Error::InvalidInput);}let Some((bytes,stamp))=self.dir.bytes(&format!("{id}.json"),MAX_BYTES)?else{return Ok(None);};
         let record:Record=serde_json::from_slice(&bytes).map_err(|_|Error::InvalidRecord)?;record.validate()?;
         if record.state==State::Completed{if let Some(path)=&self.authority{super::authority::Authority::existing(path).and_then(|a|a.verify_completed_goal(&record)).map_err(|_|Error::InvalidRecord)?;}}
+        if let Some(path)=&self.authority {
+            match super::authority::Authority::existing(path) {
+                Ok(a)=>a.verify_generated_goal(&record,allow_pending).map_err(|_|Error::InvalidRecord)?,
+                Err(super::authority::Failure::Missing) if record.generated_plans.is_empty()&&!record.admissions.iter().any(|r|r.spec.schema_version==3)=>{},
+                Err(_)=>return Err(Error::InvalidRecord),
+            }
+        }
         if record.id!=id{return Err(Error::InvalidRecord);}Ok(Some((record,stamp)))
     }
     fn stabilize(&self,record:Record)->Receipt{
@@ -135,7 +146,7 @@ impl Store{
         self.publish(Record::new(spec,now,nonce()?)?,None,false)
     }
     pub fn mutate(&self,id:&str,pet_id:&str,revision:&str,request:String,action:Action,now:u64)->Result<Receipt>{
-        let _guard=self.lock(true)?;let(mut record,before)=self.load(id)?.ok_or(Error::NotFound)?;
+        let _guard=self.lock(true)?;let(mut record,before)=self.load_with_pending(id,matches!(&action,Action::Pause|Action::Cancel))?.ok_or(Error::NotFound)?;
         if record.spec.owner.pet_id!=pet_id{return Err(Error::Conflict);}
         if record.replay(&request,&action)?{return Ok(self.stabilize(record));}
         if record.revision!=revision{return Err(Error::Conflict);}let control=matches!(action,Action::Cancel);
@@ -184,7 +195,7 @@ impl Store{
         goal=candidate;self.publish(goal,Some(&before),false)
     }
     pub(super)fn drain_owned(&self,authority:&super::authority::Authority,drain:&super::lease_controller::DrainProof,now:u64)->Result<Receipt>{
-        let _guard=self.lock(true)?;let(mut goal,before)=self.load(&drain.lease().goal_id)?.ok_or(Error::NotFound)?;
+        let _guard=self.lock(true)?;let(mut goal,before)=self.load_with_pending(&drain.lease().goal_id,true)?.ok_or(Error::NotFound)?;
         let row=goal.admissions.last().ok_or(Error::InvalidRecord)?;let proof=row.proof.as_ref().ok_or(Error::Conflict)?;
         if row.lease.as_ref()!=Some(drain.lease())&&!(drain.unstarted()&&row.lease.is_none()&&goal.state==State::Queued){return Err(Error::Conflict);}
         let reason=authority.finish(&row.spec,proof,drain.lease(),drain.unstarted(),now).map_err(|_|Error::StorageUnavailable)?;

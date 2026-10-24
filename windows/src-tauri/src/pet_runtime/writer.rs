@@ -5,22 +5,42 @@ use crate::pet_runtime::effect_budget::{Attempt,Kind,Phase};
 use crate::chat::ConversationReservation;
 use crate::local_chat::RuntimeFence;
 use std::sync::atomic::AtomicBool;
-struct ModelCall{worker:WorkerGuard,reservation:ConversationReservation,request_id:String,output_reserved:u64,attempt:Mutex<Option<Attempt>>,armed:AtomicBool,dispatched:AtomicBool}
+struct ModelCall{planning:Option<crate::pet_runtime::planning_journal::Request>,worker:WorkerGuard,reservation:ConversationReservation,request_id:String,output_reserved:u64,attempt:Mutex<Option<Attempt>>,armed:AtomicBool,dispatched:AtomicBool}
 impl Owned{
  fn check_model_goal(&self,request:&str,goal:&Record)->model::Result<()>{
   if !model::key(request)||goal.id!=self.live.lease.goal_id||goal.spec.owner!=self.live.spec.owner||model::fingerprint(&goal.spec)?!=self.live.spec.intent_hash||goal.execution_context.as_ref()!=Some(&self.live.spec.context)||goal.admissions.last().and_then(|a|a.lease.as_ref())!=Some(&self.live.lease)||goal.state!=model::State::Leased||!crate::pet_runtime::plans::matches(goal,&self.live.spec){return Err(model::Error::Conflict);}
   Ok(())
  }
  fn prepare_model(&self,request:&str,goal:&Record,output_limit:u64,now:u64)->model::Result<ModelCall>{
+  if self.live.spec.planning_policy.is_some(){return Err(model::Error::Conflict);}
+  self.prepare_model_call(request,goal,output_limit,None,now)
+ }
+ fn prepare_planning_model(&self,request:&str,goal:&Record,now:u64)->model::Result<ModelCall>{
+  let policy=self.live.spec.planning_policy.as_ref().ok_or(model::Error::Conflict)?;
+  let captured=crate::pet_runtime::planning_journal::Request::capture(goal,&self.live.spec,&self.live.lease,request)?;
+  self.prepare_model_call(request,goal,u64::from(policy.limits.max_output_bytes),Some(captured),now)
+ }
+ fn prepare_model_call(&self,request:&str,goal:&Record,output_limit:u64,planning:Option<crate::pet_runtime::planning_journal::Request>,now:u64)->model::Result<ModelCall>{
   self.check_model_goal(request,goal)?;
+  if planning.is_some()!=self.live.spec.planning_policy.is_some(){return Err(model::Error::Conflict);}
   let worker=self.worker(now)?;
   let reservation=self.live.chat.reserve_for_goal(&self.live.lease.provider,&self.live.lease.conversation_id,&self.live.lease.goal_id,self.live.hold.clone()).map_err(|_|model::Error::Busy)?;
   let authority=Authority::existing(&self.live.authority_path).map_err(|_|model::Error::StorageUnavailable)?;
   let remaining=authority.output_remaining(&self.live.spec,&self.live.proof,&self.live.lease,now).map_err(|_|model::Error::Conflict)?;
   let limit=output_limit.min(remaining).min(4*1024*1024);if limit==0{return Err(model::Error::LimitReached);}
-  Ok(ModelCall{worker,reservation,request_id:request.into(),output_reserved:limit,attempt:Mutex::new(None),armed:AtomicBool::new(false),dispatched:AtomicBool::new(false)})
+  Ok(ModelCall{planning,worker,reservation,request_id:request.into(),output_reserved:limit,attempt:Mutex::new(None),armed:AtomicBool::new(false),dispatched:AtomicBool::new(false)})
  }
  pub(in crate::pet_runtime)async fn respond_once(&self,app:Option<&tauri::AppHandle>,goal:&Record,server:&crate::local_chat::Server,request:&str,config:&crate::pet_config::Configuration)->Result<String,String>{
+  if self.live.spec.planning_policy.is_some(){return Err("Este consentimento permite planeamento tipado, não uma resposta genérica.".into());}
+  self.model_once(app,goal,server,request,config,false).await
+ }
+ pub(in crate::pet_runtime)async fn plan_once(&self,app:Option<&tauri::AppHandle>,goal:&Record,server:&crate::local_chat::Server,request:&str,config:&crate::pet_config::Configuration)->Result<crate::pet_runtime::planning_output::Envelope,String>{
+  if self.live.spec.planning_policy.is_none()||!config.permissions(&self.live.spec.owner.pet_id).map_err(|_|"Configuração indisponível.")?.music{return Err("O planeamento não está autorizado neste objetivo.".into());}
+  self.model_once(app,goal,server,request,config,true).await?;
+  let authority=Authority::existing(&self.live.authority_path).map_err(|_|"O recibo de planeamento está indisponível; não repetir a chamada.")?;
+  crate::pet_runtime::planning_output::reconcile(&authority,&self.live.spec,&self.live.proof,&self.live.lease,goal,request,crate::assistant_memory::now()).map_err(|_|"A proposta requer reconciliação durável; não repetir a chamada.".into())
+ }
+ async fn model_once(&self,app:Option<&tauri::AppHandle>,goal:&Record,server:&crate::local_chat::Server,request:&str,config:&crate::pet_config::Configuration,planning:bool)->Result<String,String>{
   // Native CLI agents have uncontrolled internal requests/tools. They remain
   // unavailable here until their finite limits can be enforced natively.
   if self.live.lease.provider!="ollama"||self.live.spec.owner.adapter!="ollama"||server.id!="ollama"{return Err("Este adaptador ainda não garante os limites de execução autónoma.".into());}
@@ -33,7 +53,11 @@ impl Owned{
    crate::pet_runtime::results::Lookup::Available{..}=>return crate::pet_runtime::results::recover(&authority,&self.live.spec,&self.live.proof,request).map(|receipt|receipt.text).map_err(|_|"Não foi possível confirmar o recibo durável; não repetir automaticamente.".into()),
    crate::pet_runtime::results::Lookup::RecoveryRequired{..}=>return Err("A tentativa anterior requer recuperação; nenhum novo pedido foi enviado ao modelo.".into()),
   }
-  let query=crate::pet_runtime::plans::model_input(goal,&self.live.spec).map_err(|_|"O contexto revisto mudou ou excedeu o limite; nenhum pedido foi enviado ao modelo.")?;
+  if planning {
+   let captured=crate::pet_runtime::planning_journal::Request::capture(goal,&self.live.spec,&self.live.lease,request).map_err(|_|"A origem do planeamento mudou.")?;
+   authority.preflight_planning(&self.live.spec,&self.live.proof,&self.live.lease,&captured,crate::assistant_memory::now()).map_err(|_|"O planeamento atingiu um limite ou requer reconciliação; nenhuma chamada foi enviada.")?;
+  }
+  let query=if planning{crate::pet_runtime::planning::model_input(goal,&self.live.spec)}else{crate::pet_runtime::plans::model_input(goal,&self.live.spec)}.map_err(|_|"O contexto revisto mudou ou excedeu o limite; nenhum pedido foi enviado ao modelo.")?;
   let base=crate::local_chat::base_url(server)?;
   if !crate::net::is_loopback_url(&base){return Err("A execução autónoma Ollama requer o servidor local aprovado.".into());}
   // Only successful, fresh native model metadata can establish that this
@@ -50,7 +74,7 @@ impl Owned{
   }).await;
   crate::pet_capabilities::finish_local(observation,metadata.as_ref().ok());
   metadata?;drop(preparation);
-  let call=self.prepare_model(request,goal,self.live.spec.budget.max_output_bytes,crate::assistant_memory::now()).map_err(|e|format!("Não foi possível reservar a chamada: {e:?}"))?;
+  let call=if planning{self.prepare_planning_model(request,goal,crate::assistant_memory::now())}else{self.prepare_model(request,goal,self.live.spec.budget.max_output_bytes,crate::assistant_memory::now())}.map_err(|e|format!("Não foi possível reservar a chamada: {e:?}"))?;
   let channel=call.reservation.channel();
   let result=crate::local_chat::send_runtime_once(app,&channel,server,&self.live.lease.model,goal.spec.intent.clone(),query,&call,config).await;
   // A failed/lost acknowledgment retains the full reservation. A successful
@@ -74,7 +98,8 @@ impl RuntimeFence for ModelCall{
   let attempt=Attempt{id:nonce().map_err(|_|"Não foi possível identificar a tentativa.")?,request_id:self.request_id.clone(),input_hash:model::fingerprint(&(&live.lease.id,model,body)).map_err(|_|"Pedido inválido.")?,kind:Kind::Model,output_reserved:self.output_reserved,phase:Phase::Reserved,accepted_output:None,reserved_at:now,started_at:None,finished_at:None};
   *self.attempt.lock().map_err(|_|"O controlador está indisponível.")?=Some(attempt.clone());
   let authority=Authority::existing(&live.authority_path).map_err(|_|"O orçamento está indisponível.")?;
-  authority.reserve_attempt(&live.spec,&live.proof,&live.lease,&attempt,now).map_err(|_|"Não foi possível reservar o orçamento antes da chamada; não repetir automaticamente.")?;
+  let reserved=if let Some(request)=&self.planning{authority.reserve_planning_attempt(&live.spec,&live.proof,&live.lease,&attempt,request,now)}else{authority.reserve_attempt(&live.spec,&live.proof,&live.lease,&attempt,now)};
+  reserved.map_err(|_|"Não foi possível reservar o orçamento antes da chamada; não repetir automaticamente.")?;
   authority.start_attempt(&live.spec,&live.proof,&live.lease,&attempt,crate::assistant_memory::now()).map_err(|_|"Não foi possível confirmar o orçamento antes da chamada; não repetir automaticamente.")?;
   if !self.current(){return Err("O objetivo foi interrompido antes do envio.".into());}
   self.dispatched.store(true,Ordering::Release);Ok(())

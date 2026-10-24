@@ -15,7 +15,7 @@ impl Reviews{
         let proposal=review.proposal();
         for (token,p)in &self.pending{
             let old=p.review.proposal();if p.window==window&&old.goal_id==proposal.goal_id{
-                let semantic=|p:&ReviewProposal|model::fingerprint(&(&p.goal_id,&p.revision,&p.request_id,&p.owner,&p.context,&p.intent,&p.criteria,&p.resolved_model,&p.policy_revision,&p.descriptor_revision,&p.budget));
+                let semantic=|p:&ReviewProposal|model::fingerprint(&(&p.goal_id,&p.revision,&p.request_id,&p.owner,&p.context,&p.intent,&p.criteria,&p.resolved_model,&p.policy_revision,&p.descriptor_revision,&p.budget,&p.planning_policy));
                 if semantic(&old)?!=semantic(&proposal)?{return Err(Error::Conflict);}
                 return Ok(ReviewTicket{token:token.clone(),proposal:old});
             }

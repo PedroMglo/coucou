@@ -46,7 +46,7 @@ pub struct Plan{pub id:String,pub task_id:String,pub steps:Vec<Step>}
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Legacy{pub task_id:String,pub provider:String,pub backend:String,pub conversation_id:Option<String>,pub phase:String,pub intent_may_be_incomplete:bool,pub receipts:Vec<crate::local_tasks::types::StepReceipt>}
 #[derive(Clone,Copy,Debug,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
-pub enum EventKind{Created,TaskProposed,PlanProposed,Paused,DraftResumed,Cancelled,CancelRequested,LegacyImported,ContextPrepared,AdmissionQueued,LeaseClaimed,StopRequested,LeaseDrained,ClaimAbandoned,GoalCompleted}
+pub enum EventKind{Created,TaskProposed,PlanProposed,Paused,DraftResumed,Cancelled,CancelRequested,LegacyImported,ContextPrepared,AdmissionQueued,LeaseClaimed,StopRequested,LeaseDrained,ClaimAbandoned,GoalCompleted,PlanGenerated}
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Event{pub sequence:u64,pub at:u64,pub request_id:String,pub fingerprint:String,pub kind:EventKind}
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -55,6 +55,7 @@ pub struct Record{
     #[serde(default,skip_serializing_if="Option::is_none")]pub execution_context:Option<ContextBinding>,
     #[serde(default,skip_serializing_if="Vec::is_empty")]pub admissions:Vec<super::admission::QueuedAdmission>,
     #[serde(default,skip_serializing_if="Option::is_none")]pub completion:Option<super::criteria::CompletionRef>,
+    #[serde(default,skip_serializing_if="Vec::is_empty")]pub generated_plans:Vec<super::generated_plans::Reference>,
     pub spec:Spec,pub state:State,pub tasks:Vec<Task>,pub plans:Vec<Plan>,pub events:Vec<Event>,pub legacy:Vec<Legacy>,
 }
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -114,6 +115,7 @@ impl Spec{
 }
 impl Record{
     fn required_schema(&self)->u32{
+        if !self.generated_plans.is_empty()||self.admissions.iter().any(|a|a.spec.schema_version==3){return 8;}
         if self.completion.is_some(){return 7;}
         if super::plans::typed(self)||self.admissions.iter().any(|a|a.spec.schema_version>=2){6}
         else if self.admissions.iter().any(|a|a.lease.is_some()){5}
@@ -126,7 +128,7 @@ impl Record{
     pub fn new(spec:Spec,now:u64,revision:String)->Result<Self>{
         spec.validate()?;if !date(now)||!token(&revision){return Err(Error::InvalidInput);}
         let event=Event{sequence:1,at:now,request_id:spec.request_id.clone(),fingerprint:fingerprint(&spec)?,kind:EventKind::Created};
-        Ok(Self{schema_version:1,id:id_for(&spec),revision,sequence:1,created_at:now,updated_at:now,spec,state:State::Draft,execution_context:None,admissions:vec![],completion:None,tasks:vec![],plans:vec![],events:vec![event],legacy:vec![]})
+        Ok(Self{schema_version:1,id:id_for(&spec),revision,sequence:1,created_at:now,updated_at:now,spec,state:State::Draft,execution_context:None,admissions:vec![],completion:None,generated_plans:vec![],tasks:vec![],plans:vec![],events:vec![event],legacy:vec![]})
     }
     pub fn validate(&self)->Result<()>{
         self.spec.validate().map_err(|_|Error::InvalidRecord)?;
@@ -134,7 +136,7 @@ impl Record{
         let mut requests=BTreeSet::new();let mut at=self.created_at;
         for(i,e)in self.events.iter().enumerate(){if e.sequence!=i as u64+1||!date(e.at)||e.at<at||!key(&e.request_id)||!requests.insert(&e.request_id)||e.fingerprint.len()!=64||!e.fingerprint.bytes().all(|b|b.is_ascii_hexdigit()){return Err(Error::InvalidRecord);}at=e.at;}
         if at!=self.updated_at||self.events[0].at!=self.created_at||!matches!(self.events[0].kind,EventKind::Created)||self.events[0].request_id!=self.spec.request_id||self.events[0].fingerprint!=fingerprint(&self.spec)?{return Err(Error::InvalidRecord);}
-        let expected=match self.events.last().ok_or(Error::InvalidRecord)?.kind{EventKind::Created|EventKind::TaskProposed|EventKind::PlanProposed|EventKind::DraftResumed|EventKind::ContextPrepared=>State::Draft,EventKind::AdmissionQueued=>State::Queued,EventKind::LeaseClaimed=>State::Leased,EventKind::StopRequested=>State::Stopping,
+        let expected=match self.events.last().ok_or(Error::InvalidRecord)?.kind{EventKind::Created|EventKind::TaskProposed|EventKind::PlanProposed|EventKind::DraftResumed|EventKind::ContextPrepared=>State::Draft,EventKind::AdmissionQueued=>State::Queued,EventKind::LeaseClaimed|EventKind::PlanGenerated=>State::Leased,EventKind::StopRequested=>State::Stopping,
             EventKind::LeaseDrained|EventKind::ClaimAbandoned=>match self.admissions.last().map(|a|a.phase){Some(super::admission::QueuePhase::Paused)=>State::Paused,Some(super::admission::QueuePhase::Cancelled)=>State::Cancelled,Some(super::admission::QueuePhase::RecoveryRequired)=>State::RecoveryRequired,_=>return Err(Error::InvalidRecord)},EventKind::GoalCompleted=>State::Completed,EventKind::Paused=>State::Paused,EventKind::Cancelled=>State::Cancelled,EventKind::CancelRequested|EventKind::LegacyImported=>State::RecoveryRequired};
         if self.state!=expected{return Err(Error::InvalidRecord);}
         if (self.state==State::Completed)!=self.completion.is_some(){return Err(Error::InvalidRecord);}
@@ -144,11 +146,14 @@ impl Record{
                 ||row.spec.decision_id!=c.decision_id||row.lease.as_ref().is_none_or(|l|l.id!=c.lease_id)||row.phase!=super::admission::QueuePhase::Completed
                 ||event.request_id!=format!("complete-{}",c.recipe_id)||event.fingerprint!=fingerprint(c)?{return Err(Error::InvalidRecord);}
         }
+        let mut generated=std::collections::BTreeSet::new();
+        if self.generated_plans.len()>32*8||self.generated_plans.iter().any(|r|!r.structurally_present(self)||!generated.insert(&r.output.attempt_id))
+            ||self.events.iter().filter(|e|matches!(e.kind,EventKind::PlanGenerated)).count()!=self.generated_plans.len(){return Err(Error::InvalidRecord);}
         if self.admissions.len()>32{return Err(Error::InvalidRecord);}
         let mut decisions=BTreeSet::new();let mut admission_requests=BTreeSet::new();
         for (i,a) in self.admissions.iter().enumerate(){
             let Some(e)=self.events.get(a.spec.source_sequence as usize)else{return Err(Error::InvalidRecord);};
-            if a.lease.as_ref().is_some_and(|l|!l.valid(&a.spec)||a.proof.is_none())||a.stop_reason.is_some()&&a.lease.is_none()||a.proof.as_ref().is_some_and(|p|!p.valid())||!a.spec.valid(self)||matches!(a.phase,super::admission::QueuePhase::Queued|super::admission::QueuePhase::Leased|super::admission::QueuePhase::StopRequested)&&!super::plans::matches(self,&a.spec)||!decisions.insert(&a.spec.decision_id)||!admission_requests.insert(&a.spec.request_id)
+            if a.lease.as_ref().is_some_and(|l|!l.valid(&a.spec)||a.proof.is_none())||a.stop_reason.is_some()&&a.lease.is_none()||a.proof.as_ref().is_some_and(|p|!p.valid()||!p.matches(&a.spec))||!a.spec.valid(self)||matches!(a.phase,super::admission::QueuePhase::Queued|super::admission::QueuePhase::Leased|super::admission::QueuePhase::StopRequested)&&!super::plans::matches(self,&a.spec)||!decisions.insert(&a.spec.decision_id)||!admission_requests.insert(&a.spec.request_id)
                 ||!matches!(e.kind,EventKind::AdmissionQueued)||e.request_id!=a.spec.request_id||e.fingerprint!=fingerprint(&a.spec)?||e.at<a.spec.approved_at
                 ||a.phase==super::admission::QueuePhase::Queued&&(i+1!=self.admissions.len()||self.state!=State::Queued){return Err(Error::InvalidRecord);}
         }

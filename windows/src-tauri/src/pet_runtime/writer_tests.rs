@@ -30,6 +30,40 @@ fn fixture_with_hook(responses:Vec<(&'static str,String)>,mut hook:impl FnMut(&s
  (crate::local_chat::Server{id:"ollama",name:"Synthetic fixture",url:format!("http://127.0.0.1:{port}"),key:None},worker)
 }
 fn stream(text:&str,done:bool)->String{format!("data: {}\n\n{}",json!({"choices":[{"delta":{"content":text}}]}),if done{"data: [DONE]\n\n"}else{""})}
+
+fn planning_config()->crate::pet_config::Configuration {let mut c=crate::pet_config::defaults();c.pets.get_mut("ai_ollama").unwrap().permissions.get_or_insert_default().music=true;c}
+fn setup_planning()->(Fixture,Authority,Record,Pending,Owned,Chat) {
+ let f=Fixture::new();let a=Authority::ensure(&root(&f)).unwrap();let draft=f.goal("ollama");let now=crate::assistant_memory::now()-100;
+ let mut budget=budget();budget.deadline_at=now+60_000;budget.payment=crate::pet_runtime::admission::Payment::LocalOnly;
+ let limits=crate::pet_runtime::planning::Limits{max_rounds:3,max_steps:2,max_output_bytes:2048,no_progress_limit:2};
+ let approved=Review::prepare_planning(&draft,evidence(&draft,now),budget,limits,&planning_config(),"queue".into(),nonce().unwrap(),now).unwrap().approve(&draft,evidence(&draft,now+1),now+1).unwrap();let cert=a.certify(&approved,&draft,now+2).unwrap();let queued=f.store().enqueue_certified(&cert,now+3).unwrap().record;
+ let main=Chat::persistent(f.path.join("live-main.json"));let controller=Controller::new().unwrap();let pending=controller.prepare(&queued,&root(&f),&f.path.join("contexts"),&main,&evidence(&queued,now+4),"claim".into(),now+4,Arc::new(|_,_,_|Validity::Current)).unwrap();let(r,o)=pending.claim(&f.store(),&a,&evidence(&queued,now+5),now+5).unwrap();(f,a,r.record,pending,o.unwrap(),main)
+}
+#[test]fn native_planning_mode_seals_original_source_and_recovers_without_another_http_call() {
+ let(f,a,g,_p,o,_main)=setup_planning();
+ let text=json!({"kind":"plan","description":"Pause","steps":[{"description":"Pause","postcondition":"Paused","operation":{"operationId":"spotify.control","version":1,"arguments":{"action":"pause"}}}],"criteria":[{"criterionIndex":0,"predicate":{"kind":"spotifyPlayback","status":"paused"}}]}).to_string();
+ let(server,http)=fixture(vec![("application/json",local_metadata().to_string()),("text/event-stream",stream(&text,true))]);
+ let e=run(o.plan_once(None,&g,&server,"plan-first",&planning_config())).unwrap();assert_eq!(e.body.source.record_hash,model::fingerprint(&g).unwrap());assert_eq!(e.body.outcome.kind(),crate::pet_runtime::planning_output::Kind::Plan);
+ let again=run(o.plan_once(None,&g,&server,"plan-first",&planning_config())).unwrap();assert_eq!(serde_json::to_value(&e).unwrap(),serde_json::to_value(&again).unwrap());
+ let requests=http.join().unwrap();assert_eq!(requests.len(),2);assert_eq!(requests[0].0,"/api/show");assert!(requests[1].1.get("tools").is_none());
+ let prompt=requests[1].1["messages"].as_array().unwrap().iter().filter_map(|m|m["content"].as_str()).collect::<Vec<_>>().join("\n");assert!(prompt.contains("SpotifyTransportV1")||prompt.contains("spotifyTransportV1"));assert!(prompt.contains("Original complete intent"));assert!(prompt.contains("maxRounds"));assert!(prompt.contains("effectsAuthorized"));
+ let rows=ledger(&f,&g);assert_eq!(rows["attempts"].as_array().unwrap().len(),1);assert_eq!(rows["attempts"][0]["phase"],"settled");assert!(rows["attempts"][0]["outputReserved"].as_u64().unwrap()<=2048);
+ a.verify_planning_output(&g.admissions[0].spec,g.admissions[0].proof.as_ref().unwrap(),&e).unwrap();assert_eq!(o.workers(),0);assert_eq!(f.store().read(&g.id,"ai_ollama").unwrap().revision,g.revision);
+}
+#[test]fn text_and_planning_consents_cannot_exchange_native_writer_modes() {
+ let(_f,_a,g,_p,o,_)=setup_planning();let(server,http)=fixture(vec![]);assert!(o.prepare_model("wrong",&g,100,crate::assistant_memory::now()).is_err());assert!(run(o.respond_once(None,&g,&server,"wrong",&planning_config())).is_err());assert!(http.join().unwrap().is_empty());
+ let(_f,_a,g,_p,o,_)=setup("ollama");let(server,http)=fixture(vec![]);assert!(o.prepare_planning_model("wrong",&g,crate::assistant_memory::now()).is_err());assert!(run(o.plan_once(None,&g,&server,"wrong",&planning_config())).is_err());assert!(http.join().unwrap().is_empty());
+}
+#[test]fn bounded_invalid_plans_consume_original_rounds_and_stop_without_canonical_mutation() {
+ let(f,_a,g,_p,o,_)=setup_planning();let text="unsupported output";
+ let(server,http)=fixture(vec![("application/json",local_metadata().to_string()),("text/event-stream",stream(text,true)),("application/json",local_metadata().to_string()),("text/event-stream",stream(text,true))]);
+ for request in ["invalid-1","invalid-2"] {let e=run(o.plan_once(None,&g,&server,request,&planning_config())).unwrap();assert_eq!(e.body.outcome.kind(),crate::pet_runtime::planning_output::Kind::Invalid);}
+ let requests=http.join().unwrap();assert_eq!(requests.len(),4);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);assert_eq!(f.store().read(&g.id,"ai_ollama").unwrap().revision,g.revision);
+ // Eligibility rejects round3 before metadata or model IO; the atomic HTTP
+ // boundary independently refuses it even if eligibility raced another caller.
+ let(server,http)=fixture(vec![]);assert!(run(o.plan_once(None,&g,&server,"invalid-3",&planning_config())).is_err());assert!(http.join().unwrap().is_empty());
+ let call=o.prepare_planning_model("invalid-3",&g,crate::assistant_memory::now()).unwrap();assert!(call.before_send("fixture-free",&body()).is_err());assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);
+}
 #[test]fn owned_hold_handoff_uses_one_physical_slot_and_preserves_independent_pet_contexts(){for provider in ["codex","copilot","antigravity","ollama","integration_notion"]{let(_f,_a,g,_p,o,main)=setup(provider);let call=o.prepare_model("first",&g,100,crate::assistant_memory::now()).unwrap();assert!(main.reserve_conversation(provider,None).is_err());assert_eq!(main.runtime_resources().busy().unwrap().len(),1);assert_eq!(o.workers(),1);drop(call);assert_eq!(o.workers(),0);assert!(o.current(crate::assistant_memory::now()));let next=o.prepare_model("second",&g,100,crate::assistant_memory::now()).unwrap();drop(next);}}
 #[test]fn dropping_unstarted_call_does_not_cancel_the_goal_hold_or_create_a_model_attempt(){let(f,_a,g,_p,o,_main)=setup("ollama");let call=o.prepare_model("first",&g,100,crate::assistant_memory::now()).unwrap();drop(call);assert!(o.current(crate::assistant_memory::now()));assert!(ledger(&f,&g).is_null());}
 #[test]fn wrong_coordinator_provider_goal_or_conversation_cannot_adopt_a_hold(){let(_f,_a,g,_p,o,_main)=setup("ollama");let chat=&o.live.chat;let foreign=Chat::default().runtime_resources().acquire("ollama",Arc::default(),None).unwrap();assert!(chat.reserve_for_goal("ollama",&o.lease().conversation_id,&g.id,foreign).is_err());assert!(chat.reserve_for_goal("codex",&o.lease().conversation_id,&g.id,o.live.hold.clone()).is_err());assert!(chat.reserve_for_goal("ollama","changed",&g.id,o.live.hold.clone()).is_err());assert!(chat.reserve_for_goal("ollama",&o.lease().conversation_id,"wrong-goal",o.live.hold.clone()).is_err());assert!(o.current(crate::assistant_memory::now()));}

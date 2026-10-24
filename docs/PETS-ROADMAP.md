@@ -107,6 +107,17 @@ após expirar a observação inicial. A composição passou 2373 Rust/20 ignorad
 1153 JS, check/TSC/Vite e 277 ensaios privados; sem inferência/quota real.
 [Validação versionada](PETS-VALIDATION.md).
 
+**Incremento769 integrado — mesma unidade RUN/EXE aberta:**
+consentimento/journal/orçamento de planeamento, writer Ollama, recibos tipados e
+publicação canónica com gate original/CAS/readback/ACK estão no código. Leitores
+validam a pertença autenticada e detetam a remoção do histórico de planeamento;
+Stop/drain e recuperação do mesmo ACK não criam workers nem renovam autorização.
+Passaram 2401 Rust/20 ignorados, check e 305 ensaios privados no anfitrião.
+Os âmbitos gerados de passo/receita, aprovação humana exata e dispatcher com
+feedback/replaneamento nativo continuam pendentes; não existe ativação pública
+do planeador. [Âmbito e avisos](PETS-VALIDATION.md#planeamento-integrado769).
+Não alterar a percentagem de conclusão nem fechar requisitos por este núcleo.
+
 **Incremento759 integrado — entrada funcional de objetivos RUN-01/02/EXE-02:**
 a área existente de Tarefas passa a chamar criação/contexto/admissão/claim/resposta/
 receita/consulta/Stop nativos. O formulário usa identidades da fábrica, prepara

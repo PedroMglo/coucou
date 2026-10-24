@@ -1,6 +1,8 @@
 //! A durable claim is preparation, never permission to call a model/tool.
 //! Actual workers must keep WorkerGuard until IO is fully drained/reaped.
 #[path="writer.rs"]mod writer;
+#[path="plan_controller.rs"]mod plan_controller;
+pub(in crate::pet_runtime)use plan_controller::PlanGate;
 #[cfg(target_os="linux")]#[path="step_controller.rs"]pub(super)mod step_controller;
 #[cfg(target_os="linux")]#[path="recipe_controller.rs"]pub(super)mod recipe_controller;
 use super::{admission::{AdmissionSpec,Evidence},authority::{Authority,ConsentProof},context,leases::{Lease,DrainOutcome},model::{self,Record,CommitStatus},store::{Store,nonce}};
