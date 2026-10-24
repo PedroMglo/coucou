@@ -1,27 +1,45 @@
-Estado atual: a **0.5.1-mochi.24 está instalada permanentemente**,
-com executável, socket, XDG e ambiente DMS verificados. Inclui leitura Bluetooth,
-controlo Wi-Fi de desativação explícita, correlação do turno Codex e retirada
-temporária do pet GitHub. Não foi alterada a ligação Wi-Fi ou Bluetooth.
-Passaram 1413 testes Rust (dez ignorados), 1010 JavaScript, quatro Python,
-cargo check, TypeScript e Vite sobre 571 fontes congeladas.
+Estado atual: **0.5.1-mochi.30 instalada e ativa**, PID `4091547`, RPM
+`94febbfe61d1…`. Executável/socket/XDG/DMS e launcher confirmados; 597 fontes
+inalteradas nos checks/construção, 1541 Rust (12 ignorados), 1017 JavaScript,
+24 ICS, 12 de datas/fusos, quatro de vocabulário e check/TSC/Vite.
 
-O Ollama recuperou automaticamente os 73 caracteres na CID original e passou
-fechar/reabrir, sem escrita ou envio. A verificação gráfica dos outros chats
-permanece parcial; os seus rascunhos anteriores ficaram guardados privadamente. Histórico/tarefas GitHub e os 25 perfis foram
-preservados; o seu rascunho anterior ficou também num backup privado. A .23
-permanece para recuperação. Gravity foi reposto após a clarificação de que só
-o pet GitHub deve ser retirado; a galeria confirmou a sua presença e a ausência
-do GitHub. O objetivo integral tem um único agente responsável.
-
-A aceitação nativa de apresentação/hotplug e os restantes controlos próprios
-continuam incompletos. Os sete indicadores direitos permanecem na barra.
-Frontend/UX estão sem prioridade até nova indicação. Estado e critérios em
+Em desenvolvimento: 759 fontes integradas e versionadas, incluindo objetivos
+duráveis, anexos múltiplos/retenção, catálogo de fontes, decisões nativas e entrada
+funcional dos objetivos em Tarefas. Passaram 2373 Rust/20 ignorados, 1153 JS e
+277 ensaios privados no anfitrião. A candidata `.31` anterior permanece histórica;
+esta composição ainda requer aceitação gráfica/áudio, migração/rollback e entrega.
+Estado e pendências em
 [PETS-ARCHITECTURE.md](PETS-ARCHITECTURE.md).
+
+A .30 integra consulta por dia com limites e fusos calculados no backend,
+conservando intervalos exatos, origem/CID/autorização e cobertura explícita.
+Codex usa ferramentas dinâmicas; Gravity/Copilot mantêm helper e aprovações nativas.
+A voz Ollama usa funções nativas quando o modelo confirma suporte, preservando
+as cinco ações e os controlos de raciocínio anunciados pelo modelo. Dois ensaios
+com o modelo local gratuito `qwen3:0.6b` consultaram o dia completo pedido e
+responderam com o evento sintético, sem ações. Microfone/TTS, calendários reais,
+CLIs/cloud/helper reais, fontes persistentes e proatividade continuam pendentes.
+
+Definições, 25 perfis e 26 mensagens em oito conversas ficaram byte iguais.
+Os quatro rascunhos foram capturados antes da troca; após a troca, Ollama 76 e
+Codex vazio passaram fechar/reabrir e a captura de recuperação foi observada.
+Gravity/Copilot ainda aguardam a leitura nativa, após o painel recolher e se
+observarem movimentos do ponteiro. Sem escrita, envio ou aprovação. Gravity
+ativo/GitHub retirado; .29 disponível para recuperação. Sete widgets mantidos,
+rede igual à .29, sem nova aceitação visual de rede ou ações de rádio/dispositivo.
+
+Prioridade atual: arquitetura primeiro, desenvolvimento dos pets a seguir;
+Sistema segue os contratos dos pets e frontend/UX continua adiado salvo bloqueadores.
+O objetivo integral continua ativo. Arquitetura em
+[PETS-ARCHITECTURE.md](PETS-ARCHITECTURE.md), plano em
+[PETS-ROADMAP.md](PETS-ROADMAP.md) e estado/aceitação em
+[PETS-IMPLEMENTATION-STATUS.md](PETS-IMPLEMENTATION-STATUS.md); avaliação de
+reaproveitamento em [AI-LOCAL-REUSE.md](AI-LOCAL-REUSE.md).
 
 # Living companions on Linux
 
 > Current Linux delivery status is maintained in
-> [PETS-ARCHITECTURE.md](PETS-ARCHITECTURE.md). The installed version is .24 (571 frozen source files);
+> [PETS-ARCHITECTURE.md](PETS-ARCHITECTURE.md). The installed version is .30 (597 frozen source files);
 > native presentation/hotplug acceptance is incomplete. The five LLM cards passed count checks in .17. Own System sound mute
 > and unmute passed on a temporary virtual output in .18. Later version notes below are
 > historical evidence, not confirmation that every requested capability shipped.
@@ -34,9 +52,11 @@ work. A session's origin and identifier determine where a message or decision is
 sent. When history cannot establish a unique active turn, it remains readable
 and control is refused with an explanation.
 
-There are five chat owners: Codex, Gravity, Copilot CLI, Ollama and GitHub.
-Spoty owns music and PC audio; it no longer has an LLM chat, model picker or
-new LLM session. Existing Spoty history is preserved. Models and stable names
+The active configuration uses Codex, Gravity, Copilot CLI and Ollama as chat owners.
+The standalone GitHub pet is temporarily retired; its stable ID and history remain.
+Spoty owns music and PC audio. Its deterministic service route is independent
+of its optional configured assistant; existing history and its logical pet identity
+remain preserved. Autonomous model support is declared per adapter. Models and stable names
 are configured in `~/.config/coucou/pets.json`; email is enabled only for Ollama
 by default. A pet without the relevant document capability must reject the drop.
 
