@@ -1,0 +1,350 @@
+{
+  "data": "2026-10-25",
+  "origem": "docs/PETS-ROADMAP.md",
+  "requisitos": [
+    {
+      "id": "ARC-01",
+      "trabalho": "Separar arquitetura, estado e histórico; atualizar prioridade para arquitetura e pets",
+      "aceitacao": "Documento normativo, plano com IDs, fontes identificadas e arquivo anterior preservado; ligações coerentes",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Coerência documental, preservação de requisitos e alcance da aceitação."
+    },
+    {
+      "id": "ARC-02",
+      "trabalho": "Rever contratos quando código/decisão revelar incompatibilidade",
+      "aceitacao": "Registar decisão, motivo, migração, impacto e requisitos afetados antes de implementar um caminho incompatível",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Coerência documental, preservação de requisitos e alcance da aceitação."
+    },
+    {
+      "id": "ARC-03",
+      "trabalho": "Manter definição de sistema completo e cobertura",
+      "aceitacao": "Cada cenário do dia a dia tem capacidade, implementação, prova e pendência por provider; exceções não desaparecem dos critérios",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Coerência documental, preservação de requisitos e alcance da aceitação."
+    },
+    {
+      "id": "PET-01",
+      "trabalho": "Implementar `PetDescriptor` e capacidades versionadas a partir de `pet_factory`, `pet_config`, modelos e adaptadores",
+      "aceitacao": "Matriz por pet distingue suporte, configuração, disponibilidade, frescura e motivo. API/perfil vazio ou hook não aparecem como execução suportada. Nome/modelo não alteram identidade; GitHub entidade continua retirado",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "PETS-E-CONTRATOS.md",
+      "provaTransversal": "Dono/sessão exatos, política nativa, capacidades reais e ausência de fallback."
+    },
+    {
+      "id": "PET-02",
+      "trabalho": "Associar conversa, sessão nativa, turno, tarefa e decisões com autoridade inequívoca",
+      "aceitacao": "Trocar de pet/vista/sessão, resultados tardios, sessão ambígua, revogação e Stop preservam dono. Terminal/chat/voz partilham a identidade do pedido nativo e a política da sessão/perfil; uma resposta invalida as outras representações. Descoberta por PID/pasta/título não autoriza controlo",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "PETS-E-CONTRATOS.md",
+      "provaTransversal": "Dono/sessão exatos, política nativa, capacidades reais e ausência de fallback."
+    },
+    {
+      "id": "PET-03",
+      "trabalho": "Completar continuidade e decisões Gravity/Copilot/Codex segundo capacidades nativas",
+      "aceitacao": "Continuar a execução original quando suportado, decisões exatas e limpeza dos filhos próprios. Gravity sem canal de aprovação não ganha permissões. Copilot usa fixtures enquanto quota real está vedada. Preservar as capacidades do agente original — ficheiros, comandos, projetos e ferramentas/MCP — conforme a sessão/perfil autorizados; distinguir continuação nativa do dispatcher autónomo ainda sem limites internos garantidos. Verificar paridade de sandbox/política/modos de aprovação, sem flags mais permissivas nem concessões copiadas entre sessões",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "PETS-E-CONTRATOS.md",
+      "provaTransversal": "Dono/sessão exatos, política nativa, capacidades reais e ausência de fallback."
+    },
+    {
+      "id": "PET-04",
+      "trabalho": "Consolidar identidade, modelos, ferramentas e falhas locais/API",
+      "aceitacao": "Ollama/LM Studio/API mantêm modelo e contexto escolhidos, recusam ferramentas não suportadas e não fazem fallback silencioso. Completar ligação de pets ainda sem configuração/adaptador resolvido",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "PETS-E-CONTRATOS.md",
+      "provaTransversal": "Dono/sessão exatos, política nativa, capacidades reais e ausência de fallback."
+    },
+    {
+      "id": "PET-05",
+      "trabalho": "Definir o contrato comum dos pets de serviço e observadores",
+      "aceitacao": "Spotify permanece determinístico nas capacidades atuais; integrações com executor LLM conservam dono próprio. Só operações efetivamente implementadas ficam disponíveis",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "PETS-E-CONTRATOS.md",
+      "provaTransversal": "Dono/sessão exatos, política nativa, capacidades reais e ausência de fallback."
+    },
+    {
+      "id": "RUN-01",
+      "trabalho": "Schema e repositório de objetivos, tarefas, planos, passos e eventos; migração do estado atual",
+      "aceitacao": "PET-01/02. Separar atividade de estado durável; guardar admissão antes de efeitos, preservar IDs e trabalhos ativos além dos dez do journal público",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Background, limites, crash/retoma, Stop e um dono por efeito."
+    },
+    {
+      "id": "RUN-02",
+      "trabalho": "Admissão, fila, leases e associação da conversa de background",
+      "aceitacao": "RUN-01. Não trocar seleção/rascunhos da UI; uma sessão não recebe dois controladores. Prazos incluem fila, slots físicos aguardam fim do worker, outros pets continuam. Prontidão fresca antes do efeito; validade durante IO não depende apenas da idade da cache e continua vinculada a política/posse/contexto/prazo",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Background, limites, crash/retoma, Stop e um dono por efeito."
+    },
+    {
+      "id": "RUN-03",
+      "trabalho": "Ciclo comum de planeamento, progresso, orçamento e conclusão",
+      "aceitacao": "RUN-01/02 + EXE-01. Critérios verificáveis, limites de ciclos/tentativas/recursos, falta de progresso detetada; texto do modelo não basta para concluir",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Background, limites, crash/retoma, Stop e um dono por efeito."
+    },
+    {
+      "id": "RUN-04",
+      "trabalho": "Recuperação, pausa, Stop e retoma após falha",
+      "aceitacao": "RUN-01/02. Reinício não reproduz efeitos; reconciliar processos/sessões/recibos, preservar incerteza e permitir retoma vinculada ao objetivo original",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Background, limites, crash/retoma, Stop e um dono por efeito."
+    },
+    {
+      "id": "RUN-05",
+      "trabalho": "Prioridades e justiça entre trabalho manual e rotinas",
+      "aceitacao": "RUN-02 + OBS-01. Stop/decisões responsivos, nenhuma rotina monopoliza provider/modelo/dispositivo; limites configurados e observáveis",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Background, limites, crash/retoma, Stop e um dono por efeito."
+    },
+    {
+      "id": "EXE-01",
+      "trabalho": "Registo/broker de operações tipadas para ferramentas nativas, locais, MCP e desktop",
+      "aceitacao": "PET-01/02. Schema, versão, efeitos, alvos, limites, cancelamento, idempotência e verificação; ferramenta descoberta não fica automaticamente autorizada",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Operação tipada, decisão exata, alvo e pós-condição, incerteza sem replay."
+    },
+    {
+      "id": "EXE-02",
+      "trabalho": "Concessões por objetivo/regra e receitas limitadas; integrar aprovações existentes",
+      "aceitacao": "RUN-01 + EXE-01. Uma aprovação não se torna shell genérica; política revogada invalida pedidos pendentes, sem conceder privilégios de outro pet. Chat/voz acompanham a política e os pedidos do agente original, com consumo único, sem duplicar pedidos já satisfeitos nem alargar a decisão nativa",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Operação tipada, decisão exata, alvo e pós-condição, incerteza sem replay."
+    },
+    {
+      "id": "EXE-03",
+      "trabalho": "Recibos e verificação de pós-condições",
+      "aceitacao": "EXE-01. Separar ACK/saída/efeito observado; erro após possível efeito exige reconciliação, sem repetir automaticamente",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Operação tipada, decisão exata, alvo e pós-condição, incerteza sem replay."
+    },
+    {
+      "id": "EXE-04",
+      "trabalho": "Uso do computador e capacidades de observação",
+      "aceitacao": "EXE-01/02. CLI/API/acessibilidade primeiro; alvos exatos, observação antes/depois em controlo visual. Sessão bloqueada ou falta de imagem tem limitação explícita",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Operação tipada, decisão exata, alvo e pós-condição, incerteza sem replay."
+    },
+    {
+      "id": "CTX-01",
+      "trabalho": "Fechar anexos múltiplos, retenção e recuperação do protótipo de 633 fontes",
+      "aceitacao": "Bloqueador REL-01. Envelope terminal e aceitação nativa de restauro parcial/nome reutilizado/limpeza interrompida/motivos de recusa verificados nos dois incrementos675 privados; completar integração e migração/backup/rollback v4/v5/leitores antigos",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "DADOS-MEMORIA-E-FONTES.md",
+      "provaTransversal": "Vários itens, cobertura/revisões, revogação e preservação de cópias."
+    },
+    {
+      "id": "CTX-02",
+      "trabalho": "Apresentação por mensagem e seleção de anexos para contexto",
+      "aceitacao": "CTX-01. IDs/proveniência/cobertura visíveis onde necessário; não reautorizar cópias nem inferir leitura integral do modelo",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "DADOS-MEMORIA-E-FONTES.md",
+      "provaTransversal": "Vários itens, cobertura/revisões, revogação e preservação de cópias."
+    },
+    {
+      "id": "MEM-01",
+      "trabalho": "Schema de memória: preferências, contexto de projeto, episódios, derivados e resumos",
+      "aceitacao": "PET-01 + RUN-01. Dono/âmbito/proveniência/validade/revisão; dados derivados não viram instrução nem autorização",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "DADOS-MEMORIA-E-FONTES.md",
+      "provaTransversal": "Origem/âmbito, seleção/destino, correção e invalidação de derivados."
+    },
+    {
+      "id": "MEM-02",
+      "trabalho": "Recuperação seletiva, correção, exclusão, revogação e retenção",
+      "aceitacao": "MEM-01 + CTX-01. Pesquisa estruturada/lexical inicial, isolamento entre pets/projetos e invalidação de derivados/índices; embeddings externos só com concessão própria",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "DADOS-MEMORIA-E-FONTES.md",
+      "provaTransversal": "Origem/âmbito, seleção/destino, correção e invalidação de derivados."
+    },
+    {
+      "id": "CTX-03",
+      "trabalho": "Completar gestão e aceitação do catálogo ICS já implementado",
+      "aceitacao": "Formulário/consentimento nativos e fonte selecionada; calendário exportado não aparece como sincronização ou capacidade de escrita",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "DADOS-MEMORIA-E-FONTES.md",
+      "provaTransversal": "Vários itens, cobertura/revisões, revogação e preservação de cópias."
+    },
+    {
+      "id": "CTX-04",
+      "trabalho": "Evoluir fontes de pet/CID para objetivos/regras e coleções persistentes",
+      "aceitacao": "RUN-01 + EXE-02 + CTX-03. Migração sem alargar concessões antigas; seleção explícita de vários calendários, revisão e revogação por ocorrência",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "DADOS-MEMORIA-E-FONTES.md",
+      "provaTransversal": "Vários itens, cobertura/revisões, revogação e preservação de cópias."
+    },
+    {
+      "id": "CTX-05",
+      "trabalho": "Adaptadores RSS/IMAP com leitura limitada e proveniência",
+      "aceitacao": "EXE-02 + CTX-04. TLS, redirecionamentos/destinos, bytes/prazos e mensagens limitados antes de materializar conteúdo; IMAP sem envio/eliminação implícitos",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "DADOS-MEMORIA-E-FONTES.md",
+      "provaTransversal": "Vários itens, cobertura/revisões, revogação e preservação de cópias."
+    },
+    {
+      "id": "AUTO-01",
+      "trabalho": "Repositório de regras, gatilhos e concessões; ativar/desativar por utilizador",
+      "aceitacao": "RUN-01/02 + EXE-02 + CTX-04. Regra tem dono, revisão, fontes, limites e validade; conteúdo externo não inscreve regras",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Regra autorizada, fuso/DST/offline, ocorrência única e silêncio."
+    },
+    {
+      "id": "AUTO-02",
+      "trabalho": "Agendador de horários/eventos e deduplicação de ocorrências",
+      "aceitacao": "AUTO-01. Fuso IANA, mudança de hora, suspensão/offline e políticas skip/coalesce/decisão; nenhum efeito duplicado por evento repetido",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Regra autorizada, fuso/DST/offline, ocorrência única e silêncio."
+    },
+    {
+      "id": "AUTO-03",
+      "trabalho": "Primeira rotina: preparação diária a partir de calendários escolhidos",
+      "aceitacao": "AUTO-01/02 + EXE-03. Dados sintéticos desconhecidos pelo modelo, várias fontes, frescura/cobertura, falha parcial e uma única notificação no horário permitido",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Regra autorizada, fuso/DST/offline, ocorrência única e silêncio."
+    },
+    {
+      "id": "AUTO-04",
+      "trabalho": "Rotina de acompanhamento de objetivo/projeto e pedido de decisão",
+      "aceitacao": "RUN-03/04 + MEM-02. Progresso verificável, interrupção/retoma sem repetir efeitos, orçamento repartido e comunicação sem spam",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Regra autorizada, fuso/DST/offline, ocorrência única e silêncio."
+    },
+    {
+      "id": "AUTO-05",
+      "trabalho": "Notificações, silêncio e escalada de bloqueios",
+      "aceitacao": "OBS-01 + AUTO-01. Conteúdo sensível limitado, deduplicação e validade; indisponibilidade não causa reenvio infinito ou mudança de canal/conta",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Regra autorizada, fuso/DST/offline, ocorrência única e silêncio."
+    },
+    {
+      "id": "TEAM-01",
+      "trabalho": "Protocolo comum de comunicação direta, descoberta e delegação",
+      "aceitacao": "PET-01/02 + RUN-01 + EXE-02. Mensagens/pedidos/respostas/eventos/resultados com origem/destino, correlação/causa, tarefa/objetivo, idempotência, artefactos, autoridade, orçamento e prazo explícitos; reutilizar mecanismos existentes. Utilizador e pets chamam cada pet diretamente; nenhuma delegação amplia permissões",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Ramos paralelos, sem coordenador, ciclos/conflitos, ACK perdido e revogação."
+    },
+    {
+      "id": "TEAM-02",
+      "trabalho": "Execução paralela/assíncrona, verificação, cancelamento e coordenação resiliente",
+      "aceitacao": "TEAM-01 + RUN-03/04 + EXE-03. Mesmo controlo para tarefas diretas/delegadas; um dono por efeito, entrega deduplicada, limites de profundidade/concorrência/custo, ciclos/conflitos recusados e falhas isoladas. Coordenador Ollama configurável, com visão autorizada dos trabalhos, sem intermediação obrigatória; restantes pets operacionais sem coordenador/motor indisponível. Resultados com proveniência, sem copiar o histórico inteiro",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Ramos paralelos, sem coordenador, ciclos/conflitos, ACK perdido e revogação."
+    },
+    {
+      "id": "SYS-01",
+      "trabalho": "Matriz pet × subplugin × operação × recurso; autoridade dos pets ligada ao executor comum",
+      "aceitacao": "PET-01 + EXE-01/02. Plugin Sistema não concede tudo; Som pode ser partilhado por Spotify/Ollama; revogação de um pet preserva o outro",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "SISTEMA-E-PERMISSOES.md",
+      "provaTransversal": "Partilha Som Spotify/Ollama, recusa entre componentes e efeito nativo."
+    },
+    {
+      "id": "SYS-02",
+      "trabalho": "Rede e Bluetooth como uma unidade de execução",
+      "aceitacao": "SYS-01 + EXE-03. Estado/scan/alvos/prompts/perfis e operações suportadas; distinguir implementação/ACK/efeito. Sem desligar Wi-Fi nem alterar dispositivos em QA sem autorização específica",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "SISTEMA-E-PERMISSOES.md",
+      "provaTransversal": "Partilha Som Spotify/Ollama, recusa entre componentes e efeito nativo."
+    },
+    {
+      "id": "SYS-03",
+      "trabalho": "Som/multimédia; ecrã/energia/sessão em subunidades completas",
+      "aceitacao": "SYS-01 + EXE-03. Streams/dispositivos/perfis e restante âmbito da arquitetura; partilha/concorrência verificadas e indicadores preservados",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "SISTEMA-E-PERMISSOES.md",
+      "provaTransversal": "Partilha Som Spotify/Ollama, recusa entre componentes e efeito nativo."
+    },
+    {
+      "id": "INT-01",
+      "trabalho": "Integrações de serviço e comunicação externa com operações distintas",
+      "aceitacao": "PET-05 + EXE-02/03. Abrir rascunho não envia; envio futuro exige concessão própria. Autenticação/tokens e identidades nativas preservados",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "PETS-E-CONTRATOS.md",
+      "provaTransversal": "Rascunho separado de envio, dono próprio e operação real autorizada."
+    },
+    {
+      "id": "VOICE-01",
+      "trabalho": "Controlo e interação integral do sistema de pets por voz",
+      "aceitacao": "PET-02/03 + EXE-01/02 + CTX-04 + SYS-01. Cobertura por operação de pets/sessões/conversas/objetivos/tarefas/regras/fontes/memória/configuração/modelos e Sistema autorizado; mesmos dono, permissões e pedidos nativos que chat/terminal. Decisão única por pedido, clarificação falada de ambiguidade, Stop prioritário e sem reenvio após reconexão",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Mesmos contratos de chat, decisão única, Stop e áudio real PT/EN/misto."
+    },
+    {
+      "id": "VOICE-02",
+      "trabalho": "Aceitação real de microfone/Bluetooth/TTS PT/EN/misto",
+      "aceitacao": "VOICE-01. Latência/pronúncia/alternância/falhas, conversa contínua, interrupção de TTS e reconexão com áudio real; matriz de cobertura funcional por voz. Uma transcrição escrita não fecha este requisito",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Mesmos contratos de chat, decisão única, Stop e áudio real PT/EN/misto."
+    },
+    {
+      "id": "OBS-01",
+      "trabalho": "Estado, decisões, prazos, recursos e consumo por tarefa/pet",
+      "aceitacao": "Distinguir terminais/TTYs, clientes e sessões, com atividade/espera/suspensão/inatividade confirmadas ou desconhecido; lease preparado não é inferência. Fontes/cobertura explícitas, sem segredos/documentos privados em logs",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Terminais/clientes/sessões separados, cobertura e ausência distinta de zero."
+    },
+    {
+      "id": "OBS-02",
+      "trabalho": "Cobertura/rotação dos ledgers e captura de consumo nativo",
+      "aceitacao": "Separar tentativas/thread/conta/quota; não perder notificação antes do ACK, não somar snapshots como deltas e não autenticar por abrir painel",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "ARQUITETURA-COMPLETA.md",
+      "provaTransversal": "Terminais/clientes/sessões separados, cobertura e ausência distinta de zero."
+    },
+    {
+      "id": "DATA-01",
+      "trabalho": "Repositórios, migrações, retenção e backups",
+      "aceitacao": "Falhas antes/depois de publicação, escritor concorrente, reinício e restauro; nenhum dado ativo desaparece por rotação",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "DADOS-MEMORIA-E-FONTES.md",
+      "provaTransversal": "Publicação concorrente/parcial, restauro e migração sem alargar acesso."
+    },
+    {
+      "id": "DATA-02",
+      "trabalho": "Decisão e eventual backend PostgreSQL",
+      "aceitacao": "Benefício medido e esquema/base/utilizador próprios; IDs e concessões preservados, migração/restauro comprovados; estado atual continua sem integração",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "DADOS-MEMORIA-E-FONTES.md",
+      "provaTransversal": "Publicação concorrente/parcial, restauro e migração sem alargar acesso."
+    },
+    {
+      "id": "REL-01",
+      "trabalho": "Composição, adoção das fontes e migração/rollback",
+      "aceitacao": "Fontes/hash exatos, preservação de dados/configuração/rascunhos e resolução de bloqueadores; journal v5 e marcadores pendentes tratados antes de regressar a leitores antigos",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "MIGRACAO-E-ENTREGA.md",
+      "provaTransversal": "Composição exata, perfil/writers, backup, compatibilidade e aceitação instalada."
+    },
+    {
+      "id": "REL-02",
+      "trabalho": "Entrega e aceitação integrada por capacidades",
+      "aceitacao": "Executável/assets/helper/autostart/login/reinício, hotplug e trabalhos interrompidos; paridade funcional dos centros legados antes de descontinuar capacidades, mantendo os indicadores. Rádio/dispositivos/contas respeitam o âmbito autorizado",
+      "estado": "Aberto nos critérios integrais",
+      "documentoRevisao": "MIGRACAO-E-ENTREGA.md",
+      "provaTransversal": "Composição exata, perfil/writers, backup, compatibilidade e aceitação instalada."
+    }
+  ]
+}

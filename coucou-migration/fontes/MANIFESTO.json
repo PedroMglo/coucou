@@ -1,0 +1,146 @@
+{
+  "dataUtc": "2026-10-25T20:01:53.414691+00:00",
+  "branch": "feat/mochi-cli-accounts",
+  "head": "bbe12e21010d28d36619003187d82ba175b6a0ec",
+  "tipo": "cópias integrais sem edição; fontes incluem estado histórico e upstream",
+  "ficheiros": [
+    {
+      "origem": "docs/AGENTS.md",
+      "copia": "fontes/docs/AGENTS.md",
+      "sha256": "b5fc7ecd457e2a2c4a25720e6577b0d357575728e79f3faf9f2eafbec693c27f",
+      "bytes": 10160
+    },
+    {
+      "origem": "docs/AI-LOCAL-REUSE.md",
+      "copia": "fontes/docs/AI-LOCAL-REUSE.md",
+      "sha256": "74a62b4c5cca91583b4cecefc176c000e49fc9387d8d4c8fc3ffef8d95ad7791",
+      "bytes": 14707
+    },
+    {
+      "origem": "docs/ANDROID_LINK.md",
+      "copia": "fontes/docs/ANDROID_LINK.md",
+      "sha256": "09af52d9c19c9815af5167e50cc3caff62bb3ecd8920e21ada623e0a66990d4b",
+      "bytes": 29493
+    },
+    {
+      "origem": "docs/COMPANIONS.md",
+      "copia": "fontes/docs/COMPANIONS.md",
+      "sha256": "ebec9e179b2eedd4698d16f50bc6716dbc15f6b852756ad3fd5a3ff151e6186e",
+      "bytes": 34961
+    },
+    {
+      "origem": "docs/INTEGRATIONS.md",
+      "copia": "fontes/docs/INTEGRATIONS.md",
+      "sha256": "d5025f84b95609ae4790d059f21b9157bbcf125f74b69cf8e386c4655fd1923f",
+      "bytes": 25293
+    },
+    {
+      "origem": "docs/IPHONE.md",
+      "copia": "fontes/docs/IPHONE.md",
+      "sha256": "4f7a5c094ef77fab5684490329062dfc512b7749ff54c29da37815e33f3929ef",
+      "bytes": 8213
+    },
+    {
+      "origem": "docs/LINUX-VOICE-ACCOUNTS.md",
+      "copia": "fontes/docs/LINUX-VOICE-ACCOUNTS.md",
+      "sha256": "dfc20d597dab888502ac5f1b17d2e0bbdd5e014a3018351802a8032fbfcc8f2b",
+      "bytes": 10100
+    },
+    {
+      "origem": "docs/PET-CAPABILITIES-CONTRACT.md",
+      "copia": "fontes/docs/PET-CAPABILITIES-CONTRACT.md",
+      "sha256": "03eaf047e1c81e67a7a7a2bafbeabe7533fc2099337f65dfe38550cd976f406a",
+      "bytes": 31367
+    },
+    {
+      "origem": "docs/PET-FACTORY.md",
+      "copia": "fontes/docs/PET-FACTORY.md",
+      "sha256": "85030ea893d78860a32c926cce73a9ba57b268020f7eebf647c3a1c7be5989b0",
+      "bytes": 8316
+    },
+    {
+      "origem": "docs/PETS-ARCHITECTURE-HISTORY-2026-10-23.md",
+      "copia": "fontes/docs/PETS-ARCHITECTURE-HISTORY-2026-10-23.md",
+      "sha256": "ab9f67328732d2735005f2d3efa0e14c12c794163c03f3fc9f3ffad5fd1549d7",
+      "bytes": 304162
+    },
+    {
+      "origem": "docs/PETS-ARCHITECTURE.md",
+      "copia": "fontes/docs/PETS-ARCHITECTURE.md",
+      "sha256": "f73f2e77c529049aa61aae0b7405ad20bce35d6fc5940d7963989da13e0bf0d8",
+      "bytes": 214775
+    },
+    {
+      "origem": "docs/PETS-GOAL.md",
+      "copia": "fontes/docs/PETS-GOAL.md",
+      "sha256": "87d7ff139eeb152bcbc0ce460b50d6f574a8a6273a6bd80525e9d04a7dcd7132",
+      "bytes": 25277
+    },
+    {
+      "origem": "docs/PETS-IMPLEMENTATION-STATUS.md",
+      "copia": "fontes/docs/PETS-IMPLEMENTATION-STATUS.md",
+      "sha256": "4c5eae04fe55fb7c250005bafe1135968d982ca83387d88793cca01030a40735",
+      "bytes": 91477
+    },
+    {
+      "origem": "docs/PETS-ROADMAP.md",
+      "copia": "fontes/docs/PETS-ROADMAP.md",
+      "sha256": "0a50a8c9819fedd6ab7790b9f25c553ff7ea9d8b840a79c9e0607b0782e02fbf",
+      "bytes": 52912
+    },
+    {
+      "origem": "docs/PETS-VALIDATION.md",
+      "copia": "fontes/docs/PETS-VALIDATION.md",
+      "sha256": "4785c08df52dd49348970d9d82de1b5690557452b66b26b31b12be5427bd9b65",
+      "bytes": 112578
+    },
+    {
+      "origem": "docs/RELAY_DEPLOY.md",
+      "copia": "fontes/docs/RELAY_DEPLOY.md",
+      "sha256": "f164da56227bfefa03d5a03552e44c0ee1621b7a119436b649455ba8d5e586fc",
+      "bytes": 8687
+    },
+    {
+      "origem": "docs/RELAY_LINK.md",
+      "copia": "fontes/docs/RELAY_LINK.md",
+      "sha256": "68d20ece993519a368098b434bd83ff2af1fa06f331af6f964ebf04ec2a60b51",
+      "bytes": 13236
+    },
+    {
+      "origem": "docs/SPEC.md",
+      "copia": "fontes/docs/SPEC.md",
+      "sha256": "8d9dfa0ec06b4f3fc6f1999362fd9f3cea8b67f6d5cec349471c17c83d1e3542",
+      "bytes": 39432
+    },
+    {
+      "origem": "docs/VOICE.md",
+      "copia": "fontes/docs/VOICE.md",
+      "sha256": "a1027ec5683df057468e3adeace55efd5f01875bdb7b16a13b9b93cfd6a5901d",
+      "bytes": 12016
+    },
+    {
+      "origem": "README.md",
+      "copia": "fontes/upstream/README.md",
+      "sha256": "ccd494a37ddd70f12b932c2d558df6552ca23e88e7e484e50587e1431a3b0fd0",
+      "bytes": 39434
+    },
+    {
+      "origem": "LICENSE",
+      "copia": "fontes/LICENSE",
+      "sha256": "aa52c5b1a8e5d8390be9651bdab25e99f2f20082b8d9a6ae16b9fd1e00bf3c74",
+      "bytes": 1070
+    },
+    {
+      "origem": "windows/src-tauri/pets.factory.json",
+      "copia": "fontes/windows/src-tauri/pets.factory.json",
+      "sha256": "d998aee575ad4011175590043395edec8ca2901a1e62c602d0f7bd224f6310b7",
+      "bytes": 20113
+    },
+    {
+      "origem": "anexo objetivo persistente fornecido pelo utilizador",
+      "copia": "fontes/OBJETIVO-LITERAL.txt",
+      "sha256": "33709fce53a7fb98571a86cf5fecbf7dbb278ad824eca0f4ec450113aac9f377",
+      "bytes": 6213
+    }
+  ]
+}
