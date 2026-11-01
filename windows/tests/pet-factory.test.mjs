@@ -36,7 +36,8 @@ test("runtime metadata preserves independent logical pets and does not enable mi
   assert.deepEqual(factory.get("integration_notion").runtime, {kind:"service",adapter:"codex"});
   assert.equal(factory.get("integration_notion").routing.taskProvider,"integration_notion");
   assert.deepEqual(factory.get("integration_spotify").runtime, {kind:"service",adapter:"spotify",assistantAdapter:"codex"});
-  for(const id of ["ai_openai","ai_anthropic","ai_google","ai_lmstudio"]){assert.equal(factory.get(id).runtime.kind,"llm");assert.equal(factory.get(id).runtime.adapter,null);assert.equal(factory.get(id).routing.execute,false);}
+  for(const id of ["ai_openai","ai_anthropic","ai_google"]){assert.equal(factory.get(id).runtime.kind,"llm");assert.equal(factory.get(id).runtime.adapter,null);assert.equal(factory.get(id).routing.execute,false);}
+  assert.equal(factory.get("ai_lmstudio").runtime.adapter,"lmstudio");assert.equal(factory.get("ai_lmstudio").preferences.provider,"");assert.equal(factory.get("ai_lmstudio").routing.voice,null);assert.equal(factory.get("ai_lmstudio").routing.execute,false);assert.equal(factory.forTaskProvider("lmstudio"),"ai_lmstudio");
   assert.equal(factory.get("agent_gemini").runtime.kind,"observer");
   assert.equal(factory.get("integration_github").routing.execute,false);
   assert.deepEqual(factory.configuration(),legacy);

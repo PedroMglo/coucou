@@ -7,7 +7,7 @@ import type {PetConfiguration,PetPreference,PetPermissions} from '../mochi/pet-p
 
 export type PetMold='llm'|'application';
 export type PetRuntimeKind='llm'|'service'|'observer';
-export type PetAdapter='codex'|'copilot'|'antigravity'|'ollama'|'spotify';
+export type PetAdapter='codex'|'copilot'|'antigravity'|'ollama'|'lmstudio'|'spotify';
 export interface PetRuntime {readonly kind:PetRuntimeKind;readonly adapter:PetAdapter|null;readonly assistantAdapter?:PetAdapter|null;}
 export interface PetPresentation {
  readonly galleryAvatarSize:number;readonly overviewAvatarSize:number;
@@ -88,13 +88,15 @@ export function createPetFactory(input:unknown){
   const runtime=raw.runtime;
   if(!object(runtime)||Object.keys(runtime).some(k=>!['kind','adapter','assistantAdapter'].includes(k))
    ||typeof runtime.kind!=='string'||!['llm','service','observer'].includes(runtime.kind)
-   ||!(runtime.adapter===null||typeof runtime.adapter==='string'&&['codex','copilot','antigravity','ollama','spotify'].includes(runtime.adapter))
+   ||!(runtime.adapter===null||typeof runtime.adapter==='string'&&['codex','copilot','antigravity','ollama','lmstudio','spotify'].includes(runtime.adapter))
    ||(runtime.kind==='service')!==(raw.mold==='application')||raw.service&&runtime.kind!=='service')invalid();
   const assistant=runtime.assistantAdapter??null;
   if(assistant!==null&&(!raw.service||runtime.adapter!=='spotify'||assistant!=='codex'))invalid();
   if([r.role,r.taskName].some(s=>s!==null&&(typeof s!=='string'||!s.trim()||s.length>256||/[\u0000-\u001f\u007f]/.test(s))))invalid();
   const logical=raw.service?id:p.provider;
-  if(runtime.adapter==='spotify'){
+  if(runtime.adapter==='lmstudio'){
+   if(runtime.kind!=='llm'||raw.service||p.provider!==''||r.chat!=='lmstudio'||r.taskProvider!=='lmstudio'||r.voice!==null||r.execute)invalid();
+  }else if(runtime.adapter==='spotify'){
    if(!raw.service||p.provider!==''||r.chat!==(assistant===null?null:logical)||r.voice!==logical||r.taskProvider!==logical||r.execute!==(assistant!==null))invalid();
   }else if(runtime.adapter!==null){
    if(runtime.kind==='observer'||p.provider!==runtime.adapter||raw.service&&runtime.adapter!=='codex'
@@ -119,6 +121,7 @@ export function createPetFactory(input:unknown){
   get:(id:string):PetBlueprint|null=>entries.get(id)??null,
   services,
   configuration:():PetConfiguration=>structuredClone({...source.configuration as Row,pets:Object.fromEntries([...entries].map(([id,p])=>[id,p.preferences]))}) as unknown as PetConfiguration,
+  forChatProvider:(provider:string)=>typeof provider==='string'&&provider?[...entries.values()].find(p=>p.routing.chat===provider)?.id??null:null,
   forTaskProvider:(provider:string)=>typeof provider==='string'&&provider?[...entries.values()].find(p=>p.routing.taskProvider===provider)?.id??null:null,
   profileProvider:(provider:string)=>typeof provider==='string'&&!!provider&&[...entries.values()].some(p=>!p.retired&&p.routing.taskProvider===provider&&p.presentation.profiles),
  });
@@ -126,6 +129,7 @@ export function createPetFactory(input:unknown){
 export const PetFactory=createPetFactory(catalog);
 export const petBlueprint=(id:string)=>PetFactory.get(id);
 export const petRetired=(id:string)=>petBlueprint(id)?.retired===true;
+export const petForChatProvider=(provider:string)=>PetFactory.forChatProvider(provider);
 export const petForTaskProvider=(provider:string)=>PetFactory.forTaskProvider(provider);
 export const taskProviderForPet=(id:string)=>petBlueprint(id)?.routing.taskProvider??null;
 export const factoryProfileProvider=(provider:string)=>PetFactory.profileProvider(provider);

@@ -90,6 +90,7 @@ fn validate_request_history(library:&Library)->std::io::Result<()> {
     let mut seen=std::collections::HashSet::new();
     let tasks:Vec<_>=library.pets.values().flat_map(|c|c.tasks.iter()).collect();
     for(provider,c)in library.pets.iter().chain(library.archives.iter().flat_map(|(p,rows)|rows.iter().map(move|c|(p,c)))){
+        if c.native_memory_context.as_ref().is_some_and(|context|!context.valid_for(provider,&c.id)){return Err(std::io::Error::other("invalid delivered memory provenance; original library preserved"));}
         validate_captured_messages(c)?;
         let mut previous_anchor=None;let mut occupied_until=0;
         for(index,r)in c.request_history.iter().enumerate(){
@@ -114,6 +115,8 @@ fn validate_request_history(library:&Library)->std::io::Result<()> {
 }
 
 pub fn load(path:&Path)->std::io::Result<Library>{load_scoped(path,None)}
+/// Read-only native restoration inspection; exactly the public archive codec.
+pub(crate)fn inspect_history_bytes(bytes:&[u8])->std::io::Result<Library>{if bytes.len()as u64>MAX_BYTES{return Err(std::io::Error::other("memory too large"));}retained::decode(bytes,None)}
 pub(crate) fn load_goal(path:&Path,provider:&str,cid:&str)->std::io::Result<Library>{load_scoped(path,Some((provider,cid)))}
 fn load_scoped(path:&Path,goal:Option<(&str,&str)>)->std::io::Result<Library> {
     let result=(||->std::io::Result<_>{
@@ -142,7 +145,8 @@ pub(crate) fn save_checked(path:&Path,library:&Library,current:impl FnOnce()->bo
 fn disk(library:&Library)->std::io::Result<Disk>{
     validate_request_history(library)?;
     let normalized=retained::normalize(library)?;validate_request_history(&normalized)?;
-    let version=if !normalized.retained.is_empty(){6}else if crate::attachment_history::has_records(&normalized){5}else{4};
+    let delivered=normalized.pets.values().chain(normalized.archives.values().flatten()).any(|c|c.native_memory_context.is_some());
+    let version=if delivered{7}else if !normalized.retained.is_empty(){6}else if crate::attachment_history::has_records(&normalized){5}else{4};
     let unavailable_history=if normalized.retained.is_empty(){None}else{Some(normalized.retained)};
     Ok(Disk{version,pets:normalized.pets,archives:normalized.archives,unavailable_history})
 }

@@ -2,9 +2,9 @@ use super::{model::*,admission::{Evidence,Denial},admission_tests::{Fixture,desc
 use crate::{pet_config::{self,RuntimeKind},pet_capabilities::{Descriptor,Binding,Concurrency,Kind,Lifecycle}};
 fn descriptor_for(id:&str,adapter:Option<&'static str>,provider:Option<&str>)->Descriptor{
     let b=pet_config::blueprint(id).unwrap();let kind=match b.runtime.kind{RuntimeKind::Llm=>Kind::Llm,RuntimeKind::Service=>Kind::Service,RuntimeKind::Observer=>Kind::Observer};
-    Descriptor{schema_version:1,pet_id:id.into(),name:"Private fixture".into(),kind,lifecycle:Lifecycle::Active,binding:Binding{adapter,provider:provider.map(str::to_string),model:None,profile:None},revision:"fixture".into(),observed_at:None,configuration_available:true,capabilities:vec![],concurrency:Concurrency{scope:None,max_active:None}}
+    Descriptor{schema_version:1,pet_id:id.into(),name:"Private fixture".into(),kind,lifecycle:Lifecycle::Active,binding:Binding{engine_binding:None,adapter,provider:provider.map(str::to_string),model:None,profile:None},revision:"fixture".into(),observed_at:None,configuration_available:true,capabilities:vec![],concurrency:Concurrency{scope:None,max_active:None}}
 }
-fn spec(owner:Owner,request:&str)->Spec{Spec{request_id:request.into(),owner,context:Context::Unbound,intent:"Preserve the original logical pet".into(),criteria:vec!["Original pet and adapter independently checked".into()]}}
+fn spec(owner:Owner,request:&str)->Spec{Spec{restored_from:None,request_id:request.into(),owner,context:Context::Unbound,intent:"Preserve the original logical pet".into(),criteria:vec!["Original pet and adapter independently checked".into()]}}
 #[test]
 fn every_declared_native_owner_uses_the_factory_without_borrowing_a_different_pets_route(){
     let f=Fixture::new();let mut count=0;
@@ -23,10 +23,17 @@ fn spotify_optional_assistant_retains_its_own_goal_context_and_serialized_owner(
 #[test]
 fn historical_api_observer_and_retired_owners_stay_readable_without_becoming_available_for_new_native_work(){
     let f=Fixture::new();
-    for(id,provider,adapter)in[("ai_openai","openai","openai"),("ai_anthropic","anthropic","anthropic"),("ai_google","google","google"),("ai_lmstudio","lmstudio","lmstudio"),("agent_gemini","gemini-cli","gemini-cli"),("integration_claude","claude-cli","claude-cli"),("integration_github","integration_github","codex")]{
+    for(id,provider,adapter)in[("ai_openai","openai","openai"),("ai_anthropic","anthropic","anthropic"),("ai_google","google","google"),("agent_gemini","gemini-cli","gemini-cli"),("integration_claude","claude-cli","claude-cli"),("integration_github","integration_github","codex")]{
         let legacy=spec(Owner{pet_id:id.into(),provider:provider.into(),adapter:adapter.into(),model_hint:None},"legacy-shape");legacy.validate().unwrap();let record=f.store().create(legacy,100_000).unwrap().record;assert!(f.store().read(&record.id,id).is_ok());
         let d=descriptor_for(id,Some(adapter),Some(provider));assert!(Owner::from_descriptor(&d).is_err());
     }
+}
+#[test]
+fn lmstudio_history_remains_readable_and_new_draft_ownership_requires_its_explicit_native_binding(){
+    let f=Fixture::new();let legacy=spec(Owner{pet_id:"ai_lmstudio".into(),provider:"lmstudio".into(),adapter:"lmstudio".into(),model_hint:None},"legacy-lmstudio");legacy.validate().unwrap();let record=f.store().create(legacy,100_000).unwrap().record;assert!(f.store().read(&record.id,"ai_lmstudio").is_ok());
+    let unbound=descriptor_for("ai_lmstudio",None,None);assert!(Owner::from_descriptor(&unbound).is_err());
+    let bound=descriptor_for("ai_lmstudio",Some("lmstudio"),Some("lmstudio"));let owner=Owner::from_descriptor(&bound).unwrap();assert_eq!(owner,record.spec.owner);assert!(bound.binding.engine_binding.is_none());assert!(record.admissions.is_empty());
+    let crossed=descriptor_for("ai_lmstudio",Some("ollama"),Some("ollama"));assert!(Owner::from_descriptor(&crossed).is_err());
 }
 #[test]
 fn configuration_lifecycle_kind_and_missing_bindings_block_new_owners(){

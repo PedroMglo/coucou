@@ -15,7 +15,7 @@ fn lease_owner(app:&AppHandle)->Option<String>{
 pub async fn release_lease(){
  #[cfg(target_os="linux")]{
   let owner=LEASE_OWNER.lock().unwrap().take();
-  if let Some(owner)=owner{let _=dms(&["ipc","call","pets-system","release",&owner]).await;}
+  if let Some(owner)=owner{let _=dms(&["ipc","call","pets-system","release",&owner],DmsUse::Release,std::sync::Arc::new(||Ok(()))).await;}
  }
 }
 /// RunEvent::Exit is outside the async runtime. Use a bounded IPC on a helper
@@ -132,19 +132,38 @@ fn present_system_panel(app:&AppHandle){
 }
 
 #[cfg(target_os="linux")]
-async fn dms(args:&[&str])->Result<Vec<u8>,String>{
- use std::{os::unix::fs::MetadataExt,process::Stdio,time::Duration};
+#[derive(Clone,Copy)]enum DmsUse{Read,Renew,Action,Release}
+#[cfg(target_os="linux")]
+impl DmsUse{
+ fn check(self)->Result<(),String>{self.check_with(crate::settings::effect_allowed)}
+ fn check_with(self,current:impl FnOnce()->Result<(),String>)->Result<(),String>{match self{Self::Read|Self::Release=>Ok(()),Self::Renew|Self::Action=>current()}}
+}
+#[cfg(target_os="linux")]
+type DmsCaller=std::sync::Arc<dyn Fn()->Result<(),String>+Send+Sync>;
+#[cfg(target_os="linux")]
+fn dms_caller(window:&tauri::WebviewWindow,app:&AppHandle)->DmsCaller{
+ let window=window.clone();let app=app.clone();
+ std::sync::Arc::new(move||authorize(&window,&app))
+}
+#[cfg(target_os="linux")]
+fn dms_executable()->Result<(),String>{
+ use std::os::unix::fs::MetadataExt;
  let metadata=std::fs::metadata("/usr/bin/dms").map_err(|_|"O DMS não está instalado nesta sessão.")?;
  if !metadata.is_file()||metadata.uid()!=0||metadata.mode()&0o022!=0||metadata.mode()&0o111==0{
   return Err("O executável do DMS não corresponde à instalação do sistema.".into());
  }
- let output=tokio::time::timeout(Duration::from_secs(3),tokio::process::Command::new("/usr/bin/dms")
-  .args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())
-  .kill_on_drop(true).output()).await
-  .map_err(|_|"O centro do sistema não respondeu a tempo.".to_string())?
-  .map_err(|_|"Não foi possível contactar o DMS nesta sessão.".to_string())?;
- if !output.status.success()||output.stdout.len()>16384{return Err("O DMS não confirmou o pedido.".into());}
- Ok(output.stdout)
+ Ok(())
+}
+#[cfg(target_os="linux")]
+async fn dms(args:&[&str],use_:DmsUse,caller:DmsCaller)->Result<Vec<u8>,String>{
+ use crate::pet_helper::{Lane,Session};use std::time::Duration;
+ use_.check()?;dms_executable()?;
+ let lane=match use_{DmsUse::Read=>Lane::DmsRead,DmsUse::Release=>Lane::DmsRelease,DmsUse::Renew|DmsUse::Action=>Lane::DmsEffect};
+ let session=Session::acquire(lane,Duration::from_secs(3))?;
+ let args=args.iter().map(|s|s.to_string()).collect::<Vec<_>>();
+ session.run(crate::pet_helper::command("/usr/bin/dms",&args),16384,Duration::from_secs(3),move||{
+  caller()?;dms_executable()?;use_.check()
+ }).await
 }
 
 #[tauri::command]
@@ -154,9 +173,21 @@ pub async fn pet_system_status(window:tauri::WebviewWindow,app:AppHandle)->Resul
   // Optional public metadata: an unavailable producer is unknown, never zero.
   // Only the visible control island claims the migrated native widgets.
   // Hub/diagnostic status reads remain pure and cannot hide the fallback.
-  let owner=can_lease(window.label(),window.is_visible().unwrap_or(false)).then(||lease_owner(&app)).flatten();
+  let ready=crate::settings::effect_allowed().is_ok();
+  if !ready{release_lease().await;}
+  let owner=(ready&&can_lease(window.label(),window.is_visible().unwrap_or(false))).then(||lease_owner(&app)).flatten();
   let args=match &owner{Some(owner)=>vec!["ipc","call","pets-system","lease",owner.as_str()],None=>vec!["ipc","call","pets-system","status"]};
-  let bytes=match dms(&args).await{Ok(bytes)=>bytes,Err(_)=>return Ok(Status::default())};
+  let caller=if let Some(expected)=owner.clone(){
+   let original_window=window.clone();let original_app=app.clone();
+   std::sync::Arc::new(move||{
+    authorize(&original_window,&original_app)?;
+    if !can_lease(original_window.label(),original_window.is_visible().unwrap_or(false))||!LEASE_OWNER.lock().is_ok_and(|v|v.as_ref()==Some(&expected)){
+     return Err("A claim original do centro do sistema deixou de estar ativa.".into());
+    }
+    Ok(())
+   })as DmsCaller
+  }else{dms_caller(&window,&app)};
+  let bytes=match dms(&args,if owner.is_some(){DmsUse::Renew}else{DmsUse::Read},caller).await{Ok(bytes)=>bytes,Err(_)=>return Ok(Status::default())};
   Ok(parse_status(&bytes,crate::assistant_memory::now()).unwrap_or_default())
  }
  #[cfg(not(target_os="linux"))]{Ok(Status::default())}
@@ -166,11 +197,11 @@ pub async fn pet_system_status(window:tauri::WebviewWindow,app:AppHandle)->Resul
 pub async fn pet_system_panel(window:tauri::WebviewWindow,app:AppHandle,panel:Panel)->Result<(),String>{
  authorize(&window,&app)?;
  #[cfg(target_os="linux")]{
-  let mut output=dms(panel.arguments()).await?;
+  let mut output=dms(panel.arguments(),DmsUse::Action,dms_caller(&window,&app)).await?;
   // A positioned dash requires a classic DMS bar. During migration an island
   // can still own that screen; only an explicit no-op failure permits fallback.
   if std::str::from_utf8(&output).is_ok_and(|reply|reply.trim()=="DASH_OPEN_FAILED"){
-   if let Some(args)=panel.island_fallback(){output=dms(args).await?;}
+   if let Some(args)=panel.island_fallback(){output=dms(args,DmsUse::Action,dms_caller(&window,&app)).await?;}
   }
   if !std::str::from_utf8(&output).is_ok_and(|reply|panel.accepted(reply.trim())){
    return Err("O DMS não confirmou a abertura do painel.".into());
@@ -186,7 +217,7 @@ pub async fn pet_system_tray(window:tauri::WebviewWindow,app:AppHandle,id:String
  authorize(&window,&app)?;
  if !valid_tray_id(&id){return Err("Atualiza a lista de aplicações antes de abrir este ícone.".into());}
  #[cfg(target_os="linux")]{
-  let bytes=dms(&["ipc","call","pets-system","tray",&id,action.argument()]).await?;
+  let bytes=dms(&["ipc","call","pets-system","tray",&id,action.argument()],DmsUse::Action,dms_caller(&window,&app)).await?;
   match std::str::from_utf8(&bytes).unwrap_or("").trim(){
    "PETS_SYSTEM_TRAY_SUCCESS"=>{present_system_panel(&app);Ok(())},
    "PETS_SYSTEM_TRAY_GONE"=>Err("A aplicação saiu da área de notificações; atualiza a lista.".into()),
@@ -199,6 +230,10 @@ pub async fn pet_system_tray(window:tauri::WebviewWindow,app:AppHandle,id:String
 
 #[cfg(test)]mod tests{
  use super::*;
+ #[cfg(target_os="linux")]
+ #[test]fn system_io_unknown_origin_never_grants_renewal_or_actions_and_never_blocks_release_or_read(){
+  let io=crate::settings::EffectFixture::new();io.external();for kind in [DmsUse::Renew,DmsUse::Action]{assert!(kind.check_with(||io.probe.check()).is_err());}let held=io.current.lock().unwrap();for kind in [DmsUse::Read,DmsUse::Release]{assert!(kind.check_with(||panic!("control/read must not wait on preferences")).is_ok());}drop(held);
+ }
  #[test]fn only_the_visible_control_surface_can_renew_the_native_bar_lease(){
   assert!(can_lease(crate::pet_control::LABEL,true));
   for label in [crate::pet_control::LABEL,crate::island::WINDOW_LABEL,crate::HUB_LABEL,"unknown"]{

@@ -6,7 +6,7 @@ impl Fixture{
     fn store(&self)->Store{Store::ensure(&self.root).unwrap()}
 }
 impl Drop for Fixture{fn drop(&mut self){let _=fs::remove_dir_all(&self.base);}}
-fn spec(request:&str)->Spec{Spec{request_id:request.into(),owner:Owner{pet_id:"agent_codex".into(),provider:"codex".into(),adapter:"codex".into(),model_hint:None},context:Context::Unbound,intent:"Concluir o pedido original com critérios verificáveis".into(),criteria:vec!["O resultado foi verificado".into()]}}
+fn spec(request:&str)->Spec{Spec{restored_from:None,request_id:request.into(),owner:Owner{pet_id:"agent_codex".into(),provider:"codex".into(),adapter:"codex".into(),model_hint:None},context:Context::Unbound,intent:"Concluir o pedido original com critérios verificáveis".into(),criteria:vec!["O resultado foi verificado".into()]}}
 fn record()->Record{Record::new(spec("create-1"),100_000,"0".repeat(32)).unwrap()}
 fn apply(r:&mut Record,key:&str,action:Action){let now=r.updated_at+1;let rev=nonce().unwrap();r.apply(key.into(),action,now,rev).unwrap();}
 fn proposal()->Action{Action::ProposeTask{description:"Preparar o resultado".into()}}

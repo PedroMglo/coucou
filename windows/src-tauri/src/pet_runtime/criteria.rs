@@ -50,7 +50,7 @@ pub struct Verification{
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
 pub enum Status{Met,Unmet,Unknown}
-#[derive(Clone,Debug,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct CriterionResult{pub criterion_index:u32,pub criterion_hash:String,pub status:Status}
 #[cfg(target_os="linux")]impl Verification{
     pub(super)fn content_hash(&self)->model::Result<String>{let mut body=self.clone();body.reference.report_hash.clear();model::fingerprint(&body)}

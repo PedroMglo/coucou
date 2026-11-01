@@ -136,7 +136,8 @@ impl ModelCapabilities{
 pub async fn capabilities(base:&reqwest::Url,model:&str)->ModelCapabilities{
  let mut observation=crate::pet_capabilities::begin_local(base.as_str(),model);
  let result=async{
-  let response=crate::net::client(base,Duration::from_secs(5))?.post(crate::net::join(base,"api/show")).json(&json!({"model":model})).send().await.map_err(|_|"metadata unavailable")?;
+  crate::settings::effect_allowed()?;
+  let response=crate::net::exact_destination_client(base,Duration::from_secs(5))?.post(crate::net::join(base,"api/show")).json(&json!({"model":model})).send().await.map_err(|_|"metadata unavailable")?;
   if !response.status().is_success(){return Err("metadata unavailable".into());}
   let data=crate::net::read_capped(response,256*1024).await?;
   let value:Value=serde_json::from_slice(&data).map_err(|e|e.to_string())?;
@@ -178,8 +179,9 @@ pub async fn round_calendar_captured(base:&reqwest::Url,model:&str,messages:&[Va
  let mut capture=None::<Capture>;
  let stream=async{
   let remaining=deadline.saturating_duration_since(Instant::now());if remaining.is_zero(){return Err("O prazo da tarefa terminou.".into());}
-  let client=crate::net::client(base,remaining)?;
+  let client=crate::net::exact_destination_client(base,remaining)?;
   let request=client.post(crate::net::join(base,"v1/chat/completions")).header("Authorization","Bearer ollama").json(&body).build().map_err(|_|"Não foi possível contactar o servidor Ollama.".to_string())?;
+  crate::settings::effect_allowed()?;
   capture=Some(Capture::begin(origin,model));
   let mut response=client.execute(request).await.map_err(|_|"Não foi possível contactar o servidor Ollama.".to_string())?;
   if !response.status().is_success(){let status=response.status();return Err(format!("O servidor Ollama recusou a ronda (HTTP {}).",status.as_u16()));}

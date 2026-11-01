@@ -4,9 +4,16 @@ use super::{admission::AdmissionSpec,model};
 use serde::{Deserialize,Serialize};
 #[cfg(target_os="linux")]pub(super)use super::authority_store::{Authority,Certified,PlanCertified};
 #[cfg(target_os="linux")]pub(super)use super::authority_store::CompletionCertified;
+#[cfg(target_os="linux")]pub(super)use super::authority_store::LostOwnerSource;
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]#[serde(rename_all="camelCase")]
 pub enum Failure{Missing,Unsafe,Changed,Invalid,WrongKey,Revoked,Expired,NotQueued,Capacity,Unavailable,Uncertain,Busy,RecoveryRequired}
+impl Failure{
+    pub(super)fn control_error(self)->model::Error{match self{
+        Self::Busy=>model::Error::Busy,Self::Missing|Self::Unavailable|Self::Uncertain=>model::Error::StorageUnavailable,
+        Self::Capacity=>model::Error::LimitReached,_=>model::Error::Conflict,
+    }}
+}
 pub(super)type Result<T>=std::result::Result<T,Failure>;
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
 pub enum Operation{ConversationRespond,GoalPlanning}
@@ -17,9 +24,13 @@ impl ConsentProof{
     pub(super)fn matches(&self,spec:&AdmissionSpec)->bool{spec.binding_format()&&if spec.schema_version==3{self.schema_version==2&&self.operation==Operation::GoalPlanning}else{self.schema_version==1&&self.operation==Operation::ConversationRespond}}
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
-pub(super)enum GrantPhase{Issued,Revoked,Claimed,Draining,Closed}
+pub(super)enum GrantPhase{Issued,Revoked,Claimed,Waiting,Draining,Closed}
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super)struct Grant{
+    #[serde(default,skip_serializing_if="Option::is_none")]pub retirement:Option<super::retirement::Reference>,
+    #[serde(default,skip_serializing_if="Option::is_none")]pub recovery:Option<super::recovery::Closure>,
+    #[serde(default,skip_serializing_if="Option::is_none")]pub runtime_owner:Option<super::runtime_owner::Record>,
+    #[serde(default,skip_serializing_if="Option::is_none")]pub resource_usage:Option<super::resource_wait::Ledger>,
     #[serde(default,skip_serializing_if="Option::is_none")]pub budget_usage:Option<super::effect_budget::Ledger>,
     #[serde(default,skip_serializing_if="Option::is_none")]pub planning_usage:Option<super::planning_journal::Ledger>,
     pub schema_version:u32,pub decision_id:String,pub goal_id:String,pub operation:Operation,
@@ -31,16 +42,24 @@ pub(super)struct Grant{
 #[derive(Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super)struct GrantEnvelope{pub body:Grant,pub tag:String}
 impl Grant{
+    pub(super)fn never_claimed_zero(&self)->bool{
+        self.lease.is_none()&&self.runtime_owner.is_none()&&self.resource_usage.is_none()&&self.budget_usage.is_none()&&self.recovery.is_none()
+            &&self.planning_usage.as_ref().is_none_or(|p|p.rounds.is_empty())
+    }
     pub(super)fn valid(&self)->bool{
         if !model::token(&self.decision_id)||!model::goal_id(&self.goal_id)||decode(&self.spec_hash).is_none()||!model::token(&self.revision)||self.approved_at==0||self.updated_at<self.approved_at||self.updated_at>8_640_000_000_000_000{return false;}
         if self.budget_usage.as_ref().is_some_and(|u|!u.valid()){return false;}
         if self.planning_usage.as_ref().is_some_and(|u|!u.valid(self.budget_usage.as_ref()))||self.planning_usage.is_some()!=(self.operation==Operation::GoalPlanning){return false;}
         let planning=self.planning_usage.is_some();
+        if self.recovery.as_ref().is_some_and(|r|!r.valid_for(self))||self.retirement.as_ref().is_some_and(|r|!r.valid_for(self)){return false;}
         match &self.lease{
-            None=>self.budget_usage.is_none()&&self.schema_version==(if planning{4}else{1})&&matches!(self.phase,GrantPhase::Issued|GrantPhase::Revoked)&&self.stop_reason.is_none()&&self.closed_at.is_none(),
-            Some(l)=>self.schema_version==(if planning{4}else if self.budget_usage.is_some(){3}else{2})&&l.basic()&&l.goal_id==self.goal_id&&l.decision_id==self.decision_id
+            None=>self.runtime_owner.is_none()&&self.resource_usage.is_none()&&self.budget_usage.is_none()&&self.schema_version==(if self.retirement.is_some(){8}else if planning{4}else{1})&&matches!(self.phase,GrantPhase::Issued|GrantPhase::Revoked)&&self.stop_reason.is_none()&&self.closed_at.is_none(),
+            Some(l)=>self.schema_version==(if self.recovery.is_some(){7}else if self.runtime_owner.is_some(){6}else if self.resource_usage.is_some(){5}else if planning{4}else if self.budget_usage.is_some(){3}else{2})&&l.basic()&&l.goal_id==self.goal_id&&l.decision_id==self.decision_id
+                &&self.runtime_owner.as_ref().is_none_or(|o|o.valid_for(l)&&o.captured_at<=self.updated_at)
+                &&self.resource_usage.as_ref().is_none_or(|r|planning&&r.valid(l,self.updated_at))
                 &&match self.phase{
-                    GrantPhase::Claimed=>self.stop_reason.is_none()&&self.closed_at.is_none(),
+                    GrantPhase::Claimed=>self.stop_reason.is_none()&&self.closed_at.is_none()&&!self.resource_usage.as_ref().is_some_and(|r|r.waiting()),
+                    GrantPhase::Waiting=>self.stop_reason.is_none()&&self.closed_at.is_none()&&self.resource_usage.as_ref().is_some_and(|r|r.waiting()),
                     GrantPhase::Draining=>self.stop_reason.is_some()&&self.closed_at.is_none(),
                     GrantPhase::Closed|GrantPhase::Revoked=>self.closed_at.is_some_and(|n|n>=l.claimed_at&&n<=self.updated_at),
                     GrantPhase::Issued=>false,

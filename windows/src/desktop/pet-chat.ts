@@ -1,5 +1,7 @@
 import {attachmentContext,receiveDocumentDrop,documentBatchMessage} from '../core/document-collection';
-import {IndexedDraftStorage,SessionDrafts,draftBroadcast,DRAFT_LIMITS} from '../core/session-drafts';
+import {SessionDrafts,draftBroadcast} from '../core/session-drafts';
+import {ApplicationDraftStorage} from '../core/native-drafts';
+import {draftStatusControl} from '../views/draft-status';
 import {requestHistoryFor,containsPendingRequest} from '../core/request-history';
 import '../style.css';import './pet-chat.css';
 import {invoke} from '@tauri-apps/api/core';
@@ -38,15 +40,11 @@ function fromLocal(target:SessionTarget,value:ConversationView):SessionSnapshot 
  if(value.busy&&value.stream)messages.push({id:`${value.id}:stream`,role:'assistant',content:value.stream});
  return {target,messages,notice:value.notice,taskNotice:value.taskNotice,requestHistory:value.requestHistory,attachmentHistory:value.attachmentHistory,localExecution:value.localExecution,busy:!!value.busy,turn:value.turn===undefined?undefined:String(value.turn),capabilities:{history:true,send:true,cancel:true}};
 }
-const draftStatus=node('section');draftStatus.id='draft-persistence';draftStatus.className='composer-hint';draftStatus.setAttribute('aria-label','Estado do rascunho desta conversa');draftStatus.hidden=true;
-const draftMessage=node('p');draftMessage.setAttribute('role','status');
-const draftActions=node('div');draftActions.className='chip-row';
-const draftRetry=node('button','Tentar guardar novamente'),draftUse=node('button','Usar o guardado'),draftKeep=node('button','Guardar este texto');
-for(const b of [draftRetry,draftUse,draftKeep]){b.type='button';b.className='picker-link';draftActions.append(b);}
-const draftPreview=node('details');draftPreview.className='failed-request-review';const draftSummary=node('summary','Rever rascunho guardado'),draftText=node('pre');draftText.className='failed-request-text';draftPreview.append(draftSummary,draftText);draftStatus.append(draftMessage,draftActions,draftPreview);
+let draftControls:ReturnType<typeof draftStatusControl>|null=null;
 let draftChannel:{publish:(key:string)=>void;close:()=>void}|null=null;
-const draftStorage=new IndexedDraftStorage();
-const drafts=new SessionDrafts(draftStorage,{changed:()=>drawDraftStatus(),restore:(target,text,previous)=>chat.restoreDraft?.(target,text,previous)??false,published:key=>draftChannel?.publish(key)});
+const draftStorage=new ApplicationDraftStorage();
+void draftStorage.ready().catch(()=>{}); // Exact-target status/retry reports failure without logging text.
+const drafts=new SessionDrafts(draftStorage,{changed:()=>drawDraftStatus(),restore:(target,text,previous)=>target.origin!=='unbound'&&(chat.restoreDraft?.(target,text,previous)??false),published:key=>draftChannel?.publish(key)});
 draftChannel=draftBroadcast(drafts);
 const session=new SessionChat({
  history:async target=>{
@@ -54,14 +52,15 @@ const session=new SessionChat({
   const[value,attachments]=await Promise.all([Bridge.chatReadConversation(target.provider,target.sessionId),Bridge.petDocumentContexts(target.provider,target.sessionId)]);
   return {...fromLocal(target,value),attachments};
  },
- send:async(target,query,model,attachments=[])=>{
+ send:async(target,query,model,attachments=[],memoryDecision)=>{
+  if(target.origin==='external'&&memoryDecision)throw Error('Uma sessão de terminal externa não recebe esta revisão de memória da aplicação.');
   if(target.origin==='external'&&attachments.length)throw new Error('Esta ligação de terminal não recebe anexos. Entrega o documento à conversa Mochi deste pet.');
   if(target.origin==='external')return invoke('session_chat_send',{target,query,...(model?{model}:{})});
   // Reading an archive does not make it current. Replying does, with a busy
   // guard in Rust and a second identity check when the send reserves its turn.
   const current=await Bridge.chatConversation(target.provider);
-  if(current.id!==target.sessionId)await Bridge.chatRestoreConversation(target.provider,target.sessionId);
-  return Bridge.chatSend(query,attachmentContext(target.provider,target.sessionId,attachments),target.provider,target.sessionId,model);
+  if(current.id!==target.sessionId){if(memoryDecision)throw Error('A conversa mudou depois da revisão de dados. Revê o pedido antes de enviar.');await Bridge.chatRestoreConversation(target.provider,target.sessionId);}
+  return Bridge.chatSend(query,attachmentContext(target.provider,target.sessionId,attachments),target.provider,target.sessionId,model,undefined,memoryDecision);
  },
  removeAttachment:(target,attachment)=>Bridge.petDocumentRemove(target.provider,target.sessionId,attachment.id),
  cancel:async(target,turn)=>{
@@ -70,20 +69,11 @@ const session=new SessionChat({
   return Bridge.chatCancel(target.provider,target.sessionId,value);
  },
 },()=>{chat?.sync();drafts.activate(session.target,selectionIntent);drawDraftStatus();drawIdentity();},drafts.map);
+draftControls=draftStatusControl({resource:drafts,target:()=>session.target,context:()=>`${opening}:${selectionIntent}`});
+const draftStatus=draftControls.el;
 const chat=buildPrompt(()=>{},session,undefined,draftStatus);chat.el.classList.add('on');document.getElementById('conversation')!.append(chat.el);
 function report(text:string){info.textContent=text;info.hidden=!text;}
-function drawDraftStatus(){
- const target=session?.target,status=drafts.status(target);draftStatus.hidden=!target||!status;if(!target||!status)return;
- draftStatus.dataset.phase=status.phase;draftStatus.setAttribute('aria-busy',String(status.busy||status.phase==='saving'));
- draftMessage.textContent=status.phase==='loading'?'A recuperar o rascunho…':status.phase==='saving'?'A guardar o rascunho…':status.phase==='restored'?'Rascunho recuperado neste dispositivo. Revê a conversa antes de enviar.':status.phase==='saved'?status.localText?'Rascunho guardado neste dispositivo.':'Sem rascunho guardado.':status.phase==='conflict'?'Há outro rascunho guardado para esta conversa. O texto desta janela foi preservado.':status.error==='limit'?status.localText.length>DRAFT_LIMITS.text?'O texto excede o limite do rascunho guardado. O texto completo mantém-se nesta janela.':'O limite do armazenamento de rascunhos foi atingido. O texto mantém-se nesta janela.':status.error==='blocked'?'O armazenamento de rascunhos está ocupado. O texto mantém-se nesta janela.':'Não foi possível guardar o rascunho. O texto mantém-se nesta janela.';
- draftRetry.hidden=status.phase!=='error';draftUse.hidden=draftKeep.hidden=status.phase!=='conflict';
- draftUse.disabled=draftKeep.disabled=status.busy;
- if(status.phase==='conflict'&&status.error)draftMessage.textContent+=' Não foi possível reler o rascunho guardado. Tenta novamente.';
- draftPreview.hidden=status.phase!=='conflict';draftText.textContent=status.storedText||'O rascunho guardado está vazio.';
- const exact=Object.freeze({...target}),intent=selectionIntent,ticket=opening,revision=status.revision;
- const current=()=>intent===selectionIntent&&ticket===opening&&sameSession(exact,session.target);
- draftRetry.onclick=()=>{if(current())void drafts.retry(exact);};draftUse.onclick=()=>{if(current())void drafts.useStored(exact,revision);};draftKeep.onclick=()=>{if(current())drafts.keepLocal(exact,revision);};
-}
+function drawDraftStatus(){draftControls?.sync();}
 
 function drawIdentity(){
  const target=session.target;if(!target)return;

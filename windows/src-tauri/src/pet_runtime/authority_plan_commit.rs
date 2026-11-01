@@ -29,6 +29,26 @@ impl PlanCertified<'_,'_> {
     }
 }
 impl Authority {
+    /// Pure check against the already authenticated grant. Safe under its lock;
+    /// it must not re-enter a result lookup or a canonical Store read.
+    pub(in crate::pet_runtime)fn generated_acknowledged(body:&Grant,spec:&AdmissionSpec,reference:&Reference)->Result<()> {
+        if spec.schema_version!=3||!reference.valid()||reference.decision_id!=spec.decision_id
+            ||body.lease.as_ref().is_none_or(|l|!reference.source.matches(spec,l))
+            ||!body.planning_usage.as_ref().is_some_and(|j|j.rounds.iter().any(|r|r.attempt_id==reference.output.attempt_id
+                &&r.publication.as_ref().is_some_and(|p|p.phase==PublicationPhase::Acknowledged&&p.reference==*reference))){return Err(Failure::Invalid);}
+        Ok(())
+    }
+    pub(in crate::pet_runtime)fn generated_candidate(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,goal:&Record,plan:&str)->Result<(Reference,planning_output::Candidate)> {
+        self.verify_generated_goal(goal,false)?;
+        let reference=goal.generated_plans.iter().find(|r|r.decision_id==spec.decision_id&&r.plan_id==plan).ok_or(Failure::Missing)?.clone();
+        {
+            let _lock=self.lock_shared()?;let body=self.load(spec,proof)?;
+            if body.lease.as_ref()!=Some(lease){return Err(Failure::Changed);}Self::generated_acknowledged(&body,spec,&reference)?;
+        }
+        let output=planning_output::read(self,spec,proof,&reference.output.attempt_id)?.ok_or(Failure::RecoveryRequired)?;
+        if !generated_plans::content_matches(goal,&reference,&output){return Err(Failure::Changed);}
+        let planning_output::Outcome::Plan{candidate}=output.body.outcome else{return Err(Failure::Invalid);};Ok((reference,candidate))
+    }
     pub(in crate::pet_runtime)fn generated_reference(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,request:&str,now:u64)->Result<Reference> {
         let _lock=self.lock()?;let body=self.budget_body(spec,proof,lease,now,false)?;
         body.planning_usage.as_ref().and_then(|j|j.rounds.iter().find(|r|r.request_id==request)).and_then(|r|r.publication.as_ref()).map(|p|p.reference.clone()).ok_or(Failure::Missing)
@@ -97,8 +117,9 @@ impl Authority {
         // or pretending to be a legacy draft. A claimed native planning grant
         // remains authoritative even when the canonical record omits it.
         {
-            let _lock=self.lock()?;
+            let _lock=self.lock_shared()?;
             for name in self.dir.names().map_err(|_|Failure::Unavailable)? {
+            if self.historical_file(&name){continue;}
                 let Some(decision)=name.strip_suffix(".json").filter(|s|model::token(s))else{continue;};
                 let (raw,_)=self.dir.bytes(&name,MAX_GRANT_BYTES).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Changed)?;
                 let envelope:GrantEnvelope=serde_json::from_slice(&raw).map_err(|_|Failure::Invalid)?;
@@ -111,10 +132,11 @@ impl Authority {
         }
         for row in goal.admissions.iter().filter(|r|r.spec.schema_version==3) {
             let proof=row.proof.as_ref().ok_or(Failure::Missing)?;
-            let body={let _lock=self.lock()?;self.load(&row.spec,proof)?};
+            let body={let _lock=self.lock_shared()?;self.load(&row.spec,proof)?};
             let journal=body.planning_usage.as_ref().ok_or(Failure::Missing)?;
             let refs=goal.generated_plans.iter().filter(|r|r.decision_id==row.spec.decision_id).collect::<Vec<_>>();let mut expected=0;
             for round in &journal.rounds {
+                if let Some(feedback)=&round.feedback{self.planning_feedback_report(&row.spec,proof,feedback)?;}
                 let Some(p)=&round.publication else {continue;};
                 let present=goal.generated_plans.contains(&p.reference);
                 if p.phase==PublicationPhase::Prepared&&!allow_pending{return Err(Failure::RecoveryRequired);}
@@ -126,7 +148,7 @@ impl Authority {
                 }else if goal.tasks.iter().any(|t|t.id==p.reference.task_id)||goal.plans.iter().any(|t|t.id==p.reference.plan_id){return Err(Failure::Invalid);}
             }
             if refs.len()!=expected{return Err(Failure::Invalid);}
-            let _lock=self.lock()?;let latest=self.load(&row.spec,proof)?;
+            let _lock=self.lock_shared()?;let latest=self.load(&row.spec,proof)?;
             if model::fingerprint(&latest.planning_usage).map_err(|_|Failure::Invalid)?!=model::fingerprint(&body.planning_usage).map_err(|_|Failure::Invalid)?{return Err(Failure::Busy);}
         }
         self.fence()

@@ -4,6 +4,7 @@ use super::{admission::{Evidence,Denial,QueuePhase},lease_controller::{Validatio
 use crate::{pet_capabilities::{Descriptor,Lifecycle,NativeProjection},pet_config::Configuration,settings::Settings};
 pub(super)fn policy_revision(config:&Configuration,settings:&Settings,goal:&Record)->model::Result<String>{
  let pet=config.pets.get(&goal.spec.owner.pet_id).ok_or(model::Error::Conflict)?;
+ if goal.spec.owner.adapter=="lmstudio"{return model::fingerprint(&(pet,settings.chat_models.get(&goal.spec.owner.provider),(&settings.lmstudio_url,crate::local_chat::lmstudio_key_generation()))); }
  model::fingerprint(&(pet,settings.chat_models.get(&goal.spec.owner.provider),if goal.spec.owner.adapter=="ollama"{Some(&settings.ollama_url)}else{None}))
 }
 pub(super)fn policy(goal:&Record,lease:&Lease,descriptor:&Descriptor,revision:&str,now:u64)->Validity{
@@ -16,17 +17,19 @@ pub(super)fn policy(goal:&Record,lease:&Lease,descriptor:&Descriptor,revision:&s
  Validity::Current
 }
 fn evaluate(goal:&Record,lease:&Lease,capture:&NativeProjection,mode:Validation,now:u64)->Validity{
+ if !capture.preferences_ready{return Validity::Unknown;}
  let Some(config)=capture.configuration.as_ref()else{return Validity::Unknown;};
  let Some(descriptor)=capture.snapshot.pets.iter().find(|d|d.pet_id==goal.spec.owner.pet_id)else{return Validity::Changed;};
  let Ok(revision)=policy_revision(config,&capture.settings,goal)else{return Validity::Changed;};
- let valid=policy(goal,lease,descriptor,&revision,now);if valid!=Validity::Current||matches!(mode,Validation::InFlightPolicy|Validation::Commit(_)){return valid;}
- match Evidence::observe(goal,descriptor,revision,now,false,false).and_then(|e|e.for_claim(goal,now)){
+ let valid=policy(goal,lease,descriptor,&revision,now);if valid!=Validity::Current||matches!(mode,Validation::InFlightPolicy|Validation::PendingDecision|Validation::Commit(_)){return valid;}
+ match Evidence::observe_native(goal,descriptor,revision,now,false,false,&capture.settings).and_then(|e|e.for_claim(goal,now)){
   Ok(_)=>Validity::Current,
   Err(Denial::Inactive|Denial::OwnerChanged|Denial::ContextChanged|Denial::PolicyChanged)=>Validity::Changed,
   Err(_)=>Validity::Unknown,
  }
 }
 pub(super)fn observe(app:&tauri::AppHandle,goal:&Record,lease:&Lease,hold:&crate::pet_resources::Hold,mode:Validation,now:u64)->Validity{
- match crate::pet_capabilities::native_projection(app,Some(hold)){Ok(capture)=>evaluate(goal,lease,&capture,mode,now),Err(_)=>Validity::Unknown}
+ let owned=if matches!(mode,Validation::PendingDecision)&&!hold.current(){None}else{Some(hold)};
+ match crate::pet_capabilities::native_projection(app,owned){Ok(capture)=>evaluate(goal,lease,&capture,mode,now),Err(_)=>Validity::Unknown}
 }
 #[cfg(test)]#[path="native_validity_tests.rs"]mod tests;

@@ -5,10 +5,10 @@ use serde::{Deserialize,Serialize};
 use std::{ffi::OsStr,io::Read,os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
 use ring::{digest::{Context,SHA256},rand::{SecureRandom,SystemRandom}};
 
-const HEADER:&str=".profile.json";
-const COMPLETE:&str=".complete.json";
-const ADMITTED:&str=".admitted.json";
-const PAYLOAD:&str="payload";
+pub(in crate::pet_data)const HEADER:&str=".profile.json";
+pub(in crate::pet_data)const COMPLETE:&str=".complete.json";
+pub(in crate::pet_data)const ADMITTED:&str=".admitted.json";
+pub(in crate::pet_data)const PAYLOAD:&str="payload";
 const MAX_RECORD:usize=4096;
 const MAX_STAGED_RECORDS:usize=16;
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
@@ -25,15 +25,15 @@ struct Admission{version:u32,pair:String,layout:String,config:String,data:String
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]enum Step{ConfigCreated,DataCreated,BeforeCopy(usize),Copied,ConfigComplete,DataComplete,Admitted}
 
 fn hex(bytes:&[u8])->String{bytes.iter().map(|b|format!("{b:02x}")).collect()}
-fn digest(bytes:&[u8])->String{hex(ring::digest::digest(&SHA256,bytes).as_ref())}
+pub(in crate::pet_data)fn digest(bytes:&[u8])->String{hex(ring::digest::digest(&SHA256,bytes).as_ref())}
 fn valid_hex(s:&str,n:usize)->bool{s.len()==n&&s.bytes().all(|c|c.is_ascii_digit()||(b'a'..=b'f').contains(&c))}
-fn layout_key(layout:&Layout)->String{
+pub(in crate::pet_data)fn layout_key(layout:&Layout)->String{
     let mut hash=Context::new(&SHA256);hash.update(b"coucou-profile-layout-v1\0");
     for path in [&layout.legacy_config,&layout.legacy_data]{let bytes=path.as_os_str().as_bytes();hash.update(&(bytes.len()as u64).to_le_bytes());hash.update(bytes);}
     hex(hash.finish().as_ref())
 }
 fn encode<T:Serialize>(value:&T)->Result<Vec<u8>>{let bytes=serde_json::to_vec(value).map_err(|_|Error::UnsupportedProfile)?;if bytes.len()>MAX_RECORD{Err(Error::Limit)}else{Ok(bytes)}}
-fn read(dir:&Dir,name:&str)->Result<Option<Vec<u8>>>{
+pub(in crate::pet_data)fn read(dir:&Dir,name:&str)->Result<Option<Vec<u8>>>{
     let parent=dir.node()?;let Some(node)=parent.child(OsStr::new(name))?else{return Ok(None)};
     if node.directory||node.len>MAX_RECORD as u64||!staging_fs::private_file(&node.file.metadata().map_err(|_|Error::Unavailable)?){return Err(Error::UnsafePath);}
     let mut bytes=vec![];(&node.file).take(MAX_RECORD as u64+1).read_to_end(&mut bytes).map_err(|_|Error::Unavailable)?;
@@ -43,7 +43,8 @@ fn read(dir:&Dir,name:&str)->Result<Option<Vec<u8>>>{
 fn parse<T:for<'a>Deserialize<'a>>(bytes:&[u8])->Result<T>{serde_json::from_slice(bytes).map_err(|_|Error::UnsupportedProfile)}
 fn controls(root:&Dir,area:Area)->Result<()>{
     let mut staged=0;
-    for name in root.node()?.names(5+MAX_STAGED_RECORDS)?{
+    for name in root.node()?.names(7+MAX_STAGED_RECORDS)?{
+        if area==Area::Config&&super::settings_io::control(name.to_str().unwrap_or("")){super::settings_io::present(root)?;continue;}
         if matches!(name.to_str(),Some(HEADER|COMPLETE|PAYLOAD))
             ||area==Area::Config&&(name==ADMITTED||name==resume::INTENT){continue;}
         let text=name.to_str().ok_or(Error::UnsupportedProfile)?;
@@ -57,15 +58,17 @@ fn controls(root:&Dir,area:Area)->Result<()>{
 }
 fn missing(path:&Path)->Result<bool>{Node::root(path).map(|n|n.is_none())}
 
+pub(in crate::pet_data)fn admitted_depth(config:&Dir)->Result<u8>{let h:Header=parse(&read(config,HEADER)?.ok_or(Error::UnsupportedProfile)?)?;let a:active_restored::Admission2=parse(&read(config,ADMITTED)?.ok_or(Error::UnsupportedProfile)?)?;if h.version!=a.profile_version()?||h.pair!=a.pair||h.layout!=a.layout{return Err(Error::UnsupportedProfile);}a.depth()}
+
 /// Read-only exception evidence issued by this native publisher or re-attested
 /// under a genuine fresh Claim during data recovery. Not a writable permit or
 /// an execution grant; general legacy inspection still refuses existing roots.
-#[derive(Clone)]pub(super)struct OwnedRoots{layout:Layout,config:Dir,data:Dir,config_header:Vec<u8>,data_header:Vec<u8>,pair:String}
+#[derive(Clone)]pub(in crate::pet_data)struct OwnedRoots{layout:Layout,pub(super)config:Dir,data:Dir,config_header:Vec<u8>,data_header:Vec<u8>,pair:String}
 impl OwnedRoots{
     pub(super)fn current_for(&self,layout:&Layout)->Result<()>{
         if layout!=&self.layout{return Err(Error::UnsafePath);}
         for(root,expected,area)in[(&self.config,&self.config_header,Area::Config),(&self.data,&self.data_header,Area::Data)]{
-            root.check()?;controls(root,area)?;
+            root.check()?;if matches!(parse::<Header>(expected)?.version,2|3){restore::root_controls(root,area)?;}else{controls(root,area)?;}
             if read(root,HEADER)?.as_deref()!=Some(expected.as_slice()){return Err(Error::SourceChanged);}root.dir(OsStr::new(PAYLOAD))?.check()?;
         }Ok(())
     }
@@ -74,18 +77,21 @@ impl OwnedRoots{
         let config=Dir::root(layout.config())?;let data=Dir::root(layout.data())?;
         let config_header=read(&config,HEADER)?.ok_or(Error::UnsupportedProfile)?;let data_header=read(&data,HEADER)?.ok_or(Error::UnsupportedProfile)?;
         let a:Header=parse(&config_header)?;let b:Header=parse(&data_header)?;
-        if a.version!=1||b.version!=1||a.area!=Area::Config||b.area!=Area::Data||a.pair!=b.pair||!valid_hex(&a.pair,32)||a.layout!=layout_key(&layout)||b.layout!=a.layout{return Err(Error::UnsupportedProfile);}
+        if !matches!(a.version,1|2|3)||b.version!=a.version||a.area!=Area::Config||b.area!=Area::Data||a.pair!=b.pair||!valid_hex(&a.pair,32)||a.layout!=layout_key(&layout)||b.layout!=a.layout{return Err(Error::UnsupportedProfile);}
         let roots=Self{layout,config,data,config_header,data_header,pair:a.pair};roots.current_for(&roots.layout)?;claim.current()?;Ok(roots)
     }
     fn payload(&self,area:Area)->Result<Dir>{match area{Area::Config=>&self.config,Area::Data=>&self.data}.dir(OsStr::new(PAYLOAD))}
 }
 fn root(parent:&Path,target:&Path,area:Area,pair:&str,key:&str)->Result<(Dir,Vec<u8>)>{
+    root_with_controls(parent,target,area,pair,key,1,&[])
+}
+fn root_with_controls(parent:&Path,target:&Path,area:Area,pair:&str,key:&str,version:u32,extra:&[(&str,&[u8])])->Result<(Dir,Vec<u8>)>{
     let parent=Dir::parent(parent)?;
     let mut nonce=[0u8;16];SystemRandom::new().fill(&mut nonce).map_err(|_|Error::Unavailable)?;
     let staged=format!(".pets-profile-stage-{}",hex(&nonce));
     let root=parent.mkdir(OsStr::new(&staged))?;
-    let bytes=encode(&Header{version:1,pair:pair.into(),area,layout:key.into()})?;
-    root.publish_new(HEADER,&bytes)?;root.mkdir(OsStr::new(PAYLOAD))?;root.sync()?;
+    let bytes=encode(&Header{version,pair:pair.into(),area,layout:key.into()})?;
+    root.publish_new(HEADER,&bytes)?;root.mkdir(OsStr::new(PAYLOAD))?;for(name,bytes)in extra{root.publish_new(name,bytes)?;}root.sync()?;
     let root=parent.publish_dir(OsStr::new(&staged),target.file_name().ok_or(Error::UnsafePath)?,&root)?;
     Ok((root,bytes))
 }
@@ -155,29 +161,54 @@ fn admit(claim:&Claim,roots:&OwnedRoots,a:&[u8],b:&[u8])->Result<()>{
 }
 /// Active means application data admitted under a current native claim. Agent
 /// sessions/permissions/consent/budgets must still follow their own brokers.
-pub(crate)struct Active{claim:Claim,roots:OwnedRoots}
+pub(crate)struct Active{claim:Claim,roots:OwnedRoots,restored:Option<active_restored::Bound>}
 pub(crate)struct Paths{pub config:PathBuf,pub data:PathBuf}
+/// Portable source provenance only; it cannot construct OwnedRoots or Active.
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super)struct BackupOrigin{schema_version:u32,app_version:String,legacy_config:Vec<u8>,legacy_data:Vec<u8>,config_header:Vec<u8>,data_header:Vec<u8>,config_complete:Vec<u8>,data_complete:Vec<u8>,admission:Vec<u8>,#[serde(default,skip_serializing_if="Option::is_none")]pub settings_io_protocol:Option<u32>}
+impl BackupOrigin{
+    pub(super)fn version(&self)->u32{self.schema_version}
+    pub(super)fn source_depth(&self)->Result<u8>{
+        if self.settings_io_protocol.is_some_and(|v|!matches!(v,1|2|3|4|5|6|7|8)){return Err(Error::UnsupportedProfile);}
+        let h:Header=parse(&self.config_header)?;let d:Header=parse(&self.data_header)?;if h.version!=d.version||h.pair!=d.pair||h.layout!=d.layout||h.area!=Area::Config||d.area!=Area::Data{return Err(Error::UnsupportedProfile);}
+        if self.schema_version==1{let a:Admission=parse(&self.admission)?;if h.version!=1||a.version!=1||a.pair!=h.pair||a.layout!=h.layout{return Err(Error::UnsupportedProfile);}return Ok(0);}
+        if self.schema_version!=2{return Err(Error::UnsupportedProfile);}let a:active_restored::Admission2=parse(&self.admission)?;if a.profile_version()?!=h.version||a.pair!=h.pair||a.layout!=h.layout{return Err(Error::UnsupportedProfile);}a.depth()
+    }
+    pub(super)fn bounded(&self)->bool{self.settings_io_protocol.is_none_or(|v|matches!(v,1|2|3|4|5|6|7|8))&&matches!(self.schema_version,1|2)&&!self.app_version.is_empty()&&self.app_version.len()<=128&&[&self.legacy_config,&self.legacy_data,&self.config_header,&self.data_header,&self.config_complete,&self.data_complete,&self.admission].into_iter().all(|b|!b.is_empty()&&b.len()<=MAX_RECORD)}
+}
+
 fn current_data(roots:&OwnedRoots)->Result<()>{
     roots.current_for(&roots.layout)?;let a=read(&roots.config,COMPLETE)?.ok_or(Error::UnsupportedProfile)?;let b=read(&roots.data,COMPLETE)?.ok_or(Error::UnsupportedProfile)?;
     if read(&roots.config,ADMITTED)?.as_deref()!=Some(admission(roots,&a,&b)?.as_slice()){return Err(Error::UnsupportedProfile);}Ok(())
 }
 impl Active{
-    fn from_roots(claim:Claim,roots:OwnedRoots)->Result<Self>{let active=Self{claim,roots};active.current()?;Ok(active)}
-    pub(crate)fn open(claim:Claim,layout:Layout)->Result<Self>{let roots=OwnedRoots::existing(&claim,layout)?;Self::from_roots(claim,roots)}
-    pub(crate)fn current(&self)->Result<()>{
-        self.claim.for_layout(&self.roots.layout)?;current_data(&self.roots)
+    pub(super)fn layout(&self)->&Layout{&self.roots.layout}
+    pub(super)fn backup_origin(&self)->Result<BackupOrigin>{
+        self.current()?;let get=|dir,name|read(dir,name)?.ok_or(Error::SourceChanged);
+        let origin=BackupOrigin{schema_version:if self.restored.is_some(){2}else{1},app_version:env!("CARGO_PKG_VERSION").into(),legacy_config:self.roots.layout.legacy_config.as_os_str().as_bytes().to_vec(),legacy_data:self.roots.layout.legacy_data.as_os_str().as_bytes().to_vec(),config_header:get(&self.roots.config,HEADER)?,data_header:get(&self.roots.data,HEADER)?,config_complete:get(&self.roots.config,COMPLETE)?,data_complete:get(&self.roots.data,COMPLETE)?,admission:get(&self.roots.config,ADMITTED)?,settings_io_protocol:super::settings_io::version(&self.roots.config)?};
+        self.current()?;if !origin.bounded(){return Err(Error::Limit);}if self.restored.is_some(){restored_backup::verify(&self.roots.config,&self.roots.data,&origin)?;self.current()?;}Ok(origin)
     }
-    pub(crate)fn paths(&self)->Result<Paths>{self.current()?;Ok(Paths{config:self.roots.layout.config().join(PAYLOAD),data:self.roots.layout.data().join(PAYLOAD)})}
-    pub(super)fn into_storage(self)->Result<Storage>{self.current()?;Ok(Storage{lease:self.claim.into_storage()?,roots:self.roots,invalid:std::sync::atomic::AtomicBool::new(false)})}
+
+    fn from_roots(claim:Claim,roots:OwnedRoots)->Result<Self>{let restored=if matches!(parse::<Header>(&roots.config_header)?.version,2|3){Some(active_restored::Bound::open(&roots)?)}else{None};let active=Self{claim,roots,restored};active.current()?;Ok(active)}
+    pub(crate)fn open(claim:Claim,layout:Layout)->Result<Self>{let roots=OwnedRoots::existing(&claim,layout)?;Self::from_roots(claim,roots)}
+    pub(in crate::pet_data)fn activation_ack(&self,archive_id:&str,choices:&super::restored_projection::Choices,approved:Option<&str>)->Result<serde_json::Value>{self.current()?;self.restored.as_ref().ok_or(Error::UnsupportedProfile)?.ack(archive_id,choices,approved)}
+    pub(crate)fn current(&self)->Result<()>{
+        self.claim.for_layout(&self.roots.layout)?;if let Some(restored)=&self.restored{self.roots.current_for(&self.roots.layout)?;restored.current(&self.roots)}else{current_data(&self.roots)}
+    }
+    pub(crate)fn paths(&self)->Result<Paths>{self.current()?;if let Some(r)=&self.restored{r.paths(&self.roots)}else{Ok(Paths{config:self.roots.layout.config().join(PAYLOAD),data:self.roots.layout.data().join(PAYLOAD)})}}
+    pub(super)fn into_storage(mut self)->Result<Storage>{self.current()?;if let Some(ref mut r)=self.restored{r.mark_opened(&self.roots)?;}let history=self.restored.as_ref().map(|r|r.history.clone());Ok(Storage{lease:self.claim.into_storage()?,roots:self.roots,restored:self.restored,history,invalid:std::sync::atomic::AtomicBool::new(false)})}
 }
-pub(super)struct Storage{lease:super::startup::StorageLease,roots:OwnedRoots,invalid:std::sync::atomic::AtomicBool}
+pub(super)struct Storage{lease:super::startup::StorageLease,pub(super)roots:OwnedRoots,restored:Option<active_restored::Bound>,history:Option<std::sync::Arc<super::restored_history::History>>,invalid:std::sync::atomic::AtomicBool}
 impl Storage{
+    pub(super)fn restored_history(&self)->Result<Option<std::sync::Arc<super::restored_history::History>>>{self.current()?;Ok(self.history.clone())}
     pub(super)fn current(&self)->Result<()>{
         use std::sync::atomic::Ordering;
         if self.invalid.load(Ordering::Acquire){return Err(Error::OwnershipLost);}
-        let result=self.lease.current().and_then(|_|current_data(&self.roots));if result.is_err(){self.invalid.store(true,Ordering::Release);}result
+        let header:Header=parse(&self.roots.config_header)?;if header.version!=1&&self.history.is_none(){return Err(Error::UnsupportedProfile);}
+        let result=self.lease.current().and_then(|_|if let Some(r)=&self.restored{self.roots.current_for(&self.roots.layout)?;r.current(&self.roots)}else{current_data(&self.roots)});if result.is_err(){self.invalid.store(true,Ordering::Release);}result
     }
-    pub(super)fn paths(&self)->Result<Paths>{self.current()?;Ok(Paths{config:self.roots.layout.config().join(PAYLOAD),data:self.roots.layout.data().join(PAYLOAD)})}
+    pub(super)fn feature_pending(&self,name:&str)->Result<bool>{self.current()?;Ok(self.restored.as_ref().is_some_and(|r|r.pending(name)))}
+    pub(super)fn paths(&self)->Result<Paths>{self.current()?;if let Some(r)=&self.restored{r.paths(&self.roots)}else{Ok(Paths{config:self.roots.layout.config().join(PAYLOAD),data:self.roots.layout.data().join(PAYLOAD)})}}
 }
 /// Finish an interrupted admission only when the entire copied payload still
 /// matches a fresh native legacy review. Partial/changed/unknown data is retained
@@ -185,6 +216,7 @@ impl Storage{
 pub(crate)fn recover_complete(claim:Claim,layout:Layout)->Result<Active>{
     let roots=OwnedRoots::existing(&claim,layout.clone())?;
     if read(&roots.config,ADMITTED)?.is_some(){return Active::from_roots(claim,roots);}
+    if parse::<Header>(&roots.config_header)?.version!=1{return Err(Error::UnsupportedProfile);}
     let review=LegacyReview::for_publication(layout,roots.clone())?;
     staging::verify_publication(&review,&roots.payload(Area::Config)?,&roots.payload(Area::Data)?)?;claim.current()?;
     let(a,b)=completion(&roots,&review)?;let mut expected:[Complete;2]=[parse(&a)?,parse(&b)?];let mut diagnostic=None;
@@ -215,4 +247,9 @@ pub(crate)fn inspect(layout:&Layout)->Result<State>{
 
 #[cfg(test)]#[path="publication_tests.rs"]mod tests;
 #[path="publication_resume.rs"]mod resume;
-pub(crate)fn recover(claim:Claim,layout:Layout)->Result<Active>{resume::recover(claim,layout)}
+pub(crate)fn recover(claim:Claim,layout:Layout)->Result<Active>{if let Ok(config)=Dir::root(layout.config()){if read(&config,HEADER)?.is_some_and(|b|parse::<Header>(&b).is_ok_and(|h|matches!(h.version,2|3))){return Err(Error::UnsupportedProfile);}}resume::recover(claim,layout)}
+#[path="publication_restore.rs"]pub(super)mod restore;
+
+#[path="publication_active_restored.rs"]pub(in crate::pet_data)mod active_restored;
+
+#[path="publication_restored_backup.rs"]pub(in crate::pet_data)mod restored_backup;

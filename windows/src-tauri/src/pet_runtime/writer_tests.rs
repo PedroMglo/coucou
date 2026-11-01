@@ -9,30 +9,114 @@ fn setup_with_fence(provider:&str,fence:Fence)->(Fixture,Authority,Record,Pendin
  let main=Chat::persistent(f.path.join("live-main.json"));let controller=Controller::new().unwrap();let pending=controller.prepare(&queued,&root(&f),&f.path.join("contexts"),&main,&evidence(&queued,now+4),"claim".into(),now+4,fence).unwrap();let(receipt,owned)=pending.claim(&f.store(),&a,&evidence(&queued,now+5),now+5).unwrap();(f,a,receipt.record,pending,owned.unwrap(),main)
 }
 fn body()->Value{json!({"model":"fixture-free","messages":[{"role":"user","content":"Original complete intent"}],"stream":true})}
-fn ledger(f:&Fixture,g:&Record)->Value{serde_json::from_slice::<Value>(&std::fs::read(root(f).join(format!("{}.json",g.admissions[0].spec.decision_id))).unwrap()).unwrap()["body"]["budgetUsage"].clone()}
-fn run<T>(future:impl std::future::Future<Output=T>)->T{tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(future)}
-fn local_metadata()->Value{json!({"model_info":{"general.architecture":"synthetic"},"capabilities":["completion"]})}
+pub(in crate::pet_runtime)fn ledger(f:&Fixture,g:&Record)->Value{serde_json::from_slice::<Value>(&std::fs::read(root(f).join(format!("{}.json",g.admissions[0].spec.decision_id))).unwrap()).unwrap()["body"]["budgetUsage"].clone()}
+pub(in crate::pet_runtime)fn run<T>(future:impl std::future::Future<Output=T>)->T{tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(future)}
+pub(in crate::pet_runtime)fn local_metadata()->Value{json!({"model_info":{"general.architecture":"synthetic"},"capabilities":["completion"]})}
 fn fixture(responses:Vec<(&'static str,String)>)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){fixture_with_hook(responses,|_|{})}
-fn fixture_with_hook(responses:Vec<(&'static str,String)>,mut hook:impl FnMut(&str)+Send+'static)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){
+pub(in crate::pet_runtime)fn fixture_with_hook(responses:Vec<(&'static str,String)>,hook:impl FnMut(&str)+Send+'static)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){
+ fixture_with_start(responses,hook,None)
+}
+fn fixture_armed(responses:Vec<(&'static str,String)>)->(crate::local_chat::Server,std::sync::mpsc::Sender<()>,thread::JoinHandle<Vec<(String,Value)>>){
+ let(start,wait)=std::sync::mpsc::channel();let(server,worker)=fixture_with_start(responses,|_|{},Some(wait));(server,start,worker)
+}
+fn fixture_with_start(responses:Vec<(&'static str,String)>,mut hook:impl FnMut(&str)+Send+'static,start:Option<std::sync::mpsc::Receiver<()>>)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){
  let listener=TcpListener::bind("127.0.0.1:0").unwrap();listener.set_nonblocking(true).unwrap();let port=listener.local_addr().unwrap().port();
- let worker=thread::spawn(move||{let mut requests=vec![];let until=Instant::now()+Duration::from_secs(4);
+ let worker=thread::spawn(move||{let mut requests=vec![];
+  // Native preparation/decisions/effects do not consume a synthetic server's
+  // IO deadline. A dropped armer (e.g. test panic) releases this worker too.
+  if start.is_some_and(|s|s.recv().is_err()){return requests;}
+  let until=Instant::now()+Duration::from_secs(4);
   for(typ,response)in responses{
    let mut socket=loop{match listener.accept(){Ok((s,_))=>break s,Err(e)if e.kind()==std::io::ErrorKind::WouldBlock=>{if Instant::now()>=until{return requests;}thread::sleep(Duration::from_millis(2));},Err(e)=>panic!("fixture accept: {e}")}};
    socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();let mut data=vec![];let mut chunk=[0u8;4096];let header;
    loop{let n=socket.read(&mut chunk).unwrap();assert!(n>0);data.extend_from_slice(&chunk[..n]);assert!(data.len()<512*1024);if let Some(end)=data.windows(4).position(|w|w==b"\r\n\r\n"){header=end+4;break;}}
-   let headers=String::from_utf8_lossy(&data[..header]);let path=headers.lines().next().unwrap().split_whitespace().nth(1).unwrap().to_owned();let len=headers.lines().find_map(|l|l.to_ascii_lowercase().strip_prefix("content-length:").map(|n|n.trim().parse::<usize>().unwrap())).unwrap();
+   let headers=String::from_utf8_lossy(&data[..header]);let path=headers.lines().next().unwrap().split_whitespace().nth(1).unwrap().to_owned();let len=headers.lines().find_map(|l|l.to_ascii_lowercase().strip_prefix("content-length:").map(|n|n.trim().parse::<usize>().unwrap())).unwrap_or(0);
    while data.len()-header<len{let n=socket.read(&mut chunk).unwrap();assert!(n>0);data.extend_from_slice(&chunk[..n]);}
-   hook(&path);requests.push((path,serde_json::from_slice(&data[header..header+len]).unwrap()));
+   hook(&path);requests.push((path,if len==0{Value::Null}else{serde_json::from_slice(&data[header..header+len]).unwrap()}));
    if typ=="redirect"{write!(socket,"HTTP/1.1 302 Found\r\nLocation: {response}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();continue;}
    write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: {typ}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
   }requests
  });
  (crate::local_chat::Server{id:"ollama",name:"Synthetic fixture",url:format!("http://127.0.0.1:{port}"),key:None},worker)
 }
-fn stream(text:&str,done:bool)->String{format!("data: {}\n\n{}",json!({"choices":[{"delta":{"content":text}}]}),if done{"data: [DONE]\n\n"}else{""})}
+pub(in crate::pet_runtime)fn stream(text:&str,done:bool)->String{format!("data: {}\n\n{}",json!({"choices":[{"delta":{"content":text}}]}),if done{"data: [DONE]\n\n"}else{""})}
 
 fn planning_config()->crate::pet_config::Configuration {let mut c=crate::pet_config::defaults();c.pets.get_mut("ai_ollama").unwrap().permissions.get_or_insert_default().music=true;c}
-fn setup_planning()->(Fixture,Authority,Record,Pending,Owned,Chat) {
+
+fn lmstudio_metadata()->Value{json!({"models":[{"type":"llm","key":"fixture-free","publisher":"private-fixture","format":"gguf","size_bytes":1,"loaded_instances":[]}]})}
+fn lmstudio_config()->crate::pet_config::Configuration{let mut c=crate::pet_config::defaults();let p=c.pets.get_mut("ai_lmstudio").unwrap();p.provider="lmstudio".into();p.permissions.get_or_insert_default().music=true;c}
+fn lmstudio_evidence(g:&Record,server:&crate::local_chat::Server,metadata:&Value,now:u64)->crate::pet_runtime::admission::Evidence{
+ let mut descriptor=crate::pet_runtime::admission_tests::descriptor(g,now);descriptor.binding.engine_binding=Some(crate::local_chat::lmstudio::Catalog::parse(server,metadata).unwrap().binding("fixture-free").unwrap());
+ crate::pet_runtime::admission::Evidence::observe(g,&descriptor,"a".repeat(64),now,false,false).unwrap()
+}
+fn setup_lmstudio(server:&crate::local_chat::Server,metadata:&Value)->(Fixture,Authority,Record,Pending,Owned,Chat){
+ setup_lmstudio_mode(server,metadata,false)
+}
+fn setup_lmstudio_planning(server:&crate::local_chat::Server,metadata:&Value)->(Fixture,Authority,Record,Pending,Owned,Chat){setup_lmstudio_mode(server,metadata,true)}
+fn setup_lmstudio_mode(server:&crate::local_chat::Server,metadata:&Value,planning:bool)->(Fixture,Authority,Record,Pending,Owned,Chat){
+ let f=Fixture::new();let authority=Authority::ensure(&root(&f)).unwrap();let draft=f.goal("lmstudio");let now=crate::assistant_memory::now()-100;let mut limits=budget();limits.deadline_at=now+60_000;limits.payment=crate::pet_runtime::admission::Payment::LocalOnly;
+ let evidence=lmstudio_evidence(&draft,server,metadata,now);let request="queue-lmstudio".into();let decision=nonce().unwrap();
+ let review=if planning{Review::prepare_planning(&draft,evidence,limits,crate::pet_runtime::planning::Limits{max_rounds:3,max_steps:2,max_output_bytes:2048,no_progress_limit:2},&lmstudio_config(),request,decision,now)}else{Review::prepare(&draft,evidence,limits,request,decision,now)}.unwrap();
+ let approved=review.approve(&draft,lmstudio_evidence(&draft,server,metadata,now+1),now+1).unwrap();
+ let cert=authority.certify(&approved,&draft,now+2).unwrap();let queued=f.store().enqueue_certified(&cert,now+3).unwrap().record;let main=Chat::persistent(f.path.join("live-main.json"));let controller=Controller::new().unwrap();
+ let goals=f.path.join("goals");let path=root(&f);let pet=queued.spec.owner.pet_id.clone();let id=queued.id.clone();
+ let fence=Arc::new(move|lease:&crate::pet_runtime::leases::Lease,_:&crate::pet_resources::Hold,mode:Validation<'_>|{let g=if let Validation::Commit(g)=mode{g.clone()}else{match Store::existing_verified(&goals,&path).ok().flatten().and_then(|s|s.read(&id,&pet).ok()){Some(g)=>g,None=>return Validity::Unknown}};if g.state==State::Leased&&g.admissions.last().and_then(|a|a.lease.as_ref())==Some(lease)&&g.execution_context.as_ref().is_some_and(|c|c.conversation_id==lease.conversation_id){Validity::Current}else{Validity::Changed}});
+ let pending=controller.prepare(&queued,&root(&f),&f.path.join("contexts"),&main,&lmstudio_evidence(&queued,server,metadata,now+4),"claim-lmstudio".into(),now+4,fence).unwrap();
+ let(receipt,owned)=pending.claim(&f.store(),&authority,&lmstudio_evidence(&queued,server,metadata,now+5),now+5).unwrap();(f,authority,receipt.record,pending,owned.unwrap(),main)
+}
+#[test]fn lmstudio_owned_response_uses_native_metadata_exact_model_and_one_durable_attempt(){
+ let metadata=lmstudio_metadata();let(mut server,http)=fixture(vec![("application/json",metadata.to_string()),("text/event-stream",stream("Independent LM Studio response",true))]);server.id="lmstudio";
+ let(f,_a,goal,_pending,owner,_main)=setup_lmstudio(&server,&metadata);let config=lmstudio_config();
+ assert_eq!(run(owner.respond_once(None,&goal,&server,"lmstudio-original-request",&config)).unwrap(),"Independent LM Studio response");
+ let requests=http.join().unwrap();assert_eq!(requests.len(),2);assert_eq!(requests[0],("/api/v1/models".into(),Value::Null));assert_eq!(requests[1].0,"/v1/chat/completions");assert_eq!(requests[1].1["model"],"fixture-free");assert!(requests[1].1.get("tools").is_none());
+ let prior=ledger(&f,&goal);assert_eq!(prior["attempts"].as_array().unwrap().len(),1);assert_eq!(prior["attempts"][0]["phase"],"settled");assert_eq!(goal.admissions[0].spec.owner.pet_id,"ai_lmstudio");assert!(goal.admissions[0].spec.engine_binding.is_some());
+ server.url="http://127.0.0.1:1".into();assert_eq!(run(owner.respond_once(None,&goal,&server,"lmstudio-original-request",&config)).unwrap(),"Independent LM Studio response");assert_eq!(ledger(&f,&goal),prior);assert_eq!(owner.workers(),0);
+}
+#[test]fn lmstudio_model_change_before_inference_preserves_original_consent_without_charging_a_call(){
+ let original=lmstudio_metadata();let mut changed=original.clone();changed["models"][0]["size_bytes"]=json!(2);let(mut server,http)=fixture(vec![("application/json",changed.to_string())]);server.id="lmstudio";
+ let(f,_a,goal,_pending,owner,_main)=setup_lmstudio(&server,&original);let path=root(&f).join(format!("{}.json",goal.admissions[0].spec.decision_id));let bytes=std::fs::read(&path).unwrap();
+ assert!(run(owner.respond_once(None,&goal,&server,"changed-native-model",&lmstudio_config())).unwrap_err().contains("identidade"));
+ let requests=http.join().unwrap();assert_eq!(requests.len(),1);assert_eq!(requests[0].0,"/api/v1/models");assert_eq!(std::fs::read(path).unwrap(),bytes);assert!(ledger(&f,&goal).is_null());assert_eq!(owner.workers(),0);assert_eq!(f.store().read(&goal.id,"ai_lmstudio").unwrap().revision,goal.revision);
+}
+#[test]fn lmstudio_review_cannot_inherit_a_different_endpoint_credential_or_native_model(){
+ let f=Fixture::new();let goal=f.goal("lmstudio");let server=crate::local_chat::Server{id:"lmstudio",name:"Private fixture",url:"http://127.0.0.1:1234".into(),key:None};let source=lmstudio_metadata();
+ for mode in 0..3{let mut limits=budget();limits.payment=crate::pet_runtime::admission::Payment::LocalOnly;let review=Review::prepare(&goal,lmstudio_evidence(&goal,&server,&source,100_002),limits,format!("review-{mode}"),nonce().unwrap(),100_002).unwrap();let mut target=crate::local_chat::Server{id:"lmstudio",name:"Private fixture",url:server.url.clone(),key:None};let mut metadata=source.clone();
+  match mode{0=>target.url="http://127.0.0.1:1235".into(),1=>target.key=Some("synthetic-private-credential".into()),_=>metadata["models"][0]["size_bytes"]=json!(2)};
+  assert!(matches!(review.approve(&goal,lmstudio_evidence(&goal,&target,&metadata,100_003),100_003),Err(crate::pet_runtime::admission::Denial::RevisionChanged)));
+ }
+ let descriptor=crate::pet_runtime::admission_tests::descriptor(&goal,100_002);assert!(matches!(crate::pet_runtime::admission::Evidence::observe(&goal,&descriptor,"a".repeat(64),100_002,false,false),Err(crate::pet_runtime::admission::Denial::ModelUnresolved)));assert!(goal.admissions.is_empty());
+}
+#[test]fn lmstudio_review_cache_never_reuses_an_old_engine_quote_even_with_the_same_descriptor_revision(){
+ let f=Fixture::new();let goal=f.goal("lmstudio");let source=lmstudio_metadata();let server=crate::local_chat::Server{id:"lmstudio",name:"Private quote fixture",url:"http://127.0.0.1:1234".into(),key:None};let mut limits=budget();limits.payment=crate::pet_runtime::admission::Payment::LocalOnly;
+ let review=|metadata:&Value,at|Review::prepare(&goal,lmstudio_evidence(&goal,&server,metadata,at),limits.clone(),"same-original-quote".into(),nonce().unwrap(),at).unwrap();
+ let mut cache=crate::pet_runtime::admission_review::Reviews::default();let ticket=cache.insert("native-window",review(&source,100_002),nonce().unwrap(),100_002).unwrap();
+ let mut changed=source.clone();changed["models"][0]["size_bytes"]=json!(2);assert!(matches!(cache.insert("native-window",review(&changed,100_003),nonce().unwrap(),100_003),Err(model::Error::Conflict)));
+ let same=cache.insert("native-window",review(&source,100_004),nonce().unwrap(),100_004).unwrap();assert_eq!(same.token,ticket.token);assert_eq!(same.proposal.engine_binding,ticket.proposal.engine_binding);assert_eq!(same.proposal.expires_at,ticket.proposal.expires_at);assert!(f.store().read(&goal.id,"ai_lmstudio").unwrap().admissions.is_empty());
+}
+
+#[test]fn a_real_shared_reader_before_model_send_keeps_one_native_attempt_and_one_inference_request(){
+ use std::{fs::OpenOptions,os::fd::AsRawFd};
+ let(f,_a,g,_pending,owner,_main)=setup_planning();let path=root(&f).join(".catalog.lock");let release=Arc::new(Mutex::new(None));let released=release.clone();
+ let text=crate::pet_runtime::planning_tests::output().to_string();
+ let(server,http)=fixture_with_hook(vec![("application/json",local_metadata().to_string()),("text/event-stream",stream(&text,true))],move|route|if route=="/api/show"{
+  let lock=OpenOptions::new().read(true).write(true).open(&path).unwrap();assert_eq!(unsafe{libc::flock(lock.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);
+  *released.lock().unwrap()=Some(thread::spawn(move||{thread::sleep(Duration::from_millis(150));drop(lock);}));
+ });
+ let lease=owner.lease().clone();let result=run(owner.plan_once(None,&g,&server,"wait-original-attempt",&planning_config())).unwrap();assert_eq!(result.body.outcome.kind(),crate::pet_runtime::planning_output::Kind::Plan);
+ release.lock().unwrap().take().unwrap().join().unwrap();let requests=http.join().unwrap();assert_eq!(requests.iter().filter(|r|r.0=="/v1/chat/completions").count(),1);assert_eq!(requests.len(),2);assert_eq!(owner.lease(),&lease);assert_eq!(owner.workers(),0);
+ let usage=ledger(&f,&g);assert_eq!(usage["attempts"].as_array().unwrap().len(),1);assert_eq!(usage["attempts"][0]["requestId"],"wait-original-attempt");assert_eq!(usage["attempts"][0]["phase"],"settled");assert_eq!(usage["attempts"][0]["id"],result.body.attempt_id);
+}
+
+#[test]fn stop_during_the_same_pre_send_budget_wait_never_sends_inference_or_starts_an_attempt(){
+ use std::{fs::OpenOptions,os::fd::AsRawFd};
+ let(f,_a,g,_pending,owner,_main)=setup_planning();let path=root(&f).join(".catalog.lock");let lease=owner.lease().clone();let stop=lease.clone();let release=Arc::new(Mutex::new(None));let released=release.clone();
+ let(server,http)=fixture_with_hook(vec![("application/json",local_metadata().to_string())],move|route|if route=="/api/show"{
+  let lock=OpenOptions::new().read(true).write(true).open(&path).unwrap();assert_eq!(unsafe{libc::flock(lock.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);let stop=stop.clone();
+  *released.lock().unwrap()=Some(thread::spawn(move||{thread::sleep(Duration::from_millis(50));signal_stop(&stop);thread::sleep(Duration::from_millis(100));drop(lock);}));
+ });
+ assert!(run(owner.plan_once(None,&g,&server,"stop-wait-original-attempt",&planning_config())).is_err());release.lock().unwrap().take().unwrap().join().unwrap();let requests=http.join().unwrap();assert_eq!(requests.len(),1);assert_eq!(requests[0].0,"/api/show");assert_eq!(owner.lease(),&lease);assert_eq!(owner.workers(),0);let usage=ledger(&f,&g);assert!(usage.is_null()||usage["attempts"].as_array().is_some_and(|rows|rows.is_empty()));
+}
+pub(in crate::pet_runtime)fn setup_planning()->(Fixture,Authority,Record,Pending,Owned,Chat) {
  let f=Fixture::new();let a=Authority::ensure(&root(&f)).unwrap();let draft=f.goal("ollama");let now=crate::assistant_memory::now()-100;
  let mut budget=budget();budget.deadline_at=now+60_000;budget.payment=crate::pet_runtime::admission::Payment::LocalOnly;
  let limits=crate::pet_runtime::planning::Limits{max_rounds:3,max_steps:2,max_output_bytes:2048,no_progress_limit:2};
@@ -57,12 +141,15 @@ fn setup_planning()->(Fixture,Authority,Record,Pending,Owned,Chat) {
 #[test]fn bounded_invalid_plans_consume_original_rounds_and_stop_without_canonical_mutation() {
  let(f,_a,g,_p,o,_)=setup_planning();let text="unsupported output";
  let(server,http)=fixture(vec![("application/json",local_metadata().to_string()),("text/event-stream",stream(text,true)),("application/json",local_metadata().to_string()),("text/event-stream",stream(text,true))]);
- for request in ["invalid-1","invalid-2"] {let e=run(o.plan_once(None,&g,&server,request,&planning_config())).unwrap();assert_eq!(e.body.outcome.kind(),crate::pet_runtime::planning_output::Kind::Invalid);}
+ let mut raced_context=None;
+ for request in ["invalid-1","invalid-2"] {let e=run(o.plan_once(None,&g,&server,request,&planning_config())).unwrap();assert_eq!(e.body.outcome.kind(),crate::pet_runtime::planning_output::Kind::Invalid);
+  if request=="invalid-1"{let a=Authority::existing(&root(&f)).unwrap();let captured=crate::pet_runtime::planning_journal::Request::capture(&g,&g.admissions[0].spec,o.lease(),"invalid-3").unwrap();raced_context=Some(a.planning_context(&g.admissions[0].spec,g.admissions[0].proof.as_ref().unwrap(),o.lease(),captured,crate::assistant_memory::now()).unwrap());}
+ }
  let requests=http.join().unwrap();assert_eq!(requests.len(),4);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);assert_eq!(f.store().read(&g.id,"ai_ollama").unwrap().revision,g.revision);
  // Eligibility rejects round3 before metadata or model IO; the atomic HTTP
  // boundary independently refuses it even if eligibility raced another caller.
  let(server,http)=fixture(vec![]);assert!(run(o.plan_once(None,&g,&server,"invalid-3",&planning_config())).is_err());assert!(http.join().unwrap().is_empty());
- let call=o.prepare_planning_model("invalid-3",&g,crate::assistant_memory::now()).unwrap();assert!(call.before_send("fixture-free",&body()).is_err());assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);
+ let call=o.prepare_planning_captured(&g,raced_context.unwrap(),crate::assistant_memory::now()).unwrap();assert!(call.before_send("fixture-free",&body()).is_err());assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);
 }
 #[test]fn owned_hold_handoff_uses_one_physical_slot_and_preserves_independent_pet_contexts(){for provider in ["codex","copilot","antigravity","ollama","integration_notion"]{let(_f,_a,g,_p,o,main)=setup(provider);let call=o.prepare_model("first",&g,100,crate::assistant_memory::now()).unwrap();assert!(main.reserve_conversation(provider,None).is_err());assert_eq!(main.runtime_resources().busy().unwrap().len(),1);assert_eq!(o.workers(),1);drop(call);assert_eq!(o.workers(),0);assert!(o.current(crate::assistant_memory::now()));let next=o.prepare_model("second",&g,100,crate::assistant_memory::now()).unwrap();drop(next);}}
 #[test]fn dropping_unstarted_call_does_not_cancel_the_goal_hold_or_create_a_model_attempt(){let(f,_a,g,_p,o,_main)=setup("ollama");let call=o.prepare_model("first",&g,100,crate::assistant_memory::now()).unwrap();drop(call);assert!(o.current(crate::assistant_memory::now()));assert!(ledger(&f,&g).is_null());}
@@ -80,6 +167,7 @@ fn setup_planning()->(Fixture,Authority,Record,Pending,Owned,Chat) {
 #[test]fn same_logical_request_retry_recovers_durable_result_without_metadata_or_inference(){let(f,_a,g,_p,o,_main)=setup("ollama");let(server,first)=fixture(vec![("application/json",local_metadata().to_string()),("text/event-stream",stream("Hello",true))]);assert_eq!(run(o.respond_once(None,&g,&server,"same-request",&crate::pet_config::defaults())).unwrap(),"Hello");assert_eq!(first.join().unwrap().len(),2);let server=crate::local_chat::Server{id:"ollama",name:"No network",url:"http://127.0.0.1:1".into(),key:None};assert_eq!(run(o.respond_once(None,&g,&server,"same-request",&crate::pet_config::defaults())).unwrap(),"Hello");assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),1);assert_eq!(o.workers(),0);assert!(o.current(crate::assistant_memory::now()));}
 
 #[path="result_tests.rs"]mod result_tests;
+#[path="result_sink_tests.rs"]mod result_sink_tests;
 #[path="plan_writer_tests.rs"]mod plan_writer_tests;
 #[test]fn remote_native_model_metadata_blocks_inference_before_any_budget_charge(){let(f,_a,g,_p,o,_main)=setup("ollama");let mut cloud=local_metadata();cloud["remote_model"]="cloud".into();let(server,worker)=fixture(vec![("application/json",cloud.to_string())]);assert!(run(o.respond_once(None,&g,&server,"first",&crate::pet_config::defaults())).is_err());assert_eq!(worker.join().unwrap().len(),1);assert!(ledger(&f,&g).is_null());assert_eq!(o.workers(),0);}
 
@@ -120,3 +208,5 @@ fn setup_planning()->(Fixture,Authority,Record,Pending,Owned,Chat) {
 }
 
 #[cfg(target_os="linux")]#[path="step_tests.rs"]mod step_tests;
+
+#[path="dispatcher_tests.rs"]mod dispatcher_tests;

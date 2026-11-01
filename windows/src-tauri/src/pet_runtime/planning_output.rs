@@ -59,6 +59,10 @@ pub(super)fn read(authority:&Authority,spec:&AdmissionSpec,proof:&ConsentProof,a
     if e.body.attempt_id!=attempt{return Err(Failure::Invalid);}
     authority.verify_planning_output(spec,proof,&e)?;dir.check().map_err(|_|Failure::Changed)?;Ok(Some(e))
 }
+pub(super)fn receipt_fence(authority:&Authority,spec:&AdmissionSpec,attempts:&[String])->Result<Vec<(String,Option<String>)>>{
+    if spec.schema_version!=3{return Ok(vec![]);}let dir=directory(authority,spec,false)?;let mut rows=vec![];
+    for id in attempts{if !model::token(id){return Err(Failure::Invalid);}let name=format!("{id}.json");let hash=match &dir{Some(d)=>d.bytes(&name,MAX_BYTES).map_err(|_|Failure::Unsafe)?.map(|(b,_)|model::hash(&b)),None=>None};rows.push((name,hash));}Ok(rows)
+}
 pub(super)fn publish(authority:&Authority,spec:&AdmissionSpec,proof:&ConsentProof,e:&Envelope)->Result<()> {
     authority.verify_planning_output(spec,proof,e)?;
     let bytes=serde_json::to_vec(e).map_err(|_|Failure::Invalid)?;if bytes.len()>MAX_BYTES{return Err(Failure::Capacity);}
@@ -89,4 +93,15 @@ pub(super)fn candidate(plan:planning::ValidatedPlan,body:&Body)->Candidate {
     Candidate {task_id:format!("planning-task-{}",body.attempt_id),plan_id:format!("planning-plan-{}",body.attempt_id),
         target_revision:model::hash(format!("coucou-planning-target-v1\0{}\0{}\0{}",body.decision_id,body.source.record_hash,body.attempt_id).as_bytes())[..32].into(),
         target_sequence:body.source.sequence+1,description:plan.description,steps:plan.steps,verification:plan.verification}
+}
+
+/// A no-lease grant cannot have a completed-result directory. This read refuses
+/// contradictory/ambiguous artifacts and never constructs a synthetic spec.
+pub(super)fn unclaimed_directory_fence(authority:&Authority,decision:&str)->super::authority::Result<String>{
+    use std::os::unix::fs::MetadataExt;
+    if !model::token(decision){return Err(Failure::Invalid);}
+    let Some(root)=protocol_directory(&authority.planning_root()?,PROTOCOL,false).map_err(|_|Failure::Unsafe)?else{return model::fingerprint(&Option::<(u64,u64)>::None).map_err(|_|Failure::Invalid);};
+    if protocol_directory(&root.path.join(decision),PROTOCOL,false).map_err(|_|Failure::Unsafe)?.is_some(){return Err(Failure::RecoveryRequired);}
+    root.check().map_err(|_|Failure::Changed)?;let metadata=root.file.metadata().map_err(|_|Failure::Unavailable)?;
+    model::fingerprint(&Some((metadata.dev(),metadata.ino()))).map_err(|_|Failure::Invalid)
 }

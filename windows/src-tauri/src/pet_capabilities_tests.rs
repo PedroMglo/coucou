@@ -8,6 +8,16 @@ impl Fixture{
 }
 fn descriptor<'a>(s:&'a Snapshot,id:&str)->&'a Descriptor{s.pets.iter().find(|p|p.pet_id==id).unwrap()}
 fn capability<'a>(s:&'a Snapshot,id:&str,cap:&str)->&'a Capability{descriptor(s,id).capabilities.iter().find(|c|c.id==cap).unwrap()}
+#[test]fn settings_effect_capabilities_gate_new_effects_without_changing_support_or_preservation(){
+ let mut f=Fixture::new();f.model(json!({"capabilities":["completion","tools"]}),100_000);let before=f.snapshot(100_001);
+ let blocked=f.registry.snapshot_with_io(&f.settings,Some(&f.config),true,&BTreeSet::new(),100_001,false).unwrap();
+ for id in ["ai_ollama","agent_codex","agent_antigravity","agent_copilot"]{
+  let a=capability(&before,id,"conversation.respond");let b=capability(&blocked,id,"conversation.respond");assert_eq!(b.support,a.support);assert_eq!(b.reason,Some(Reason::SettingsUnconfirmed));assert_eq!(b.availability,Availability::Unavailable);
+  for name in ["history.read","conversation.cancel"]{assert_eq!(serde_json::to_value(capability(&before,id,name)).unwrap(),serde_json::to_value(capability(&blocked,id,name)).unwrap());}
+ }
+ assert_ne!(before.revision,blocked.revision);let ready=f.snapshot(100_001);assert_ne!(blocked.revision,ready.revision);
+ assert_eq!(capability(&ready,"ai_ollama","conversation.respond").reason,capability(&before,"ai_ollama","conversation.respond").reason);
+}
 #[test]fn configured_service_assistant_keeps_logical_identity_and_native_audio_capabilities(){
     let mut f=Fixture::new();f.config.pets.get_mut("integration_spotify").unwrap().provider="codex".into();let s=f.snapshot(100_000);
     let d=descriptor(&s,"integration_spotify");assert_eq!(d.binding.adapter,Some("codex"));assert_eq!(d.binding.provider.as_deref(),Some("integration_spotify"));
@@ -126,3 +136,33 @@ fn capability<'a>(s:&'a Snapshot,id:&str,cap:&str)->&'a Capability{descriptor(s,
  let mut f=Fixture::new();let metadata=json!({"capabilities":["completion","tools"],"model_info":{"fixture":true}});f.model(metadata.clone(),100_000);let first=f.snapshot(100_001);let before=descriptor(&first,"ai_ollama");f.model(metadata,100_010);let second=f.snapshot(100_011);let after=descriptor(&second,"ai_ollama");assert_ne!(before.revision,after.revision);assert_ne!(before.observed_at,after.observed_at);assert_eq!(admission_semantics(before).unwrap(),admission_semantics(after).unwrap());
  let mut changed=after.clone();changed.capabilities.iter_mut().find(|c|c.id=="conversation.respond").unwrap().limits.max_calls=Some(1);assert_ne!(admission_semantics(before).unwrap(),admission_semantics(&changed).unwrap());let mut stale=after.clone();stale.capabilities.iter_mut().find(|c|c.id=="conversation.respond").unwrap().availability=Availability::Unknown;assert_ne!(admission_semantics(before).unwrap(),admission_semantics(&stale).unwrap());
 }
+
+#[test]fn bounded_planning_execution_and_verification_are_declared_only_for_the_implemented_native_adapter(){
+    let mut f=Fixture::new();f.config.pets.get_mut("ai_ollama").unwrap().permissions.as_mut().unwrap().music=true;let s=f.snapshot(100_000);
+    for id in ["goals.planBounded","goals.executeRecipe","goals.verifyCriteria"] {
+        let c=capability(&s,"ai_ollama",id);assert_eq!(c.support,Support::Supported);assert_eq!(c.availability,Availability::Unknown);assert_eq!(c.reason,Some(Reason::TargetRequired));assert_eq!(c.decision,Decision::ScopedGrant);assert!(c.limitations.contains(&"spotifyTransportV1Only"));
+        for pet in ["agent_codex","agent_copilot","agent_antigravity","integration_spotify","ai_lmstudio"]{assert_eq!(capability(&s,pet,id).support,Support::Unsupported);}
+    }
+    f.config.pets.get_mut("ai_ollama").unwrap().permissions.as_mut().unwrap().music=false;let s=f.snapshot(100_001);assert_eq!(capability(&s,"ai_ollama","goals.planBounded").reason,Some(Reason::PermissionDenied));
+}
+
+#[test]fn continuation_review_is_common_native_provenance_without_enabling_other_provider_execution(){
+    let mut f=Fixture::new();let s=f.snapshot(100_000);
+    for pet in ["agent_codex","agent_copilot","agent_antigravity","ai_ollama"]{
+        let c=capability(&s,pet,"goals.continuationReview");assert_eq!(c.support,Support::Supported);assert_eq!(c.availability,Availability::Unknown);assert_eq!(c.reason,Some(Reason::TargetRequired));assert_eq!(c.decision,Decision::NativeApproval);assert_eq!(c.callers,vec![Caller::NativeUser]);
+        for bound in ["authenticatedClosedSourceRequired","additionalAllowanceOnly","unknownToolEffectsRequireReconciliation","doesNotEnableProviderExecution"]{assert!(c.limitations.contains(&bound));}
+        if pet!="ai_ollama"{for id in ["goals.planBounded","goals.executeRecipe","goals.verifyCriteria"]{assert_eq!(capability(&s,pet,id).support,Support::Unsupported);}}
+    }
+    for pet in ["integration_spotify","ai_lmstudio"]{assert_eq!(capability(&s,pet,"goals.continuationReview").support,Support::Unsupported);}
+}
+
+#[test]fn unused_authority_retirement_review_is_common_native_reduction_without_an_execution_grant(){
+    let mut fixture=Fixture::new();let snapshot=fixture.snapshot(100_000);
+    for pet in ["agent_codex","agent_copilot","agent_antigravity","ai_ollama"]{
+        let c=capability(&snapshot,pet,"goals.retirementReview");assert_eq!(c.support,Support::Supported);assert_eq!(c.reason,Some(Reason::TargetRequired));assert_eq!(c.decision,Decision::NativeApproval);assert_eq!(c.callers,vec![Caller::NativeUser]);
+        for limit in ["signedUnusedCanonicalGrantRequired","noLinkedAdmission","nativeNoIoEvidenceRequired","authorityReductionOnly","doesNotEnableProviderExecution"]{assert!(c.limitations.contains(&limit));}
+    }
+    for pet in ["integration_spotify","ai_lmstudio"]{assert_eq!(capability(&snapshot,pet,"goals.retirementReview").support,Support::Unsupported);}
+}
+
+#[path="pet_memory_capabilities_tests.rs"]mod memory_projection_tests;

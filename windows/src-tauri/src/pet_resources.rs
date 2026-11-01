@@ -1,11 +1,11 @@
 //! Shared physical admission between chat instances. No persisted row is a hold.
-use std::{collections::{BTreeSet,HashMap},sync::{Arc,Mutex,Weak,atomic::{AtomicBool,Ordering}},time::Instant};
+use std::{collections::{BTreeSet,HashMap},sync::{Arc,Mutex,Weak,atomic::{AtomicBool,AtomicU64,Ordering}},time::Instant};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(crate) enum Failure{Busy,Expired,Invalid,Unavailable}
 #[derive(Default)]
 pub(crate) struct Coordinator{holds:Mutex<HashMap<String,Weak<Hold>>>}
-pub(crate) struct Hold{coordinator:Arc<Coordinator>,provider:String,cancel:Arc<AtomicBool>,deadline:Option<Instant>}
+pub(crate) struct Hold{coordinator:Arc<Coordinator>,provider:String,cancel:Arc<AtomicBool>,deadline:Option<Instant>,generation:AtomicU64}
 impl Coordinator{
     pub(crate) fn acquire(self:&Arc<Self>,provider:&str,cancel:Arc<AtomicBool>,deadline:Option<Instant>)->Result<Arc<Hold>,Failure>{
         if provider.is_empty()||provider.len()>128||!provider.bytes().all(|c|c.is_ascii_alphanumeric()||matches!(c,b'-'|b'_')){return Err(Failure::Invalid);}
@@ -16,7 +16,7 @@ impl Coordinator{
         holds.retain(|_,hold|hold.strong_count()>0);
         if holds.contains_key(provider){return Err(Failure::Busy);}
         if holds.len()>=64{return Err(Failure::Unavailable);}
-        let hold=Arc::new(Hold{coordinator:self.clone(),provider:provider.into(),cancel,deadline});
+        let hold=Arc::new(Hold{coordinator:self.clone(),provider:provider.into(),cancel,deadline,generation:AtomicU64::new(1)});
         holds.insert(provider.into(),Arc::downgrade(&hold));Ok(hold)
     }
     pub(crate) fn busy(&self)->Result<BTreeSet<String>,Failure>{
@@ -25,7 +25,37 @@ impl Coordinator{
     }
 }
 impl Hold{
+    pub(crate)fn generation(&self)->u64{self.generation.load(Ordering::Acquire)}
+    #[cfg(target_os="linux")]
+    pub(crate)fn release_waiting(&self,proof:&crate::pet_runtime::NativeYieldProof)->Result<(),Failure>{
+        let mut holds=self.coordinator.holds.lock().map_err(|_|Failure::Unavailable)?;
+        if !proof.covers_release(self){return Err(Failure::Invalid);}
+        if holds.get(&self.provider).is_some_and(|w|std::ptr::eq(w.as_ptr(),self)){holds.remove(&self.provider);}
+        Ok(())
+    }
+    #[cfg(target_os="linux")]
+    pub(crate)fn reacquire_waiting(self:&Arc<Self>,proof:&crate::pet_runtime::NativeYieldProof)->Result<(),Failure>{
+        let mut holds=self.coordinator.holds.lock().map_err(|_|Failure::Unavailable)?;
+        if !proof.covers_reacquire(self)||self.cancel.load(Ordering::Acquire)||self.deadline.is_some_and(|d|Instant::now()>=d){return Err(Failure::Invalid);}
+        holds.retain(|_,h|h.strong_count()>0);
+        if let Some(held)=holds.get(&self.provider){return if std::ptr::eq(held.as_ptr(),Arc::as_ptr(self))&&self.generation()==proof.next_generation(){Ok(())}else{Err(Failure::Busy)};}
+        if holds.len()>=64{return Err(Failure::Unavailable);}
+        if self.generation()!=proof.generation(){return Err(Failure::Invalid);}
+        self.generation.store(proof.next_generation(),Ordering::Release);holds.insert(self.provider.clone(),Arc::downgrade(self));Ok(())
+    }
+    /// Cancellation alone never releases a slot. Only the original native
+    /// owner's non-serialized proof of fully drained IO can retire this hold.
+    /// Old retained handles cannot retire a later owner's slot.
+    #[cfg(target_os="linux")]
+    pub(crate)fn release_drained(&self,proof:&crate::pet_runtime::NativeDrainProof)->Result<(),Failure>{
+        if !proof.covers_drained_hold(self){return Err(Failure::Invalid);}
+        let mut holds=self.coordinator.holds.lock().map_err(|_|Failure::Unavailable)?;
+        if holds.get(&self.provider).is_some_and(|w|std::ptr::eq(w.as_ptr(),self)){holds.remove(&self.provider);}Ok(())
+    }
+
     pub(crate)fn cancel(&self){self.cancel.store(true,Ordering::Release);}
+    pub(crate)fn stopped(&self)->bool{self.cancel.load(Ordering::Acquire)||self.deadline.is_some_and(|d|Instant::now()>=d)}
+    pub(crate)fn occupies_slot(&self)->bool{self.coordinator.holds.lock().is_ok_and(|h|h.get(&self.provider).is_some_and(|w|std::ptr::eq(w.as_ptr(),self)))}
     pub(crate)fn provider_for<'a>(&'a self,coordinator:&Arc<Coordinator>)->Option<&'a str>{(Arc::ptr_eq(&self.coordinator,coordinator)&&self.current()).then_some(self.provider.as_str())}
     pub(crate) fn current(&self)->bool{self.current_at(Instant::now())}
     fn current_at(&self,now:Instant)->bool{

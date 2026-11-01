@@ -120,19 +120,18 @@ pub async fn pet_runtime_run_step(window:tauri::WebviewWindow,input:RunInput)->m
 #[tauri::command]
 pub async fn pet_runtime_step_result(window:tauri::WebviewWindow,input:ReadInput)->model::Result<Option<View>>{
     check(&window)?;tauri::async_runtime::spawn_blocking(move||{
-        let goal=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?.read(&input.goal_id,&input.pet_id)?;
+        let goal=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?.read_control(&input.goal_id,&input.pet_id)?;
         let row=goal.admissions.iter().find(|a|a.spec.decision_id==input.decision_id).ok_or(model::Error::NotFound)?;
         let authority=Authority::existing(&super::admission_review::authority_root()).map_err(|_|model::Error::StorageUnavailable)?;
-        authority.read_step_assessment(&row.spec,row.proof.as_ref().ok_or(model::Error::Conflict)?,&input.plan_id,&input.step_id).map(|v|v.map(Into::into)).map_err(|_|model::Error::StorageUnavailable)
+        authority.read_step_assessment_for_goal(&goal,&row.spec,row.proof.as_ref().ok_or(model::Error::Conflict)?,&input.plan_id,&input.step_id).map(|v|v.map(Into::into)).map_err(Failure::control_error)
     }).await.map_err(|_|model::Error::StorageUnavailable)?
 }
 #[cfg(target_os="linux")]
 #[tauri::command]
 pub async fn pet_runtime_recover_step(window:tauri::WebviewWindow,input:RecoverInput)->model::Result<View>{
     check(&window)?;tauri::async_runtime::spawn_blocking(move||{
-        let goal=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?.read(&input.goal_id,&input.pet_id)?;
-        let authority=Authority::existing(&super::admission_review::authority_root()).map_err(|_|model::Error::StorageUnavailable)?;
-        recover_for_goal(&authority,&goal,&input,crate::assistant_memory::now())
+        let store=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?;
+        store.recover_step_native(&super::admission_review::authority_root(),&input,crate::assistant_memory::now())
     }).await.map_err(|_|model::Error::StorageUnavailable)?
 }
 #[cfg(target_os="linux")]
@@ -141,9 +140,9 @@ pub(super)fn recover_for_goal(authority:&Authority,goal:&model::Record,input:&Re
     if goal.revision!=input.revision||goal.id!=input.goal_id||goal.spec.owner.pet_id!=input.pet_id{return Err(model::Error::Conflict);}
     let row=goal.admissions.iter().find(|a|a.spec.decision_id==input.decision_id).ok_or(model::Error::NotFound)?;
     let proof=row.proof.as_ref().ok_or(model::Error::Conflict)?;
-    let stored=authority.read_step_assessment(&row.spec,proof,&input.plan_id,&input.step_id).map_err(|_|model::Error::StorageUnavailable)?.ok_or(model::Error::NotFound)?;
+    let stored=authority.read_step_assessment(&row.spec,proof,&input.plan_id,&input.step_id).map_err(Failure::control_error)?.ok_or(model::Error::NotFound)?;
     if stored.record.scope.grant_id!=input.grant_id{return Err(model::Error::Conflict);}
-    authority.recover_step(&row.spec,proof,row.lease.as_ref().ok_or(model::Error::Conflict)?,&stored.record.scope,now).map(Into::into).map_err(|_|model::Error::StorageUnavailable)
+    authority.recover_step_for_goal(goal,&row.spec,proof,row.lease.as_ref().ok_or(model::Error::Conflict)?,&stored.record.scope,now).map(Into::into).map_err(Failure::control_error)
 }
 #[cfg(not(target_os="linux"))]#[tauri::command]
 pub async fn pet_runtime_prepare_step(window:tauri::WebviewWindow,input:PrepareInput)->model::Result<serde_json::Value>{check(&window)?;let _=input;Err(model::Error::UnsupportedPlatform)}

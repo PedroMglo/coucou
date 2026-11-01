@@ -185,3 +185,10 @@ mod tests{
         let mut revised=snapshot.registry.clone();revised.sources[0].enabled=false;store::save_at(&path,&snapshot.revision,revised).unwrap();assert_eq!(selected.validate_with("codex","cid-one",&pets),Err("registryChanged"));std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+/// Native restore initialization only. No source path is read/materialized.
+/// Fresh source enrollment still uses save_checked and explicit native consent.
+pub(crate)fn suspend_for_restoration(bytes:&[u8])->Result<Vec<u8>,&'static str>{
+ if bytes.len()>model::MAX_BYTES{return Err("registryLimit");}let old:model::Registry=serde_json::from_slice(bytes).map_err(|_|"invalidRegistry")?;old.validate()?;let mut next=old.clone();for source in &mut next.sources{source.enabled=false;}
+ if next==old{return Ok(bytes.to_vec());}let next=next.next(&old)?;serde_json::to_vec(&next).map_err(|_|"invalidRegistry")
+}

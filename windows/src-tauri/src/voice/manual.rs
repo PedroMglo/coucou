@@ -2,7 +2,7 @@
 //! inference and speech so Bluetooth can return to stereo while answering.
 use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, Ordering}};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::{flow::pill, speech::{self, audio}};
 use super::VoiceView;
@@ -22,17 +22,23 @@ pub fn finish() {
 pub fn toggle(app: &AppHandle) {
     if super::session::active() { return; }
     crate::log::line("voice: manual turn requested");
-    let mut turn = TURN.lock().unwrap();
-    if let Some(current) = turn.as_ref() {
-        current.stop.store(true, Ordering::Relaxed);
-        super::cancel_speech(app);
-        return;
+    {
+        let turn = TURN.lock().unwrap();
+        if let Some(current) = turn.as_ref() {
+            current.stop.store(true, Ordering::Relaxed);
+            super::cancel_speech(app);
+            return;
+        }
     }
+    if crate::settings::optional::check(crate::settings::optional::Operation::Voice).is_err(){return;}
     if !super::requirements_met(app) {
         pill::announce(app, "mic", "#FF6B6B", crate::i18n::t("Choose a local Ollama model or configure Claude, and download the voice model first."), None, 7);
         return;
     }
     if pill::dictating(app) || crate::notes::is_recording(app) { return; }
+    let input=match super::input::Input::capture(app){Ok(input)=>input,Err(error)=>{pill::announce(app,"mic","#FFB84D",error,None,7);return;}};
+    let mut turn=TURN.lock().unwrap();
+    if let Some(current)=turn.as_ref(){current.stop.store(true,Ordering::Release);super::cancel_speech(app);return;}
     // The explicit voice turn temporarily takes the microphone from hotword
     // listening; sync starts it again only if that preference remains enabled.
     if let Some(background) = super::RUNNING.lock().unwrap().take() { background.stop.store(true, Ordering::Relaxed); }
@@ -42,8 +48,8 @@ pub fn toggle(app: &AppHandle) {
     *turn = Some(Turn { stop: stop.clone(), finish: finish.clone() });
     let app = app.clone();
     if std::thread::Builder::new().name("coucou-voice-turn".into()).spawn(move || {
-        run(&app, &stop, &finish);
-        super::show(&app, None);
+        run(&app, &stop, &finish, &input);
+        super::show_for_pet(&app, None, super::dialogue::Pet::from_provider(&input.settings.chat_provider).map(super::dialogue::Pet::pill));
         let mut current = TURN.lock().unwrap();
         if current.as_ref().is_some_and(|t| Arc::ptr_eq(&t.stop, &stop)) { *current = None; }
         drop(current);
@@ -56,12 +62,12 @@ fn wait(stop: &AtomicBool, duration: Duration) {
     while !stop.load(Ordering::Relaxed) && Instant::now() < until { std::thread::sleep(Duration::from_millis(50)); }
 }
 
-fn run(app: &AppHandle, stop: &Arc<AtomicBool>, finish: &AtomicBool) {
+fn run(app: &AppHandle, stop: &Arc<AtomicBool>, finish: &AtomicBool, input: &super::input::Input) {
     let Some(_lease) = super::capture_lease(stop) else { return };
-    let mic = crate::flow::get(app).map(|f| f.store.lock().unwrap().prefs.mic.clone()).unwrap_or_default();
+    if input.check().is_err(){return;}
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(8);
-    let source = audio::Source::Mic(if mic.is_empty() { None } else { Some(mic) });
-    let mut capture = match audio::Capture::start(source, move |data| { let _ = tx.try_send(data.to_vec()); }) {
+    let source = input.source.clone();
+    let mut capture = match audio::Capture::start_stoppable(source, stop.clone(), move |data| { let _ = tx.try_send(data.to_vec()); }) {
         Ok(c) => c,
         Err(_) => {
             pill::announce(app, "mic", "#FF6B6B", crate::i18n::t("Coucou can't hear you: the microphone is not allowed or not available."), None, 7);
@@ -69,7 +75,7 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, finish: &AtomicBool) {
         }
     };
     crate::log::line("voice: microphone open");
-    super::show(app, Some(VoiceView { phase: "listening".into(), heard: String::new(), answer: String::new() }));
+    super::show_for_pet(app, Some(VoiceView { phase: "listening".into(), heard: String::new(), answer: String::new() }), super::dialogue::Pet::from_provider(&input.settings.chat_provider).map(super::dialogue::Pet::pill));
     let mut vad = super::wake::Vad::default();
     let mut meter = audio::BandMeter::default();
     let mut samples = Vec::new();
@@ -99,24 +105,24 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, finish: &AtomicBool) {
         pill::announce(app, "mic", "#FFB84D", crate::i18n::t("No speech detected. Check your microphone."), None, 6);
         return;
     }
-    super::show(app, Some(VoiceView { phase: "thinking".into(), heard: String::new(), answer: String::new() }));
-    let Some(transcript) = super::transcribe(app, &samples, Some(stop)) else { return; };
+    super::show_for_pet(app, Some(VoiceView { phase: "thinking".into(), heard: String::new(), answer: String::new() }), super::dialogue::Pet::from_provider(&input.settings.chat_provider).map(super::dialogue::Pet::pill));
+    let Some(transcript) = input.transcribe(&samples, Some(stop)) else { return; };
     drop(samples);
     let question = transcript.text.trim();
     crate::log::line(format!("voice: recognized {} words", crate::flow::text::word_count(question)));
     if question.is_empty() || stop.load(Ordering::Relaxed) { return; }
-    super::show(app, Some(VoiceView { phase: "thinking".into(), heard: question.into(), answer: String::new() }));
+    super::show_for_pet(app, Some(VoiceView { phase: "thinking".into(), heard: question.into(), answer: String::new() }), super::dialogue::Pet::from_provider(&input.settings.chat_provider).map(super::dialogue::Pet::pill));
     static BRAIN: OnceLock<Mutex<super::brain::Brain>> = OnceLock::new();
-    let provider = app.state::<crate::Shared>().settings.lock().unwrap().chat_provider.clone();
+    let provider = input.settings.chat_provider.clone();
     let mut brain = BRAIN.get_or_init(|| Mutex::new(super::brain::Brain::default())).lock().unwrap();
     brain.forget_if_idle();
-    let reply = brain.respond_as(app, question, &provider, Some(stop.clone()));
+    let reply = brain.respond_as(app, question, &provider, &input, Some(stop.clone()));
     if stop.load(Ordering::Relaxed) { return; }
     crate::log::line(format!("voice: local answer ready={}; elapsed={:?}", reply.is_some(), started.elapsed()));
     let language = reply.as_ref().and_then(|r| r.language.clone());
     let answer = reply.map(|r| r.text).filter(|s| !s.is_empty()).unwrap_or_else(|| crate::i18n::t("Coucou couldn't answer: check the selected voice provider."));
-    super::show(app, Some(VoiceView { phase: "speaking".into(), heard: question.into(), answer: answer.clone() }));
-    super::speak(app, &answer, Some(stop), language.as_deref());
+    super::show_for_pet(app, Some(VoiceView { phase: "speaking".into(), heard: question.into(), answer: answer.clone() }), super::dialogue::Pet::from_provider(&input.settings.chat_provider).map(super::dialogue::Pet::pill));
+    super::speak_prepared(app, &answer, Some(stop), Some(&input.settings.chat_provider), language.as_deref(), input);
     crate::log::line("voice: speech finished");
     wait(stop, Duration::from_secs(5));
 }

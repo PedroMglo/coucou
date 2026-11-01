@@ -2,7 +2,7 @@
 //! A stale general settings snapshot never owns these two fields.
 use crate::settings::Settings;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, io, sync::{Mutex, PoisonError}};
+use std::{collections::HashSet, io, sync::Mutex};
 
 const MAX_DECLARED: usize = 6;
 const MAIN_PETS: &[&str] = &["integration_claude", "agent_cursor", "agent_antigravity", "agent_codex"];
@@ -63,13 +63,8 @@ pub(crate) fn apply_with(
     current: &Mutex<Settings>, request: Request,
     persist: impl FnOnce(&Settings) -> io::Result<()>, publish: impl FnOnce(&Settings),
 ) -> io::Result<Roster> {
-    let mut current = current.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut next = current.clone();
-    change(&mut next, request)?;
-    persist(&next)?;
-    *current = next;
-    publish(&current);
-    Ok(Roster::from(&*current))
+    let committed = crate::settings::update_checked_with(current, |next| change(next, request), persist, publish)?;
+    Ok(Roster::from(&committed))
 }
 
 pub(crate) fn preserve_incoming(current: &Settings, incoming: &mut Settings) {

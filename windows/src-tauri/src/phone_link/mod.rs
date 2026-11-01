@@ -22,6 +22,7 @@ mod hub;
 #[cfg(test)]
 mod interop;
 mod pairing;
+mod preferences;
 mod relay_client;
 mod relay_crypto;
 mod server;
@@ -37,6 +38,20 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use crate::{island, log, pipe, recap, secrets, settings, Shared};
 use hub::{ApprovalIn, Host, Hub, SessionIn};
 use pairing::SecretStore;
+use preferences::Change;
+
+fn commit_preferences(app: &AppHandle, link: &PhoneLink, shared: &Shared, change: Change) -> Result<settings::Settings, String> {
+    preferences::commit_with(&shared.settings, change, settings::save, |fresh| {
+        let _ = app.emit("settings-changed", fresh);
+    }).map_err(|err| {
+        // In particular, a failed restrictive edit must not leave existing
+        // phones using the previously granted feature. This stop is separate
+        // from persisted preference state and never reconnects automatically.
+        link.stop();
+        format!("{} A ligação do telefone foi parada; o estado guardado continua por confirmar.",
+            settings::save_error("Não foi possível confirmar as preferências do telefone", &err))
+    })
+}
 
 /// The port the pairing link offers; another is taken if it is busy.
 pub const DEFAULT_PORT: u16 = 47821;
@@ -160,6 +175,7 @@ impl PhoneLink {
         if !on {
             return;
         }
+        if crate::settings::optional::check(crate::settings::optional::Operation::Mobile).is_err() { return; }
         let Ok(target) = relay_client::Target::parse(&url) else {
             log::line("phone link: relay address not valid, not connecting");
             return;
@@ -168,6 +184,7 @@ impl PhoneLink {
             log::line("phone link: relay needs an access key, not connecting");
             return;
         };
+        if crate::settings::optional::check(crate::settings::optional::Operation::Mobile).is_err() { return; }
         let handle = tauri::async_runtime::block_on(async move { relay_client::start(shared, target, creds) });
         log::line("phone link: connecting to the relay");
         *self.relay.lock().unwrap() = Some(handle);
@@ -176,6 +193,9 @@ impl PhoneLink {
     /// Starts listening. Fails without side effects if the keystore is missing:
     /// nothing is ever kept on disk instead.
     pub fn start(&self) -> Result<(), String> {
+        crate::settings::optional::check(crate::settings::optional::Operation::Mobile).inspect_err(|error| {
+            *self.error.lock().unwrap() = Some(error.clone());
+        })?;
         let mut running = self.running.lock().unwrap();
         if running.is_some() {
             return Ok(());
@@ -185,6 +205,11 @@ impl PhoneLink {
             Ok(r) => {
                 log::line(format!("phone link: listening on port {}", r.port));
                 // So the phone can find this computer again after a Wi-Fi change. The link works without it.
+                if let Err(error) = crate::settings::optional::check(crate::settings::optional::Operation::Mobile) {
+                    r.handle.stop();
+                    *self.error.lock().unwrap() = Some(error.clone());
+                    return Err(error);
+                }
                 match self.advertiser.start(&pairing::computer_name(), r.port, &r.identity.fingerprint) {
                     Ok(()) => log::line("phone link: announced on the local network"),
                     Err(e) => log::line(format!("phone link: not announced on the local network: {e}")),
@@ -207,6 +232,8 @@ impl PhoneLink {
         let identity = pairing::load_or_create_identity(&*self.store)
             .map_err(|e| format!("no secure storage for the certificate: {e}"))?;
         let token = pairing::token(&*self.store).map_err(|e| format!("no secure storage for the pairing code: {e}"))?;
+        // Keystore interaction can wait; recheck before opening a listener.
+        crate::settings::optional::check(crate::settings::optional::Operation::Mobile)?;
         let std_listener = StdListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, DEFAULT_PORT)))
             .or_else(|_| StdListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))))
             .map_err(|e| format!("cannot listen: {e}"))?;
@@ -303,15 +330,9 @@ pub fn phone_link_set_enabled(
     } else {
         link.stop();
     }
-    let updated = {
-        let mut current = shared.settings.lock().unwrap();
-        current.phone_link = enabled;
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        current.clone()
-    };
-    let _ = app.emit("settings-changed", updated);
+    commit_preferences(&app, &link, &shared, Change::Link(enabled)).map_err(|err| {
+        format!("{err} O pedido ao serviço do telefone já foi efetuado; consulta o estado antes de repetir. Uma falha de preferências não desfaz esse pedido.")
+    })?;
     Ok(status_of(&link, enabled))
 }
 
@@ -426,18 +447,9 @@ pub fn phone_relay_set(
             return Err("Enter the relay's access key first".into());
         }
     }
-    let updated = {
-        let mut current = shared.settings.lock().unwrap();
-        current.phone_relay = enabled;
-        current.phone_relay_url = clean;
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        current.clone()
-    };
+    commit_preferences(&app, &link, &shared, Change::Relay { enabled, url: clean })?;
     link.sync_relay();
     log::line(format!("phone link: relay {}", if enabled { "on" } else { "off" }));
-    let _ = app.emit("settings-changed", updated);
     Ok(relay_status_of(&link, &shared))
 }
 
@@ -454,15 +466,12 @@ pub fn phone_relay_set_access(
     only_settings(&window)?;
     relay_client::set_access_key(&*link.store, &access)?;
     if relay_client::access_key(&*link.store).is_none() {
-        let updated = {
-            let mut current = shared.settings.lock().unwrap();
-            current.phone_relay = false;
-            if let Err(err) = settings::save(&current) {
-                log::line(format!("could not save settings: {err}"));
-            }
-            current.clone()
-        };
-        let _ = app.emit("settings-changed", updated);
+        // Key removal has already happened. Stop the obsolete relay even if
+        // saving its preference fails; do not send keys/reconnect on that error.
+        if let Some(old) = link.relay.lock().unwrap().take() { old.stop(); }
+        commit_preferences(&app, &link, &shared, Change::RelayOff).map_err(|err| {
+            format!("{err} A remoção da chave já foi pedida e o relay foi parado; a falha de preferências não repõe a chave.")
+        })?;
     }
     // Phones paired for the relay follow the new key by themselves (LAN or relay); others re-scan.
     if let Some(access) = relay_client::access_key(&*link.store) {
@@ -497,17 +506,9 @@ pub fn phone_details_set_enabled(
     enabled: bool,
 ) -> Result<DetailsStatus, String> {
     only_settings(&window)?;
-    let updated = {
-        let mut current = shared.settings.lock().unwrap();
-        current.phone_details = enabled;
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        current.clone()
-    };
+    commit_preferences(&app, &link, &shared, Change::Details(enabled))?;
     link.hub.kick_all("closed", "details setting changed");
     log::line(format!("phone link: details {}", if enabled { "on" } else { "off" }));
-    let _ = app.emit("settings-changed", updated);
     Ok(DetailsStatus { enabled })
 }
 
@@ -535,17 +536,9 @@ pub fn phone_answers_set_enabled(
     enabled: bool,
 ) -> Result<AnswersStatus, String> {
     only_settings(&window)?;
-    let updated = {
-        let mut current = shared.settings.lock().unwrap();
-        current.phone_answers = enabled;
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        current.clone()
-    };
+    commit_preferences(&app, &link, &shared, Change::Answers(enabled))?;
     link.hub.kick_all("closed", "answers setting changed");
     log::line(format!("phone link: answering questions {}", if enabled { "on" } else { "off" }));
-    let _ = app.emit("settings-changed", updated);
     Ok(AnswersStatus { enabled })
 }
 
@@ -573,17 +566,9 @@ pub fn phone_diffs_set_enabled(
     enabled: bool,
 ) -> Result<DiffsStatus, String> {
     only_settings(&window)?;
-    let updated = {
-        let mut current = shared.settings.lock().unwrap();
-        current.phone_diffs = enabled;
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        current.clone()
-    };
+    commit_preferences(&app, &link, &shared, Change::Diffs(enabled))?;
     link.hub.kick_all("closed", "diffs setting changed");
     log::line(format!("phone link: file changes on the phone {}", if enabled { "on" } else { "off" }));
-    let _ = app.emit("settings-changed", updated);
     Ok(DiffsStatus { enabled })
 }
 
@@ -611,17 +596,9 @@ pub fn phone_usage_set_enabled(
     enabled: bool,
 ) -> Result<UsageStatus, String> {
     only_settings(&window)?;
-    let updated = {
-        let mut current = shared.settings.lock().unwrap();
-        current.phone_usage = enabled;
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        current.clone()
-    };
+    commit_preferences(&app, &link, &shared, Change::Usage(enabled))?;
     link.hub.kick_all("closed", "usage setting changed");
     log::line(format!("phone link: plan usage on the phone {}", if enabled { "on" } else { "off" }));
-    let _ = app.emit("settings-changed", updated);
     Ok(UsageStatus { enabled })
 }
 
@@ -652,17 +629,9 @@ pub fn phone_services_set(
 ) -> Result<ServicesStatus, String> {
     only_settings(&window)?;
     let allowed: Vec<String> = hub::SERVICE_IDS.iter().filter(|id| services.iter().any(|s| s == *id)).map(|id| id.to_string()).collect();
-    let updated = {
-        let mut current = shared.settings.lock().unwrap();
-        current.phone_services = allowed.clone();
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        current.clone()
-    };
+    commit_preferences(&app, &link, &shared, Change::Services(allowed.clone()))?;
     link.hub.kick_all("closed", "services setting changed");
     log::line(format!("phone link: {} service(s) on the phone", allowed.len()));
-    let _ = app.emit("settings-changed", updated);
     Ok(ServicesStatus { services: allowed })
 }
 
@@ -760,21 +729,11 @@ pub fn phone_chat_set_enabled(
     enabled: bool,
 ) -> Result<ChatStatus, String> {
     only_settings(&window)?;
-    let (updated, status) = {
-        let mut current = shared.settings.lock().unwrap();
-        current.phone_chat = enabled;
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        let status = ChatStatus { enabled, models: chat_backend::clean_models(&current.phone_chat_models) };
-        (current.clone(), status)
-    };
-    if !enabled {
-        link.chat.shutdown();
-    }
+    if !enabled { link.chat.shutdown(); }
+    let updated = commit_preferences(&app, &link, &shared, Change::Chat(enabled))?;
+    let status = ChatStatus { enabled: updated.phone_chat, models: chat_backend::clean_models(&updated.phone_chat_models) };
     link.hub.kick_all("closed", "chat setting changed");
     log::line(format!("phone link: chat {}", if enabled { "on" } else { "off" }));
-    let _ = app.emit("settings-changed", updated);
     Ok(status)
 }
 
@@ -783,21 +742,14 @@ pub fn phone_chat_set_enabled(
 pub fn phone_chat_set_models(
     app: AppHandle,
     window: WebviewWindow,
+    link: State<PhoneLink>,
     shared: State<Shared>,
     models: Vec<String>,
 ) -> Result<ChatStatus, String> {
     only_settings(&window)?;
     let cleaned = chat_backend::clean_models(&models);
-    let (updated, status) = {
-        let mut current = shared.settings.lock().unwrap();
-        current.phone_chat_models = cleaned.clone();
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        (current.clone(), ChatStatus { enabled: current.phone_chat, models: cleaned })
-    };
-    let _ = app.emit("settings-changed", updated);
-    Ok(status)
+    let updated = commit_preferences(&app, &link, &shared, Change::ChatModels(cleaned))?;
+    Ok(ChatStatus { enabled: updated.phone_chat, models: chat_backend::clean_models(&updated.phone_chat_models) })
 }
 
 /// The question Claude Code is waiting on (None: none), for phones that may answer it.

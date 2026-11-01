@@ -8,6 +8,7 @@ export class PetSettings {
  readonly el=element('section');private body=element('div');private error=element('p');private path=element('p');
  private pet=element('select');private name=element('input');private aliases=element('input');private mode=element('select');
  private models=[element('input'),element('input')];private efforts=[element('select'),element('select')];private execution=element('select');private executionGroup=element('fieldset');
+ private engine=element('input');private engineGroup=element('fieldset');
  private choices=element('datalist');private profiles=element('div');private save=element('button','Guardar');private catalog=element('button','Atualizar modelos da conta');
  private reload=element('button','Recarregar ficheiro');
  private discard=element('div');private use=element('button','Usar este perfil no chat');private active=true;private intent=0;private requested='';private applying=false;
@@ -26,6 +27,7 @@ export class PetSettings {
   for(const [value,label]of [['auto','Automático'],['fast','Rápido'],['reasoning','Raciocínio elevado']]){const o=element('option',label);o.value=value;this.mode.append(o);}
   this.mode.setAttribute('aria-label','Modo predefinido do pet');
   const identity=element('fieldset');identity.append(element('legend','Identidade'),field('Pet',this.pet),field('Nome apresentado',this.name),field('Nomes de voz, separados por vírgulas',this.aliases));this.body.append(identity);
+  this.engine.type='checkbox';this.engine.setAttribute('aria-label','Associar este pet ao LM Studio');this.engineGroup.append(element('legend','Motor deste pet'),field('Usar o servidor LM Studio configurado',this.engine),element('p','A associação é guardada apenas ao escolher Guardar. O servidor e o modelo precisam de confirmação nativa; guardar não inicia inferência nem tarefas.'));this.body.append(this.engineGroup);this.engine.onchange=()=>{this.keep();this.choose(this.selected);this.dirty();};
   this.profiles.append(element('h2','Como responde'),field('Voz e pedidos escritos',this.mode));
   this.choices.id='pet-profile-models';
   for(let i=0;i<2;i++){
@@ -88,6 +90,7 @@ export class PetSettings {
  }
  private keep(){
   const p=this.document?.config.pets[this.selected];if(!p)return;
+  if(this.selected==='ai_lmstudio')p.provider=this.engine.checked?'lmstudio':'';
   p.name=this.name.value.trim();p.aliases=this.aliases.value.split(',').map(x=>x.trim()).filter(Boolean);p.mode=this.mode.value as PetPreference['mode'];
   p.fast={model:this.models[0].value.trim(),effort:this.efforts[0].value};p.reasoning={model:this.models[1].value.trim(),effort:this.efforts[1].value};
   p.permissions=Object.fromEntries([...this.grants].map(([key,input])=>[key,input.checked])) as unknown as PetPermissions;
@@ -95,6 +98,7 @@ export class PetSettings {
  }
  private choose(id:string){
   const p=this.document?.config.pets[id];if(!p)return;this.intent++;this.closeDiscard();this.status.textContent=this.el.dataset.dirty==='true'?'Alterações por guardar':'';this.error.hidden=true;this.requested=id;this.selected=id;this.pet.value=id;this.name.value=p.name;this.aliases.value=p.aliases.join(', ');this.mode.value=p.mode;
+  this.engineGroup.hidden=id!=='ai_lmstudio';this.engine.checked=p.provider==='lmstudio';
   this.models[0].value=p.fast.model;this.models[1].value=p.reasoning.model;this.efforts[0].value=p.fast.effort;this.efforts[1].value=p.reasoning.effort;this.executionGroup.hidden=p.provider!=='ollama';this.execution.value=p.localExecution?.mode??'disabled';
   for(const [key,input]of this.grants)input.checked=p.permissions?.[key]??false;
   const presentation=petBlueprint(id)?.presentation;

@@ -9,7 +9,7 @@ impl Case{
   let revision=policy_revision(&config,&settings,&goal).unwrap();let observation=|g:&Record,now|Evidence::observe(g,&descriptor(g,now),revision.clone(),now,false,false).unwrap();
   let approved=Review::prepare(&goal,observation(&goal,100_002),budget(),"queue".into(),nonce().unwrap(),100_002).unwrap().approve(&goal,observation(&goal,100_003),100_003).unwrap();let cert=a.certify(&approved,&goal,100_004).unwrap();let queued=f.store().enqueue_certified(&cert,100_005).unwrap().record;
   let controller=Controller::new().unwrap();let main=crate::chat::Chat::persistent(f.path.join("live-main.json"));let pending=controller.prepare(&queued,&root(&f),&f.path.join("contexts"),&main,&observation(&queued,100_006),"claim".into(),100_006,Arc::new(|_,_,_|Validity::Current)).unwrap();let(receipt,owned)=pending.claim(&f.store(),&a,&observation(&queued,100_007),100_007).unwrap();let owned=owned.unwrap();let lease=owned.lease().clone();let goal=receipt.record;
-  let capture=NativeProjection{snapshot:Snapshot{schema_version:1,revision:"test-capture".into(),observed_at:100_008,configuration_available:true,pets:vec![descriptor(&goal,100_008)]},configuration:Some(config),settings};
+  let capture=NativeProjection{snapshot:Snapshot{schema_version:1,revision:"test-capture".into(),observed_at:100_008,configuration_available:true,pets:vec![descriptor(&goal,100_008)]},configuration:Some(config),settings,preferences_ready:true};
   Self{_f:f,_pending:pending,_owned:owned,goal,lease,capture}
  }
  fn valid(&self,mode:Validation,now:u64)->Validity{evaluate(&self.goal,&self.lease,&self.capture,mode,now)}
@@ -25,3 +25,11 @@ impl Case{
 #[test]fn stopped_goal_or_changed_lease_context_intent_is_not_a_current_operation(){for change in ["stop","lease","context","intent"]{let mut case=Case::new("ollama");match change{"stop"=>case.goal.state=State::Stopping,"lease"=>case.goal.admissions[0].lease.as_mut().unwrap().id=nonce().unwrap(),"context"=>case.goal.execution_context.as_mut().unwrap().conversation_id="different".into(),_=>case.goal.spec.intent="replacement intent".into()};assert_eq!(case.valid(Validation::InFlightPolicy,100_009),Validity::Changed);}}
 #[test]fn deadline_and_backwards_observation_are_not_ignored_with_stale_readiness(){let case=Case::new("ollama");assert_eq!(case.valid(Validation::InFlightPolicy,200_000),Validity::Changed);assert_eq!(case.valid(Validation::InFlightPolicy,100_001),Validity::Changed);}
 #[test]fn unavailable_projection_cannot_authorize_a_current_operation(){let mut case=Case::new("ollama");case.descriptor().configuration_available=false;assert_eq!(case.valid(Validation::InFlightPolicy,100_009),Validity::Unknown);}
+
+#[path="tool_readiness_tests.rs"]mod tool_readiness_tests;
+
+#[test]fn settings_effect_unconfirmed_preferences_cannot_authorize_any_goal_phase(){
+ let mut case=Case::new("ollama");let original=serde_json::to_value(&case.goal).unwrap();case.capture.preferences_ready=false;
+ for mode in [Validation::FreshEffect,Validation::InFlightPolicy,Validation::PendingDecision,Validation::Commit(&case.goal)]{assert_eq!(case.valid(mode,100_009),Validity::Unknown);}
+ assert_eq!(serde_json::to_value(&case.goal).unwrap(),original);
+}

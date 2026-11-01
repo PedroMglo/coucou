@@ -56,6 +56,17 @@ impl Claim{
     /// Must run after the original single-instance plugin owns its name, before
     /// constructing Settings/Chat/Recap or doing any migration/profile writes.
     /// This constructor observes ownership; it never claims/replaces a bus name.
+    /// Offline native maintenance uses the SAME single-instance name/lock.
+    /// Never queue, replace or forward maintenance into a running UI process.
+    pub(super)fn maintenance(address:&str,identifier:&str,layout:&Layout)->Result<Self>{
+        local_address(address)?;let name=name(identifier)?;
+        let connection=Connection::new_address(address).map_err(|_|Error::Unavailable)?;
+        if connection.request_name(name.as_str(),false,false,true).map_err(|_|Error::Unavailable)?!=dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply::PrimaryOwner{return Err(Error::Busy);}
+        let mut owner=Owner{connection,name,unique:String::new(),pid:std::process::id(),uid:unsafe{libc::geteuid()}};owner.unique=owner.observe()?;owner.current()?;
+        // A maintenance read never creates missing application roots/defaults.
+        let _=Dir::parent(&layout.legacy_config)?;let lock=Lock::acquire(&layout.legacy_config)?;
+        let claim=Self{owner,lock,root:layout.legacy_config.clone(),invalid:AtomicBool::new(false)};claim.current()?;Ok(claim)
+    }
     pub(crate) fn acquire(app:&tauri::AppHandle,layout:&Layout)->Result<Self>{
         let address=std::env::var("DBUS_SESSION_BUS_ADDRESS").map_err(|_|Error::Unavailable)?;
         Self::at(&address,&app.config().identifier,&layout.legacy_config)
@@ -92,5 +103,6 @@ fn ensure_app_root(path:&Path)->Result<()>{
     for component in missing.into_iter().rev(){directory=directory.mkdir(&component)?;}
     Dir::parent(path)?.check()
 }
+#[cfg(test)]pub(crate)fn fixture_native_claim(address:&str,identifier:&str,root:&Path)->Result<Claim>{Claim::at(address,identifier,root)}
 
 #[cfg(test)]#[path="startup_tests.rs"]pub(super)mod tests;

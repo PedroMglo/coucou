@@ -199,12 +199,16 @@ impl Client {
     async fn write(&self,message:Value)->Result<(),Error>{
         self.write_guarded(message,None).await
     }
-    async fn write_guarded(&self,message:Value,cancel:Option<Arc<AtomicBool>>)->Result<(),Error>{self.write_native_guarded(message,cancel,None).await}
-    async fn write_native_guarded(&self,message:Value,cancel:Option<Arc<AtomicBool>>,native:Option<Ticket>)->Result<(),Error>{
+    async fn write_guarded(&self,message:Value,cancel:Option<Arc<AtomicBool>>)->Result<(),Error>{self.write_native_guarded(message,cancel,None,crate::pet_native_write::Use::Decision).await}
+    async fn write_native_guarded(&self,message:Value,cancel:Option<Arc<AtomicBool>>,native:Option<Ticket>,use_:crate::pet_native_write::Use)->Result<(),Error>{
         if !self.connected(){return Err(Error::local("A ligação ao daemon Codex terminou. Atualiza a sessão; o pedido não será reenviado."));}
         if message.to_string().len()>MAX_REQUEST{return Err(Error::local("A mensagem excede o limite de envio ao Codex."));}
         let(tx,rx)=oneshot::channel();let caller=native_write::Caller(Arc::new(AtomicBool::new(true)));
-        let scope=native_write::Scope::new(crate::pet_native_write::Guard{deadline:Instant::now()+IO_TIMEOUT,cancel,caller:Some(caller.0.clone()),source:native.map(|t|(t,crate::pet_native_write::Use::Decision))});
+        // Passive native history/Stop remain available. Thread resume/start,
+        // account refresh, model/data delivery and policy mutations are effects.
+        let control=matches!(message["method"].as_str(),Some("initialize"|"initialized"|"thread/read"|"thread/list"|"thread/loaded/list"|"thread/turns/list"|"turn/interrupt"))||matches!(use_,crate::pet_native_write::Use::Refusal|crate::pet_native_write::Use::Withdrawal);
+        let dispatch=if control{crate::pet_native_write::Dispatch::Control}else{crate::pet_native_write::Dispatch::NewEffect};
+        let scope=native_write::Scope::new(crate::pet_native_write::Guard{dispatch,deadline:Instant::now()+IO_TIMEOUT,cancel,caller:Some(caller.0.clone()),source:native.map(|t|(t,use_))});
         timeout(IO_TIMEOUT,self.writer.send(Packet{message,written:tx,scope})).await.map_err(|_|Error::local("O daemon Codex não recebeu o pedido dentro do prazo. Confirma o histórico antes de repetir."))?.map_err(|_|Error::local("A ligação ao Codex terminou antes do envio."))?;
         timeout(IO_TIMEOUT,rx).await.map_err(|_|Error::local("Não foi possível confirmar o envio ao Codex. Confirma o histórico antes de repetir."))?.map_err(|_|Error::local("O envio ao Codex foi interrompido. Confirma o histórico antes de repetir."))?.map_err(|_|Error::local("A ligação terminou durante o envio ao Codex. Confirma o histórico antes de repetir."))
     }
@@ -235,7 +239,8 @@ impl Client {
     pub(crate)async fn respond_native(&self,ticket:&Ticket,result:Value,cancel:Arc<AtomicBool>)->Result<(),Error>{
         self.verified_endpoint()?;
         if !self.sources.owns(ticket){return Err(Error::local("O pedido nativo já não está pendente nesta ligação."));}
-        let result=self.write_native_guarded(json!({"id":ticket.identity().request_id,"result":result}),Some(cancel),Some(ticket.clone())).await;
+        let use_=if crate::pet_native_choices::codex_fixed_refusal(&ticket.identity().method,&result){crate::pet_native_write::Use::Refusal}else{crate::pet_native_write::Use::Decision};
+        let result=self.write_native_guarded(json!({"id":ticket.identity().request_id,"result":result}),Some(cancel),Some(ticket.clone()),use_).await;
         self.sources.finish(ticket);result
     }
     /// Called only after a human broker decision for the exact native request.

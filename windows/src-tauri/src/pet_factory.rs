@@ -50,7 +50,8 @@ fn merge(base:&mut Value,overlay:&Value)->Result<(),String>{
  }
  #[test]fn retirement_and_missing_model_routes_never_grant_new_execution(){
   let github=blueprint("integration_github").unwrap();assert!(github.retired);assert!(!github.routing.execute);assert_eq!(for_provider("integration_github"),Some("integration_github"));
-  for id in ["ai_openai","ai_anthropic","ai_google","ai_lmstudio"]{let p=blueprint(id).unwrap();assert_eq!(p.runtime.kind,RuntimeKind::Llm);assert!(p.runtime.adapter.is_none());assert!(!p.routing.execute);assert!(p.history_owner());}
+  for id in ["ai_openai","ai_anthropic","ai_google"]{let p=blueprint(id).unwrap();assert_eq!(p.runtime.kind,RuntimeKind::Llm);assert!(p.runtime.adapter.is_none());assert!(!p.routing.execute);assert!(p.history_owner());}
+  let lm=blueprint("ai_lmstudio").unwrap();assert_eq!(lm.runtime.adapter,Some(Adapter::Lmstudio));assert_eq!(lm.configured_adapter(""),None);assert_eq!(lm.configured_adapter("lmstudio"),Some(Adapter::Lmstudio));assert!(lm.routing.voice.is_none()&&!lm.routing.execute);
   for id in ["agent_gemini","integration_claude"]{let p=blueprint(id).unwrap();assert_eq!(p.runtime.kind,RuntimeKind::Observer);assert!(p.runtime.adapter.is_none());assert!(p.routing.voice.is_none());assert!(p.history_owner());}
  }
  #[test]fn native_service_and_optional_assistant_are_declared_without_changing_defaults(){

@@ -35,29 +35,29 @@ pub struct HoldKey {
 
 pub fn listen(tx: Sender<(KeyEvent, Instant)>) -> Option<HoldKey> {
     let handle = portal::start(move |event| match event {
-        portal::Event::Activated(id) if id == SHORTCUT_ID => {
+        portal::Event::Activated { gen: 1, id } if id == SHORTCUT_ID => {
             crate::log::line("flow: shortcut pressed");
             let _ = tx.send((KeyEvent::Down, Instant::now()));
         }
-        portal::Event::Deactivated(id) if id == SHORTCUT_ID => {
+        portal::Event::Deactivated { gen: 1, id } if id == SHORTCUT_ID => {
             crate::log::line("flow: shortcut released");
             let _ = tx.send((KeyEvent::Up, Instant::now()));
         }
-        portal::Event::Activated(id) if id == "flowRelease" => {
+        portal::Event::Activated { gen: 1, id } if id == "flowRelease" => {
             crate::log::line("flow: shortcut release recovered");
             let _ = tx.send((KeyEvent::Up, Instant::now()));
         }
-        portal::Event::Activated(id) if id == "voiceTalk" => {
+        portal::Event::Activated { gen: 1, id } if id == "voiceTalk" => {
             let _ = tx.send((KeyEvent::Voice, Instant::now()));
         }
-        portal::Event::Activated(id) if id == "flowCancel" => {
+        portal::Event::Activated { gen: 1, id } if id == "flowCancel" => {
             let _ = tx.send((KeyEvent::Cancel, Instant::now()));
         }
-        portal::Event::Activated(id) if id == "flowFinish" => {
+        portal::Event::Activated { gen: 1, id } if id == "flowFinish" => {
             let _ = tx.send((KeyEvent::Finish, Instant::now()));
         }
-        portal::Event::Bound { .. } => crate::log::line("flow: dictation shortcut held by the desktop"),
-        portal::Event::Failed { reason, .. } | portal::Event::Unavailable(reason) => {
+        portal::Event::Bound { gen: 1, .. } => crate::log::line("flow: dictation shortcut held by the desktop"),
+        portal::Event::Failed { gen: 1, reason } | portal::Event::Unavailable(reason) => {
             let _ = tx.send((KeyEvent::Cancel, Instant::now()));
             crate::log::line(format!("flow: no dictation shortcut from the desktop ({reason})"));
         }

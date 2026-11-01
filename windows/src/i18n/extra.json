@@ -4538,17 +4538,6 @@
    "ru": "Рабочая папка",
    "id": "Folder kerja"
   },
-  "Run CLI agents without approval prompts": {
-   "zh-Hans": "运行 CLI 代理时不请求批准",
-   "hi": "अनुमोदन पूछे बिना CLI एजेंट चलाएँ",
-   "es": "Ejecutar agentes CLI sin pedir aprobación",
-   "ar": "تشغيل وكلاء CLI دون طلب الموافقة",
-   "fr": "Exécuter les agents CLI sans demander d’autorisation",
-   "bn": "অনুমতি না চেয়ে CLI এজেন্ট চালান",
-   "pt-BR": "Executar agentes CLI sem pedir aprovação",
-   "ru": "Запускать CLI-агентов без запросов разрешения",
-   "id": "Jalankan agen CLI tanpa meminta persetujuan"
-  },
   "The CLI returned no available models.": {
    "zh-Hans": "CLI 未返回可用模型。",
    "hi": "CLI ने कोई उपलब्ध मॉडल नहीं लौटाया।",
@@ -4570,17 +4559,6 @@
    "pt-BR": "{provider} precisa da tua resposta",
    "ru": "{provider} ждёт вашего ответа",
    "id": "{provider} memerlukan jawaban Anda"
-  },
-  "Enabled: commands and file changes run with your user account. Disabled: use each CLI's permissions; Antigravity actions that need a prompt must be approved in its terminal.": {
-   "zh-Hans": "启用后，以你的账户执行命令和修改文件。禁用时遵循各 CLI 的权限；Antigravity 需要确认的操作必须在其终端批准。",
-   "hi": "चालू होने पर कमांड और फ़ाइल बदलाव आपके खाते से चलते हैं। बंद होने पर हर CLI की अनुमतियाँ लागू होती हैं; Antigravity में पुष्टि वाले काम उसके टर्मिनल में स्वीकृत करने होंगे।",
-   "es": "Activado: ejecuta comandos y cambios con tu cuenta. Desactivado: usa los permisos de cada CLI; las aprobaciones de Antigravity se realizan en su terminal.",
-   "ar": "عند التفعيل، تُنفذ الأوامر وتعديلات الملفات بحسابك. عند التعطيل، تُحترم صلاحيات كل CLI؛ يجب الموافقة على طلبات Antigravity في طرفيته.",
-   "fr": "Activé : les commandes et modifications utilisent votre compte. Désactivé : les permissions de chaque CLI s’appliquent ; les demandes d’Antigravity doivent être approuvées dans son terminal.",
-   "bn": "চালু থাকলে আপনার অ্যাকাউন্টে কমান্ড ও ফাইল পরিবর্তন চলে। বন্ধ থাকলে প্রতিটি CLI-এর অনুমতি প্রযোজ্য; Antigravity-এর অনুমতির অনুরোধ তার টার্মিনালে অনুমোদন করতে হবে।",
-   "pt-BR": "Ativado: executa comandos e alterações de ficheiros com a tua conta. Desativado: respeita as permissões de cada CLI; os pedidos de aprovação do Antigravity devem ser tratados no respetivo terminal.",
-   "ru": "Включено: команды и изменения файлов выполняются от вашего имени. Выключено: действуют разрешения CLI; запросы Antigravity нужно одобрять в его терминале.",
-   "id": "Aktif: perintah dan perubahan berkas dijalankan dengan akun Anda. Nonaktif: gunakan izin tiap CLI; permintaan persetujuan Antigravity harus disetujui di terminalnya."
   },
   "Review": {
    "fr": "Voir",
@@ -4780,16 +4758,16 @@
    "ar": "صوت محلي (pt-PT)",
    "id": "Suara lokal (pt-PT)"
   },
-  "Local voice unavailable. Check the pt-PT model folder. Using the system voice.": {
-   "pt-BR": "Voz local indisponível. Verifica a pasta do modelo pt-PT. A usar a voz do sistema.",
-   "fr": "Voix locale indisponible. Vérifiez le dossier du modèle pt-PT. La voix système est utilisée.",
-   "es": "Voz local no disponible. Comprueba la carpeta del modelo pt-PT. Se usa la voz del sistema.",
-   "ru": "Локальный голос недоступен. Проверьте папку модели pt-PT. Используется системный голос.",
-   "zh-Hans": "本地语音不可用。请检查 pt-PT 模型文件夹。已使用系统声音。",
-   "hi": "स्थानीय आवाज़ उपलब्ध नहीं है। pt-PT मॉडल फ़ोल्डर जाँचें। सिस्टम की आवाज़ उपयोग हो रही है।",
-   "bn": "স্থানীয় কণ্ঠ উপলব্ধ নয়। pt-PT মডেল ফোল্ডার পরীক্ষা করুন। সিস্টেম কণ্ঠ ব্যবহার হচ্ছে।",
-   "ar": "الصوت المحلي غير متاح. تحقّق من مجلد نموذج pt-PT. يُستخدم صوت النظام.",
-   "id": "Suara lokal tidak tersedia. Periksa folder model pt-PT. Menggunakan suara sistem."
+  "Local voice unavailable. Check the pt-PT model folder. The reply remains as text.": {
+   "pt-BR": "Voz local indisponível. Verifica a pasta do modelo pt-PT. A resposta continua em texto.",
+   "fr": "Voix locale indisponible. Vérifiez le dossier du modèle pt-PT. La réponse reste disponible sous forme de texte.",
+   "es": "Voz local no disponible. Comprueba la carpeta del modelo pt-PT. La respuesta sigue disponible como texto.",
+   "ru": "Локальный голос недоступен. Проверьте папку модели pt-PT. Ответ остаётся доступным в текстовом виде.",
+   "zh-Hans": "本地语音不可用。请检查 pt-PT 模型文件夹。回复仍以文本形式显示。",
+   "hi": "स्थानीय आवाज़ उपलब्ध नहीं है। pt-PT मॉडल फ़ोल्डर जाँचें। उत्तर पाठ के रूप में उपलब्ध रहेगा।",
+   "bn": "স্থানীয় কণ্ঠ উপলব্ধ নয়। pt-PT মডেল ফোল্ডার পরীক্ষা করুন। উত্তর পাঠ্য হিসেবে থাকবে।",
+   "ar": "الصوت المحلي غير متاح. تحقّق من مجلد نموذج pt-PT. تبقى الإجابة متاحة كنص.",
+   "id": "Suara lokal tidak tersedia. Periksa folder model pt-PT. Jawaban tetap tersedia sebagai teks."
   },
   "Say a pet name to choose who answers.": {
    "pt-BR": "Diz o nome do pet que deve responder.",
@@ -5120,6 +5098,28 @@
    "ru": "Обновить настройки",
    "id": "Segarkan preferensi",
    "pt-BR": "Atualizar preferências"
+  },
+  "Full access in new Codex/Gravity conversations": {
+   "zh-Hans": "新建 Codex/Gravity 对话的完全访问权限",
+   "hi": "नई Codex/Gravity बातचीत में पूर्ण पहुँच",
+   "es": "Acceso completo en conversaciones nuevas de Codex/Gravity",
+   "ar": "وصول كامل في محادثات Codex/Gravity الجديدة",
+   "fr": "Accès complet pour les nouvelles conversations Codex/Gravity",
+   "bn": "নতুন Codex/Gravity কথোপকথনে সম্পূর্ণ প্রবেশাধিকার",
+   "pt-BR": "Acesso total em novas conversas Codex/Gravity",
+   "ru": "Полный доступ в новых беседах Codex/Gravity",
+   "id": "Akses penuh dalam percakapan Codex/Gravity baru"
+  },
+  "Full access runs commands and file changes with your user account. It applies only to new Codex/Gravity conversations. Existing sessions keep their native policy; choose a new conversation after changing this option or the working folder. Copilot keeps its native permissions.": {
+   "zh-Hans": "完全访问权限允许使用你的用户账户运行命令和修改文件，仅适用于新建的 Codex/Gravity 对话。现有会话保留其原生策略；更改此选项或工作文件夹后，请新建对话。Copilot 保留其原生权限。",
+   "hi": "पूर्ण पहुँच आपके उपयोगकर्ता खाते से कमांड चलाती और फ़ाइलें बदलती है। यह केवल नई Codex/Gravity बातचीत पर लागू होती है। मौजूदा सत्र अपनी मूल नीति रखते हैं; यह विकल्प या कार्य फ़ोल्डर बदलने के बाद नई बातचीत चुनें। Copilot अपनी मूल अनुमतियाँ रखता है।",
+   "es": "El acceso completo ejecuta comandos y modifica archivos con tu cuenta de usuario. Solo se aplica a conversaciones nuevas de Codex/Gravity. Las sesiones existentes conservan su política nativa; inicia una conversación nueva tras cambiar esta opción o la carpeta de trabajo. Copilot conserva sus permisos nativos.",
+   "ar": "يتيح الوصول الكامل تشغيل الأوامر وتعديل الملفات بحساب المستخدم الخاص بك. ينطبق فقط على محادثات Codex/Gravity الجديدة. تحتفظ الجلسات الحالية بسياستها الأصلية؛ ابدأ محادثة جديدة بعد تغيير هذا الخيار أو مجلد العمل. يحتفظ Copilot بأذوناته الأصلية.",
+   "fr": "L’accès complet exécute les commandes et modifie les fichiers avec votre compte utilisateur. Il ne s’applique qu’aux nouvelles conversations Codex/Gravity. Les sessions existantes conservent leur politique native ; démarrez une nouvelle conversation après avoir changé cette option ou le dossier de travail. Copilot conserve ses autorisations natives.",
+   "bn": "সম্পূর্ণ প্রবেশাধিকার আপনার ব্যবহারকারী অ্যাকাউন্ট দিয়ে কমান্ড চালায় এবং ফাইল পরিবর্তন করে। এটি শুধু নতুন Codex/Gravity কথোপকথনে প্রযোজ্য। বিদ্যমান সেশন তাদের নিজস্ব নীতি বজায় রাখে; এই বিকল্প বা কাজের ফোল্ডার বদলানোর পরে নতুন কথোপকথন শুরু করুন। Copilot তার নিজস্ব অনুমতি বজায় রাখে।",
+   "pt-BR": "O acesso total executa comandos e altera ficheiros com a tua conta de utilizador. Aplica-se apenas a novas conversas Codex/Gravity. As sessões existentes conservam a política nativa; escolhe uma nova conversa depois de mudar esta opção ou a pasta de trabalho. O Copilot conserva as permissões nativas.",
+   "ru": "Полный доступ позволяет выполнять команды и изменять файлы от имени вашей учётной записи. Он применяется только к новым беседам Codex/Gravity. Существующие сеансы сохраняют исходную политику; после изменения этой настройки или рабочей папки начните новую беседу. Copilot сохраняет свои исходные разрешения.",
+   "id": "Akses penuh menjalankan perintah dan mengubah file dengan akun pengguna Anda. Ini hanya berlaku untuk percakapan Codex/Gravity baru. Sesi yang ada mempertahankan kebijakan aslinya; mulai percakapan baru setelah mengubah opsi ini atau folder kerja. Copilot mempertahankan izin aslinya."
   }
  }
 }

@@ -90,7 +90,7 @@ pub fn require(id:&str,capability:&str)->Result<(),String>{
 }
 fn normalized(text:&str)->String {crate::voice::wake::normalize(text)}
 fn short_text(text:&str,max:usize)->bool {!text.trim().is_empty() && text.chars().count()<=max && !text.chars().any(char::is_control)}
-pub(crate) fn validate(c:&Configuration)->Result<(),String> {
+pub(crate)fn validate(c:&Configuration)->Result<(),String> {
  let base=defaults();
  if c.version!=1 || c.pets.len()!=base.pets.len() || !(200..=12000).contains(&c.reasoning_length) || c.reasoning_terms.len()>80 {return Err("Versão ou limites inválidos na configuração dos pets.".into());}
  let mut names=BTreeMap::<String,String>::new();
@@ -144,7 +144,11 @@ fn write(path:&Path,c:&Configuration)->Result<(),String> {
 fn read_at(path:&Path)->Result<Document,String> {read_at_policy(path,true)}
 fn read_at_policy(path:&Path,create_defaults:bool)->Result<Document,String> {
  if create_defaults && !path.exists() {write(path,&defaults())?;}
- let data=bytes(path)?;let mut c:Configuration=serde_json::from_slice(&data).map_err(|e|format!("Corrige pets.json: {e}"))?;
+ let data=bytes(path)?;let c=resolve_existing_bytes(&data)?;Ok(Document{config:c,path:path.to_string_lossy().to_string(),revision:revision(&data)})
+}
+/// Pure existing-profile resolution, shared by runtime and native restoration review.
+pub(crate)fn resolve_existing_bytes(data:&[u8])->Result<Configuration,String>{
+ let mut c:Configuration=serde_json::from_slice(data).map_err(|e|format!("Corrige pets.json: {e}"))?;
  // Upgrade the existing Copilot identity without replacing names, aliases or grants.
  if let Some(p)=c.pets.get_mut("agent_copilot") {if p.provider.is_empty(){let base=defaults();p.provider="copilot".into();if p.fast.model.is_empty(){p.fast=base.pets["agent_copilot"].fast.clone();}if p.reasoning.model.is_empty(){p.reasoning=base.pets["agent_copilot"].reasoning.clone();}}}
  // Native service controls and an explicitly configured assistant coexist.
@@ -153,7 +157,7 @@ fn read_at_policy(path:&Path,create_defaults:bool)->Result<Document,String> {
  for(id,legacy)in[("agent_gemini","gemini-cli"),("integration_claude","claude-cli")]{if let Some(p)=c.pets.get_mut(id){if p.provider==legacy{p.provider.clear();}}}
  validate(&c)?;
  let base=defaults();for(id,p)in &mut c.pets{if p.permissions.is_none(){p.permissions=base.pets[id].permissions.clone();}}
- Ok(Document{config:c,path:path.to_string_lossy().to_string(),revision:revision(&data)})
+ Ok(c)
 }
 pub fn read()->Result<Configuration,String> {let _edit=EDIT.lock().unwrap();Ok(read_at(&path())?.config)}
 /// Read existing identities with the same in-memory upgrades/validation, without
@@ -187,6 +191,7 @@ impl Configuration {
  pub fn select(&self,provider:&str,requested:&str,query:&str)->Result<Selection,String> {
   require_active_provider(provider)?;let id=pet_id(provider).ok_or("Este pet não tem perfil de modelos.")?;let p=self.pets.get(id).ok_or("Falta o perfil deste pet.")?;
   if p.provider.is_empty(){
+   if blueprint(id).is_some_and(|b|b.runtime.adapter==Some(Adapter::Lmstudio)){return Err("Associa primeiro este pet ao LM Studio no perfil do pet.".into());}
    if blueprint(id).is_some_and(|b|b.runtime.assistant_adapter.is_some()){return Err("Este pet mantém os controlos nativos. Configura um backend de AI para conversar.".into());}
    return Err("Os modelos Gemini e Claude da conta Gravity estão no pet Gravity. Escolhe o modelo nesse pet.".into());
   }
@@ -319,5 +324,14 @@ pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revisi
   // Before reading HOME preferences or touching a dropped file.
   assert!(matches!(crate::pet_files::ingest("integration_github","/not/a/real/file"),Err(error)if error.contains("temporariamente")));
   assert!(require("integration_github","documents").unwrap_err().contains("temporariamente"));
+ }
+}
+
+#[cfg(test)]mod lmstudio_binding_tests{
+ use super::*;
+ #[test]fn explicit_native_binding_preserves_legacy_empty_profiles_and_other_pet_permissions(){
+  let original=defaults();let before=serde_json::to_value(&original).unwrap();assert_eq!(original.pets["ai_lmstudio"].provider,"");validate(&original).unwrap();assert_eq!(serde_json::to_value(&original).unwrap(),before);
+  let mut bound=original.clone();bound.pets.get_mut("ai_lmstudio").unwrap().provider="lmstudio".into();validate(&bound).unwrap();assert_eq!(bound.pets["ai_lmstudio"].permissions,original.pets["ai_lmstudio"].permissions);assert_eq!(serde_json::to_value(&bound.pets["ai_ollama"]).unwrap(),before["pets"]["ai_ollama"]);assert_eq!(blueprint("ai_lmstudio").unwrap().configured_adapter(""),None);
+  for provider in ["codex","ollama","custom"]{bound.pets.get_mut("ai_lmstudio").unwrap().provider=provider.into();assert!(validate(&bound).is_err());}
  }
 }

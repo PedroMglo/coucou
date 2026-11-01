@@ -48,6 +48,7 @@ impl SessionIdentity{
 }
 
 struct Process {
+    #[cfg(test)] io_probe:Option<crate::settings::EffectProbe>,
     child: Child,
     input: Option<ChildStdin>,
     output: Receiver<Result<String, String>>,
@@ -75,6 +76,7 @@ impl Process {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x08000000);
         }
+        crate::settings::effect_allowed()?;
         let mut child = cmd.spawn().map_err(|_| {
             "Cannot start Antigravity. Run agy in a terminal and sign in first.".to_string()
         })?;
@@ -126,6 +128,7 @@ impl Process {
             }
         });
         Ok(Self {
+            #[cfg(test)] io_probe:None,
             child,
             input,
             output,
@@ -160,20 +163,17 @@ impl Process {
         if bytes.len()>MAX_LINE{return Err("Antigravity input exceeded the size limit.".into());}
         bytes.push(b'\n');
         let deadline=self.deadline.min(Instant::now()+Duration::from_secs(30));
-        let mut offset=0;
-        while offset<bytes.len(){
-            if self.cancel.as_ref().is_some_and(|flag|flag.load(Ordering::Relaxed)){return Err("The CLI request was cancelled.".into());}
-            if Instant::now()>=deadline{return Err("Antigravity did not receive the request in time. Check the native session before sending again.".into());}
-            let input=self.input.as_mut().ok_or("Antigravity did not open stdin.")?;
-            match input.write(&bytes[offset..]){
-                Ok(0)=>return Err("Antigravity closed its input.".into()),
-                Ok(size)=>offset+=size,
-                Err(error)if error.kind()==std::io::ErrorKind::WouldBlock=>std::thread::sleep(Duration::from_millis(10)),
-                Err(error)if error.kind()==std::io::ErrorKind::Interrupted=>{},
-                Err(_)=>return Err("Cannot write to Antigravity.".into()),
-            }
+        let dispatch=crate::pet_native_write::Dispatch::NewEffect;
+        #[cfg(test)]let dispatch=self.io_probe.as_ref().map(|p|crate::pet_native_write::Dispatch::ProbedEffect(p.clone())).unwrap_or(dispatch);
+        let guard=crate::pet_native_write::Guard{dispatch,deadline,cancel:self.cancel.clone(),caller:None,source:None};
+        let outcome=crate::pet_native_write::frame(self.input.as_mut().ok_or("Antigravity did not open stdin.")?,&bytes,&guard);
+        match outcome{
+            Ok(crate::pet_native_write::Outcome::Written)=>Ok(()),
+            Ok(crate::pet_native_write::Outcome::Skipped(crate::pet_native_write::Reason::Cancelled))=>Err("The CLI request was cancelled.".into()),
+            Ok(crate::pet_native_write::Outcome::Skipped(crate::pet_native_write::Reason::PreferencesUnconfirmed))=>Err("A origem das preferências não está confirmada; o novo pedido Gravity não foi enviado.".into()),
+            Ok(crate::pet_native_write::Outcome::Skipped(_))=>Err("Antigravity did not receive the request in time. Check the native session before sending again.".into()),
+            Err(_)=>{self.input.take();Err("A escrita Gravity não foi confirmada; a pipe própria foi retirada sem repetir o pedido. Verifica a sessão antes de outro efeito.".into())},
         }
-        Ok(())
     }
 }
 
@@ -293,7 +293,9 @@ pub fn answer(
     if let Some(id) = session_id {
         args.extend(["--conversation", id]);
     }
-    if full_access {
+    // A saved session retains its current native permission rules. The app's
+    // creation preference must not reapply a bypass on every continuation.
+    if full_access && session_id.is_none() {
         args.push("--dangerously-skip-permissions");
     }
     let mut process = Process::start(exe, cwd, &args, Duration::from_secs(1800))?;
@@ -376,6 +378,16 @@ impl Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os="linux")]
+    #[test]fn final_dispatch_gravity_uses_current_io_at_real_private_pipe_write(){
+        for changed in [true,false]{
+            let io=crate::settings::EffectFixture::new();let mut process=Process::start(Path::new("/usr/bin/python3"),&io.root,&["-u","-c","import pathlib,sys;line=sys.stdin.readline();pathlib.Path('received').write_text(line);print('ack',flush=True)"],Duration::from_secs(3)).unwrap();process.io_probe=Some(io.probe.clone());
+            if changed{io.external();}else{io.save();}
+            let message=json!({"event":"user","message":{"content":"captured-fixture"}});let sent=process.write_message(&message);
+            if changed{assert!(sent.is_err());drop(process);let path=io.root.join("received");assert!(!path.exists()||std::fs::read(path).unwrap().is_empty());}
+            else{sent.unwrap();assert_eq!(process.line().unwrap(),"ack\n");drop(process);assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(io.root.join("received")).unwrap()).unwrap(),message);}
+        }
+    }
     #[test]
     fn catalog_uses_real_cli_slugs_and_labels() {
         let models = parse_models("Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n");

@@ -228,7 +228,7 @@ fn spawn_disable_wifi(native: t::Config, mut work: l::Work, association: Associa
 }
 fn native_error(error: t::Error) -> l::NativeError {
     match error {
-        t::Error::Unavailable | t::Error::Timeout => l::NativeError::Unavailable,
+        t::Error::Unavailable | t::Error::Timeout | t::Error::PreferencesUnconfirmed => l::NativeError::Unavailable,
         t::Error::Protocol => l::NativeError::InvalidResponse,
         t::Error::UntrustedPeer | t::Error::OriginChanged | t::Error::Unsupported | t::Error::NativeFailure => l::NativeError::Rejected,
     }
@@ -334,6 +334,7 @@ async fn actor(native: t::Config, service: l::Service, mut counter: ProducerCoun
                     }
                     Command::Scan {window,scope,intent,response} => {
                         let result = (|| {
+                            if !native.effect_ready(){return Err(l::Reason::NativeUnavailable);}
                             let admission=window.run(&binding,|owner|service.scan(owner,&scope,&intent,Instant::now()))??;
                             if let Some(work)=admission.work {
                                 if active.is_some() { drop(work);return Err(l::Reason::Busy); }
@@ -349,6 +350,7 @@ async fn actor(native: t::Config, service: l::Service, mut counter: ProducerCoun
                     }
                     Command::EnableWifi {window,scope,intent,response} => {
                         let result = (|| {
+                            if !native.effect_ready(){return Err(l::Reason::NativeUnavailable);}
                             let admission=window.run(&binding,|owner|service.enable_wifi(owner,&scope,&intent,Instant::now()))??;
                             if let Some(work)=admission.work {
                                 if active.is_some() { drop(work);return Err(l::Reason::Busy); }
@@ -363,6 +365,7 @@ async fn actor(native: t::Config, service: l::Service, mut counter: ProducerCoun
                         let _=response.send(result);
                     }                    Command::DisableWifi {window,scope,intent,response} => {
                         let result = (|| {
+                            if !native.effect_ready(){return Err(l::Reason::NativeUnavailable);}
                             let admission=window.run(&binding,|owner|service.disable_wifi(owner,&scope,&intent,Instant::now()))??;
                             if let Some(work)=admission.work {
                                 if active.is_some() { drop(work);return Err(l::Reason::Busy); }
@@ -377,7 +380,9 @@ async fn actor(native: t::Config, service: l::Service, mut counter: ProducerCoun
                         let _=response.send(result);
                     }
                     Command::View {window,response} => {
-                        let result=window.run(&binding,|owner|service.view(owner,Instant::now())).and_then(|v|v);let _=response.send(result);
+                        let result=window.run(&binding,|owner|service.view(owner,Instant::now())).and_then(|v|v).map(|mut view|{
+                            if !native.effect_ready(){view.capabilities.scan=false;view.capabilities.enable_wifi=false;view.capabilities.disable_wifi=false;view.scan_scope=None;view.enable_wifi_scope=None;view.disable_wifi_scope=None;view.reason=Some(l::Reason::NativeUnavailable);}view
+                        });let _=response.send(result);
                     }
                     Command::Ticket {window,id,response} => {
                         let result=window.run(&binding,|owner|service.ticket(owner,&id,Instant::now())).and_then(|v|v);let _=response.send(result);

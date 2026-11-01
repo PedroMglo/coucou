@@ -36,7 +36,7 @@ async fn plain_response(chat:&Chat,turn:&crate::chat::Turn,base:&reqwest::Url,mo
 #[allow(clippy::too_many_arguments)]
 async fn plain_response_captured(chat:&Chat,turn:&crate::chat::Turn,base:&reqwest::Url,model:&str,effort:Option<&str>,messages:&[serde_json::Value],user:serde_json::Value,plain:&str,deadline:Instant,origin:Option<&UsageOrigin>,prepared:Option<&crate::local_chat::PreparedUser>,delta:impl FnMut(String))->Result<(ChatReply,crate::pet_usage::Usage,Option<String>),String>{
  if let Some(prepared)=prepared{prepared.validate_contents().await?;}
- let round=protocol::round_captured(base,model,messages,false,effort,deadline,&turn.cancel,origin,delta).await?;
+ let round=crate::net::while_current(||chat.is_current(turn)&&prepared.is_none_or(|p|p.validate().is_ok()),||protocol::round_captured(base,model,messages,false,effort,deadline,&turn.cancel,origin,delta)).await?;
  if let Some(prepared)=prepared{prepared.validate_contents().await?;}
  if !round.calls.is_empty()||round.text.is_empty(){return Err("O modelo não devolveu uma resposta de texto válida.".into());}
  let notice=chat.commit_observed_reply(turn,user,json!({"role":"assistant","content":round.text}),plain,&round.text)?;
@@ -75,6 +75,7 @@ pub(crate) async fn respond(app:&AppHandle,chat:&Chat,settings:&crate::settings:
  let user=json!({"role":"user","content":prepared.text});
  let plain=crate::chat::plain_question(turn.first,context.as_ref(),&query);
  let mut messages=vec![json!({"role":"system","content":system_prompt(&cwd,tools,&prompt)})];messages.extend(turn.history.clone());messages.push(user.clone());
+ chat.append_selected_memory("ollama",&query,&crate::pet_memory::context_model::Destination::Server{provider:"ollama".into(),endpoint:crate::net::join(&base,"v1/chat/completions"),model:model.into()},server.key.as_deref(),&mut messages)?;
  prepared.validate_contents().await?;
  if !tools{
   if resume_from.is_some(){return Err("O modelo original não confirmou suporte a ferramentas. A tarefa anterior foi preservada; inicia explicitamente um novo pedido com um modelo compatível.".into());}
@@ -94,7 +95,7 @@ pub(crate) async fn respond(app:&AppHandle,chat:&Chat,settings:&crate::settings:
    if !chat.is_current(&turn){return Err("A tarefa foi interrompida.".into());}
    let offer_tools=count<scope.policy.max_calls&&budget.can_run();
    incomplete_round=Some(Instant::now());
-   let round=protocol::round_calendar_captured(&scope.base,&scope.model,&messages,offer_tools,calendar.as_ref(),scope.reasoning_effort.as_deref(),scope.deadline,&turn.cancel,capture_origin.as_ref(),|s|{if prepared.validate().is_ok(){chat.publish_delta(app,&turn,&s);activity.update("message",s.rsplit("\n\n").next().unwrap_or(&s));}}).await?;
+   let round=crate::net::while_current(||chat.is_current(&turn)&&prepared.validate().is_ok(),||protocol::round_calendar_captured(&scope.base,&scope.model,&messages,offer_tools,calendar.as_ref(),scope.reasoning_effort.as_deref(),scope.deadline,&turn.cancel,capture_origin.as_ref(),|s|{if prepared.validate().is_ok(){chat.publish_delta(app,&turn,&s);activity.update("message",s.rsplit("\n\n").next().unwrap_or(&s));}})).await?;
    prepared.validate_contents().await?;
    incomplete_round=None;
    if let Some(total)=&mut usage{total.add(&round.usage);}else{usage=Some(round.usage.clone());}
@@ -129,7 +130,7 @@ pub(crate) async fn respond(app:&AppHandle,chat:&Chat,settings:&crate::settings:
        let worker_chat=chat.clone();let worker_scope=scope.clone();let reporter=activity.clone();let own_lease=lease.take().ok_or("Falta a reserva da execução local.")?;
        let (result,returned_budget,returned_lease,durable)=tauri::async_runtime::spawn_blocking(move||{
         let mut budget=budget;
-        let result=if approval::policy_current(&worker_scope){executor::run(permit,&mut budget,&worker_scope.turn.cancel,worker_scope.deadline,receipt,|r|{let _=worker_chat.record_local_receipt(&worker_scope,r.clone());reporter.update("stopping","A limpeza do processo ainda não foi confirmada.");})}else{let mut r=receipt;r.finish(ReceiptState::Cancelled,Some(ReceiptCause::PolicyRevoked));ProcessResult{receipt:r,stdout:vec![],stderr:vec![]}};
+        let result=if worker_chat.is_current(&worker_scope.turn)&&approval::policy_current(&worker_scope){executor::run(permit,&mut budget,&worker_scope.turn.cancel,worker_scope.deadline,receipt,|r|{let _=worker_chat.record_local_receipt(&worker_scope,r.clone());reporter.update("stopping","A limpeza do processo ainda não foi confirmada.");})}else{let mut r=receipt;r.finish(ReceiptState::Cancelled,Some(ReceiptCause::PolicyRevoked));ProcessResult{receipt:r,stdout:vec![],stderr:vec![]}};
         let durable=worker_chat.record_local_receipt(&worker_scope,result.receipt.clone());
         (result,budget,own_lease,durable)
        }).await.map_err(|_|"O supervisor local foi interrompido; verifica os efeitos reais.")?;

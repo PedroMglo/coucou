@@ -109,7 +109,11 @@ async fn recovery_helper_timeout_stops_owned_group_and_reaps_leader() {
     assert_eq!(result.err(), Some(Error::Timeout));
     let leader: u32 = fs::read_to_string(f.root.join("leader")).unwrap().parse().unwrap();
     let descendant: u32 = fs::read_to_string(f.root.join("descendant")).unwrap().parse().unwrap();
-    assert!(!Path::new(&format!("/proc/{leader}")).exists()); assert!(dead(descendant));
+    assert!(!Path::new(&format!("/proc/{leader}")).exists());
+    // SIGKILL and leader wait do not schedule the descendant atomically.
+    // Match the bounded observation already used by the normal-exit case.
+    let deadline=Instant::now()+Duration::from_secs(1);
+    while !dead(descendant) { assert!(Instant::now()<deadline,"owned helper descendant survived timeout cleanup"); tokio::time::sleep(Duration::from_millis(5)).await; }
 }
 
 #[tokio::test]

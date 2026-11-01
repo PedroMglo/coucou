@@ -9,19 +9,20 @@ const STEP_PROTOCOL:&[u8]=b"{\"version\":1,\"kind\":\"coucou-native-goal-steps\"
 const STEP_BYTES:usize=64*1024;
 #[derive(Serialize,Deserialize)]#[serde(deny_unknown_fields)]struct Envelope{body:StepRecord,tag:String}
 fn message(record:&StepRecord)->Result<Vec<u8>>{
-    let mut bytes=b"coucou-native-goal-step-state-v1\0".to_vec();bytes.extend(serde_json::to_vec(record).map_err(|_|Failure::Invalid)?);Ok(bytes)
+    let mut bytes=match record.scope.schema_version{1=>b"coucou-native-goal-step-state-v1\0".to_vec(),2=>b"coucou-native-generated-step-state-v1\0".to_vec(),_=>return Err(Failure::Invalid)};bytes.extend(serde_json::to_vec(record).map_err(|_|Failure::Invalid)?);Ok(bytes)
 }
 impl Authority{
-    fn step_directory(&self,create:bool)->Result<Option<Dir>>{
+    pub(in crate::pet_runtime::authority_store)fn step_directory(&self,create:bool)->Result<Option<Dir>>{
         self.fence()?;let path=self.dir.path.parent().ok_or(Failure::Unsafe)?.join("pet-runtime-step-consent-v1");
         protocol_directory(&path,STEP_PROTOCOL,create).map_err(|_|Failure::Unsafe)
     }
-    fn step_load(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str,step:&str)->Result<Option<StepRecord>>{
+    pub(super)fn step_load(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str,step:&str)->Result<Option<StepRecord>>{
         let main=self.load(spec,proof)?;let Some(lease)=main.lease.as_ref()else{return Err(Failure::Missing);};
         let Some(dir)=self.step_directory(false)?else{return Ok(None);};let slot=steps::slot(&spec.decision_id,plan,step).map_err(|_|Failure::Invalid)?;
         let Some((raw,_))=dir.bytes(&format!("{slot}.json"),STEP_BYTES).map_err(|_|Failure::Unsafe)?else{return Ok(None);};
         let envelope:Envelope=serde_json::from_slice(&raw).map_err(|_|Failure::Invalid)?;
         if !envelope.body.valid()||envelope.body.scope.plan_id!=plan||envelope.body.scope.step_id!=step||!envelope.body.scope.belongs(spec,lease){return Err(Failure::Invalid);}
+        if let Some(reference)=&envelope.body.scope.generated_plan{Self::generated_acknowledged(&main,spec,reference)?;}
         hmac::verify(&self.key,&message(&envelope.body)?,&decode(&envelope.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;
         self.fence()?;Ok(Some(envelope.body))
     }
@@ -40,7 +41,8 @@ impl Authority{
     }
     pub(in crate::pet_runtime)fn issue_step(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,approved:&steps::Approved,now:u64)->Result<Scope>{
         let scope=approved.scope();if !scope.belongs(spec,lease)||now<scope.approved_at||now>=scope.deadline_at||spec.budget.max_tool_calls==0{return Err(Failure::Invalid);}
-        let _lock=self.lock()?;self.budget_body(spec,proof,lease,now,true)?;
+        let _lock=self.lock()?;let main=self.budget_body(spec,proof,lease,now,true)?;
+        if let Some(reference)=&scope.generated_plan{Self::generated_acknowledged(&main,spec,reference)?;}
         if let Some(old)=self.step_load(spec,proof,&scope.plan_id,&scope.step_id)?{
             if old.scope!=*scope||old.phase!=Phase::Approved{return Err(Failure::RecoveryRequired);}
             self.step_publish(&old,false)?;return Ok(old.scope);
@@ -77,5 +79,29 @@ impl Authority{
             None=>{if record.phase!=Phase::Approved||result.observation.delivery!=crate::spotify::goal::Delivery::NotDispatched{return Err(Failure::RecoveryRequired);}None},
         };
         record.phase=Phase::Finished;record.attempt=settled;record.result=Some(result);record.updated_at=now;self.step_publish(&record,false)?;Ok(record)
+    }
+}
+
+impl Authority{
+    /// Caller holds the shared/exclusive native grant guard. Every supported
+    /// artifact is decoded and authenticated with its original message domain;
+    /// arbitrary JSON identities are never accepted as proof of another owner.
+    pub(in crate::pet_runtime::authority_store)fn retirement_artifact_decision(&self,name:&str,raw:&[u8])->Result<String>{
+        let canonical=|suffix:&str|name.strip_suffix(suffix).filter(|v|decode(v).is_some());
+        let staged=|prefix:&str|name.strip_prefix(prefix).is_some_and(model::token);
+        if canonical(".verification.json").is_some()||staged(".verification-"){
+            let(decision,slot)=self.retirement_verification_identity(raw)?;if canonical(".verification.json").is_some_and(|v|v!=slot){return Err(Failure::Invalid);}return Ok(decision);
+        }
+        if canonical(".recipe.json").is_some()||staged(".recipe-"){
+            let scope=self.retirement_recipe_scope(raw)?;if canonical(".recipe.json").is_some_and(|v|scope.slot().ok().as_deref()!=Some(v)){return Err(Failure::Invalid);}return Ok(scope.decision_id);
+        }
+        if canonical(".evidence.json").is_some()||staged(".step-evidence-"){
+            let scope=self.retirement_evidence_scope(raw)?;if canonical(".evidence.json").is_some_and(|v|scope.slot().ok().as_deref()!=Some(v)){return Err(Failure::Invalid);}return Ok(scope.decision_id);
+        }
+        if canonical(".json").is_some()||staged(".step-"){
+            let e:Envelope=serde_json::from_slice(raw).map_err(|_|Failure::Invalid)?;
+            if !e.body.valid()||canonical(".json").is_some_and(|v|e.body.scope.slot().ok().as_deref()!=Some(v)){return Err(Failure::Invalid);}
+            hmac::verify(&self.key,&message(&e.body)?,&decode(&e.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;return Ok(e.body.scope.decision_id);
+        }Err(Failure::RecoveryRequired)
     }
 }

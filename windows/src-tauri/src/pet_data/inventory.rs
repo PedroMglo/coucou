@@ -19,10 +19,17 @@ pub(super) fn legacy_history_backup(name:&OsStr)->bool{
 #[serde(rename_all="camelCase")]
 pub(super) enum Area { Config, Data }
 #[derive(Clone, Copy)] enum Rule { Tree, Directory, Json, Pets, Sources, Memory, Assistant, Metrics, Inbox }
-#[derive(Debug, PartialEq, Eq)] pub(super) struct Entry { pub area: Area, pub relative: PathBuf, pub stamp: Stamp, pub digest: Option<[u8; 32]> }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)] pub(super) struct Entry { pub area: Area, pub relative: PathBuf, pub stamp: Stamp, pub digest: Option<[u8; 32]> }
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Snapshot { pub summary: Summary, roots: [Option<Stamp>; 2], pub entries: Vec<Entry>, path_bytes: usize }
 impl Snapshot {
+    /// Revisions of previously fully hashed bytes. No new content is admitted
+    /// from metadata alone. Retain descriptors only within the caller budget.
+    pub(super)fn revision_nodes(&self,config:&Path,data:&Path,pin:bool)->Result<Vec<Node>>{
+        let mut nodes=vec![];for(index,path)in[config,data].into_iter().enumerate(){let n=Node::root(path)?.ok_or(Error::SourceChanged)?;if !n.directory||self.roots[index].as_ref()!=Some(&n.initial){return Err(Error::SourceChanged);}nodes.push(n);}
+        for e in &self.entries{let root=&nodes[if e.area==Area::Config{0}else{1}];let mut parts=e.relative.components();let first=parts.next().ok_or(Error::UnsafePath)?;let mut n=root.child(first.as_os_str())?.ok_or(Error::SourceChanged)?;for part in parts{n=n.child(part.as_os_str())?.ok_or(Error::SourceChanged)?;}if n.initial!=e.stamp||n.directory!=e.digest.is_none(){return Err(Error::SourceChanged);}n.current()?;if pin{nodes.push(n);}}
+        for n in &nodes[..2]{n.current()?;}Ok(nodes)
+    }
     pub(super) fn fingerprint(&self) -> Result<String> {
         let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
         hash.update(b"coucou-legacy-review-v1\0");
@@ -50,13 +57,14 @@ fn json(bytes: &[u8], rule: Rule) -> Result<()> {
             if value.get("unavailableHistory").is_some(){return Err(Error::UnsupportedProfile);}
             if !matches!(version, Some(1..=4)) || !value["pets"].is_object()
                 || value.get("archives").is_some_and(|v| !v.is_object()) { return Err(Error::UnsupportedProfile); }
-            // Never downgrade a newer attachment schema hidden behind an old
-            // version number. This is format admission, not dialogue validation.
+            // An old version marker cannot hide newer attachment or delivered
+            // memory state. Admit only the legacy format; never copy a partial
+            // current profile and silently discard its provenance on rollback.
             let pets = value["pets"].as_object().unwrap().values();
             let archives = value.get("archives").and_then(|v| v.as_object()).into_iter().flat_map(|a| a.values());
             if pets.clone().any(|c| !c.is_object()) || archives.clone().any(|a| !a.is_array() || a.as_array().unwrap().iter().any(|c| !c.is_object())) { return Err(Error::UnsupportedProfile); }
             if pets.chain(archives.flat_map(|a| a.as_array().into_iter().flatten()))
-                .any(|c| c.get("attachmentHistory").is_some() || c.get("attachment_history").is_some()) { return Err(Error::UnsupportedProfile); }
+                .any(|c| ["attachmentHistory","attachment_history","native_memory_context","nativeMemoryContext"].iter().any(|field|c.get(*field).is_some())) { return Err(Error::UnsupportedProfile); }
             Ok(())
         }
         _ => Ok(()),
@@ -126,11 +134,15 @@ fn root(snapshot: &mut Snapshot, area: Area, path: &Path, index: usize) -> Resul
     snapshot.roots[index] = Some(node.initial.clone());
     for name in names {
         let selected = match (area, name.to_str()) {
+            (Area::Config,Some(crate::settings::durable::FILE|crate::settings::durable::history::DIRECTORY|".settings-io-record.lock"|".settings-io-commit.lock"))=>return Err(Error::UnsupportedProfile),
             (Area::Config, Some("settings.json")) => Some(Rule::Json),
             (Area::Config, Some("pets.json")) => Some(Rule::Pets),
             (Area::Config, Some("sources.json")) => Some(Rule::Sources),
             (Area::Config, Some("sounds")) => Some(Rule::Directory),
-            (Area::Config, Some("pet-runtime-v1" | "pet-runtime-contexts-v1" | "pet-runtime-consent-v1")) => return Err(Error::UnsupportedProfile),
+            // Runtime state is a coherent current-profile unit, including its
+            // result/planning/step/physical-owner catalogues and future formats.
+            // It is never an excluded root in a legacy-only import.
+            (Area::Config, Some(name)) if name.starts_with("pet-runtime-") => return Err(Error::UnsupportedProfile),
             (Area::Data, Some("assistant")) => Some(Rule::Assistant),
             (Area::Data, Some("inbox")) => Some(Rule::Inbox),
             (Area::Data, Some("Flow" | "Notes")) => Some(Rule::Directory),
@@ -164,5 +176,25 @@ fn inspect_with(layout:&Layout,owned:Option<&super::publication::OwnedRoots>)->R
         if Node::root(path)?.map(|n| n.initial) != *before { return Err(Error::SourceChanged); }
     }
     targets(layout,owned)?;
+    Ok(snapshot)
+}
+
+/// Entire admitted payload pair under an offline native owner. No legacy
+/// filters/exclusions: modern/unknown regular app data is preserved as data.
+pub(super)fn inspect_current(config:&Path,data:&Path)->Result<Snapshot>{
+    inspect_current_pair(config,data,false)
+}
+/// Review-only partial restore inventory. Missing roots never constitute
+/// admitted application data; the normal current-profile reader stays strict.
+pub(super)fn inspect_partial_current(config:&Path,data:&Path)->Result<Snapshot>{inspect_current_pair(config,data,true)}
+fn inspect_current_pair(config:&Path,data:&Path,partial:bool)->Result<Snapshot>{
+    let mut snapshot=Snapshot{summary:Summary{files:0,directories:0,bytes:0,excluded_roots:0},roots:[None,None],entries:vec![],path_bytes:0};
+    for(index,(area,path))in[(Area::Config,config),(Area::Data,data)].into_iter().enumerate(){
+        let Some(node)=Node::root(path)?else{if partial{continue;}return Err(Error::SourceChanged);};
+        if !node.directory{return Err(Error::UnsupportedProfile);}snapshot.roots[index]=Some(node.initial.clone());
+        for name in node.names(MAX_ROOT_NAMES)?{tree(&mut snapshot,&node,&name,area,PathBuf::from(&name),Rule::Tree,1)?;}
+        node.current()?;
+    }
+    for(index,path)in[config,data].into_iter().enumerate(){if Node::root(path)?.map(|n|n.initial)!=snapshot.roots[index]{return Err(Error::SourceChanged);}}
     Ok(snapshot)
 }

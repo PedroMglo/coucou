@@ -101,6 +101,7 @@ pub fn get(app: &AppHandle) -> Option<Arc<Flow>> {
 
 /// Voice routing hands off only after its capture is closed.
 pub fn voice_dictation(app: &AppHandle, start: bool) {
+    #[cfg(target_os="linux")]if start&&crate::pet_data::bootstrap::feature_allowed("voice").is_err(){return;}
     if let Some(flow) = get(app) { flow.send(if start { KeyEvent::HandsFree } else { KeyEvent::Cancel }); }
 }
 
@@ -166,6 +167,7 @@ fn key_id(key: logic::FlowKey) -> String {
 }
 
 fn enable(app: &AppHandle, flow: &Arc<Flow>) {
+    #[cfg(target_os="linux")]if crate::pet_data::bootstrap::feature_allowed("voice").is_err(){return;}
     let mut running = flow.running.lock().unwrap();
     if running.is_some() {
         return;
@@ -356,7 +358,7 @@ fn begin(app: &AppHandle, flow: &Arc<Flow>) -> Option<Listening> {
     let take = Arc::new(Mutex::new(audio::Take::default()));
     let sink_take = take.clone();
     let source = audio::Source::Mic(if mic.is_empty() { None } else { Some(mic) });
-    let capture = audio::Capture::start(source, move |samples| {
+    let capture = audio::Capture::start(source, audio::CaptureUse::Dictation, move |samples| {
         let mut t = sink_take.lock().unwrap();
         // Ten minutes at most: a dictation left open by mistake stops growing.
         if t.samples.len() < 16_000 * 600 {
@@ -528,6 +530,7 @@ pub fn flow_status(app: AppHandle, flow: State<Arc<Flow>>) -> FlowStatus {
 
 #[tauri::command]
 pub async fn flow_set_prefs(app: AppHandle, flow: State<'_, Arc<Flow>>, prefs: Prefs) -> Result<(), String> {
+    #[cfg(target_os="linux")]if prefs.enabled||prefs.voice{crate::pet_data::bootstrap::feature_allowed("voice")?;}
     let flow = flow.inner().clone();
     tauri::async_runtime::spawn_blocking(move || flow.update_prefs(&prefs, |before| {
         pill::update(&app, |s| {
@@ -822,4 +825,11 @@ mod preference_tests {
         assert_eq!(Store::load_from(dir.clone()).prefs, third);
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+/// Offline restored-profile initialization, without listeners, timers or IO.
+pub(crate)fn suspend_for_restoration(bytes:&[u8])->Result<Vec<u8>,&'static str>{
+ if bytes.len()>256*1024{return Err("flowPreferencesLimit");}let mut raw:serde_json::Value=serde_json::from_slice(bytes).map_err(|_|"invalidFlowPreferences")?;
+ let _:store::Prefs=serde_json::from_value(raw.clone()).map_err(|_|"invalidFlowPreferences")?;let fields=raw.as_object_mut().ok_or("invalidFlowPreferences")?;
+ for key in ["enabled","voice","cleanup"]{fields.insert(key.into(),serde_json::Value::Bool(false));}fields.insert("voiceOutput".into(),serde_json::Value::String("off".into()));serde_json::to_vec(&raw).map_err(|_|"invalidFlowPreferences")
 }

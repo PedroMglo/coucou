@@ -11,6 +11,38 @@ fn recover(a:&Authority,g:&Record,s:&Scope)->Assessment{
 fn evidence_path(f:&Fixture,s:&Scope)->std::path::PathBuf{f.path.join("pet-runtime-step-consent-v1").join(format!("{}.evidence.json",s.slot().unwrap()))}
 fn input(g:&Record,s:&Scope)->RecoverInput{RecoverInput{pet_id:g.spec.owner.pet_id.clone(),goal_id:g.id.clone(),decision_id:s.decision_id.clone(),plan_id:s.plan_id.clone(),step_id:s.step_id.clone(),revision:g.revision.clone(),grant_id:s.grant_id.clone()}}
 
+#[test]fn native_receipt_recovery_keeps_the_goal_guard_until_original_authority_settlement(){
+    use std::os::fd::AsRawFd;
+    let(f,mut a,g,_p,o,_main)=setup_plan();let bus=Bus::new();let player=Player::new(&bus,"Serialized receipt recovery");let ready=grant(&a,&g,&o,&bus);a.fault=Fault::AfterStepEvidencePublish;assert!(o.run_step_with_authority(&g,&ready,&config(),&a).is_err());a.fault=Fault::None;assert_eq!(ledger(&f,&g)["attempts"][0]["phase"],"started");
+    let authority=root(&f);let store=Arc::new(crate::pet_runtime::store::Store::existing_verified(&f.path.join("goals"),&authority).unwrap().unwrap());let lock=fs::OpenOptions::new().read(true).write(true).open(authority.join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(lock.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);
+    let request=input(&g,&ready.scope);let thread_store=store.clone();let thread_authority=authority.clone();let recovery=std::thread::spawn(move||thread_store.recover_step_native(&thread_authority,&request,crate::assistant_memory::now()));let until=std::time::Instant::now()+std::time::Duration::from_secs(2);let mut observed=false;
+    while std::time::Instant::now()<until{match store.test_lock(true){Err(crate::pet_runtime::model::Error::Busy)=>{observed=true;break;},Ok(guard)=>drop(guard),Err(error)=>panic!("unexpected goal guard error: {error:?}")};std::thread::sleep(std::time::Duration::from_millis(1));}
+    assert!(observed,"the production recovery must hold the goal guard while waiting for authority");assert_eq!(store.mutate(&g.id,&g.spec.owner.pet_id,&g.revision,"concurrent-control".into(),crate::pet_runtime::model::Action::Cancel,crate::assistant_memory::now()).err(),Some(crate::pet_runtime::model::Error::Busy));drop(lock);
+    let view=recovery.join().unwrap().unwrap();assert_eq!(view.phase,Phase::Finished);assert!(!view.execution_available&&!view.recovery.accounting_frozen);assert_eq!(store.read(&g.id,&g.spec.owner.pet_id).unwrap().revision,g.revision);assert_eq!(player.calls.lock().unwrap().len(),1);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),1);
+    let before=crate::pet_runtime::reconciliation_tests::inventory(&f.path);let again=store.recover_step_native(&authority,&input(&g,&ready.scope),crate::assistant_memory::now()).unwrap();assert_eq!(again.phase,Phase::Finished);assert_eq!(crate::pet_runtime::reconciliation_tests::inventory(&f.path),before);assert_eq!(player.calls.lock().unwrap().len(),1);
+}
+
+#[test]fn native_receipt_recovery_rejects_stale_foreign_and_writer_locked_sources_without_changes(){
+    let(f,mut a,g,_p,o,_main)=setup_plan();let bus=Bus::new();let player=Player::new(&bus,"Bound original receipt source");let ready=grant(&a,&g,&o,&bus);a.fault=Fault::AfterStepEvidencePublish;assert!(o.run_step_with_authority(&g,&ready,&config(),&a).is_err());a.fault=Fault::None;
+    let authority=root(&f);let store=crate::pet_runtime::store::Store::existing_verified(&f.path.join("goals"),&authority).unwrap().unwrap();let foreign=f.path.join("foreign-authority");Authority::ensure(&foreign).unwrap();let before=crate::pet_runtime::reconciliation_tests::inventory(&f.path);
+    for field in 0..4{let mut request=input(&g,&ready.scope);match field{0=>request.revision=nonce().unwrap(),1=>request.pet_id="agent_codex".into(),2=>request.decision_id=nonce().unwrap(),_=>request.grant_id=nonce().unwrap()};assert!(store.recover_step_native(&authority,&request,crate::assistant_memory::now()).is_err());assert_eq!(crate::pet_runtime::reconciliation_tests::inventory(&f.path),before);}
+    assert!(store.recover_step_native(&foreign,&input(&g,&ready.scope),crate::assistant_memory::now()).is_err());let writer=store.test_lock(true).unwrap();assert_eq!(store.recover_step_native(&authority,&input(&g,&ready.scope),crate::assistant_memory::now()).err(),Some(crate::pet_runtime::model::Error::Busy));drop(writer);assert_eq!(crate::pet_runtime::reconciliation_tests::inventory(&f.path),before);assert_eq!(player.calls.lock().unwrap().len(),1);
+}
+
+#[test]fn native_receipt_recovery_does_not_infer_a_missing_original_result_from_the_current_player_state(){
+    let(f,mut a,g,_p,o,_main)=setup_plan();let bus=Bus::new();let player=Player::new(&bus,"Unproven original result");let ready=grant(&a,&g,&o,&bus);a.fault=Fault::BeforeStepEvidencePublish;assert!(o.run_step_with_authority(&g,&ready,&config(),&a).is_err());a.fault=Fault::None;assert_eq!(player.state.lock().unwrap().status,"Paused");
+    let authority=root(&f);let store=crate::pet_runtime::store::Store::existing_verified(&f.path.join("goals"),&authority).unwrap().unwrap();let before=crate::pet_runtime::reconciliation_tests::inventory(&f.path);assert!(store.recover_step_native(&authority,&input(&g,&ready.scope),crate::assistant_memory::now()).is_err());assert_eq!(crate::pet_runtime::reconciliation_tests::inventory(&f.path),before);assert_eq!(ledger(&f,&g)["attempts"][0]["phase"],"started");assert_eq!(player.calls.lock().unwrap().len(),1);
+}
+
+#[test]fn aggregate_reconciliation_distinguishes_native_tool_observation_from_missing_effect_without_repair_or_dispatch(){
+    use crate::pet_runtime::{reconciliation_tests::inventory,reconciliation::{EvidenceKind,EvidenceStatus}};
+    for fault in [Fault::BeforeStepEvidencePublish,Fault::AfterStepEvidencePublish,Fault::BeforeStepResultPublish]{
+        let(f,mut a,g,_p,o,_)=setup_plan();let bus=Bus::new();let player=Player::new(&bus,"Private read-only reconciliation");let ready=grant(&a,&g,&o,&bus);a.fault=fault;assert!(o.run_step_with_authority(&g,&ready,&config(),&a).is_err());
+        let before=inventory(&f.path);let view=f.store().reconciliation(&root(&f),&g.id,&g.spec.owner.pet_id,&g.revision,crate::assistant_memory::now()).unwrap();let witnessed=!matches!(fault,Fault::BeforeStepEvidencePublish);assert_eq!(view.attempts.len(),1);assert_eq!(view.attempts[0].outcome_known,witnessed);assert_eq!(view.accounting.as_ref().unwrap().unknown_attempts,usize::from(!witnessed));assert!(!view.criteria_verified&&!view.goal_complete&&!view.execution_available&&!view.recovery_available);
+        assert_eq!(view.evidence.iter().any(|e|e.kind==EvidenceKind::ToolObservation&&e.status==EvidenceStatus::Verified),witnessed);assert_eq!(inventory(&f.path),before);assert_eq!(player.calls.lock().unwrap().len(),1);
+    }
+}
+
 #[test]
 fn final_receipt_publication_failure_is_explicitly_recovered_without_another_effect_or_budget_charge(){
     for fault in [Fault::BeforeStepResultPublish,Fault::AfterStepResultPublish]{
@@ -169,4 +201,19 @@ fn validly_signed_evidence_from_another_step_of_the_same_goal_cannot_be_substitu
     let file=evidence_path(&f,&second.scope);let original=fs::read(&file).unwrap();fs::write(&file,fs::read(evidence_path(&f,&first.scope)).unwrap()).unwrap();let before=ledger(&f,&g);
     assert!(a.read_step_assessment(&row.spec,row.proof.as_ref().unwrap(),&second.scope.plan_id,&second.scope.step_id).is_err());assert!(a.recover_step(&row.spec,row.proof.as_ref().unwrap(),o.lease(),&second.scope,crate::assistant_memory::now()).is_err());assert_eq!(ledger(&f,&g),before);
     fs::write(&file,original).unwrap();assert_eq!(recover(&a,&g,&second.scope).record.phase,Phase::Finished);assert_eq!(player.calls.lock().unwrap().len(),2);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);
+}
+
+#[test]fn native_uncertain_state_manifest_requires_the_original_signed_step_and_preserves_its_unknown_charge(){
+    for fault in [Fault::BeforeStepEvidencePublish,Fault::AfterStepEvidencePublish]{
+        let(f,mut a,g,_p,o,_)=setup_plan();let bus=Bus::new();let player=Player::new(&bus,"Native uncertain state assignment");let ready=grant(&a,&g,&o,&bus);a.fault=fault;assert!(o.run_step_with_authority(&g,&ready,&config(),&a).is_err());a.fault=Fault::None;
+        let before=crate::pet_runtime::reconciliation_tests::inventory(&f.path);let manifest=a.test_uncertain_effects(&g).unwrap();assert_eq!(manifest.len(),usize::from(matches!(fault,Fault::BeforeStepEvidencePublish)));
+        if let Some(effect)=manifest.first(){assert_eq!(effect.scope_hash,fingerprint(&ready.scope).unwrap());assert_eq!(effect.grant_id,ready.scope.grant_id);assert_eq!(effect.operation.arguments,serde_json::json!({"action":"pause"}));assert!(effect.target_label.contains("Native uncertain state assignment"));assert!(effect.valid());}
+        assert_eq!(crate::pet_runtime::reconciliation_tests::inventory(&f.path),before);assert_eq!(ledger(&f,&g)["attempts"][0]["phase"],"started");assert_eq!(player.calls.lock().unwrap().len(),1);
+    }
+}
+#[test]fn unknown_state_review_cannot_bless_changed_arguments_or_a_corrupt_or_missing_original_step(){
+    let(f,mut a,g,_p,o,_)=setup_plan();let bus=Bus::new();let player=Player::new(&bus,"Original unknown scope");let ready=grant(&a,&g,&o,&bus);a.fault=Fault::BeforeStepEvidencePublish;assert!(o.run_step_with_authority(&g,&ready,&config(),&a).is_err());a.fault=Fault::None;assert_eq!(a.test_uncertain_effects(&g).unwrap().len(),1);
+    let mut changed=g.clone();changed.plans[0].steps[0].operation.as_mut().unwrap().arguments=serde_json::json!({"action":"next"});let before=crate::pet_runtime::reconciliation_tests::inventory(&f.path);assert!(a.test_uncertain_effects(&changed).is_err());assert_eq!(crate::pet_runtime::reconciliation_tests::inventory(&f.path),before);
+    let file=path(&f,&ready.scope);let original=fs::read(&file).unwrap();let mut corrupt:serde_json::Value=serde_json::from_slice(&original).unwrap();corrupt["tag"]=serde_json::json!("00".repeat(32));fs::write(&file,serde_json::to_vec(&corrupt).unwrap()).unwrap();let before=crate::pet_runtime::reconciliation_tests::inventory(&f.path);assert!(a.test_uncertain_effects(&g).is_err());assert_eq!(crate::pet_runtime::reconciliation_tests::inventory(&f.path),before);
+    fs::remove_file(&file).unwrap();let before=crate::pet_runtime::reconciliation_tests::inventory(&f.path);assert!(a.test_uncertain_effects(&g).is_err());assert_eq!(crate::pet_runtime::reconciliation_tests::inventory(&f.path),before);assert_eq!(player.calls.lock().unwrap().len(),1);
 }

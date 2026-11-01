@@ -12,6 +12,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "google-api-key",
     "openrouter-api-key",
     "openai-compatible-key",
+    "lmstudio-local-api-key",
     "n8n-url",
     "n8n-api-key",
     "vercel-token",
@@ -36,15 +37,21 @@ pub fn get(key: &str) -> Option<String> {
 }
 
 pub fn set(key: &str, value: &str) -> Result<(), String> {
+    if !KNOWN_KEYS.contains(&key) { return Err(format!("unknown key {key}")); }
+    crate::settings::optional::check(crate::settings::optional::Operation::Credentials)?;
     let entry = entry(key).ok_or_else(|| format!("unknown key {key}"))?;
     if value.is_empty() {
-        let _ = entry.delete_credential();
-        return Ok(());
+        return match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        };
     }
     entry.set_password(value).map_err(|e| e.to_string())
 }
 
 pub fn clear(key: &str) -> Result<(), String> {
+    if !KNOWN_KEYS.contains(&key) { return Err(format!("unknown key {key}")); }
+    crate::settings::optional::check(crate::settings::optional::Operation::Credentials)?;
     let entry = entry(key).ok_or_else(|| format!("unknown key {key}"))?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
@@ -90,6 +97,8 @@ pub fn get_internal(key: &str) -> Option<String> {
 }
 
 pub fn set_internal(key: &str, value: &str) -> Result<(), String> {
+    if !is_internal(key) { return Err(format!("unknown key {key}")); }
+    crate::settings::optional::check(crate::settings::optional::Operation::Credentials)?;
     let entry = internal_entry(key)?;
     if value.is_empty() {
         // An empty value means "forget it" (the relay's access key); some keystores refuse an empty password.

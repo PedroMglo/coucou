@@ -11,6 +11,17 @@
 // somewhere else: that address is the only place this module talks to.
 
 use std::time::{Duration, Instant};
+#[path="lmstudio.rs"]pub(crate)mod lmstudio;
+use std::sync::{Mutex,atomic::{AtomicU64,Ordering}};
+static LMSTUDIO_KEY_GENERATION:AtomicU64=AtomicU64::new(2);
+static LMSTUDIO_KEY_EDIT:Mutex<()>=Mutex::new(());
+pub(crate)fn lmstudio_key_generation()->u64{LMSTUDIO_KEY_GENERATION.load(Ordering::Acquire)}
+fn edit_lmstudio_key(operation:impl FnOnce()->Result<(),String>)->Result<(),String>{
+    let _guard=LMSTUDIO_KEY_EDIT.lock().map_err(|_|"O cofre está ocupado.")?;
+    LMSTUDIO_KEY_GENERATION.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|n.checked_add(2).map(|_|n+1)).map_err(|_|"Limite de credenciais atingido.")?;
+    let result=operation();LMSTUDIO_KEY_GENERATION.fetch_add(1,Ordering::AcqRel);result
+}
+pub(crate)fn clear_lmstudio_key()->Result<(),String>{edit_lmstudio_key(||secrets::clear(LMSTUDIO_KEY))}
 
 use reqwest::Url;
 use serde::Serialize;
@@ -26,6 +37,7 @@ use crate::{net, secrets};
 
 /// Credential store entry of the key of the user's own OpenAI-compatible server.
 pub const CUSTOM_KEY: &str = "openai-compatible-key";
+pub const LMSTUDIO_KEY:&str="lmstudio-local-api-key";
 
 const MAX_TOKENS: u32 = 4096;
 /// A text file is sent inline up to this many characters; the rest is cut.
@@ -58,14 +70,19 @@ fn may_carry_key(url: &Url) -> bool {
 }
 
 /// Settings → Local models: stores the key for the address typed next to it.
-pub fn set_custom_key(typed_url: &str, key: &str) -> Result<(), String> {
+pub fn set_custom_key(typed_url: &str, key: &str) -> Result<(), String> {set_server_key("custom",typed_url,key)}
+pub fn set_server_key(provider:&str,typed_url: &str,key: &str)->Result<(),String>{
+    let slot=match provider{"custom"=>CUSTOM_KEY,"lmstudio"=>LMSTUDIO_KEY,_=>return Err("Servidor de credenciais desconhecido.".into())};
+    if key.len()>8192||key.chars().any(char::is_control){return Err("Credencial inválida.".into());}
     let url = net::normalise_server_url(typed_url)?;
     if !may_carry_key(&url) {
         return Err(t("A key is only sent over https, or to a server on this computer."));
     }
     let bound = BoundKey { url: url.as_str().trim_end_matches('/').to_string(), key: key.trim().to_string() };
     let value = serde_json::to_string(&bound).map_err(|e| e.to_string())?;
-    secrets::set(CUSTOM_KEY, &value)
+    if provider=="lmstudio"{
+        edit_lmstudio_key(||secrets::set(slot,&value))
+    }else{secrets::set(slot,&value)}
 }
 
 /// The key, if it was entered for exactly this address.
@@ -93,7 +110,7 @@ pub struct Server {
 pub fn server(settings: &Settings, id: &str) -> Option<Server> {
     let (id, name, url, key) = match id {
         "ollama" => ("ollama", "Ollama", &settings.ollama_url, None),
-        "lmstudio" => ("lmstudio", "LM Studio", &settings.lmstudio_url, None),
+        "lmstudio" => ("lmstudio", "LM Studio", &settings.lmstudio_url, net::normalise_server_url(&settings.lmstudio_url).ok().and_then(|url|secrets::get(LMSTUDIO_KEY).and_then(|stored|key_for(&stored,&url)))),
         "custom" => {
             let key = net::normalise_server_url(&settings.custom_url).ok().and_then(|u| custom_key_for(&u));
             ("custom", crate::i18n::n_("OpenAI-compatible server"), &settings.custom_url, key)
@@ -148,7 +165,7 @@ pub struct Connected {
 pub async fn connect(id: &str, typed: &str) -> Result<Connected, String> {
     let raw = if typed.trim().is_empty() { usual_address(id).unwrap_or_default() } else { typed.to_string() };
     let url = net::normalise_server_url(&raw)?;
-    let key = if id == "custom" { custom_key_for(&url) } else { None };
+    let key = match id{"custom"=>custom_key_for(&url),"lmstudio"=>secrets::get(LMSTUDIO_KEY).and_then(|stored|key_for(&stored,&url)),_=>None};
     let models = list(&url, key.as_deref()).await?;
     Ok(Connected {
         url: url.as_str().trim_end_matches('/').to_string(),
@@ -159,6 +176,7 @@ pub async fn connect(id: &str, typed: &str) -> Result<Connected, String> {
 
 /// The models of a connected server, for the picker in the chat view.
 pub async fn models(server: &Server) -> Result<Vec<ModelInfo>, String> {
+    if server.id=="lmstudio"&&crate::pet_config::read_existing().is_ok_and(|c|c.pets.get("ai_lmstudio").is_some_and(|p|p.provider=="lmstudio")){return Ok(lmstudio::catalog(server,||true).await?.models());}
     let url = base_url(server)?;
     let models = list(&url, server.key.as_deref()).await?;
     if models.is_empty() {
@@ -169,7 +187,7 @@ pub async fn models(server: &Server) -> Result<Vec<ModelInfo>, String> {
 
 /// `GET /v1/models`, chat models only, or why the server can't be reached.
 async fn list(base: &Url, key: Option<&str>) -> Result<Vec<String>, String> {
-    let response = net::client(base, Duration::from_secs(5))?
+    let response = net::exact_destination_client(base, Duration::from_secs(5))?
         .get(net::join(base, "v1/models"))
         .header("Authorization", bearer(key))
         .send()
@@ -300,6 +318,7 @@ pub async fn send_with(
 async fn send_inner(
     chat:&Chat,server:&Server,model:&str,query:String,context:Option<ChatContext>,app:Option<&AppHandle>,selection:Option<&crate::pet_config::Selection>,mut on_delta:impl FnMut(String),
 )->Result<ChatReply,String> {
+    chat.check_new_effect()?;
     let base = base_url(server)?;
     if model.is_empty() {
         return Err(t("Pick a model above the chat box first."));
@@ -311,13 +330,20 @@ async fn send_inner(
     let identity = if server.id == "ollama" {
         let config = crate::pet_config::read_existing()?;
         Some(chat.capture_local_identity(&turn, &config, "ai_ollama")?)
-    } else { None };
+    } else if server.id=="lmstudio" {
+        let config=crate::pet_config::read_existing()?;
+        if config.pets.get("ai_lmstudio").is_some_and(|p|p.provider=="lmstudio"){
+            lmstudio::inspect(server,model,||chat.is_current(&turn)).await?;
+            Some(chat.capture_local_identity(&turn,&config,"ai_lmstudio")?)
+        }else{if selection.is_some(){return Err("A associação do pet LM Studio mudou.".into());}None}
+    }else{None};
     let activity=app.map(|app|crate::pet_activity::Reporter::new(app,server.id,Some(turn.cancel.clone())).observe(chat.clone(),turn.clone()));
     let prepared = user_text_for_turn(chat, &turn, context.as_ref(), &query).await?;
     let user = json!({ "role": "user", "content": prepared.text });
     let system = identity.as_ref().map(|identity| chat::system_prompt_for_pet(identity, false))
         .unwrap_or_else(|| chat::system_prompt(false));
     let mut body = request_body(model, &system, &turn.history, &user);
+    chat.append_selected_memory(server.id,&query,&crate::pet_memory::context_model::Destination::Server{provider:server.id.into(),endpoint:net::join(&base,"v1/chat/completions"),model:model.into()},server.key.as_deref(),body["messages"].as_array_mut().unwrap())?;
     if server.id=="ollama"{body["stream_options"]=json!({"include_usage":true});}
     let mut calendar_tools = prepared.calendar().and_then(|n|n.query()).is_some();
     if server.id=="ollama"&&(selection.is_some()||calendar_tools){
@@ -345,8 +371,8 @@ async fn send_inner(
     prepared.validate_contents().await?;
     let mut capture = None;
     let streamed = tokio::select! {
-        result=stream_measured_captured(&base, server.key.as_deref(), model, &body, capture_origin.as_ref(), &mut capture, |text|{if prepared.validate().is_ok()&&chat.is_current(&turn){if let Some(app)=app {chat.publish_delta(app,&turn,&text);}if let Some(activity)=&activity{activity.update("message",text.rsplit("\n\n").next().unwrap_or(&text));}on_delta(text);}})=>Some(result),
-        _=async {while !turn.cancel.load(std::sync::atomic::Ordering::Relaxed) {tokio::time::sleep(Duration::from_millis(50)).await;}}=>None,
+        result=stream_bounded_captured(&base, server.key.as_deref(), model, &body, capture_origin.as_ref(), &mut capture, |text|{if prepared.validate().is_ok()&&chat.is_current(&turn){if let Some(app)=app {chat.publish_delta(app,&turn,&text);}if let Some(activity)=&activity{activity.update("message",text.rsplit("\n\n").next().unwrap_or(&text));}on_delta(text);}},MAX_ANSWER,false,||chat.check_new_effect())=>Some(result),
+        _=async {while chat.is_current(&turn) && prepared.validate().is_ok() {tokio::time::sleep(Duration::from_millis(50)).await;}}=>None,
     };
     // The select futures have been dropped before accessing capture again.
     let answer = match streamed {
@@ -391,16 +417,24 @@ pub(crate)trait RuntimeFence:Send+Sync{
  fn current(&self)->bool;
  fn output_limit(&self)->usize;
  fn before_send(&self,model:&str,body:&Value)->Result<(),String>;
+ fn memory_message(&self)->Result<Option<Value>,String>{Ok(None)}
+ fn before_send_to(&self,_server:&Server,model:&str,body:&Value)->Result<(),String>{self.before_send(model,body)}
 }
 pub(crate)struct RuntimeReply{pub reply:ChatReply,pub accepted_output_bytes:u64}
 pub(crate)async fn send_runtime_once(app:Option<&AppHandle>,chat:&Chat,server:&Server,model:&str,query:String,model_input:String,fence:&impl RuntimeFence,config:&crate::pet_config::Configuration)->Result<RuntimeReply,String>{
  let base=base_url(server)?;if !fence.current(){return Err("O objetivo deixou de estar pronto.".into());}
  let turn=chat.begin_cli(server.id,std::sync::Arc::default())?;let lease=chat.lease(&turn);let _lease=if let Some(app)=app{lease.broadcast(app,&query)}else{lease};
  let identity=chat.capture_local_identity(&turn,config,crate::pet_config::pet_id(server.id).ok_or("O pet do modelo mudou.")?)?;
- let user=json!({"role":"user","content":model_input});let body=request_body(model,&chat::system_prompt_for_pet(&identity,false),&turn.history,&user);
+ let user=json!({"role":"user","content":model_input});let mut body=request_body(model,&chat::system_prompt_for_pet(&identity,false),&turn.history,&user);
+ // This distinct data message is never committed as the public user question
+ // or copied into turn history. The fence hashes the actual complete body.
+ if let Some(memory)=fence.memory_message()?{
+  let messages=body.get_mut("messages").and_then(Value::as_array_mut).filter(|m|!m.is_empty()).ok_or("O pedido do objetivo é inválido.")?;
+  messages.insert(messages.len()-1,memory);
+ }
  let origin=chat.usage_capture_origin(&turn);let mut capture=None;
  let result=tokio::select!{
-  result=stream_bounded_captured(&base,server.key.as_deref(),model,&body,origin.as_ref(),&mut capture,|text|{if fence.current()&&chat.is_current(&turn){if let Some(app)=app{chat.publish_delta(app,&turn,&text);}}},fence.output_limit(),true,||fence.before_send(model,&body))=>result,
+  result=stream_bounded_captured(&base,server.key.as_deref(),model,&body,origin.as_ref(),&mut capture,|text|{if fence.current()&&chat.is_current(&turn){if let Some(app)=app{chat.publish_delta(app,&turn,&text);}}},fence.output_limit(),true,||fence.before_send_to(server,model,&body))=>result,
   _=async{loop{if !fence.current()||!chat.is_current(&turn){break;}tokio::time::sleep(Duration::from_millis(50)).await;}}=>Err("A execução foi interrompida.".into()),
  };
  let answer=match result{Ok(answer)=>answer,Err(error)=>{finish_text_capture(&mut capture,AttemptOutcome::Failed);return Err(error);}};
@@ -426,7 +460,8 @@ async fn calendar_answer(chat:&Chat,turn:&crate::chat::Turn,prepared:&PreparedUs
         let response=net::while_current(
             ||chat.is_current(turn)&&prepared.validate().is_ok()&&session.validate().is_ok(),
             ||async{
-                let client=net::client(base,Duration::from_secs(90))?;
+                chat.check_new_effect()?;
+                let client=net::exact_destination_client(base,Duration::from_secs(90))?;
                 let request=client.post(net::join(base,"v1/chat/completions")).header("Authorization",bearer(key)).json(&body).build().map_err(|_|"Não foi possível preparar a consulta.")?;
                 capture=Some(Capture::begin(origin,model));
                 let response=client.execute(request).await.map_err(|_|"A ligação ao modelo foi interrompida.")?;
@@ -608,7 +643,7 @@ async fn stream_bounded_captured(
 )->Result<MeasuredReply,String>{
     if max_output==0||max_output>MAX_ANSWER{return Err("Limite de resposta inválido.".into());}
     let began=Instant::now();let mut usage=crate::pet_usage::Usage::default();
-    let client = if require_local{net::local_client(base,Duration::from_secs(300))?}else{net::client(base, Duration::from_secs(300))?};
+    let client = if require_local{net::local_client(base,Duration::from_secs(300))?}else{net::exact_destination_client(base, Duration::from_secs(300))?};
     let request = client.post(net::join(base, "v1/chat/completions"))
         .header("Authorization", bearer(key))
         .json(body)
@@ -616,6 +651,7 @@ async fn stream_bounded_captured(
         .map_err(|_| unreachable(base))?;
     // One guard per actual dispatch attempt, after request construction and
     // metadata discovery. No credentials, prompts or response bytes are kept.
+    crate::settings::effect_allowed()?;
     before_send()?;
     *capture = Some(Capture::begin(origin, model));
     let mut reply = client.execute(request).await.map_err(|_| unreachable(base))?;

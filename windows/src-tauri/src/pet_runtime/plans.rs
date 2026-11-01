@@ -34,6 +34,11 @@ pub(super) fn snapshot(record: &Record) -> Snapshot {
         plans: record.plans.iter().map(|p| Plan { id:p.id.clone(), task_id:p.task_id.clone(), steps:p.steps.iter().map(|s| Step { id:s.id.clone(), description:s.description.clone(), postcondition:s.postcondition.clone(), operation:s.operation.clone() }).collect() }).collect(),
     }
 }
+pub(super) fn seed_snapshot(record:&Record,spec:&AdmissionSpec)->Snapshot {
+    if spec.schema_version!=3{return snapshot(record);}
+    let refs=record.generated_plans.iter().filter(|r|r.decision_id==spec.decision_id).collect::<Vec<_>>();let mut seed=record.clone();
+    seed.tasks.retain(|t|!refs.iter().any(|r|r.task_id==t.id));seed.plans.retain(|p|!refs.iter().any(|r|r.plan_id==p.id));snapshot(&seed)
+}
 pub(super) fn fingerprint(record: &Record) -> model::Result<String> { model::fingerprint(&snapshot(record)) }
 pub(super) fn typed(record: &Record) -> bool { record.plans.iter().flat_map(|p| &p.steps).any(|s| s.operation.is_some()) }
 pub(super) fn matches(record: &Record, spec: &AdmissionSpec) -> bool {

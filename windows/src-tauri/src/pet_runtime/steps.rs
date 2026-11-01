@@ -7,6 +7,7 @@ pub(super) const MAX_OUTPUT:u64=16_000;
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Scope {
+    #[serde(default,skip_serializing_if="Option::is_none")]pub generated_plan:Option<super::generated_plans::Reference>,
     pub schema_version:u32,pub grant_id:String,pub request_id:String,
     pub goal_id:String,pub pet_id:String,pub provider:String,pub decision_id:String,
     pub lease_id:String,pub controller_id:String,pub main_spec_hash:String,
@@ -18,7 +19,7 @@ pub struct Scope {
 impl Scope {
     pub(super) fn slot(&self)->model::Result<String>{slot(&self.decision_id,&self.plan_id,&self.step_id)}
     pub(super) fn valid(&self)->bool{
-        self.schema_version==1&&model::token(&self.grant_id)&&model::key(&self.request_id)&&model::goal_id(&self.goal_id)
+        (match(self.schema_version,&self.generated_plan){(1,None)=>true,(2,Some(r))=>r.valid()&&r.published_at<=self.approved_at&&r.plan_id==self.plan_id&&r.decision_id==self.decision_id&&r.source.lease_id==self.lease_id&&r.source.controller_id==self.controller_id&&r.proposal_hash==self.proposal_hash,_=>false})&&model::token(&self.grant_id)&&model::key(&self.request_id)&&model::goal_id(&self.goal_id)
             &&model::key(&self.pet_id)&&model::key(&self.provider)&&model::token(&self.decision_id)
             &&model::token(&self.lease_id)&&model::token(&self.controller_id)&&model::key(&self.plan_id)&&model::key(&self.step_id)
             &&self.operation_id=="spotify.control"&&self.version==1
@@ -30,14 +31,15 @@ impl Scope {
             &&(2048..=MAX_OUTPUT).contains(&self.max_output_bytes)
     }
     pub(super) fn belongs(&self,spec:&AdmissionSpec,lease:&Lease)->bool{
-        self.valid()&&spec.schema_version==2&&self.main_spec_hash==model::fingerprint(spec).unwrap_or_default()
+        self.valid()&&(match(self.schema_version,spec.schema_version,&self.generated_plan){(1,2,None)=>Some(&self.proposal_hash)==spec.proposal_hash.as_ref(),(2,3,Some(r))=>r.source.matches(spec,lease)&&r.decision_id==spec.decision_id,_=>false})&&self.main_spec_hash==model::fingerprint(spec).unwrap_or_default()
             &&self.goal_id==spec.goal_id&&self.pet_id==spec.owner.pet_id&&self.provider==spec.owner.provider
             &&self.decision_id==spec.decision_id&&self.lease_id==lease.id&&self.controller_id==lease.controller_id
-            &&self.context_hash==spec.context_hash&&Some(&self.proposal_hash)==spec.proposal_hash.as_ref()
+            &&self.context_hash==spec.context_hash
             &&self.policy_revision==spec.policy_revision&&self.deadline_at==lease.deadline_at&&self.approved_at>=lease.claimed_at
     }
     pub(super) fn matches(&self,goal:&Record)->bool{
         if goal.validate().is_err()||goal.id!=self.goal_id||goal.spec.owner.pet_id!=self.pet_id||super::plans::fingerprint(goal).ok().as_ref()!=Some(&self.proposal_hash){return false;}
+        if self.generated_plan.as_ref().is_some_and(|r|!r.structurally_present(goal)){return false;}
         let Some(plan)=goal.plans.iter().find(|p|p.id==self.plan_id)else{return false;};
         if !goal.tasks.iter().any(|t|t.id==plan.task_id&&t.plan_id.as_ref()==Some(&plan.id)&&t.state==WorkState::Proposed){return false;}
         let Some(step)=plan.steps.iter().find(|s|s.id==self.step_id&&s.state==WorkState::Proposed)else{return false;};
@@ -72,7 +74,11 @@ impl From<AttemptPhase>for RecoveryBudget{fn from(p:AttemptPhase)->Self{match p{
 pub struct Recovery {
     pub status:RecoveryStatus,pub budget_phase:Option<RecoveryBudget>,
     pub recorded_effect_verified:Option<bool>,pub reconciliation_available:bool,
+    #[serde(skip_serializing_if="not_frozen")]pub accounting_frozen:bool,
+    #[serde(skip_serializing_if="Option::is_none")]pub recorded_result:Option<Receipt>,
 }
+fn not_frozen(value:&bool)->bool{!*value}
+impl Recovery{pub(super)fn freeze_accounting(&mut self){self.accounting_frozen=true;self.reconciliation_available=false;}}
 pub(super) struct Assessment{pub record:StepRecord,pub recovery:Recovery}
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]

@@ -28,6 +28,7 @@ pub(crate) enum Error {
     NativeFailure,
     OriginChanged,
     Unsupported,
+    PreferencesUnconfirmed,
 }
 
 struct WireReply {
@@ -40,6 +41,7 @@ struct WireReply {
 
 #[derive(Clone)]
 pub(crate) struct Config {
+    #[cfg(test)] io_probe:Option<crate::settings::EffectProbe>,
     socket: PathBuf,
     runtime: PathBuf,
     uid: u32,
@@ -62,9 +64,18 @@ impl Config {
             return Err(Error::UntrustedPeer);
         }
         Ok(Self { socket, runtime, uid, trusted_executable: PathBuf::from("/usr/bin/dms"),
+            #[cfg(test)] io_probe:None,
             trusted_executable_uid: 0, deadline: Duration::from_secs(3),
             discovery: Some(discovery::Native::current()) })
     }
+}
+
+impl Config {
+    pub(crate) fn effect_ready(&self)->bool {
+        #[cfg(test)]if let Some(probe)=&self.io_probe{return probe.check().is_ok();}
+        crate::settings::effect_allowed().is_ok()
+    }
+    #[cfg(test)]pub(crate)fn with_effect_probe(mut self,probe:crate::settings::EffectProbe)->Self{self.io_probe=Some(probe);self}
 }
 
 fn native_socket_path(socket: &std::path::Path, runtime: &std::path::Path) -> bool {
@@ -128,6 +139,23 @@ async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, bytes: &[u8], state:
     *state = WriteState::MayHaveStarted;
     writer.write_all(bytes).await.map_err(|_| Error::Unavailable)
 }
+
+async fn write_frame_checked<W:AsyncWrite+Unpin>(writer:&mut W,bytes:&[u8],state:&mut WriteState,ready:impl Fn()->bool)->Result<(),Error>{
+    let mut offset=0;
+    while offset<bytes.len(){
+        let n=std::future::poll_fn(|cx|{
+            if !ready(){return std::task::Poll::Ready(Err(Error::PreferencesUnconfirmed));}
+            // Retain the existing conservative contract once actual IO has
+            // been attempted. Pending/partial never becomes a zero-byte claim.
+            *state=WriteState::MayHaveStarted;
+            std::pin::Pin::new(&mut *writer).poll_write(cx,&bytes[offset..]).map_err(|_|Error::Unavailable)
+        }).await?;
+        if n==0{return Err(Error::Unavailable);}offset+=n;
+    }
+    // No check after the last byte: an observed full frame remains delivered.
+    Ok(())
+}
+#[cfg(all(test,target_os="linux"))]#[path="system_io_transport_tests.rs"]mod system_io_tests;
 
 // The reviewed API34/API38 requests, framing and ACKs share this exact contract.
 // Keep the same explicit protocol gate as software enable/disable evidence.
@@ -260,6 +288,7 @@ where F: FnOnce(&Origin) -> Result<(), E> {
     let deadline = Instant::now() + config.deadline;
     let mut write = WriteState::NotStarted;
     let operation = async {
+        if !matches!(rpc,Rpc::Read)&&!config.effect_ready(){return Err(failure(Error::PreferencesUnconfirmed,write));}
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
         let (mut stream, source, selected) = if matches!(rpc, Rpc::Read) {
             connect_read(config, deadline).await.map_err(|e| failure(e, write))?
@@ -290,9 +319,11 @@ where F: FnOnce(&Origin) -> Result<(), E> {
         let candidate = Origin { source: source.clone(), scan_proven: handshake.is_some(),
             enable_wifi_proven: expected.is_some_and(|o|o.enable_wifi_proven),
             disable_wifi_proven: expected.is_some_and(|o|o.disable_wifi_proven) };
+        if !matches!(rpc,Rpc::Read)&&!config.effect_ready(){return Err(failure(Error::PreferencesUnconfirmed,write));}
         guard(&candidate).map_err(Failure::Guard)?;
         if Instant::now() >= deadline { return Err(failure(Error::Timeout, write)); }
-        write_frame(&mut stream, &bytes, &mut write).await.map_err(|e| failure(e, write))?;
+        if matches!(rpc,Rpc::Read){write_frame(&mut stream,&bytes,&mut write).await}
+        else{write_frame_checked(&mut stream,&bytes,&mut write,||config.effect_ready()).await}.map_err(|e|failure(e,write))?;
         let raw = if let Some((version, capabilities)) = handshake {
             scanner.ack(&mut stream, id, rpc).await.map_err(|e| failure(e, write))?;
             WireReply { api_version: Some(version), capabilities, result: Value::Null }
@@ -458,7 +489,7 @@ async fn read_reply(stream: &mut UnixStream, id: u64) -> Result<WireReply, Error
 // Fixture constructor: no native metadata process can run in the default harness.
 #[cfg(test)]
 pub(crate) fn config_for_fixture(socket: PathBuf, runtime: PathBuf, trusted_executable: PathBuf, uid: u32, deadline: Duration) -> Config {
-    Config {socket,runtime,uid,trusted_executable,trusted_executable_uid:uid,deadline,discovery:None}
+    Config {io_probe:None,socket,runtime,uid,trusted_executable,trusted_executable_uid:uid,deadline,discovery:None}
 }
 
 

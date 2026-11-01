@@ -78,9 +78,15 @@ fn reserved_accounting_is_not_misrepresented_as_a_response() {
 #[test]
 fn actual_http_success_with_failed_receipt_publication_retains_charge_and_cannot_be_replayed() {
     let (f, a, g, _p, o, _main) = setup("ollama");
-    let blocked = a.result_root().unwrap(); fs::write(&blocked, b"occupied").unwrap();
-    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o600)).unwrap();
-    let (server, worker) = fixture(vec![("application/json", local_metadata().to_string()), ("text/event-stream", stream("Known", true))]);
+    let blocked = a.result_root().unwrap(); let late = blocked.clone();
+    // Preflight cannot predict a failure introduced after dispatch. Preserve
+    // this uncertain-result/no-replay regression at its actual causal boundary.
+    let (server, worker) = fixture_with_hook(vec![("application/json", local_metadata().to_string()), ("text/event-stream", stream("Known", true))], move |path| {
+        if path == "/v1/chat/completions" {
+            fs::write(&late, b"occupied after dispatch").unwrap();
+            fs::set_permissions(&late, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    });
     assert!(run(o.respond_once(None, &g, &server, "once", &crate::pet_config::defaults())).unwrap_err().contains("publicação"));
     assert_eq!(worker.join().unwrap().len(), 2);
     assert_eq!(ledger(&f, &g)["attempts"][0]["phase"], "settled");

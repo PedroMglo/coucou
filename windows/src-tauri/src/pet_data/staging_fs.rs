@@ -20,14 +20,16 @@ enum Binding { Root(PathBuf), Child(Arc<Inner>, OsString) }
 struct Inner { file: File, identity: Identity, binding: Binding, private:bool }
 #[derive(Clone)] pub(super) struct Dir(Arc<Inner>);
 impl Dir {
+    /// Lexical path for an already held/current binding, never a native permit.
+    pub(super)fn bound_path(&self)->Result<PathBuf>{self.check()?;match &self.0.binding{Binding::Root(path)=>Ok(path.clone()),Binding::Child(parent,name)=>Ok(Dir(parent.clone()).bound_path()?.join(name))}}
     pub(super) fn root(path: &Path) -> Result<Self> {
-        let node = Node::root(path)?.ok_or(Error::Unavailable)?;
+        let node = private_fs::bound_directory_root(path)?.ok_or(Error::Unavailable)?;
         Self::from_node(node, Binding::Root(path.into()),true)
     }
     /// Existing application parent may be 0755. New children/output are always
     /// private; do not chmod or adopt broader permissions for a workspace.
     pub(super) fn parent(path:&Path)->Result<Self>{
-        let node=Node::root(path)?.ok_or(Error::Unavailable)?;
+        let node=private_fs::bound_directory_root(path)?.ok_or(Error::Unavailable)?;
         Self::from_node(node,Binding::Root(path.into()),false)
     }
     fn from_node(node: Node, binding: Binding,private:bool) -> Result<Self> {
@@ -39,8 +41,8 @@ impl Dir {
         let current = self.0.file.metadata().map_err(|_| Error::Unavailable)?;
         if !owned_dir(&current,self.0.private) || identity(&self.0.file)? != self.0.identity { return Err(Error::UnsafePath); }
         let named = match &self.0.binding {
-            Binding::Root(path) => Node::root(path)?,
-            Binding::Child(parent, name) => { Dir(parent.clone()).check()?; private_fs::child(&parent.file, name)? },
+            Binding::Root(path) => private_fs::bound_directory_root(path)?,
+            Binding::Child(parent, name) => { Dir(parent.clone()).check()?; private_fs::bound_directory_child(&parent.file, name)? },
         }.ok_or(Error::SourceChanged)?;
         if identity(&named.file)? != self.0.identity { return Err(Error::SourceChanged); }
         Ok(())
@@ -54,22 +56,28 @@ impl Dir {
     }
     pub(super) fn dir(&self, n: &OsStr) -> Result<Self> {
         self.check()?;
-        let node = private_fs::child(&self.0.file, n)?.ok_or(Error::Unavailable)?;
+        let node = private_fs::bound_directory_child(&self.0.file, n)?.ok_or(Error::Unavailable)?;
         if node.device != self.0.identity.0 { return Err(Error::UnsafePath); }
         Self::from_node(node, Binding::Child(self.0.clone(), n.into()),true)
     }
     /// Publish a fully prepared child directory without replacing any target.
     pub(super) fn publish_dir(&self, staged: &OsStr, target: &OsStr, prepared: &Dir) -> Result<Dir> {
-        self.check()?; prepared.check()?;
+        self.transfer_dir(staged,self,target,prepared)
+    }
+    /// Transfer only the exact reviewed child between pinned parents. This is
+    /// a storage primitive, never a caller-facing path or execution permit.
+    pub(super) fn transfer_dir(&self, staged:&OsStr, destination:&Dir, target:&OsStr, prepared:&Dir)->Result<Dir>{
+        self.check()?; destination.check()?; prepared.check()?;
+        if self.0.identity.0!=destination.0.identity.0||self.0.identity.4!=destination.0.identity.4{return Err(Error::UnsafePath);}
         let named = self.dir(staged)?;
         if named.0.identity != prepared.0.identity { return Err(Error::SourceChanged); }
         let from = name(staged)?; let to = name(target)?;
         prepared.sync()?;
-        if unsafe { libc::renameat2(self.0.file.as_raw_fd(), from.as_ptr(), self.0.file.as_raw_fd(), to.as_ptr(), libc::RENAME_NOREPLACE) } != 0 {
+        if unsafe { libc::renameat2(self.0.file.as_raw_fd(), from.as_ptr(), destination.0.file.as_raw_fd(), to.as_ptr(), libc::RENAME_NOREPLACE) } != 0 {
             return Err(if std::io::Error::last_os_error().kind() == std::io::ErrorKind::AlreadyExists { Error::TargetExists } else { Error::Unavailable });
         }
-        self.sync()?;
-        let published = self.dir(target)?;
+        destination.sync()?; self.sync()?;
+        let published = destination.dir(target)?;
         if published.0.identity != prepared.0.identity { return Err(Error::SourceChanged); }
         Ok(published)
     }
@@ -122,6 +130,31 @@ impl Dir {
             return Err(if std::io::Error::last_os_error().kind()==std::io::ErrorKind::AlreadyExists{Error::TargetExists}else{Error::Unavailable});
         }
         self.sync()
+    }
+    /// Continue only a verified native staging prefix; never truncate/replace.
+    pub(super)fn complete_prefix(&self,n:&str,bytes:&[u8])->Result<()>{
+        use std::io::{Read,Write};
+        let parent=self.node()?;
+        let Some(node)=parent.child(OsStr::new(n))?else{return self.write(n,bytes);};
+        if node.directory||node.len>bytes.len()as u64||!private_file(&node.file.metadata().map_err(|_|Error::Unavailable)?){return Err(Error::UnsafePath);}
+        let mut prior=vec![];(&node.file).take(bytes.len()as u64+1).read_to_end(&mut prior).map_err(|_|Error::Unavailable)?;
+        if !bytes.starts_with(&prior)||prior.len()as u64!=node.len{return Err(Error::SourceChanged);}node.current()?;parent.same_child(OsStr::new(n),&node)?;
+        let c=name(OsStr::new(n))?;let fd=unsafe{libc::openat(self.0.file.as_raw_fd(),c.as_ptr(),libc::O_WRONLY|libc::O_APPEND|libc::O_NOFOLLOW|libc::O_CLOEXEC)};
+        if fd<0{return Err(Error::Unavailable);}let mut file=unsafe{File::from_raw_fd(fd)};if identity(&file)?!=identity(&node.file)?{return Err(Error::SourceChanged);}self.confirm(OsStr::new(n),&file)?;if file.metadata().map_err(|_|Error::Unavailable)?.len()!=prior.len()as u64{return Err(Error::SourceChanged);}
+        file.write_all(&bytes[prior.len()..]).and_then(|_|file.sync_all()).map_err(|_|Error::Unavailable)?;self.confirm(OsStr::new(n),&file)?;self.sync()
+    }
+    pub(super)fn publish_staged_new(&self,staged:&str,target:&str)->Result<()>{
+        self.check()?;let node=self.node()?.child(OsStr::new(staged))?.ok_or(Error::SourceChanged)?;if node.directory||!private_file(&node.file.metadata().map_err(|_|Error::Unavailable)?){return Err(Error::UnsafePath);}node.current()?;
+        let from=name(OsStr::new(staged))?;let to=name(OsStr::new(target))?;if unsafe{libc::renameat2(self.0.file.as_raw_fd(),from.as_ptr(),self.0.file.as_raw_fd(),to.as_ptr(),libc::RENAME_NOREPLACE)}!=0{return Err(Error::TargetExists);}self.sync()
+    }
+    /// Exchange two owned regular files, retaining the actual displaced bytes.
+    /// Caller verifies both sides and its native transaction before/after this
+    /// point; uncertainty is preserved, never automatically repeated.
+    pub(super)fn exchange_files(&self,staged:&str,target:&str)->Result<()>{
+        self.check()?;let parent=self.node()?;
+        for n in [staged,target]{let node=parent.child(OsStr::new(n))?.ok_or(Error::SourceChanged)?;if node.directory||!private_file(&node.file.metadata().map_err(|_|Error::Unavailable)?){return Err(Error::UnsafePath);}node.current()?;parent.same_child(OsStr::new(n),&node)?;}
+        let from=name(OsStr::new(staged))?;let to=name(OsStr::new(target))?;
+        if unsafe{libc::renameat2(self.0.file.as_raw_fd(),from.as_ptr(),self.0.file.as_raw_fd(),to.as_ptr(),libc::RENAME_EXCHANGE)}!=0{return Err(Error::Unavailable);}self.sync()
     }
     pub(super) fn sync(&self) -> Result<()> { self.check()?; self.0.file.sync_all().map_err(|_| Error::Unavailable) }
     pub(super) fn node(&self) -> Result<Node> {

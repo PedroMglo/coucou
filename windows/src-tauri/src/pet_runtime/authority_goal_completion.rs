@@ -7,7 +7,14 @@ const MAX_VERIFICATION:usize=64*1024;
 fn message(body:&Verification)->Result<Vec<u8>>{let mut v=b"coucou-native-goal-verification-v1\0".to_vec();v.extend(serde_json::to_vec(body).map_err(|_|Failure::Invalid)?);Ok(v)}
 pub(in crate::pet_runtime)struct Certified<'a>{authority:&'a Authority,spec:AdmissionSpec,proof:ConsentProof,scope:RecipeScope,report:Verification}
 impl Authority{
-    pub(super)fn verification_load_unlocked(&self,spec:&AdmissionSpec,proof:&ConsentProof,scope:&RecipeScope)->Result<Option<Verification>>{
+    pub(in crate::pet_runtime)fn observe_completed_goal(&self,goal:&Record)->Result<()> {
+        goal.validate().map_err(|_|Failure::Invalid)?;if goal.state!=State::Completed{return Err(Failure::Invalid);}
+        let _lock=self.lock_shared()?;let row=goal.admissions.last().ok_or(Failure::Missing)?;let proof=row.proof.as_ref().ok_or(Failure::Missing)?;
+        let scope=self.recipe_load(&row.spec,proof,&goal.completion.as_ref().ok_or(Failure::Missing)?.plan_id)?.ok_or(Failure::Missing)?;
+        let report=self.verification_load_unlocked(&row.spec,proof,&scope)?.ok_or(Failure::Missing)?;
+        if !report.criteria_verified{return Err(Failure::RecoveryRequired);}verify_goal_source(goal,&report)
+    }
+    pub(in crate::pet_runtime)fn verification_load_unlocked(&self,spec:&AdmissionSpec,proof:&ConsentProof,scope:&RecipeScope)->Result<Option<Verification>>{
         if scope.verification.is_none(){return Ok(None);}let stored=self.recipe_load(spec,proof,&scope.plan_id)?.ok_or(Failure::Missing)?;
         if stored!=*scope{return Err(Failure::Invalid);}let dir=self.step_directory(false)?.ok_or(Failure::Missing)?;
         let Some((raw,_))=dir.bytes(&format!("{}.verification.json",scope.slot().map_err(|_|Failure::Invalid)?),MAX_VERIFICATION).map_err(|_|Failure::Unsafe)?else{return Ok(None);};
@@ -18,7 +25,7 @@ impl Authority{
             if saved.record.scope!=*s||saved.record.phase!=Phase::Finished||saved.record.result.as_ref().is_none_or(|r|!r.observation.effect_verified||!r.observation.scope_current){return Err(Failure::RecoveryRequired);}}
         self.fence()?;Ok(Some(e.body))
     }
-    fn verification_stabilize(&self,scope:&RecipeScope,report:&Verification)->Result<()>{
+    pub(in crate::pet_runtime)fn verification_stabilize(&self,scope:&RecipeScope,report:&Verification)->Result<()>{
         let dir=self.step_directory(false)?.ok_or(Failure::Missing)?;let name=format!("{}.verification.json",scope.slot().map_err(|_|Failure::Invalid)?);
         dir.open_file(&name,libc::O_RDONLY).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?.sync_all().map_err(|_|Failure::Uncertain)?;dir.durable().map_err(|_|Failure::Uncertain)?;
         let(raw,_)=dir.bytes(&name,MAX_VERIFICATION).map_err(|_|Failure::Changed)?.ok_or(Failure::Changed)?;let e:Envelope=serde_json::from_slice(&raw).map_err(|_|Failure::Invalid)?;
@@ -41,7 +48,10 @@ impl Authority{
         self.verification_stabilize(scope,report)?;Ok(report.clone())
     }
     pub(in crate::pet_runtime)fn certify_completion(&self,spec:&AdmissionSpec,proof:&ConsentProof,scope:&RecipeScope,goal:&Record)->Result<Certified<'_>>{
-        let _lock=self.lock()?;let report=self.verification_load_unlocked(spec,proof,scope)?.ok_or(Failure::Missing)?;
+        // This authenticates/stabilizes existing immutable evidence. A shared
+        // reader excludes writers while allowing concurrent native goal reads.
+        // Certified::current still takes the exclusive transaction lock.
+        let _lock=self.lock_shared()?;let report=self.verification_load_unlocked(spec,proof,scope)?.ok_or(Failure::Missing)?;
         if !report.criteria_verified{return Err(Failure::RecoveryRequired);}self.verification_stabilize(scope,&report)?;
         verify_goal_source(goal,&report)?;Ok(Certified{authority:self,spec:spec.clone(),proof:proof.clone(),scope:scope.clone(),report})
     }
@@ -69,5 +79,15 @@ impl Certified<'_>{
         if !report.criteria_verified||report.reference!=self.report.reference{return Err(Failure::Changed);}verify_goal_source(goal,&report)?;
         if goal.state!=State::Completed{let lease=goal.admissions.last().and_then(|r|r.lease.as_ref()).ok_or(Failure::Missing)?;self.authority.budget_body(&self.spec,&self.proof,lease,now,true)?;}
         self.authority.fence()
+    }
+}
+
+impl Authority{
+    pub(in crate::pet_runtime::authority_store)fn retirement_verification_identity(&self,raw:&[u8])->Result<(String,String)>{
+        let e:Envelope=serde_json::from_slice(raw).map_err(|_|Failure::Invalid)?;
+        hmac::verify(&self.key,&message(&e.body)?,&decode(&e.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;
+        let r=&e.body.reference;let slot=recipe_model::slot(&r.decision_id,&r.plan_id).map_err(|_|Failure::Invalid)?;
+        let dir=self.step_directory(false)?.ok_or(Failure::Missing)?;let(recipe,_)=dir.bytes(&format!("{slot}.recipe.json"),256*1024).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;
+        let scope=self.retirement_recipe_scope(&recipe)?;if !e.body.valid_for(&scope){return Err(Failure::Invalid);}Ok((r.decision_id.clone(),slot))
     }
 }

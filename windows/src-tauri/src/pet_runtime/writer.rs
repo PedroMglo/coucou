@@ -16,9 +16,14 @@ impl Owned{
   self.prepare_model_call(request,goal,output_limit,None,now)
  }
  fn prepare_planning_model(&self,request:&str,goal:&Record,now:u64)->model::Result<ModelCall>{
-  let policy=self.live.spec.planning_policy.as_ref().ok_or(model::Error::Conflict)?;
   let captured=crate::pet_runtime::planning_journal::Request::capture(goal,&self.live.spec,&self.live.lease,request)?;
-  self.prepare_model_call(request,goal,u64::from(policy.limits.max_output_bytes),Some(captured),now)
+  let authority=Authority::existing(&self.live.authority_path).map_err(|_|model::Error::StorageUnavailable)?;
+  let context=authority.planning_context(&self.live.spec,&self.live.proof,&self.live.lease,captured,now).map_err(|_|model::Error::Conflict)?;
+  self.prepare_planning_captured(goal,context,now)
+ }
+ fn prepare_planning_captured(&self,goal:&Record,context:crate::pet_runtime::planning_context::Context,now:u64)->model::Result<ModelCall>{
+  if !context.request.matches(&self.live.spec,&self.live.lease)||context.request.source.record_hash!=model::fingerprint(goal)?{return Err(model::Error::Conflict);}
+  let request=context.request.request_id.clone();self.prepare_model_call(&request,goal,context.input.remaining.model_output_limit,Some(context.request),now)
  }
  fn prepare_model_call(&self,request:&str,goal:&Record,output_limit:u64,planning:Option<crate::pet_runtime::planning_journal::Request>,now:u64)->model::Result<ModelCall>{
   self.check_model_goal(request,goal)?;
@@ -43,7 +48,7 @@ impl Owned{
  async fn model_once(&self,app:Option<&tauri::AppHandle>,goal:&Record,server:&crate::local_chat::Server,request:&str,config:&crate::pet_config::Configuration,planning:bool)->Result<String,String>{
   // Native CLI agents have uncontrolled internal requests/tools. They remain
   // unavailable here until their finite limits can be enforced natively.
-  if self.live.lease.provider!="ollama"||self.live.spec.owner.adapter!="ollama"||server.id!="ollama"{return Err("Este adaptador ainda não garante os limites de execução autónoma.".into());}
+  if !self.live.spec.owner.local_engine()||server.id!=self.live.lease.provider{return Err("Este adaptador ainda não garante os limites de execução autónoma.".into());}
   self.check_model_goal(request,goal).map_err(|_|"O pedido já não corresponde ao objetivo original.")?;
   // Consult durable observations before any metadata or inference IO. An old
   // attempt without a completed receipt cannot be automatically replayed.
@@ -53,16 +58,25 @@ impl Owned{
    crate::pet_runtime::results::Lookup::Available{..}=>return crate::pet_runtime::results::recover(&authority,&self.live.spec,&self.live.proof,request).map(|receipt|receipt.text).map_err(|_|"Não foi possível confirmar o recibo durável; não repetir automaticamente.".into()),
    crate::pet_runtime::results::Lookup::RecoveryRequired{..}=>return Err("A tentativa anterior requer recuperação; nenhum novo pedido foi enviado ao modelo.".into()),
   }
-  if planning {
-   let captured=crate::pet_runtime::planning_journal::Request::capture(goal,&self.live.spec,&self.live.lease,request).map_err(|_|"A origem do planeamento mudou.")?;
-   authority.preflight_planning(&self.live.spec,&self.live.proof,&self.live.lease,&captured,crate::assistant_memory::now()).map_err(|_|"O planeamento atingiu um limite ou requer reconciliação; nenhuma chamada foi enviada.")?;
+  crate::pet_runtime::results::preflight(&authority,&self.live.spec.decision_id).map_err(|_|"O armazenamento dos resultados está inválido ou indisponível; nenhum pedido foi enviado ao modelo.")?;
+  if let Some(data)=&self.live.spec.memory_data{
+   let destination=crate::pet_runtime::memory_review::destination_for(&self.live.spec.owner.provider,server,&self.live.lease.model).map_err(|_|"O destino revisto dos dados mudou.")?;
+   if destination!=data.destination||!data.valid(server.id,&self.live.lease.model)||server.id=="ollama"&&server.key.is_some(){return Err("O destino revisto dos dados mudou; nenhuma chamada foi enviada.".into());}
   }
-  let query=if planning{crate::pet_runtime::planning::model_input(goal,&self.live.spec)}else{crate::pet_runtime::plans::model_input(goal,&self.live.spec)}.map_err(|_|"O contexto revisto mudou ou excedeu o limite; nenhum pedido foi enviado ao modelo.")?;
+  let context=if planning {
+   let captured=crate::pet_runtime::planning_journal::Request::capture(goal,&self.live.spec,&self.live.lease,request).map_err(|_|"A origem do planeamento mudou.")?;
+   Some(authority.planning_context(&self.live.spec,&self.live.proof,&self.live.lease,captured,crate::assistant_memory::now()).map_err(|_|"O planeamento atingiu um limite ou requer reconciliação; nenhuma chamada foi enviada.")?)
+  }else{None};
+  let query=if let Some(context)=&context{crate::pet_runtime::planning::model_input(goal,&self.live.spec,&context.input)}else{crate::pet_runtime::plans::model_input(goal,&self.live.spec)}.map_err(|_|"O contexto revisto mudou ou excedeu o limite; nenhum pedido foi enviado ao modelo.")?;
   let base=crate::local_chat::base_url(server)?;
-  if !crate::net::is_loopback_url(&base){return Err("A execução autónoma Ollama requer o servidor local aprovado.".into());}
+  if !crate::net::is_loopback_url(&base){return Err(if server.id=="lmstudio"{"A execução autónoma LM Studio requer o servidor local aprovado."}else{"A execução autónoma Ollama requer o servidor local aprovado."}.into());}
   // Only successful, fresh native model metadata can establish that this
   // configured loopback Ollama model is installed locally, not a cloud alias.
   let preparation=self.readiness_worker(crate::assistant_memory::now()).map_err(|_|"O objetivo deixou de estar pronto.")?;
+  if server.id=="lmstudio"{
+   let binding=crate::local_chat::lmstudio::inspect(server,&self.live.lease.model,||preparation.in_flight_current(crate::assistant_memory::now())).await?;
+   if self.live.spec.engine_binding.as_ref()!=Some(&binding){return Err("A identidade do modelo LM Studio mudou; é necessária outra revisão.".into());}
+  }else{
   let observation=crate::pet_capabilities::begin_local(&server.url,&self.live.lease.model);
   let metadata=crate::net::while_current(||preparation.in_flight_current(crate::assistant_memory::now()),||async{
    let client=crate::net::local_client(&base,Duration::from_secs(3))?;
@@ -73,8 +87,10 @@ impl Owned{
    verify_local_model(&value)?;Ok(value)
   }).await;
   crate::pet_capabilities::finish_local(observation,metadata.as_ref().ok());
-  metadata?;drop(preparation);
-  let call=if planning{self.prepare_planning_model(request,goal,crate::assistant_memory::now())}else{self.prepare_model(request,goal,self.live.spec.budget.max_output_bytes,crate::assistant_memory::now())}.map_err(|e|format!("Não foi possível reservar a chamada: {e:?}"))?;
+  metadata?;
+  }
+  drop(preparation);
+  let call=if let Some(context)=context{self.prepare_planning_captured(goal,context,crate::assistant_memory::now())}else{self.prepare_model(request,goal,self.live.spec.budget.max_output_bytes,crate::assistant_memory::now())}.map_err(|e|format!("Não foi possível reservar a chamada: {e:?}"))?;
   let channel=call.reservation.channel();
   let result=crate::local_chat::send_runtime_once(app,&channel,server,&self.live.lease.model,goal.spec.intent.clone(),query,&call,config).await;
   // A failed/lost acknowledgment retains the full reservation. A successful
@@ -86,21 +102,57 @@ impl Owned{
   Ok(result.reply.text)
  }
 }
+impl ModelCall{
+ /// Only Busy, before HTTP, on this exact retained worker/attempt. A published
+ /// or uncertain ACK is not retried; neither the budget nor deadline is renewed.
+ fn budget_when_available(&self,mut operation:impl FnMut()->crate::pet_runtime::authority::Result<()>)->crate::pet_runtime::authority::Result<()>{
+  let until=Instant::now()+Duration::from_secs(1);
+  loop{
+   if self.worker.live.closed.load(Ordering::Acquire)||self.worker.live.hold.stopped(){return Err(crate::pet_runtime::authority::Failure::Revoked);}
+   match operation(){Err(crate::pet_runtime::authority::Failure::Busy)if Instant::now()<until=>std::thread::sleep(Duration::from_millis(10)),result=>return result}
+  }
+ }
+}
 impl RuntimeFence for ModelCall{
  fn current(&self)->bool{let now=crate::assistant_memory::now();if self.dispatched.load(Ordering::Acquire){self.worker.in_flight_current(now)}else{self.worker.current(now)}}
  fn output_limit(&self)->usize{self.output_reserved as usize}
+ fn memory_message(&self)->Result<Option<serde_json::Value>,String>{
+  let message=self.reservation.channel().goal_memory_message(&self.worker.live.lease.goal_id)?;
+  if self.worker.live.spec.memory_data.is_some()!=message.is_some(){return Err("O contexto de dados não corresponde à concessão do objetivo.".into());}Ok(message)
+ }
  fn before_send(&self,model:&str,body:&serde_json::Value)->Result<(),String>{
+  if self.worker.live.spec.memory_data.is_some(){return Err("O destino dos dados tem de ser validado antes da chamada.".into());}
+  self.authorize_body(model,body)
+ }
+ fn before_send_to(&self,server:&crate::local_chat::Server,model:&str,body:&serde_json::Value)->Result<(),String>{
+  if let Some(data)=&self.worker.live.spec.memory_data{
+   let destination=crate::pet_runtime::memory_review::destination_for(&self.worker.live.spec.owner.provider,server,model).map_err(|_|"O destino dos dados mudou.")?;
+   if destination!=data.destination||!data.valid(server.id,model)||server.id=="ollama"&&server.key.is_some(){return Err("O destino dos dados mudou; é necessária outra revisão.".into());}
+   let message=self.memory_message()?.ok_or("As recordações selecionadas estão indisponíveis.")?;
+   let messages=body.get("messages").and_then(serde_json::Value::as_array).ok_or("O pedido do objetivo é inválido.")?;
+   if messages.len()<2||messages.get(messages.len()-2)!=Some(&message)||serde_json::to_vec(body).map_err(|_|"Pedido inválido.")?.len()>data.max_input_bytes{return Err("O pedido mudou ou excedeu o limite revisto; nenhuma chamada foi enviada.".into());}
+  }
+  self.authorize_body(model,body)
+ }
+}
+impl ModelCall{
+ fn authorize_body(&self,model:&str,body:&serde_json::Value)->Result<(),String>{
   if model!=self.worker.live.lease.model||self.armed.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_err(){return Err("A autorização desta chamada já foi consumida.".into());}
   let live=&self.worker.live;let _gate=live.gate.lock().map_err(|_|"O controlador está indisponível.")?;
   if !self.current(){return Err("O objetivo deixou de estar autorizado/pronto.".into());}
   if body.get("model").and_then(|v|v.as_str())!=Some(model)||body.get("tools").is_some(){return Err("O pedido mudou ou incluiu ferramentas não autorizadas.".into());}
+  let authority=Authority::existing(&live.authority_path).map_err(|_|"O orçamento está indisponível.")?;
+  // Metadata IO may have taken time since the first check. Inspect the exact
+  // native decision again before reserving anything; never bless an old folder.
+  crate::pet_runtime::results::preflight(&authority,&live.spec.decision_id).map_err(|_|"O armazenamento dos resultados está inválido ou indisponível; nenhum pedido foi enviado ao modelo.")?;
   let now=crate::assistant_memory::now();
   let attempt=Attempt{id:nonce().map_err(|_|"Não foi possível identificar a tentativa.")?,request_id:self.request_id.clone(),input_hash:model::fingerprint(&(&live.lease.id,model,body)).map_err(|_|"Pedido inválido.")?,kind:Kind::Model,output_reserved:self.output_reserved,phase:Phase::Reserved,accepted_output:None,reserved_at:now,started_at:None,finished_at:None};
   *self.attempt.lock().map_err(|_|"O controlador está indisponível.")?=Some(attempt.clone());
-  let authority=Authority::existing(&live.authority_path).map_err(|_|"O orçamento está indisponível.")?;
-  let reserved=if let Some(request)=&self.planning{authority.reserve_planning_attempt(&live.spec,&live.proof,&live.lease,&attempt,request,now)}else{authority.reserve_attempt(&live.spec,&live.proof,&live.lease,&attempt,now)};
-  reserved.map_err(|_|"Não foi possível reservar o orçamento antes da chamada; não repetir automaticamente.")?;
-  authority.start_attempt(&live.spec,&live.proof,&live.lease,&attempt,crate::assistant_memory::now()).map_err(|_|"Não foi possível confirmar o orçamento antes da chamada; não repetir automaticamente.")?;
+  self.budget_when_available(||{
+   let at=crate::assistant_memory::now();
+   if let Some(request)=&self.planning{authority.reserve_planning_attempt(&live.spec,&live.proof,&live.lease,&attempt,request,at)}else{authority.reserve_attempt(&live.spec,&live.proof,&live.lease,&attempt,at)}
+  }).map_err(|error|format!("Não foi possível reservar o orçamento antes da chamada ({error:?}); não repetir automaticamente."))?;
+  self.budget_when_available(||authority.start_attempt(&live.spec,&live.proof,&live.lease,&attempt,crate::assistant_memory::now())).map_err(|error|format!("Não foi possível confirmar o orçamento antes da chamada ({error:?}); não repetir automaticamente."))?;
   if !self.current(){return Err("O objetivo foi interrompido antes do envio.".into());}
   self.dispatched.store(true,Ordering::Release);Ok(())
  }
@@ -126,4 +178,4 @@ fn verify_local_model(value:&serde_json::Value)->Result<(),String>{
  Ok(())
 }
 
-#[cfg(test)]#[path="writer_tests.rs"]mod tests;
+#[cfg(test)]#[path="writer_tests.rs"]pub(in crate::pet_runtime)mod tests;

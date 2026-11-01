@@ -109,7 +109,7 @@ export class CompanionsLink {
       State.notify();
     });
     await onEvent<{provider:string}>("pet-use-profile",async value=>{
-      if(!isCliProvider(value.provider) && value.provider!=="ollama")return;
+      if(!isCliProvider(value.provider) && !["ollama","lmstudio"].includes(value.provider))return;
       if(value.provider==='ollama'){
         try{await OllamaModelSelection.select('@default');}
         catch(error){State.chatFeedback.set('ollama',String(error).replace(/^Error:\s*/,''));State.notify();}

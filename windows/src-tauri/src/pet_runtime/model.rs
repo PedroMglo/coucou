@@ -17,11 +17,12 @@ pub struct Owner{pub pet_id:String,pub provider:String,pub adapter:String,pub mo
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(tag="kind",rename_all="camelCase",deny_unknown_fields)]
 pub enum Context{Unbound,Mochi{#[serde(rename="conversationId")]conversation_id:String}}
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct Spec{pub request_id:String,pub owner:Owner,pub context:Context,pub intent:String,pub criteria:Vec<String>}
+pub struct Spec{pub request_id:String,pub owner:Owner,pub context:Context,pub intent:String,pub criteria:Vec<String>,#[serde(default,skip_serializing_if="Option::is_none")]pub restored_from:Option<super::restored_future::Origin>}
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
 pub enum PreparationMode{Dedicated,Snapshot}
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct ContextBinding{
+    #[serde(default,skip_serializing_if="Option::is_none")]pub memory:Option<crate::pet_memory::context_model::Selection>,
     pub schema_version:u32,pub goal_id:String,pub pet_id:String,pub provider:String,pub conversation_id:String,
     pub request_id:String,pub mode:PreparationMode,pub source_conversation_id:Option<String>,pub source_messages:usize,
     pub copied_messages:usize,pub seed_hash:String,pub prepared_at:u64,
@@ -29,7 +30,7 @@ pub struct ContextBinding{
 pub(super)fn cid(goal:&Record)->String{format!("goal-{}",goal.id.trim_start_matches("g-"))}
 impl ContextBinding{
     pub fn valid(&self,goal:&Record)->bool{
-        if self.schema_version!=1||self.goal_id!=goal.id||self.pet_id!=goal.spec.owner.pet_id||self.provider!=goal.spec.owner.provider||self.conversation_id!=cid(goal)||!key(&self.request_id)||self.prepared_at==0||self.prepared_at>8_640_000_000_000_000||self.seed_hash.len()!=64||!self.seed_hash.bytes().all(|b|b.is_ascii_hexdigit())||self.copied_messages>crate::assistant_memory::MAX_CONTEXT_MESSAGES||self.copied_messages>self.source_messages{return false;}
+        if self.schema_version!=(if self.memory.is_some(){2}else{1})||self.memory.as_ref().is_some_and(|m|!m.valid(&self.pet_id,self.source_conversation_id.as_deref()))||self.goal_id!=goal.id||self.pet_id!=goal.spec.owner.pet_id||self.provider!=goal.spec.owner.provider||self.conversation_id!=cid(goal)||!key(&self.request_id)||self.prepared_at==0||self.prepared_at>8_640_000_000_000_000||self.seed_hash.len()!=64||!self.seed_hash.bytes().all(|b|b.is_ascii_hexdigit())||self.copied_messages>crate::assistant_memory::MAX_CONTEXT_MESSAGES||self.copied_messages>self.source_messages{return false;}
         match (&goal.spec.context,self.mode){
             (Context::Unbound,PreparationMode::Dedicated)=>self.source_conversation_id.is_none()&&self.source_messages==0&&self.copied_messages==0,
             (Context::Mochi{conversation_id},PreparationMode::Snapshot)=>self.source_conversation_id.as_ref()==Some(conversation_id),
@@ -46,7 +47,7 @@ pub struct Plan{pub id:String,pub task_id:String,pub steps:Vec<Step>}
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Legacy{pub task_id:String,pub provider:String,pub backend:String,pub conversation_id:Option<String>,pub phase:String,pub intent_may_be_incomplete:bool,pub receipts:Vec<crate::local_tasks::types::StepReceipt>}
 #[derive(Clone,Copy,Debug,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
-pub enum EventKind{Created,TaskProposed,PlanProposed,Paused,DraftResumed,Cancelled,CancelRequested,LegacyImported,ContextPrepared,AdmissionQueued,LeaseClaimed,StopRequested,LeaseDrained,ClaimAbandoned,GoalCompleted,PlanGenerated}
+pub enum EventKind{Created,TaskProposed,PlanProposed,Paused,DraftResumed,Cancelled,CancelRequested,LegacyImported,ContextPrepared,AdmissionQueued,LeaseClaimed,StopRequested,LeaseDrained,ClaimAbandoned,GoalCompleted,PlanGenerated,LostOwnerClosed,UnclaimedOwnerClosed}
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Event{pub sequence:u64,pub at:u64,pub request_id:String,pub fingerprint:String,pub kind:EventKind}
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -73,7 +74,8 @@ pub enum CommitStatus{Durable,Uncertain,Unchanged}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct Receipt{pub status:CommitStatus,pub record:Record}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
-pub struct Summary{pub id:String,pub revision:String,pub pet_id:String,pub state:State,pub updated_at:u64,pub intent_preview:String,pub tasks:usize,pub steps:usize}
+pub struct Summary{pub id:String,pub revision:String,pub pet_id:String,pub state:State,pub updated_at:u64,pub intent_preview:String,pub tasks:usize,pub steps:usize,#[serde(skip_serializing_if="is_false")]pub historical_source:bool}
+fn is_false(v:&bool)->bool{!*v}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct Listing{pub schema_version:u32,pub goals:Vec<Summary>,pub unavailable:usize,pub pending_artifacts:usize,pub complete:bool}
 
@@ -86,6 +88,7 @@ pub fn hash(bytes:&[u8])->String{ring::digest::digest(&ring::digest::SHA256,byte
 pub fn fingerprint<T:Serialize>(value:&T)->Result<String>{serde_json::to_vec(value).map(|v|hash(&v)).map_err(|_|Error::InvalidInput)}
 pub fn id_for(spec:&Spec)->String{format!("g-{}",hash(format!("{}\0{}",spec.owner.pet_id,spec.request_id).as_bytes()))}
 impl Owner{
+    pub(super)fn local_engine(&self)->bool{self.provider==self.adapter&&matches!(self.adapter.as_str(),"ollama"|"lmstudio")}
     /// A model hint can resolve after a draft is created. Runtime identity is
     /// the logical factory owner/provider/adapter; admission seals the model.
     pub(super)fn same_runtime_binding(&self,other:&Self)->bool{self.pet_id==other.pet_id&&self.provider==other.provider&&self.adapter==other.adapter}
@@ -109,12 +112,17 @@ impl Owner{
 impl Spec{
     pub fn validate(&self)->Result<()>{
         if !key(&self.request_id)||!self.owner.valid()||!text(&self.intent,65536)||self.criteria.is_empty()||self.criteria.len()>32||self.criteria.iter().any(|c|!text(c,4096)){return Err(Error::InvalidInput);}
-        if let Context::Mochi{conversation_id}= &self.context{if !crate::assistant_memory::valid_id(conversation_id){return Err(Error::InvalidInput);}}
+        if let Context::Mochi{conversation_id}= &self.context{if !crate::assistant_memory::valid_id(conversation_id){return Err(Error::InvalidInput);}}if self.restored_from.as_ref().is_some_and(|origin|!origin.valid_for(self)){return Err(Error::InvalidInput);}
         Ok(())
     }
 }
 impl Record{
     fn required_schema(&self)->u32{
+        if self.spec.restored_from.is_some(){return 13;}
+        if self.admissions.iter().any(|a|a.spec.memory_data.is_some()){return 12;}
+        if self.execution_context.as_ref().is_some_and(|c|c.memory.is_some()){return 11;}
+        if self.admissions.iter().any(|a|a.spec.continuation.is_some()){return 10;}
+        if self.events.iter().any(|e|matches!(e.kind,EventKind::LostOwnerClosed|EventKind::UnclaimedOwnerClosed)){return 9;}
         if !self.generated_plans.is_empty()||self.admissions.iter().any(|a|a.spec.schema_version==3){return 8;}
         if self.completion.is_some(){return 7;}
         if super::plans::typed(self)||self.admissions.iter().any(|a|a.spec.schema_version>=2){6}
@@ -123,21 +131,21 @@ impl Record{
         else if !self.admissions.is_empty(){3}
         else if self.execution_context.is_some(){2}else{1}
     }
-    fn refresh_schema(&mut self){self.schema_version=self.required_schema();}
+    pub(super)fn refresh_schema(&mut self){self.schema_version=self.required_schema();}
 
     pub fn new(spec:Spec,now:u64,revision:String)->Result<Self>{
         spec.validate()?;if !date(now)||!token(&revision){return Err(Error::InvalidInput);}
         let event=Event{sequence:1,at:now,request_id:spec.request_id.clone(),fingerprint:fingerprint(&spec)?,kind:EventKind::Created};
-        Ok(Self{schema_version:1,id:id_for(&spec),revision,sequence:1,created_at:now,updated_at:now,spec,state:State::Draft,execution_context:None,admissions:vec![],completion:None,generated_plans:vec![],tasks:vec![],plans:vec![],events:vec![event],legacy:vec![]})
+        let mut record=Self{schema_version:1,id:id_for(&spec),revision,sequence:1,created_at:now,updated_at:now,spec,state:State::Draft,execution_context:None,admissions:vec![],completion:None,generated_plans:vec![],tasks:vec![],plans:vec![],events:vec![event],legacy:vec![]};record.refresh_schema();record.validate()?;Ok(record)
     }
     pub fn validate(&self)->Result<()>{
-        self.spec.validate().map_err(|_|Error::InvalidRecord)?;
+        self.spec.validate().map_err(|_|Error::InvalidRecord)?;if self.spec.restored_from.as_ref().is_some_and(|origin|origin.body.approved_at>self.created_at){return Err(Error::InvalidRecord);}
         if self.schema_version!=self.required_schema()||!self.admissions.is_empty()&&self.execution_context.is_none()||self.execution_context.as_ref().is_some_and(|c|!c.valid(self))||self.id!=id_for(&self.spec)||!token(&self.revision)||!date(self.created_at)||!date(self.updated_at)||self.updated_at<self.created_at||self.tasks.len()>128||self.plans.len()>32||self.legacy.len()>128||self.events.is_empty()||self.events.len()>MAX_EVENTS||self.events.len() as u64!=self.sequence{return Err(Error::InvalidRecord);}
         let mut requests=BTreeSet::new();let mut at=self.created_at;
         for(i,e)in self.events.iter().enumerate(){if e.sequence!=i as u64+1||!date(e.at)||e.at<at||!key(&e.request_id)||!requests.insert(&e.request_id)||e.fingerprint.len()!=64||!e.fingerprint.bytes().all(|b|b.is_ascii_hexdigit()){return Err(Error::InvalidRecord);}at=e.at;}
         if at!=self.updated_at||self.events[0].at!=self.created_at||!matches!(self.events[0].kind,EventKind::Created)||self.events[0].request_id!=self.spec.request_id||self.events[0].fingerprint!=fingerprint(&self.spec)?{return Err(Error::InvalidRecord);}
         let expected=match self.events.last().ok_or(Error::InvalidRecord)?.kind{EventKind::Created|EventKind::TaskProposed|EventKind::PlanProposed|EventKind::DraftResumed|EventKind::ContextPrepared=>State::Draft,EventKind::AdmissionQueued=>State::Queued,EventKind::LeaseClaimed|EventKind::PlanGenerated=>State::Leased,EventKind::StopRequested=>State::Stopping,
-            EventKind::LeaseDrained|EventKind::ClaimAbandoned=>match self.admissions.last().map(|a|a.phase){Some(super::admission::QueuePhase::Paused)=>State::Paused,Some(super::admission::QueuePhase::Cancelled)=>State::Cancelled,Some(super::admission::QueuePhase::RecoveryRequired)=>State::RecoveryRequired,_=>return Err(Error::InvalidRecord)},EventKind::GoalCompleted=>State::Completed,EventKind::Paused=>State::Paused,EventKind::Cancelled=>State::Cancelled,EventKind::CancelRequested|EventKind::LegacyImported=>State::RecoveryRequired};
+            EventKind::LeaseDrained|EventKind::ClaimAbandoned|EventKind::LostOwnerClosed|EventKind::UnclaimedOwnerClosed=>match self.admissions.last().map(|a|a.phase){Some(super::admission::QueuePhase::Paused)=>State::Paused,Some(super::admission::QueuePhase::Cancelled)=>State::Cancelled,Some(super::admission::QueuePhase::RecoveryRequired)=>State::RecoveryRequired,_=>return Err(Error::InvalidRecord)},EventKind::GoalCompleted=>State::Completed,EventKind::Paused=>State::Paused,EventKind::Cancelled=>State::Cancelled,EventKind::CancelRequested|EventKind::LegacyImported=>State::RecoveryRequired};
         if self.state!=expected{return Err(Error::InvalidRecord);}
         if (self.state==State::Completed)!=self.completion.is_some(){return Err(Error::InvalidRecord);}
         if let Some(c)=&self.completion{
@@ -160,7 +168,7 @@ impl Record{
         if self.events.iter().filter(|e|matches!(e.kind,EventKind::AdmissionQueued)).count()!=self.admissions.len()
             ||self.state==State::Queued&&self.admissions.last().is_none_or(|a|a.phase!=super::admission::QueuePhase::Queued){return Err(Error::InvalidRecord);}
         let active=self.admissions.iter().filter(|a|matches!(a.phase,super::admission::QueuePhase::Queued|super::admission::QueuePhase::Leased|super::admission::QueuePhase::StopRequested)).count();
-        if active>1||self.events.iter().filter(|e|matches!(e.kind,EventKind::LeaseClaimed|EventKind::ClaimAbandoned)).count()!=self.admissions.iter().filter(|a|a.lease.is_some()).count(){return Err(Error::InvalidRecord);}
+        if active>1||self.events.iter().filter(|e|matches!(e.kind,EventKind::LeaseClaimed|EventKind::ClaimAbandoned|EventKind::UnclaimedOwnerClosed)).count()!=self.admissions.iter().filter(|a|a.lease.is_some()).count(){return Err(Error::InvalidRecord);}
         for(i,a)in self.admissions.iter().enumerate(){use super::admission::QueuePhase as Q;
             if a.phase==Q::Completed&&(i+1!=self.admissions.len()||self.state!=State::Completed||a.lease.is_none()||a.proof.is_none()||a.stop_reason.is_some())
                 ||matches!(a.phase,Q::Leased|Q::StopRequested)&&(i+1!=self.admissions.len()||a.lease.is_none())
@@ -183,7 +191,7 @@ impl Record{
     }
     pub(super)fn enqueue(&mut self,approved:&super::admission::Approved,proof:Option<super::authority::ConsentProof>,now:u64,revision:String)->Result<()>{
         self.validate()?;approved.current(self,now)?;
-        let a=approved.spec();if self.state!=State::Draft||!self.legacy.is_empty(){return Err(Error::Conflict);}
+        let a=approved.spec();if !self.legacy.is_empty()||match &a.continuation{None=>self.state!=State::Draft,Some(reference)=>proof.is_none()||!reference.source_matches(self)}{return Err(Error::Conflict);}
         if !date(now)||now<self.updated_at{return Err(Error::ClockRollback);}
         if !token(&revision)||revision==self.revision||self.events.iter().any(|e|e.request_id==a.request_id){return Err(Error::Conflict);}
         if self.events.len()>=MAX_EVENTS-1||self.admissions.len()>=32{return Err(Error::LimitReached);}
@@ -200,7 +208,11 @@ impl Record{
     }
     pub(super)fn abandoned(&mut self,lease:&super::leases::Lease,reason:Option<super::leases::StopReason>,now:u64,revision:String,request:String)->Result<()>{
         self.validate()?;let a=self.admissions.last_mut().ok_or(Error::InvalidRecord)?;
-        if self.state!=State::Queued||a.lease.is_some()||!lease.valid(&a.spec)||lease.source_revision!=self.revision||now<self.updated_at||!date(now)||!token(&revision)||revision==self.revision||!key(&request)||self.events.iter().any(|e|e.request_id==request){return Err(Error::Conflict);}
+        // Pause/Cancel may advance the control revision before an unactivated
+        // native preparation is audited. Only the original opaque proof can
+        // enter here through Store; neither transition grants execution.
+        let state_matches=match self.state{State::Queued=>lease.source_revision==self.revision,State::Paused=>reason==Some(super::leases::StopReason::Pause),State::Cancelled=>reason==Some(super::leases::StopReason::Cancel),_=>false};
+        if !state_matches||a.lease.is_some()||!lease.valid(&a.spec)||now<self.updated_at||!date(now)||!token(&revision)||revision==self.revision||!key(&request)||self.events.iter().any(|e|e.request_id==request){return Err(Error::Conflict);}
         if self.events.len()>=MAX_EVENTS{return Err(Error::LimitReached);}
         a.lease=Some(lease.clone());a.stop_reason=reason;a.phase=match reason{Some(super::leases::StopReason::Cancel)=>super::admission::QueuePhase::Cancelled,Some(super::leases::StopReason::Pause)=>super::admission::QueuePhase::Paused,_=>super::admission::QueuePhase::RecoveryRequired};
         self.state=match a.phase{super::admission::QueuePhase::Cancelled=>State::Cancelled,super::admission::QueuePhase::Paused=>State::Paused,_=>State::RecoveryRequired};
@@ -216,7 +228,19 @@ impl Record{
         if self.state==State::Cancelled{for t in &mut self.tasks{t.state=WorkState::Cancelled;}for s in self.plans.iter_mut().flat_map(|p|&mut p.steps){s.state=WorkState::Cancelled;}}
         self.sequence+=1;self.revision=revision;self.updated_at=now;self.events.push(Event{sequence:self.sequence,at:now,request_id:request,fingerprint:fingerprint(&(lease,confirmed,reason))?,kind:EventKind::LeaseDrained});self.refresh_schema();self.validate()
     }
-    pub fn summary(&self)->Summary{Summary{id:self.id.clone(),revision:self.revision.clone(),pet_id:self.spec.owner.pet_id.clone(),state:self.state,updated_at:self.updated_at,intent_preview:self.spec.intent.chars().take(120).collect(),tasks:self.tasks.len(),steps:self.plans.iter().map(|p|p.steps.len()).sum()}}
+    pub fn summary(&self)->Summary{Summary{id:self.id.clone(),revision:self.revision.clone(),pet_id:self.spec.owner.pet_id.clone(),state:self.state,updated_at:self.updated_at,intent_preview:self.spec.intent.chars().take(120).collect(),tasks:self.tasks.len(),steps:self.plans.iter().map(|p|p.steps.len()).sum(),historical_source:false}}
+    /// Only Store accepts an authenticated native closure transaction. This
+    /// transition attaches audit metadata for an uncommitted claim, never work.
+    pub(super)fn lost_owner_closed(&mut self,r:&super::recovery::Reference,lease:&super::leases::Lease)->Result<()>{
+        self.validate()?;if !r.source_matches(self)||!super::recovery::lease_matches(r,lease)||r.approved_at<self.updated_at{return Err(Error::Conflict);}
+        if r.target_state==State::Completed{return if self.state==State::Completed{Ok(())}else{Err(Error::Conflict)};}
+        if !matches!(self.state,State::Queued|State::Leased|State::Stopping|State::Paused|State::RecoveryRequired|State::Cancelled)||self.events.len()>=MAX_EVENTS||self.events.iter().any(|e|e.request_id==r.request_id){return Err(Error::Conflict);}
+        let kind=super::recovery::event(self,r);let row=self.admissions.last_mut().ok_or(Error::Conflict)?;
+        if !lease.valid(&row.spec)||row.spec.decision_id!=r.decision_id||r.unclaimed!=row.lease.is_none()||row.lease.as_ref().is_some_and(|old|old!=lease)||row.lease.is_none()&&!(matches!(self.state,State::Queued|State::Paused|State::Cancelled)&&(self.state!=State::Queued||lease.source_revision==self.revision)){return Err(Error::Conflict);}
+        row.lease=Some(lease.clone());row.phase=if r.target_state==State::Cancelled{super::admission::QueuePhase::Cancelled}else{super::admission::QueuePhase::RecoveryRequired};
+        if r.target_state==State::Cancelled{row.stop_reason=Some(super::leases::StopReason::Cancel);for t in &mut self.tasks{t.state=WorkState::Cancelled;}for s in self.plans.iter_mut().flat_map(|p|&mut p.steps){s.state=WorkState::Cancelled;}}
+        self.state=r.target_state;self.revision=r.target_goal_revision.clone();self.sequence=r.target_sequence;self.updated_at=r.approved_at;self.events.push(Event{sequence:self.sequence,at:self.updated_at,request_id:r.request_id.clone(),fingerprint:fingerprint(r)?,kind});self.refresh_schema();self.validate()
+    }
     /// Only the native store accepts an authenticated certificate for this data.
     pub(super)fn complete_native(&mut self,c:super::criteria::CompletionRef,now:u64)->Result<()>{
         self.validate()?;

@@ -145,6 +145,7 @@ fn run_writer(mut stdin:impl Write,requests:Receiver<Outbound>,source:Endpoint){
 }
 
 pub struct Client {
+    #[cfg(test)] io_probe:Option<crate::settings::EffectProbe>,
     child: Child,
     source:Endpoint,
     requests:RequestBook,
@@ -185,6 +186,7 @@ impl Client {
         let cwd = cwd.canonicalize().map_err(|_| "A pasta do Copilot já não está disponível.")?;
         if !cwd.is_dir() { return Err("O Copilot precisa de uma pasta de trabalho válida.".into()); }
         let source=Endpoint::new(Adapter::Copilot,Transport::ManagedPipe)?;let monitor:Arc<Mutex<NativeMonitor>>=Arc::default();
+        crate::settings::effect_allowed()?;
         let mut child = command(exe, &cwd).spawn().map_err(|error| format!("Não foi possível iniciar Copilot ACP ({:?}). Verifica a instalação e a conta no terminal.",error.kind()))?;
         let stdin = child.stdin.take().ok_or("Copilot não abriu a entrada ACP.")?;
         #[cfg(unix)]{
@@ -222,7 +224,7 @@ impl Client {
             }
             reader_source.close();
         });
-        let mut client = Self { child, source, requests, monitor, input:Some(input), output, deadline: Instant::now() + timeout.min(Duration::from_secs(30)), next_id: 0, capabilities: Value::Null, session: None, active: false, catalog: Catalog::default(), cwd: cwd.to_string_lossy().into(), cancel,used:false,broken:false };
+        let mut client = Self { #[cfg(test)]io_probe:None,child, source, requests, monitor, input:Some(input), output, deadline: Instant::now() + timeout.min(Duration::from_secs(30)), next_id: 0, capabilities: Value::Null, session: None, active: false, catalog: Catalog::default(), cwd: cwd.to_string_lossy().into(), cancel,used:false,broken:false };
         let init = client.request("initialize", json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"coucou_mochi","version":env!("CARGO_PKG_VERSION")}}))?;
         if init["protocolVersion"] != 1 { return Err("A versão ACP do Copilot não é compatível com este cliente.".into()); }
         client.capabilities = init["agentCapabilities"].clone();
@@ -244,6 +246,7 @@ impl Client {
         match self.write_until_guarded(message,deadline,respect_cancel,None)?{
             crate::pet_native_write::Outcome::Written=>Ok(()),
             crate::pet_native_write::Outcome::Skipped(crate::pet_native_write::Reason::Cancelled)=>Err(CANCELLED.into()),
+            crate::pet_native_write::Outcome::Skipped(crate::pet_native_write::Reason::PreferencesUnconfirmed)=>Err("A origem das preferências não está confirmada; o novo pedido Copilot não foi enviado.".into()),
             crate::pet_native_write::Outcome::Skipped(_)=>Err("Copilot não recebeu a mensagem antes de expirar.".into()),
         }
     }
@@ -252,10 +255,12 @@ impl Client {
         let mut bytes=serde_json::to_vec(&message).map_err(|_|"Não foi possível preparar a mensagem Copilot.")?;
         if bytes.len()>MAX_LINE{return Err("O pedido Copilot excedeu o limite de tamanho.".into());}bytes.push(b'\n');
         let waiting=WriteWait(Arc::new(AtomicBool::new(true)));
-        let guard=crate::pet_native_write::Guard{deadline,cancel:if respect_cancel{self.cancel.clone()}else{None},caller:Some(waiting.0.clone()),source};
+        let dispatch=if !respect_cancel||source.as_ref().is_some_and(|(_,u)|matches!(u,crate::pet_native_write::Use::Refusal|crate::pet_native_write::Use::Withdrawal)){crate::pet_native_write::Dispatch::Control}else{crate::pet_native_write::Dispatch::NewEffect};
+        #[cfg(test)]let dispatch=match (&dispatch,&self.io_probe){(crate::pet_native_write::Dispatch::NewEffect,Some(p))=>crate::pet_native_write::Dispatch::ProbedEffect(p.clone()),_=>dispatch};
+        let guard=crate::pet_native_write::Guard{dispatch,deadline,cancel:if respect_cancel{self.cancel.clone()}else{None},caller:Some(waiting.0.clone()),source};
         let(ack,answer)=mpsc::sync_channel(1);let mut packet=Outbound{bytes,guard,ack};
         loop{
-            if let Some(reason)=packet.guard.reason(){return Ok(crate::pet_native_write::Outcome::Skipped(reason));}
+            if let Some(reason)=packet.guard.write_reason(){return Ok(crate::pet_native_write::Outcome::Skipped(reason));}
             match input.try_send(packet){Ok(())=>break,Err(mpsc::TrySendError::Full(value))=>{packet=value;std::thread::sleep(Duration::from_millis(2));},Err(_)=>return Err("Copilot fechou a entrada ACP.".into())}
         }
         loop{
@@ -322,10 +327,11 @@ impl Client {
         if result.is_err(){self.broken=true;}result
     }
 
-    fn respond_native(&mut self,result:Value,ticket:&Ticket)->Result<crate::pet_native_write::Outcome,String>{
+    fn respond_native(&mut self,result:Value,ticket:&Ticket,params:&Value)->Result<crate::pet_native_write::Outcome,String>{
         let withdrawal=result==cancelled_outcome();
+        let refusal=crate::pet_native_choices::pure_refusal("copilot","session/request_permission",params,&result);
         let response=json!({"jsonrpc":"2.0","id":ticket.identity().request_id,"result":result});
-        let use_=if withdrawal{crate::pet_native_write::Use::Withdrawal}else{crate::pet_native_write::Use::Decision};
+        let use_=if withdrawal{crate::pet_native_write::Use::Withdrawal}else if refusal{crate::pet_native_write::Use::Refusal}else{crate::pet_native_write::Use::Decision};
         let result=self.write_until_guarded(response,Instant::now()+Duration::from_millis(100),!withdrawal,Some((ticket.clone(),use_)));
         if result.is_err(){self.broken=true;}result
     }
@@ -475,12 +481,12 @@ impl Client {
                         // reader; no stale human reply is sent to a finished prompt.
                         if let Some(ticket)=ticket{
                             if ticket.current()||ticket.withdrawal_pending(){
-                                let outcome=self.respond_native(reply,ticket)?;
+                                let outcome=self.respond_native(reply,ticket,params)?;
                                 // Only a skipped frame proves no byte was sent.
                                 // Cancel the still-pending native request once;
                                 // resolved/closed sources suppress this control.
                                 if matches!(outcome,crate::pet_native_write::Outcome::Skipped(_))&&(ticket.current()||ticket.withdrawal_pending()){
-                                    self.respond_native(cancelled_outcome(),ticket)?;
+                                    self.respond_native(cancelled_outcome(),ticket,params)?;
                                 }
                             }
                             self.requests.finish(ticket);

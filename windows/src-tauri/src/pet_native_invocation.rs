@@ -9,7 +9,7 @@ pub(crate) struct Invocation { fence:Fence, caller:Arc<AtomicBool> }
 impl Invocation {
     pub(crate) fn begin(source:&Ticket,deadline:Instant,cancel:Option<Arc<AtomicBool>>)->Option<Self>{
         let caller=Arc::new(AtomicBool::new(true));
-        let fence=Fence(Arc::new(Guard{deadline,cancel,caller:Some(caller.clone()),source:Some((source.clone(),Use::Decision))}));
+        let fence=Fence(Arc::new(Guard{dispatch:crate::pet_native_write::Dispatch::NewEffect,deadline,cancel,caller:Some(caller.clone()),source:Some((source.clone(),Use::Decision))}));
         fence.current().then_some(Self{fence,caller})
     }
     pub(crate) fn fence(&self)->&Fence{&self.fence}

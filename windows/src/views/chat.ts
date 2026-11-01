@@ -1,5 +1,7 @@
 import {refreshDocumentState,invalidateDocumentState} from '../core/document-state';
 import {attachmentControls} from './attachment-controls';
+import {buildManualMemory} from './manual-memory';
+import {petForChatProvider,petForTaskProvider,petRetired} from '../core/pet-factory';
 import {conversationPurge} from './conversation-purge';
 import {documentRetention} from './document-retention';
 import {attachmentContext} from '../core/document-collection';
@@ -17,7 +19,7 @@ import {buildTaskNotice} from "./task-notice";
 import {buildRequestHistory} from "./request-history";
 import { ICONS } from "./icons";
 import { renderMarkdown } from "./markdown";
-import { Bridge, emitToWindow, onEvent,  type ModelInfo,type ChatTurnState,type ConversationView } from "../core/bridge";
+import { Bridge, emitToWindow, onEvent,  type ModelInfo,type ChatTurnState,type ConversationView,type PetMemoryDecision } from "../core/bridge";
 import {
   activeModel, isCliProvider, pickModel, providerDef, providerForPill, visibleProviders, withModel, type ProviderDef,
 } from "../core/providers";
@@ -34,6 +36,10 @@ import {approvalQuestions} from './approval-questions';
 import {OllamaModelSelection} from '../core/ollama-selection';
 import {commandReview} from './command-review';
 import {LocalCapabilities,type LocalCapabilityEvent} from '../core/local-capabilities';
+import {InlineDrafts} from '../core/inline-drafts';
+import {ApplicationDraftStorage} from '../core/native-drafts';
+import {draftBroadcast,type DraftTarget} from '../core/session-drafts';
+import {draftStatusControl} from './draft-status';
 
 const localCapabilities=new LocalCapabilities();let watchingCapabilities=false;
 function watchCapabilities(){if(watchingCapabilities)return;watchingCapabilities=true;void onEvent<LocalCapabilityEvent>('local-execution-capability',e=>{if(e.provider==='ollama'){localCapabilities.observe(e.conversationId,e.turn,e.capability);State.notify();}});}
@@ -290,7 +296,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     title:'Enter para enviar · Shift + Enter para mudar de linha',
   }) as HTMLTextAreaElement;
   const fitInput=()=>{input.style.height='auto';input.style.height=`${Math.min(72,Math.max(20,input.scrollHeight))}px`;};
-  input.addEventListener('input',()=>{fitInput();onHeightChange();});
+  input.addEventListener('input',()=>{recordDraftInput();fitInput();onHeightChange();});
   const send = h("button", { class: "send-btn", title: tl(STRINGS.send) }, svg(ICONS.arrowUp, 11));
   const bar = h("div", { class: "chat-bar" }, input, send);
 
@@ -342,8 +348,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
           h("strong",{text:`${c.current?"Atual · ":""}${c.title}`}),h("span",{text:c.preview,style:"display:block;opacity:.65;font-size:11px"}));
         row.disabled=c.current || State.chatBusyProviders.has(owner) || State.chatResettingProviders.has(owner);
         row.addEventListener("click",()=>{row.disabled=true;void restoreDialogue(owner,c.id).then(ok=>{
-          if(ok)drafts.delete(owner);
-          if(ok && owner===State.chatProvider) {input.value="";live=null;renderedCount=-1;library.hidden=true;State.notify();}
+          if(ok && owner===State.chatProvider) {live=null;renderedCount=-1;library.hidden=true;State.notify();}
           else if(owner===State.chatProvider)void loadLibrary();
           onHeightChange();
         });});
@@ -364,12 +369,16 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   modelRow.append(sessionsBtn);
   librarySearch.addEventListener("input",()=>void loadLibrary());
   newConversation.addEventListener("click",()=>{const owner=State.chatProvider;newConversation.disabled=true;void resetDialogue(owner).then(ok=>{
-    if(ok)drafts.delete(owner);
-    if(ok && owner===State.chatProvider){input.value="";live=null;renderedCount=-1;State.notify();}
+    if(ok && owner===State.chatProvider){live=null;renderedCount=-1;State.notify();}
     if(!library.hidden && owner===State.chatProvider)void loadLibrary();
   }).finally(()=>{newConversation.disabled=false;onHeightChange();});});
 
   const body = h("div", { class: "chat-body" });
+  const memory=buildManualMemory({changed:onHeightChange});const preparingMemory=new Set<string>();
+  input.addEventListener('input',()=>memory.invalidate());
+  const memoryOwner=(provider:string)=>{const pet=petForTaskProvider(provider);return pet&&!petRetired(pet)&&providerForPill(pet)===provider?pet:null;};
+  function syncMemory(){const provider=State.chatProvider,pet=memoryOwner(provider),cid=dialogueId(provider)??null;memory.sync(pet?{petId:pet,provider,conversationId:cid}:null,JSON.stringify([provider,cid,activeModel({...State.settings,chatProvider:provider}),input.value.trim(),State.filesFor(provider)]));}
+
   const requests = h("div", { class: "cli-requests", style: "max-height:190px;overflow:auto" });
   const unavailable=h("p",{class:"pet-chat-unavailable"});unavailable.hidden=true;
   const feedback=h("p",{class:"chat-feedback",style:"font-size:11px;color:#fbbf24","role":"status","aria-live":"polite"});feedback.hidden=true;
@@ -380,13 +389,41 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   const prepared=h("button",{class:"picker-link prepared-chat"});prepared.hidden=true;
   prepared.addEventListener("click",()=>{
     const draft=State.preparedChat;if(!draft || draft.provider!==State.chatProvider || pending.has(draft.provider))return;
-    input.value=draft.text;State.preparedChat=null;prepared.hidden=true;input.focus();onHeightChange();
+    setDraftText(draft.text);State.preparedChat=null;prepared.hidden=true;input.focus();onHeightChange();
   });
   const picker = buildPicker(() => {
     body.classList.toggle("picking", picker.isOpen);
     drawModelButton();
   });
-  body.append(chipRow, log, taskStatus.el,requests, picker.el,unavailable,prepared, modelRow,executionBadge,folderEditor,library,feedback,failedReview, bar);
+  let renderedDraftTarget:DraftTarget|null=null,draftChannel:{publish:(key:string)=>void;close:()=>void}|null=null;
+  const draftStorage=new ApplicationDraftStorage();void draftStorage.ready().catch(()=>{});
+  const inline=new InlineDrafts(draftStorage,()=>drawInlineDraft(),(target,text,previous)=>{
+    if(!draftViewCurrent()||!renderedDraftTarget||sessionTargetKey(renderedDraftTarget)!==sessionTargetKey(target)||input.value!==previous)return false;
+    input.value=text;fitInput();return true;
+  },key=>draftChannel?.publish(key));draftChannel=draftBroadcast(inline.resource);
+  const draftControls=draftStatusControl({resource:inline.resource,target:()=>inline.target,context:()=>inline.epoch,id:'inline-draft-persistence'});
+  const pendingMessage=h('p',{role:'status'}),pendingText=h('pre',{class:'failed-request-text'});
+  const pendingCopy=h('button',{type:'button',class:'picker-link',text:'Copiar para esta conversa'}),pendingOpen=h('button',{type:'button',class:'picker-link',text:'Abrir conversa sem copiar'}),pendingReview=h('button',{type:'button',class:'picker-link',text:'Rever rascunho sem conversa'}),pendingRetry=h('button',{type:'button',class:'picker-link',text:'Voltar a consultar rascunho sem conversa'});
+  const pendingPanel=h('section',{id:'inline-unbound-draft',class:'composer-hint','aria-label':'Rascunho sem conversa associada'},pendingMessage,h('details',{class:'failed-request-review'},h('summary',{text:'Rever texto sem conversa'}),pendingText),pendingCopy,pendingOpen,pendingReview,pendingRetry);pendingPanel.hidden=true;
+  function draftIdentity(){const provider=State.chatProvider,pet=petForChatProvider(provider);return pet?{petId:pet,provider,conversationId:dialogueId(provider)??null}:null;}
+  function draftViewCurrent(){return JSON.stringify(inline.identity)===JSON.stringify(draftIdentity());}
+  function recordDraftInput(){if(!renderedDraftTarget){inline.select(draftIdentity());renderedDraftTarget=inline.target;}if(renderedDraftTarget)inline.edit(renderedDraftTarget,input.value);}
+  function setDraftText(text:string){if(!draftViewCurrent()){recordDraftInput();inline.select(draftIdentity());renderedDraftTarget=inline.target;}input.value=text;recordDraftInput();fitInput();}
+  function drawInlineDraft(){
+    if(!draftViewCurrent())return;
+    renderedDraftTarget=inline.target;if(input.value!==inline.text){input.value=inline.text;fitInput();}
+    draftControls.sync();
+    const choosing=inline.needsChoice,stored=inline.recovery,status=inline.resource.status(inline.target),epoch=inline.epoch,revision=stored?.revision;
+    pendingPanel.hidden=!choosing&&!stored?.text&&!inline.recoveryError;
+    pendingMessage.textContent=choosing?`Este texto foi escrito antes de a conversa ser identificada. Escolhe explicitamente o destino: ${inline.candidate?.petId} · ${inline.candidate?.provider} · #${inline.candidate?.sessionId}. A origem será conservada; nada é enviado.`:inline.recoveryError?'Não foi possível consultar o rascunho sem conversa. O texto anterior não foi eliminado.':`Existe um rascunho sem conversa de ${inline.identity?.petId}. Revê-o antes de o copiar; o texto da conversa atual mantém-se separado.`;
+    pendingText.textContent=choosing?inline.text:stored?.text??'';
+    pendingCopy.hidden=pendingOpen.hidden=!choosing;pendingOpen.disabled=!!status?.busy||!!status?.error||status?.phase==='conflict';pendingCopy.disabled=!!status?.busy||!!status?.error&&status.error!=='unsupported'||status?.phase==='conflict';pendingReview.hidden=choosing||!stored?.text;pendingReview.disabled=!!status?.busy||!!status?.error||status?.phase==='conflict';pendingRetry.hidden=!inline.recoveryError;
+    pendingCopy.onclick=()=>{if(epoch===inline.epoch&&draftViewCurrent())void inline.choose(true);};pendingOpen.onclick=()=>{if(epoch===inline.epoch&&draftViewCurrent())void inline.choose(false);};pendingReview.onclick=()=>{if(epoch===inline.epoch&&draftViewCurrent()&&revision)void inline.reviewRecovery(revision);};pendingRetry.onclick=()=>{if(epoch===inline.epoch&&draftViewCurrent())void inline.refreshRecovery();};
+    drawModelButton();onHeightChange();
+  }
+  document.addEventListener?.('visibilitychange',()=>{if(document.hidden)void inline.flush();else if(inline.target){inline.resource.hint(inline.key);void inline.refreshRecovery();}});
+  window.addEventListener?.('pagehide',()=>{void inline.flush();});
+  body.append(chipRow, log, taskStatus.el,requests, picker.el,unavailable,prepared, modelRow,executionBadge,folderEditor,library,feedback,failedReview,draftControls.el,pendingPanel, bar,memory.el);
 
   const requestCards = new Map<string, HTMLElement>();
   const endedRequests=new Set<string>();
@@ -431,7 +468,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   const busy=(provider:string)=>pending.has(provider)||observed.has(provider);
   let renderedCount = -1;
   let renderedProvider = "";
-  const drafts = new Map<string, string>();
+
   PetPreferences.subscribe(()=>{drawModelButton();onHeightChange();});
   const historyRequests=new Map<string,number>();
   async function refreshHistory(provider:string) {
@@ -445,8 +482,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     const messages=snapshot?.messages;
     if(!messages || historyRequests.get(provider)!==ticket || State.chatHistoryFor(provider)!==before || before.length!==count || pending.has(provider) || State.chatResettingProviders.has(provider))return;
     if(dialogueId(provider) && dialogueId(provider)!==snapshot.id) {
-      State.clearDialogueContext(provider);drafts.delete(provider);
-      if(provider===State.chatProvider)input.value="";
+      State.clearDialogueContext(provider); // Prior exact-target draft remains in the shared repository.
     }
     rememberDialogue(provider,snapshot);
     void refreshDocumentState(provider,snapshot.id).catch(()=>{});
@@ -484,7 +520,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     const observedTurn=observed.get(State.chatProvider);
     const stoppable = (isCliProvider(State.chatProvider) || State.chatProvider==="ollama") && !!observedTurn?.id && observedTurn.turn!==undefined;
     send.title = busyHere && stoppable ? t("Stop") : t(STRINGS.send);
-    send.disabled = resetting || (busyHere && !stoppable);
+    send.disabled = preparingMemory.has(State.chatProvider) || memory.pending || resetting || (busyHere && !stoppable) || (!busyHere&&!inline.sendable);
     send.textContent = busyHere && stoppable ? "■" : "↑";
     libraryBtn.disabled=newConversation.disabled=busyHere || resetting;
   }
@@ -544,19 +580,34 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
 
   async function submit() {
     if(State.settings.companionMode && !providerForPill(State.focusId??undefined))return;
-    const query = input.value.trim();
-    if (!query || busy(State.chatProvider) || State.chatResettingProviders.has(State.chatProvider)||(State.chatProvider==='ollama'&&OllamaModelSelection.pending)) return;
-    if (picker.isOpen) picker.close();
-    input.value = "";
-    const sendingProvider = State.chatProvider;
-    const expectedModel=sendingProvider==='ollama'?activeModel({...State.settings,chatProvider:'ollama'}):undefined;
+    recordDraftInput();if(!draftViewCurrent())return;const capture=inline.capture();
+    const query=input.value.trim(),sendingProvider=State.chatProvider;
+    if(!capture||capture.target.provider!==sendingProvider||capture.text!==input.value)return;
+    if(!query||preparingMemory.has(sendingProvider)||memory.pending||busy(sendingProvider)||State.chatResettingProviders.has(sendingProvider)||(sendingProvider==='ollama'&&OllamaModelSelection.pending))return;
+    if(picker.isOpen)picker.close();
+    // Pin caller, model, selected references and attachments before any await.
+    const selected=memory.capture(),files=structuredClone(State.filesFor(sendingProvider)),filesKey=JSON.stringify(files),owner=memoryOwner(sendingProvider),shownModel=activeModel({...State.settings,chatProvider:sendingProvider});
+    const expectedModel=sendingProvider==='ollama'||selected.length?shownModel:undefined;
+    let capturedCid=capture.target.sessionId,memoryDecision:PetMemoryDecision|undefined;
+    if(selected.length){
+      preparingMemory.add(sendingProvider);drawModelButton();
+      const current=()=>inline.key===capture.key&&inline.capture()?.edit===capture.edit&&State.chatProvider===sendingProvider&&memoryOwner(sendingProvider)===owner&&input.value.trim()===query&&activeModel({...State.settings,chatProvider:sendingProvider})===shownModel&&JSON.stringify(State.filesFor(sendingProvider))===filesKey&&dialogueId(sendingProvider)===capturedCid;
+      try{
+        if(!capturedCid){const snapshot=await Bridge.chatConversation(sendingProvider);if(State.chatProvider!==sendingProvider||input.value.trim()!==query||!snapshot?.id)return;rememberDialogue(sendingProvider,snapshot);capturedCid=snapshot.id;}
+        if(!owner||!current())return;syncMemory();
+        const decision=await memory.request({provider:sendingProvider,conversationId:capturedCid!,query,selectedModel:expectedModel,selected,context:files.length?attachmentContext(sendingProvider,capturedCid!,files):null},selected,current);
+        if(decision===null)return;if(!current()){if(decision)void Bridge.petMemoryContextCancel(decision.token).catch(()=>{});return;}memoryDecision=decision;
+      }catch(e){State.chatFeedback.set(sendingProvider,String(e).replace(/^Error:\s*/,''));State.notify();return;}
+      finally{preparingMemory.delete(sendingProvider);drawModelButton();onHeightChange();}
+    }
+    // Draft remains until the send result; newer typing is never cleared.
     failedQueries.delete(sendingProvider);
     State.chatFeedback.delete(sendingProvider);
     pending.set(sendingProvider,{text:""});
     State.chatBusyProviders.add(sendingProvider);
-    const owner = State.tasks.find(t => providerForPill(t.id) === sendingProvider)?.id;
+    const notificationOwner = State.tasks.find(t => providerForPill(t.id) === sendingProvider)?.id;
     const notifyReply = (text: string) => {
-      if(owner && State.settings.companionMode && (State.mode !== "expanded" || State.focusId !== owner)) void emitToWindow("companions","companions-notice",{key:`chat:${sendingProvider}:${nextId}`,pet:owner,text,urgent:false,view:"prompt"});
+      if(notificationOwner && State.settings.companionMode && (State.mode !== "expanded" || State.focusId !== notificationOwner)) void emitToWindow("companions","companions-notice",{key:`chat:${sendingProvider}:${nextId}`,pet:notificationOwner,text,urgent:false,view:"prompt"});
     };
     const history = State.chatHistory;
     drawModelButton();
@@ -567,7 +618,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     State.notify();
     onHeightChange();
 
-    const files = State.filesFor(sendingProvider),capturedCid=dialogueId(sendingProvider)??files[0]?.conversationId;
+
 
     try {
       if(!dialogueId(sendingProvider)) {
@@ -576,7 +627,8 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       }
       const cid=capturedCid??dialogueId(sendingProvider);if(files.length&&!cid)throw Error('A conversa ainda não está disponível.');
       const context=files.length?attachmentContext(sendingProvider,cid!,files):null;
-      const reply = await Bridge.chatSend(query,context,sendingProvider,cid,expectedModel);
+      const reply = await Bridge.chatSend(query,context,sendingProvider,cid,expectedModel,undefined,memoryDecision);
+      inline.complete(capture);
       history.push({id:nextId++,role:'assistant',content:reply.text});
       notifyReply("Your answer is ready.");
       State.stateOverride = pending.size>1 ? "thinking" : null;
@@ -632,8 +684,10 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   return {
     el,
     sync() {
+      if(renderedDraftTarget)inline.edit(renderedDraftTarget,input.value);
+      inline.select(draftIdentity());drawInlineDraft();
       const noChat=State.settings.companionMode && !providerForPill(State.focusId??undefined);
-      const snapshot=turnSnapshots.get(State.chatProvider),cid=dialogueId(State.chatProvider),pet=State.focusId;
+      const snapshot=turnSnapshots.get(State.chatProvider),cid=dialogueId(State.chatProvider),pet=petForChatProvider(State.chatProvider);
       const target=pet&&cid&&providerForPill(pet)===State.chatProvider?{petId:pet,provider:State.chatProvider,origin:'mochi' as const,sessionId:cid,conversationId:cid}:null;
       const historyChanged=requestHistory.sync(noChat?null:target,snapshot?.requestHistory,State.chatHistory.length);
       body.classList.toggle('has-request-history',requestHistory.hasEntries);
@@ -643,7 +697,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       if(noticeWasHidden!==taskStatus.el.hidden)onHeightChange();
       const message=State.chatFeedback.get(State.chatProvider)??"";feedback.hidden=!message || !!noChat;feedback.textContent=message;
       const failed=failedQueries.get(State.chatProvider);failedReview.hidden=!failed||failed.id!==dialogueId(State.chatProvider);failedText.textContent=failed?.query??'';
-      bar.hidden=modelRow.hidden=log.hidden=!!noChat;unavailable.hidden=!noChat;
+      bar.hidden=modelRow.hidden=log.hidden=!!noChat;draftControls.el.hidden=!!noChat||!inline.target;if(noChat)pendingPanel.hidden=true;unavailable.hidden=!noChat;
       if(noChat)unavailable.textContent=petCapabilities(State.focusId??"").role;
       profileBtn.hidden=!profileProvider(State.chatProvider) || !!noChat;
       libraryBtn.hidden=!!noChat;
@@ -656,8 +710,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       folderBtn.disabled=busy(State.chatProvider) || State.chatResettingProviders.has(State.chatProvider);
       if(folderOwner!==State.chatProvider || noChat)folderEditor.hidden=true;
       if (renderedProvider !== State.chatProvider) {
-        if (renderedProvider) drafts.set(renderedProvider, input.value);
-        input.value = drafts.get(State.chatProvider) ?? "";
+        
         if (State.settings.companionMode && picker.isOpen) picker.close();
         renderedProvider = State.chatProvider; renderedCount = -1; live = null;
         void refreshHistory(renderedProvider);
@@ -669,7 +722,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       const draft=State.preparedChat?.provider===State.chatProvider?State.preparedChat:null;
       prepared.hidden=!draft;prepared.disabled=thinking;
       if(draft){
-        if(!thinking && !input.value.trim()){input.value=draft.text;State.preparedChat=null;prepared.hidden=true;}
+        if(!thinking && !input.value.trim()){setDraftText(draft.text);State.preparedChat=null;prepared.hidden=true;}
         else prepared.textContent=`Usar pedido preparado de ${draft.source}`;
       }
       const count = State.chatHistory.length + (thinking ? 0.5 : 0);
@@ -689,6 +742,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
         log.scrollTop = follow?log.scrollHeight:previousTop;
       }
 
+      syncMemory();if(noChat||State.view!=='prompt')memory.invalidate();memory.el.hidden=!!noChat;
       // Leaving the chat folds the picker away.
       if (State.view !== "prompt" && picker.isOpen) picker.close();
       drawModelButton();
@@ -728,7 +782,8 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
   const decisions=buildAgentRequests(()=>session.target,onHeightChange);
   const picker=buildPicker(()=>{body.classList.toggle('picking',picker.isOpen);onHeightChange();},(provider,model)=>{if(provider!=='ollama')session.chooseModel(model);},()=>session.target?.origin==='external',()=>session.model||session.snapshot?.model||'');
   const hint=h('p',{id:'session-composer-hint',class:'composer-hint',text:'Enter para enviar · Shift + Enter para mudar de linha'});
-  const body=h('div',{class:'chat-body'},attachments,log,taskStatus.el,decisions.el,picker.el,modelRow,executionBadge,feedback,failedReview,...(draftStatus?[draftStatus]:[]),h('div',{class:'chat-bar'},input,send),hint);
+  const memory=buildManualMemory({changed:onHeightChange});const preparingMemory=new Set<string>();let manualError='';
+  const body=h('div',{class:'chat-body'},attachments,log,taskStatus.el,decisions.el,picker.el,modelRow,executionBadge,feedback,failedReview,...(draftStatus?[draftStatus]:[]),h('div',{class:'chat-bar'},input,send),hint,memory.el);
   modelButton.addEventListener('click',()=>{if(picker.isOpen)picker.close();else picker.open();});
   const el=h('div',{class:'view'},h('div',{class:'card wash chat-card'},body));
   (el.querySelector('.card') as HTMLElement).style.setProperty('--wash','rgba(99,102,241,0.5)');
@@ -737,12 +792,26 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
   let emptyNode:HTMLElement|null=null,dots:HTMLElement|null=null;
   const fitInput=()=>{input.style.height='auto';input.style.height=`${Math.min(128,Math.max(20,input.scrollHeight-14))}px`;};
   PetPreferences.subscribe(()=>{sync();onHeightChange();});
-  input.addEventListener('input',()=>{if(session.target)session.drafts.set(sessionTargetKey(session.target),input.value);fitInput();sync();});
+  input.addEventListener('input',()=>{memory.invalidate();if(session.target)session.drafts.set(sessionTargetKey(session.target),input.value);fitInput();sync();});
   async function submit(){
-    const target=session.target,query=input.value.trim();if(!target||!query||session.sending||session.snapshot?.busy||!session.snapshot?.capabilities.send||session.error||(target.provider==='ollama'&&OllamaModelSelection.pending))return;
-    const key=sessionTargetKey(target);
+    const target=session.target?structuredClone(session.target):null,query=input.value.trim();if(!target||!query||preparingMemory.has(sessionTargetKey(target))||memory.pending||session.sending||session.snapshot?.busy||!session.snapshot?.capabilities.send||session.error||(target.provider==='ollama'&&OllamaModelSelection.pending))return;
+    const key=sessionTargetKey(target),selected=memory.capture(),attachments=structuredClone(session.snapshot.attachments??[]),attachmentKey=JSON.stringify(attachments);
+    const expectedModel=target.provider==='ollama'?activeModel({...State.settings,chatProvider:'ollama'}):session.model,shownModel=activeModel({...State.settings,chatProvider:target.provider as typeof State.chatProvider});
+    const current=()=>!!session.target&&sessionTargetKey(session.target)===key&&input.value.trim()===query&&!session.error&&!session.snapshot?.busy&&JSON.stringify(session.snapshot?.attachments??[])===attachmentKey&&(target.provider==='ollama'?activeModel({...State.settings,chatProvider:'ollama'}):session.model)===expectedModel&&activeModel({...State.settings,chatProvider:target.provider as typeof State.chatProvider})===shownModel;
+    let decision:PetMemoryDecision|undefined;manualError='';
+    if(selected.length){
+      if(target.origin!=='mochi')return;preparingMemory.add(key);sync();
+      try{
+        const active=await Bridge.chatConversation(target.provider);if(!current())return;
+        if(active.id!==target.sessionId){await Bridge.chatRestoreConversation(target.provider,target.sessionId);if(!current())return;}
+        const review=await memory.request({provider:target.provider,conversationId:target.sessionId,query,selectedModel:expectedModel,selected,context:attachmentContext(target.provider,target.sessionId,attachments)},selected,current);
+        if(review===null)return;if(!current()){if(review)void Bridge.petMemoryContextCancel(review.token).catch(()=>{});return;}decision=review;
+      }catch(e){if(session.target&&sessionTargetKey(session.target)===key)manualError=String(e).replace(/^Error:\s*/,'');return;}
+      finally{preparingMemory.delete(key);sync();}
+    }
     input.value='';session.drafts.set(key,'');fitInput();
-    await session.send(query,target.provider==='ollama'?activeModel({...State.settings,chatProvider:'ollama'}):undefined);
+    const sent=decision?await session.send(query,expectedModel,{target,attachments,decision}):await session.send(query,expectedModel);
+    if(decision&&!sent&&session.target&&sessionTargetKey(session.target)===key&&!input.value){input.value=query;session.drafts.set(key,query);}
     sync();
   }
   send.addEventListener('click',()=>{if(session.snapshot?.busy)void session.cancel();else void submit();});
@@ -758,7 +827,7 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
     // Ollama's native selection is shared by text and voice. An old session
     // override must never advertise or send a model preceding the current ACK.
     if(target?.provider==='ollama')session.models.delete(key);
-    if(key!==owner){if(owner)session.drafts.set(owner,input.value);owner=key;input.value=session.drafts.get(key)??'';fitInput();rendered='';messageNodes.clear();emptyNode=null;dots=null;clear(log);if(picker.isOpen)picker.close();}
+    if(key!==owner){manualError='';if(owner)session.drafts.set(owner,input.value);owner=key;input.value=session.drafts.get(key)??'';fitInput();rendered='';messageNodes.clear();emptyNode=null;dots=null;clear(log);if(picker.isOpen)picker.close();}
     const waiting=session.sending||!!snapshot?.busy;
     requestHistory.sync(target,snapshot?.requestHistory,snapshot?.messages.length??0);
     taskStatus.sync(target,snapshot?{...snapshot,taskNotice:requestHistory.coversTask(snapshot.taskNotice?.taskId)?undefined:snapshot.taskNotice}:null,session.sending);
@@ -793,13 +862,13 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
       desired.forEach((child,index)=>{if(log.children[index]!==child)log.insertBefore(child,log.children[index]??null);});
       if(follow)log.scrollTop=log.scrollHeight;log.dataset.owner=key;
     }
-    const notices=[session.error,snapshot?.notice].filter((value,index,all)=>value&&all.indexOf(value)===index);
+    const notices=[session.error,manualError,snapshot?.notice].filter((value,index,all)=>value&&all.indexOf(value)===index);
     const text=notices.join('\n\n')||(session.loading&&!snapshot?'A carregar a conversa…':waiting?'A trabalhar nesta sessão.':'');
     feedback.hidden=!text;feedback.textContent=text;
     input.disabled=!snapshot?.capabilities.send;
     input.placeholder=snapshot&&!snapshot.capabilities.send?'Esta sessão permite apenas leitura.':target?.origin==='external'?'Mensagem para esta sessão de terminal…':'Escreve uma mensagem…';
     const stoppable=!!snapshot?.busy&&snapshot.capabilities.cancel&&!!snapshot.turn;
-    send.disabled=waiting?!stoppable:input.disabled||!input.value.trim()||!!session.error||(target?.provider==='ollama'&&OllamaModelSelection.pending);
+    send.disabled=preparingMemory.has(key)||memory.pending||(waiting?!stoppable:input.disabled||!input.value.trim()||!!session.error||(target?.provider==='ollama'&&OllamaModelSelection.pending));
     send.textContent=waiting?'■':'↑';send.title=waiting?'Interromper esta sessão':t(STRINGS.send);
     send.setAttribute('aria-label',send.title);
     const provider=target?.provider??'';
@@ -808,6 +877,9 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
     const nativeModel=target?.origin==='external'&&provider!=='codex';
     modelButton.disabled=waiting||!snapshot?.capabilities.send||nativeModel;modelButton.title=`${nativeModel?'Modelo escolhido no terminal':'Modelo para o próximo pedido'} · ${model.textContent}`;modelButton.setAttribute('aria-label',modelButton.title);
     profiles.disabled=waiting;profiles.hidden=target?.origin==='external'||!profileProvider(provider);
+    const memoryTarget=target?.origin==='mochi'&&!petRetired(target.petId)?{petId:target.petId,provider:target.provider,conversationId:target.sessionId}:null;
+    memory.sync(memoryTarget,JSON.stringify([key,input.value.trim(),target?.provider==='ollama'?activeModel({...State.settings,chatProvider:'ollama'}):session.model,target?activeModel({...State.settings,chatProvider:target.provider as typeof State.chatProvider}):'',snapshot?.attachments??[]]));
+    if(!memoryTarget)manualError='';
     onHeightChange();
   }
   if(typeof ResizeObserver!=='undefined'){

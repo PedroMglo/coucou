@@ -111,7 +111,7 @@ impl Selections {
         reservation.channel().check_admission(PROVIDER)?;
         let mut next = current.clone();
         next.chat_models.insert(PROVIDER.into(), choice.model.clone());
-        persist(&next)?;
+        if let Err(error)=persist(&next){crate::settings::note_failed_io(&current,&next);return Err(error);}
         *current = next;
         // Emit synchronously before releasing the serialization locks. An
         // accepted disk write must not be reported as a failed model choice
@@ -149,7 +149,7 @@ pub async fn pet_model_select(
         let profiles = if choice.model.starts_with('@') { Some(crate::pet_config::read()?) } else { None };
         let generation=choice.generation;
         SELECTIONS.finish(choice, &shared.settings, &chat, &models, profiles.as_ref(),
-            |next| crate::settings::save(next).map_err(|_| "Não foi possível guardar o modelo. A seleção anterior foi preservada.".into()),
+            |next| crate::settings::save(next).map_err(|err| crate::settings::save_error("Não foi possível confirmar a seleção do modelo", &err)),
             |next| { match selection_event(next,generation){
                 Ok(event)=>{let _=app.emit("settings-changed",event);},
                 Err(error)=>crate::log::line(error),

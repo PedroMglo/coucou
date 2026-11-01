@@ -21,9 +21,9 @@ fn sha(bytes: &[u8]) -> String { ring::digest::digest(&ring::digest::SHA256, byt
         assert!(!String::from_utf8_lossy(fixture).contains("#[cfg(test)]"));
     }
 }
-#[test] fn actual_legacy_reader_accepts_v1_through_v4_and_refuses_v5_v6_without_writing() {
+#[test] fn actual_legacy_reader_accepts_v1_through_v4_and_refuses_v5_through_v7_without_writing() {
     let t = Temp::new(); let path = t.0.join("conversations.json");
-    for version in 1..=6 {
+    for version in 1..=7 {
         let bytes = format!("{{\"version\":{version},\"pets\":{{}},\"archives\":{{}}}}").into_bytes();
         fs::write(&path, &bytes).unwrap();
         assert_eq!(memory::load(&path).is_ok(), version <= 4);

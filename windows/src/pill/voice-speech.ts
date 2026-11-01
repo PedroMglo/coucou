@@ -15,6 +15,7 @@ type AudioPort = Pick<VoiceAudio, "play" | "cancel">;
 /** Playback belongs to the mapped surface, which may be a pet or the old pill. */
 export class VoiceSpeech {
   private epoch = 0;
+  private activeId: number | null = null;
   private cancelSystem: (() => void) | null = null;
   private audio: AudioPort;
   private changed: (speaking: boolean) => void;
@@ -22,7 +23,9 @@ export class VoiceSpeech {
     this.changed = changed;
     this.audio = audio;
   }
-  cancel() {
+  cancel(id?: number) {
+    if (id !== undefined && id !== this.activeId) return;
+    this.activeId = null;
     this.epoch++;
     window.speechSynthesis?.cancel();
     this.audio.cancel();
@@ -33,13 +36,14 @@ export class VoiceSpeech {
   async say(reply: SpokenReply) {
     this.cancel();
     const epoch = this.epoch;
+    this.activeId = reply.id;
     let played = false;
     this.changed(true);
     try {
       played = !!reply.audio && await this.audio.play(reply.audio);
       if (!played && epoch === this.epoch && reply.allowSystemFallback !== false) played = await this.system(reply, epoch);
     } finally {
-      if (epoch === this.epoch) { this.cancelSystem = null; this.changed(false); }
+      if (epoch === this.epoch) { this.activeId = null; this.cancelSystem = null; this.changed(false); }
       void FlowBridge.voiceDone(reply.id, played && epoch === this.epoch);
     }
   }
@@ -52,7 +56,7 @@ export class VoiceSpeech {
       });
     }
     if (epoch !== this.epoch) return false;
-    if (!synth || !synth.getVoices().length) return !!(await FlowBridge.sayNative(reply.text, reply.lang));
+    if (!synth || !synth.getVoices().length) return !!(await FlowBridge.sayNative(reply.id));
     const want = (reply.lang ?? navigator.language).toLowerCase();
     const short = want.split("-")[0];
     const voices = synth.getVoices();
@@ -77,7 +81,10 @@ export async function registerVoiceSpeech(webview: "pill" | "companions", change
   const speaker = new VoiceSpeech(changed, audio);
   await Promise.all([
     onEvent<SpokenReply>("voice-say", reply => void speaker.say(reply), webview),
-    onEvent("voice-cancel", () => speaker.cancel(), webview),
+    onEvent<{ id: number } | null>("voice-cancel", request => {
+      if (request == null) speaker.cancel();
+      else if (Number.isSafeInteger(request.id) && request.id > 0) speaker.cancel(request.id);
+    }, webview),
   ]);
   return speaker;
 }

@@ -23,6 +23,11 @@ pub mod dialogue;
 mod services;
 pub mod session;
 mod tts;
+mod native;
+pub(crate) mod native_surface;
+mod native_worker;
+mod speech_http;
+mod input;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -54,6 +59,14 @@ struct Running {
 }
 
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
+fn release_running(running:&mut Option<Running>,stop:&Arc<AtomicBool>){
+    if running.as_ref().is_some_and(|r|Arc::ptr_eq(&r.stop,stop)){*running=None;}
+}
+struct ListeningOwner(Arc<AtomicBool>);
+impl Drop for ListeningOwner{fn drop(&mut self){
+    self.0.store(true,Ordering::Release);
+    release_running(&mut RUNNING.lock().unwrap(),&self.0);
+}}
 static CAPTURE_OWNER: Mutex<()> = Mutex::new(());
 
 /// Wait for the previous voice capture to close instead of guessing how long
@@ -69,13 +82,16 @@ fn capture_lease(stop: &AtomicBool) -> Option<std::sync::MutexGuard<'static, ()>
     }
 }
 
-struct Pending {speech:bool,tx:mpsc::Sender<String>}
+struct NativeReply{speech:Arc<native::Speech>,backend:Option<native_worker::Plan>}
+struct Pending {speech:bool,tx:mpsc::Sender<String>,native:Option<NativeReply>,target:&'static str}
+impl Drop for Pending{fn drop(&mut self){if let Some(reply)=&self.native{reply.speech.retire();}}}
 /// Tool replies survive turning speech off while their CLI job continues.
 fn pending() -> &'static Mutex<HashMap<u64, Pending>> {
     static P: OnceLock<Mutex<HashMap<u64, Pending>>> = OnceLock::new();
     P.get_or_init(|| Mutex::new(HashMap::new()))
 }
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+fn next_id()->Option<u64>{NEXT_ID.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|(n<9_007_199_254_740_991).then(||n+1)).ok()}
 fn cancel_playback(pending:&mut HashMap<u64,Pending>) {
     pending.retain(|_,p|if p.speech {let _=p.tx.send(String::new());false}else{true});
 }
@@ -101,6 +117,7 @@ pub fn requirements_met(app: &AppHandle) -> bool {
 /// Starts or stops listening to follow the preference.
 pub fn sync(app: &AppHandle) {
     let wanted = crate::flow::get(app).is_some_and(|f| f.store.lock().unwrap().prefs.voice);
+    let wanted=wanted&&crate::settings::optional::check(crate::settings::optional::Operation::Voice).is_ok();
     let explicit = session::active() || manual::active();
     let mut running = RUNNING.lock().unwrap();
     match (wanted && !explicit && !session::suspend_hotword() && requirements_met(app), running.is_some()) {
@@ -108,9 +125,11 @@ pub fn sync(app: &AppHandle) {
             let stop = Arc::new(AtomicBool::new(false));
             let app2 = app.clone();
             let stop2 = stop.clone();
-            std::thread::Builder::new().name("coucou-voice".into()).spawn(move || run(app2, stop2)).ok();
+            *running = Some(Running { stop:stop.clone() });
+            if std::thread::Builder::new().name("coucou-voice".into()).spawn(move || run(app2, stop2)).is_err(){
+                release_running(&mut running,&stop);return;
+            }
             preload_asr(app,stop.clone());
-            *running = Some(Running { stop });
             crate::log::line("voice: « OK Coucou » listening");
         }
         (false, true) => {
@@ -168,17 +187,19 @@ enum Mode {
 }
 
 fn run(app: AppHandle, stop: Arc<AtomicBool>) {
+    let _owner=ListeningOwner(stop.clone());
+    let input=match input::Input::capture(&app){Ok(input)=>input,Err(_)=>return};
+    let provider=input.settings.chat_provider.clone();
     let Some(_lease) = capture_lease(&stop) else { return };
-    let mic = crate::flow::get(&app).map(|f| f.store.lock().unwrap().prefs.mic.clone()).unwrap_or_default();
+    if input.check().is_err() {return;}
     let (tx, rx) = mpsc::sync_channel::<Vec<f32>>(8);
-    let capture = audio::Capture::start(audio::Source::Mic(if mic.is_empty() { None } else { Some(mic) }), move |s| {
+    let capture = audio::Capture::start_stoppable(input.source.clone(), stop.clone(), move |s| {
         let _ = tx.try_send(s.to_vec());
     });
     let mut capture = match capture {
         Ok(c) => c,
         Err(err) => {
             crate::log::line(format!("voice: microphone: {err}"));
-            *RUNNING.lock().unwrap() = None;
             return;
         }
     };
@@ -187,6 +208,7 @@ fn run(app: AppHandle, stop: Arc<AtomicBool>) {
     let mut brain = brain::Brain::default();
     let mut hide_at: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
+        if input.check().is_err(){break;}
         let chunk = match rx.recv_timeout(Duration::from_millis(300)) {
             Ok(c) => Some(c),
             Err(mpsc::RecvTimeoutError::Timeout) => None,
@@ -196,13 +218,13 @@ fn run(app: AppHandle, stop: Arc<AtomicBool>) {
         // The pill's last answer goes away after a while.
         if hide_at.is_some_and(|t| now > t) {
             hide_at = None;
-            show(&app, None);
+            show_for_pet(&app, None, dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
         }
         match &mode {
             Mode::Command { until, .. } | Mode::FollowUp { until } if now > *until => {
                 mode = Mode::Wake;
                 vad.hangover = 25;
-                show(&app, None);
+                show_for_pet(&app, None, dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
             }
             _ => {}
         }
@@ -216,7 +238,7 @@ fn run(app: AppHandle, stop: Arc<AtomicBool>) {
             if segment.len() < speech::SAMPLE_RATE as usize * 35 / 100 {
                 continue;
             }
-            let Some(heard) = transcribe(&app, &segment, Some(&stop)).map(|t| t.text.trim().to_string()) else { continue };
+            let Some(heard) = input.transcribe(&segment, Some(&stop)).map(|t| t.text.trim().to_string()) else { continue };
             if heard.is_empty() {
                 continue;
             }
@@ -228,7 +250,7 @@ fn run(app: AppHandle, stop: Arc<AtomicBool>) {
                         if crate::flow::text::word_count(&rest) >= 2 {
                             Some(rest)
                         } else {
-                            show(&app, Some(VoiceView { phase: "listening".into(), heard: rest.clone(), answer: String::new() }));
+                            show_for_pet(&app, Some(VoiceView { phase: "listening".into(), heard: rest.clone(), answer: String::new() }), dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
                             mode = Mode::Command { text: rest, until: now + Duration::from_secs(7) };
                             // A question may come with pauses in it.
                             vad.hangover = 40;
@@ -246,38 +268,37 @@ fn run(app: AppHandle, stop: Arc<AtomicBool>) {
             let Some(question) = question else { continue };
             mode = Mode::Wake;
             vad.hangover = 25;
-            show(&app, Some(VoiceView { phase: "thinking".into(), heard: question.clone(), answer: String::new() }));
-            let provider = app.try_state::<crate::Shared>().map(|s| s.settings.lock().unwrap().chat_provider.clone()).unwrap_or_default();
+            show_for_pet(&app, Some(VoiceView { phase: "thinking".into(), heard: question.clone(), answer: String::new() }), dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
             brain.forget_if_idle();
-            let reply = brain.respond_as(&app, &question, &provider, Some(stop.clone()));
+            let reply = brain.respond_as(&app, &question, &provider, &input, Some(stop.clone()));
             if stop.load(Ordering::Relaxed) { break; }
             let answer = reply.as_ref().map(|r| r.text.clone()).unwrap_or_default();
             if answer.is_empty() {
                 let done = reply.is_some_and(|r| r.acted);
-                show(&app, Some(VoiceView {
+                show_for_pet(&app, Some(VoiceView {
                     phase: "speaking".into(),
                     heard: question,
                     answer: if done { "✓".into() } else { crate::i18n::t("Coucou couldn't answer: check the selected voice provider.") },
-                }));
+                }), dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
                 hide_at = Some(Instant::now() + Duration::from_secs(5));
                 continue;
             }
-            show(&app, Some(VoiceView { phase: "speaking".into(), heard: question.clone(), answer: answer.clone() }));
-            speak_stoppable(&app, &answer, Some(&stop), None);
+            show_for_pet(&app, Some(VoiceView { phase: "speaking".into(), heard: question.clone(), answer: answer.clone() }), dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
+            speak_prepared(&app, &answer, Some(&stop), None, None, &input);
             vad.reset();
             // Drop what the microphone heard of Coucou's own voice.
             while rx.try_recv().is_ok() {}
             if answer.trim_end().ends_with('?') {
                 mode = Mode::FollowUp { until: Instant::now() + Duration::from_secs(8) };
                 vad.hangover = 40;
-                show(&app, Some(VoiceView { phase: "listening".into(), heard: String::new(), answer }));
+                show_for_pet(&app, Some(VoiceView { phase: "listening".into(), heard: String::new(), answer }), dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
             } else {
                 hide_at = Some(Instant::now() + Duration::from_secs(6));
             }
         }
     }
     capture.stop();
-    show(&app, None);
+    show_for_pet(&app, None, dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
 }
 
 // ── Speaking ──────────────────────────────────────────────────────────────────
@@ -310,8 +331,9 @@ fn asr_engine(settings:&crate::settings::Settings)->&'static str {
     match settings.voice_asr_engine.as_str() {
         "parakeet"=>"parakeet",
         "whisper"=>"whisper",
-        _ if !settings.voice_asr_python.is_empty()&&!settings.voice_asr_model.is_empty()=>"whisper",
-        _=>"parakeet",
+        "" | "auto" if !settings.voice_asr_python.is_empty()&&!settings.voice_asr_model.is_empty()=>"whisper",
+        "" | "auto"=>"parakeet",
+        _=>"unsupported",
     }
 }
 fn whisper_ready(settings:&crate::settings::Settings)->bool {
@@ -324,12 +346,16 @@ pub struct RecognitionStatus{engine:&'static str,ready:bool,whisper_available:bo
 pub(crate) fn recognition_status(app:&AppHandle)->RecognitionStatus {
     let settings=app.state::<crate::Shared>().settings.lock().unwrap().clone();
     let engine=asr_engine(&settings);let whisper_available=whisper_ready(&settings);
-    RecognitionStatus{engine,ready:if engine=="whisper"{whisper_available}else{crate::speech::is_ready()},whisper_available}
+    RecognitionStatus{engine,ready:if engine=="whisper"{whisper_available}else{engine=="parakeet"&&crate::speech::is_ready()},whisper_available}
 }
 pub(crate) fn asr_ready(app: &AppHandle) -> bool {recognition_status(app).ready}
 fn preload_asr(app: &AppHandle, stop: std::sync::Arc<AtomicBool>) {
-    if asr_engine(&app.state::<crate::Shared>().settings.lock().unwrap())=="parakeet" { crate::speech::preload(); return; }
-    let app=app.clone(); std::thread::spawn(move || { let _=transcribe(&app,&[],Some(&stop)); });
+    let settings=match app.state::<crate::Shared>().settings.lock(){Ok(s)=>s.clone(),Err(_)=>return};
+    let Ok(configuration)=crate::pet_config::read_existing()else{return};
+    let Ok(plan)=input::Recognition::prepare(&settings,&configuration)else{return};
+    if stop.load(Ordering::Acquire){return;}
+    if matches!(plan.backend(),input::Recognizer::Parakeet){crate::speech::preload();return;}
+    std::thread::spawn(move || {let _=plan.transcribe(&[],Some(&stop));});
 }
 
 const ASR_TECHNICAL_TERMS:&[&str]=&["Docker Compose","unit tests","pull requests","issues","next steps"];
@@ -352,28 +378,14 @@ fn asr_vocabulary(config:&crate::pet_config::Configuration,settings:&crate::sett
     // Claude/Gemini are retired routes (session::available always false).
     terms
 }
-fn current_asr_vocabulary(settings:&crate::settings::Settings)->Vec<String>{
-    let config=crate::pet_config::read_existing().unwrap_or_else(|_|crate::pet_config::defaults());
-    asr_vocabulary(&config,settings)
-}
-pub(crate) fn transcribe(app: &AppHandle, samples: &[f32], stop: Option<&AtomicBool>) -> Option<crate::speech::Transcript> {
-    let settings=app.state::<crate::Shared>().settings.lock().unwrap().clone();
-    if stop.is_some_and(|s|s.load(Ordering::Relaxed)){return None;}
-    if asr_engine(&settings)=="parakeet" {
-        let result=crate::speech::transcribe(samples);
-        return if stop.is_some_and(|s|s.load(Ordering::Relaxed)){None}else{result};
-    }
-    if !whisper_ready(&settings){return None;}
-    let expand=|path: &str|path.strip_prefix("~/").map(|p|crate::platform::home_dir().join(p)).unwrap_or_else(||path.into());
-    let python=expand(&settings.voice_asr_python); let model=expand(&settings.voice_asr_model);
-    if samples.is_empty() { return crate::speech::whisper::transcribe(&python,&model,samples,stop); }
-    let vocabulary=current_asr_vocabulary(&settings);
-    let mut result=crate::speech::Transcript::default();
-    for (_,chunk) in crate::speech::audio::split_for_model(samples,crate::speech::SAMPLE_RATE,28.0) {
-        let part=crate::speech::whisper::transcribe_with_vocabulary(&python,&model,chunk,stop,&vocabulary)?;
-        if !part.text.is_empty() { if !result.text.is_empty() { result.text.push(' '); } result.text.push_str(&part.text); }
-    }
-    Some(result)
+
+/// Existing dictation callers prepare ASR at transcription time. Voice
+/// occurrences use Input captured before audio; this is not their admission.
+pub(crate) fn transcribe(app:&AppHandle,samples:&[f32],stop:Option<&AtomicBool>)->Option<crate::speech::Transcript>{
+    if stop.is_some_and(|s|s.load(Ordering::Acquire)){return None;}
+    let settings=app.state::<crate::Shared>().settings.lock().ok()?.clone();
+    let configuration=crate::pet_config::read_existing().ok()?;
+    input::Recognition::prepare(&settings,&configuration).ok()?.transcribe(samples,stop)
 }
 
 fn cancel_speech(app: &AppHandle) {
@@ -383,49 +395,49 @@ fn cancel_speech(app: &AppHandle) {
     tts::cancel_native();
 }
 
-fn speak_stoppable(app: &AppHandle, text: &str, stop: Option<&AtomicBool>, provider: Option<&str>) {
-    speak_with_language(app, text, stop, provider, None);
+fn speak_prepared(app:&AppHandle,text:&str,stop:Option<&Arc<AtomicBool>>,provider:Option<&str>,language:Option<&str>,input:&input::Input){
+    let captured=input.clone();let stop=stop.cloned();
+    let current:tts::Current=Arc::new(move||!stop.as_ref().is_some_and(|s|s.load(Ordering::Acquire))&&captured.check().is_ok());
+    speak_plan(app,text,provider,language,&input.playback,current);
 }
 
-fn speak(app: &AppHandle, text: &str, stop: Option<&AtomicBool>, language: Option<&str>) {
-    speak_with_language(app, text, stop, None, language);
-}
-
-fn speak_with_language(app: &AppHandle, text: &str, stop: Option<&AtomicBool>, provider: Option<&str>, language: Option<&str>) {
-    if stop.is_some_and(|s| s.load(Ordering::Relaxed)) { return; }
-    let epoch = tts::epoch();
-    let (output, gender) = crate::flow::get(app)
-        .map(|f| {
-            let p = &f.store.lock().unwrap().prefs;
-            (p.voice_output.clone(), p.voice_gender.clone())
-        })
-        .unwrap_or_else(|| ("system".into(), "female".into()));
-    if output == "off" {
-        return;
-    }
-    if output == "edge" {
-        if tts::speak_streaming(app, text, stop).is_some() { return; }
-    }
-    let audio = if output == "elevenlabs" { elevenlabs(text, &gender).map(|mp3| format!("data:audio/mpeg;base64,{}", base64(&mp3))) }
-        else { tts::generate(app, &output, provider, text, stop) };
-    if stop.is_some_and(|s| s.load(Ordering::Relaxed)) || tts::epoch() != epoch { return; }
-    // An unavailable online voice keeps the written answer. Never silently
-    // switch to the voices the user rejected or to a paid speech API.
-    if output == "edge" && audio.is_none() { return; }
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let (tx, rx) = mpsc::channel();
-    pending().lock().unwrap().insert(id, Pending{speech:true,tx});
+fn speak_plan(app:&AppHandle,text:&str,provider:Option<&str>,language:Option<&str>,plan:&tts::Plan,valid:tts::Current){
+    let epoch=tts::epoch();let diagnosed=AtomicBool::new(false);
+    let current:tts::Current=Arc::new(move||{if epoch==u64::MAX||tts::epoch()!=epoch{
+        if !diagnosed.swap(true,Ordering::AcqRel){crate::log::line("voice playback retired: generation changed");}return false;
+    }valid()});
+    if !current()||plan.output=="off"||text.chars().count()>8000{return;}
+    if plan.output=="edge"&&tts::speak_streaming(app,plan,text,current.clone()).is_some(){return;}
+    let audio=if plan.output=="elevenlabs"{elevenlabs(text,&plan.gender,current.clone()).map(|b|format!("data:audio/mpeg;base64,{}",base64(&b)))}
+        else{tts::generate(app,plan,provider,text,current.clone())};
+    if !current()||(!plan.system_allowed()&&audio.is_none()){return;}
+    let output=&plan.output;let gender=plan.gender.clone();
+    let Some(id)=next_id()else{return;};let(tx,rx)=mpsc::channel();
     // WebKit can suspend the hidden pill. The visible pet surface owns audio
     // while companions are enabled, just as it owns the conversation bubble.
     let target = if crate::companions::enabled(app) { crate::companions::LABEL } else { pill::LABEL };
     crate::log::line(format!("voice: playback request id={id}, output={output}, window={target}, audio={}", audio.is_some()));
-    let _ = app.emit_to(target, "voice-say", Say { id, text: text.into(), lang: language.or_else(|| wake::speech_lang(text)).map(str::to_string), audio, gender, allow_system_fallback: output != "edge" });
-    let words = crate::flow::text::word_count(text) as u64;
-    let until = Instant::now() + Duration::from_millis(4000 + words.min(200) * 600);
+    let language=language.or_else(||wake::speech_lang(text));
+    let words=crate::flow::text::word_count(text)as u64;
+    let until=Instant::now()+Duration::from_millis(4000+words.min(200)*600);
+    #[cfg(target_os="linux")]
+    let speech={
+        let Some(window)=app.get_webview_window(target)else{return;};
+        let Ok(frame)=tauri::async_runtime::block_on(native_surface::capture(&window))else{return;};
+        if frame.surface().label()!=target{return;}
+        let Some(speech)=native::Speech::prepare(frame,text,language,until,current.clone())else{return;};Some(speech)
+    };
+    // Native speech was already unavailable on these platforms. Preserve their
+    // browser playback/ACK without claiming Linux physical-window admission.
+    #[cfg(not(target_os="linux"))]
+    let speech:Option<Arc<native::Speech>>=None;
+    let native=speech.as_ref().map(|speech|NativeReply{speech:speech.clone(),backend:if plan.system_allowed(){native_worker::Plan::capture()}else{None}});
+    pending().lock().unwrap().insert(id,Pending{speech:true,tx,native,target});
+    if app.emit_to(target,"voice-say",Say{id,text:text.into(),lang:language.map(str::to_owned),audio,gender,allow_system_fallback:plan.system_allowed()}).is_err(){pending().lock().unwrap().remove(&id);return;}
     while Instant::now() < until {
         // The controller cancels playback before releasing microphone ownership.
         // A superseded waiter must never send a global cancel to a newer voice.
-        if stop.is_some_and(|s| s.load(Ordering::Relaxed)) { break; }
+        if !current()||speech.as_ref().is_some_and(|s|!s.current()){let _=app.emit_to(target,"voice-cancel",json!({"id":id}));break;}
         if rx.recv_timeout(Duration::from_millis(50)).is_ok() { break; }
     }
     pending().lock().unwrap().remove(&id);
@@ -433,57 +445,51 @@ fn speak_with_language(app: &AppHandle, text: &str, stop: Option<&AtomicBool>, p
 
 /// The pill says it has finished speaking (`id`), or the island answers a question.
 #[tauri::command]
-pub fn voice_done(id: u64, text: Option<String>, played: Option<bool>) {
-    if let Some(played) = played { crate::log::line(format!("voice: playback complete id={id}, played={played}")); }
-    if let Some(p) = pending().lock().unwrap().remove(&id) {
-        let _ = p.tx.send(text.unwrap_or_default());
-    }
+pub async fn voice_done(window:tauri::WebviewWindow,id:u64,text:Option<String>,played:Option<bool>){
+    let scope=pending().lock().unwrap().get(&id).map(|p|(p.speech,p.target,p.native.as_ref().map(|n|n.speech.clone())));
+    let Some((speech,target,reply))=scope else{return;};
+    if speech{
+        #[cfg(target_os="linux")]{let(Some(reply),Ok(frame))=(reply,native_surface::capture(&window).await)else{return;};if !reply.belongs_to(&frame){return;}}
+        #[cfg(not(target_os="linux"))]{let _=reply;if window.label()!=target{return;}}
+        #[cfg(target_os="linux")]let _=target;
+    }else if window.label()!=crate::island::WINDOW_LABEL{return;}
+    if let Some(played)=played{crate::log::line(format!("voice: renderer playback complete id={id}, played={played}"));}
+    if let Some(p)=pending().lock().unwrap().remove(&id){let _=p.tx.send(text.unwrap_or_default());}
 }
 
-/// Where the webview has no voice (WebKitGTK often): speech-dispatcher or
-/// espeak-ng, when installed.
+/// A renderer requests only a backend-owned reply. Payload text/language,
+/// another surface, a tool id, replay or an obsolete document cannot dispatch.
 #[tauri::command]
-pub async fn voice_say_native(text: String, lang: Option<String>) -> bool {
-    tauri::async_runtime::spawn_blocking(move || {
-        tts::say_native(&text, lang.as_deref())
-    })
-    .await
-    .unwrap_or(false)
+pub async fn voice_say_native(window:tauri::WebviewWindow,id:Option<u64>)->bool{
+    let Some(id)=id.filter(|n|*n>0&&*n<=9_007_199_254_740_991)else{return false;};
+    let selected={let pending=pending().lock().unwrap();pending.get(&id).filter(|p|p.speech)
+        .and_then(|p|p.native.as_ref()).map(|n|(n.speech.clone(),n.backend.clone()))};
+    let Some((speech,backend))=selected else{return false;};
+    let Ok(frame)=native_surface::capture(&window).await else{speech.event(0);return false;};
+    let Some(backend)=backend else{speech.event(1);return false;};
+    let Some(call)=speech.claim(&frame)else{speech.event(2);return false;};
+    speech.event(3);let result=native_worker::run(call,backend).await;if !result{speech.event(4);}result
 }
 
 #[tauri::command]
 pub async fn voice_preview(app: AppHandle, provider: Option<String>) {
     if session::active() || pill::dictating(&app) || crate::notes::is_recording(&app) { return; }
+    let Ok((plan,current))=tts::preview(&app)else{return;};
     cancel_speech(&app);
+    // Own the preview generation before queuing: a delayed old worker must
+    // not borrow the newer preview's epoch when it eventually starts.
+    let preview_epoch=tts::epoch();
+    let current:tts::Current=Arc::new(move||tts::epoch()==preview_epoch&&current());
     tauri::async_runtime::spawn_blocking(move || {
-        let raquel = crate::flow::get(&app).is_some_and(|f| f.store.lock().unwrap().prefs.voice_output == "edge");
+        let raquel = plan.output=="edge";
         let sample = if raquel { "Olá! Esta é a minha voz para as nossas conversas.".into() }
             else { crate::i18n::t("Hello! This is my voice for our conversations.") };
-        speak_stoppable(&app, &sample, None, provider.as_deref());
+        speak_plan(&app, &sample, provider.as_deref(), None, &plan, current);
     }).await.ok();
 }
 
-/// ElevenLabs' MP3 for `text`, with the user's key; None and the system voice speaks.
-fn elevenlabs(text: &str, gender: &str) -> Option<Vec<u8>> {
-    let key = crate::secrets::get("elevenlabs-api-key")?;
-    tauri::async_runtime::block_on(async {
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().ok()?;
-        let voices: Value = client.get("https://api.elevenlabs.io/v1/voices").header("xi-api-key", &key).send().await.ok()?.json().await.ok()?;
-        let voice = pick_voice(voices["voices"].as_array()?, gender)?;
-        let response = client
-            .post(format!("https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=mp3_44100_128"))
-            .header("xi-api-key", &key)
-            .header("accept", "audio/mpeg")
-            .json(&json!({ "text": text, "model_id": "eleven_flash_v2_5" }))
-            .send()
-            .await
-            .ok()?;
-        if !response.status().is_success() {
-            crate::log::line(format!("voice: ElevenLabs {}", response.status()));
-            return None;
-        }
-        Some(response.bytes().await.ok()?.to_vec())
-    })
+fn elevenlabs(text:&str,gender:&str,current:tts::Current)->Option<Vec<u8>>{
+    speech_http::elevenlabs(text,gender,current)
 }
 
 /// First English voice of the gender (a young one first for a man); else any
@@ -523,9 +529,9 @@ fn base64(bytes: &[u8]) -> String {
 
 /// Asks the island (it knows the pills and the services' data) and waits for its answer.
 pub fn ask_island(app: &AppHandle, kind: &str, input: Value) -> Option<String> {
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let id = next_id()?;
     let (tx, rx) = mpsc::channel();
-    pending().lock().unwrap().insert(id, Pending{speech:false,tx});
+    pending().lock().unwrap().insert(id, Pending{speech:false,tx,native:None,target:crate::island::WINDOW_LABEL});
     let _ = app.emit_to(crate::island::WINDOW_LABEL, "voice-ask", json!({ "id": id, "kind": kind, "input": input }));
     let answer = rx.recv_timeout(Duration::from_secs(5)).ok();
     pending().lock().unwrap().remove(&id);
@@ -534,9 +540,11 @@ pub fn ask_island(app: &AppHandle, kind: &str, input: Value) -> Option<String> {
 
 /// Runs one of Claude's tools: what goes back to Claude, and whether something changed.
 pub fn run_tool_for(app:&AppHandle,pet:&str,name:&str,input:&Value,current:impl Fn()->bool)->(String,bool){
+    if let Err(error)=crate::settings::effect_allowed(){return(error,false);}
     crate::pet_operations::run(pet,name,input,current,crate::pet_config::read_existing,|call|run_native_tool(app,call)).legacy()
 }
 pub(crate) fn run_native_tool_for(app:&AppHandle,pet:&str,name:&str,input:&Value,native:&crate::pet_native_invocation::Fence,current:impl Fn()->bool)->(String,bool){
+    if let Err(error)=crate::settings::effect_allowed(){return(error,false);}
     crate::pet_operations::run_native(native,pet,name,input,current,crate::pet_config::read_existing,|call|run_native_tool(app,call)).legacy()
 }
 
@@ -681,7 +689,7 @@ mod tests {
     #[test]
     fn cancelling_audio_does_not_cancel_an_in_flight_mochi_tool_reply() {
         let (voice,heard)=mpsc::channel();let (tool,answer)=mpsc::channel();
-        let mut waiting=HashMap::from([(1,Pending{speech:true,tx:voice}),(2,Pending{speech:false,tx:tool})]);
+        let mut waiting=HashMap::from([(1,Pending{speech:true,tx:voice,native:None,target:crate::flow::pill::LABEL}),(2,Pending{speech:false,tx:tool,native:None,target:crate::island::WINDOW_LABEL})]);
         cancel_playback(&mut waiting);assert_eq!(heard.recv().unwrap(),"");
         assert!(waiting.contains_key(&2));assert!(answer.try_recv().is_err());
         waiting.remove(&2).unwrap().tx.send("service data".into()).unwrap();assert_eq!(answer.recv().unwrap(),"service data");

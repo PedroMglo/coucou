@@ -87,15 +87,16 @@ pub(super) fn parse(goal:&model::Record, policy:&Policy, raw:&str)->model::Resul
     }
 }
 
-pub(super) fn model_input(goal:&model::Record,spec:&super::admission::AdmissionSpec)->model::Result<String> {
+#[cfg(target_os="linux")]
+pub(super) fn model_input(goal:&model::Record,spec:&super::admission::AdmissionSpec,context:&super::planning_context::Input)->model::Result<String> {
     let policy=spec.planning_policy.as_ref().filter(|_|spec.binding_format()).ok_or(model::Error::Conflict)?;
     if !super::plans::matches(goal,spec) {return Err(model::Error::Conflict);}
     // This catalog is prompt data, never an HTTP tool definition. Native typed
     // parsing, captured targets and human exact recipe review still follow.
-    super::plans::encode_input(&serde_json::json!({
-        "instructions":"Return exactly one JSON object, without markdown. Produce bounded proposed work or a blocked reason. Never execute operations, approve permissions or claim any criterion is verified. Use every original criterion exactly once by its zero-based index. A plan must use only the declared catalog and predicates; it cannot change the goal, model, context, budget or policy. The native system will choose and capture the target and request separate exact human approval before effects.",
-        "intent":goal.spec.intent,"criteria":goal.spec.criteria,"seedProposals":super::plans::snapshot(goal),
-        "policy":policy,"sharedBudget":spec.budget,"effectsAuthorized":false,"criteriaVerified":false,
+    let mut input=serde_json::json!({
+        "instructions":"Return exactly one JSON object, without markdown. Produce bounded proposed work or a blocked reason. Never execute operations, approve permissions or claim any criterion is verified. Use every original criterion exactly once by its zero-based index. Use the native remaining maxStepsThisRound/output limits, and treat prior native observations as historical at their timestamps, not assumed current. A plan must use only the declared catalog and predicates; it cannot change the goal, model, context, budget or policy. The native system will choose and capture the target and request separate exact human approval before effects.",
+        "intent":goal.spec.intent,"criteria":goal.spec.criteria,"seedProposals":super::plans::seed_snapshot(goal,spec),
+        "policy":policy,"sharedBudget":spec.budget,"nativeContext":context,"effectsAuthorized":false,"criteriaVerified":false,
         "catalog":{
             "operationId":"spotify.control","version":1,
             "arguments":[{"action":"play"},{"action":"pause"},{"action":"set_volume","volume":"integer 0..100"}],
@@ -105,5 +106,9 @@ pub(super) fn model_input(goal:&model::Record,spec:&super::admission::AdmissionS
             "plan":{"kind":"plan","description":"nonempty text <=2048 bytes","steps":[{"description":"nonempty text <=2048 bytes","postcondition":"nonempty text <=2048 bytes","operation":{"operationId":"spotify.control","version":1,"arguments":"one exact catalog object"}}],"criteria":[{"criterionIndex":"each original index exactly once","predicate":"one exact typed predicate"}]},
             "blocked":{"kind":"blocked","reason":"nonempty text <=4096 bytes"}
         }
-    }))
+    });
+    if let Some(c)=spec.continuation.as_ref().filter(|c|c.uncertain_effects.is_some()){
+        input["historicalUncertainty"]=serde_json::json!({"reviewedAt":c.reviewed_at,"effects":c.uncertain_effects,"originalCharge":c.charge,"instructions":"These historical outcomes remain unknown and charged. This is neither proof of success nor a replay permit. Propose only the declared fresh state assignments; each new target and recipe requires its own exact native approval."});
+    }
+    super::plans::encode_input(&input)
 }

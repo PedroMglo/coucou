@@ -79,6 +79,15 @@ fn directory(path: PathBuf, decision: &str, create: bool) -> super::authority::R
     root.check().map_err(|_| Failure::Changed)?;
     protocol_directory(&root.path.join(decision), PROTOCOL, create).map_err(|_| Failure::Unsafe)
 }
+/// Refuse a known incompatible sink before spending a model attempt or sending
+/// context. Absence remains absence; this is neither repair nor a guarantee
+/// that a later publication will succeed. Prior rounds may own this directory.
+pub(super) fn preflight(authority: &Authority, decision: &str) -> super::authority::Result<()> {
+    if let Some(dir) = directory(authority.result_root()?, decision, false)? {
+        dir.check().map_err(|_| Failure::Changed)?;
+    }
+    Ok(())
+}
 pub(super) fn lookup(authority: &Authority, spec: &AdmissionSpec, proof: &ConsentProof, request: &str) -> super::authority::Result<Lookup> {
     let (_, attempt) = authority.result_attempt(spec, proof, request)?;
     let Some(attempt) = attempt else { return Ok(Lookup::NotStarted); };
@@ -101,6 +110,12 @@ pub(super) fn lookup(authority: &Authority, spec: &AdmissionSpec, proof: &Consen
     authority.verify_result(spec, proof, &envelope)?;
     dir.check().map_err(|_| Failure::Changed)?;
     Ok(Lookup::Available { receipt: envelope.body })
+}
+/// Exact canonical bytes observed under the native authority lock. Missing
+/// receipts remain missing; this fence never initializes or repairs a store.
+pub(super)fn receipt_fence(authority:&Authority,spec:&AdmissionSpec,attempts:&[String])->Result<Vec<(String,Option<String>)>,Failure>{
+    let dir=directory(authority.result_root()?,&spec.decision_id,false)?;let mut rows=vec![];
+    for id in attempts{if !model::token(id){return Err(Failure::Invalid);}let name=format!("{id}.json");let hash=match &dir{Some(d)=>d.bytes(&name,MAX_RECEIPT).map_err(|_|Failure::Unsafe)?.map(|(b,_)|model::hash(&b)),None=>None};rows.push((name,hash));}Ok(rows)
 }
 
 pub(super) fn publish(authority: &Authority, spec: &AdmissionSpec, proof: &ConsentProof, envelope: &Envelope) -> super::authority::Result<()> {
@@ -139,4 +154,15 @@ pub(super) fn recover(authority: &Authority, spec: &AdmissionSpec, proof: &Conse
     if envelope.body.attempt_id != attempt.id || envelope.body.request_id != request { return Err(Failure::Invalid); }
     publish(authority, spec, proof, &envelope)?;
     Ok(envelope.body)
+}
+
+/// A no-lease grant cannot have a completed-result directory. This read refuses
+/// contradictory/ambiguous artifacts and never constructs a synthetic spec.
+pub(super)fn unclaimed_directory_fence(authority:&Authority,decision:&str)->super::authority::Result<String>{
+    use std::os::unix::fs::MetadataExt;
+    if !model::token(decision){return Err(Failure::Invalid);}
+    let Some(root)=protocol_directory(&authority.result_root()?,PROTOCOL,false).map_err(|_|Failure::Unsafe)?else{return model::fingerprint(&Option::<(u64,u64)>::None).map_err(|_|Failure::Invalid);};
+    if protocol_directory(&root.path.join(decision),PROTOCOL,false).map_err(|_|Failure::Unsafe)?.is_some(){return Err(Failure::RecoveryRequired);}
+    root.check().map_err(|_|Failure::Changed)?;let metadata=root.file.metadata().map_err(|_|Failure::Unavailable)?;
+    model::fingerprint(&Some((metadata.dev(),metadata.ino()))).map_err(|_|Failure::Invalid)
 }

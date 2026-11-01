@@ -159,3 +159,5 @@ fn management_goal_decisions_share_the_broker_without_exposing_or_answering_term
     decision.panel_answer(false,decision.request["goalTarget"].clone()).unwrap();assert_eq!(decision.reply.recv().unwrap()["allow"],false);assert!(decision.answer(json!({"allow":true}),decision.request["goalTarget"].clone()).is_err());let code=decision.request["voiceCode"].as_str().unwrap();assert!(decision.voice("ollama",&format!("aprovar receita {code}"),&AtomicBool::new(false)).unwrap().contains("Não há"));assert!(player.calls.lock().unwrap().is_empty());assert!(ledger(&f,&g).is_null());
     assert!(serde_json::from_value::<GoalAnswerInput>(json!({"id":"request","approve":"yes","target":{}})).is_err());assert!(serde_json::from_value::<GoalAnswerInput>(json!({"id":"request","approve":true,"target":{},"nativeChoice":"always"})).is_err());
 }
+
+#[path="driver_decision_tests.rs"]mod driver_decision_tests;

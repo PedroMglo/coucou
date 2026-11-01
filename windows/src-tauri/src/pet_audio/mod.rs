@@ -11,6 +11,9 @@ fn authorize(window: &tauri::WebviewWindow, app: &AppHandle) -> Result<(), Strin
     if ![crate::island::WINDOW_LABEL, crate::pet_control::LABEL, crate::HUB_LABEL].contains(&window.label()) {
         return Err("Abre o Spoty para controlar o som.".into());
     }
+    authorize_owner(app)
+}
+fn authorize_owner(app:&AppHandle)->Result<(),String>{
     let shared = app.state::<crate::Shared>();
     let settings = shared.settings.lock().unwrap();
     if settings.main_pill != "integration_spotify" && !settings.active_integrations.iter().any(|id| id == "integration_spotify") {
@@ -31,15 +34,15 @@ pub async fn pet_audio_snapshot(window: tauri::WebviewWindow, app: AppHandle) ->
 #[tauri::command]
 pub async fn pet_audio_control(window: tauri::WebviewWindow, app: AppHandle, request: Request) -> Result<Receipt, String> {
     authorize(&window, &app)?;
-    #[cfg(target_os = "linux")] { linux::control(request).await }
+    #[cfg(target_os = "linux")] { let original_window=window.clone();let original_app=app.clone();linux::control_with(request,std::sync::Arc::new(move||authorize(&original_window,&original_app).is_ok())).await }
     #[cfg(not(target_os = "linux"))] { let _ = request; Err("O controlo de som do Spoty está disponível em Linux.".into()) }
 }
 
 /// Called only by Spoty's already addressed, user-started voice session.
 /// Recognition and speech remain with the existing voice engine.
-pub fn spoken(normalized: &str) -> Option<Result<(String, bool), String>> {
+pub fn spoken(app:&AppHandle,normalized: &str) -> Option<Result<(String, bool), String>> {
     let command = commands::parse(normalized)?;
-    #[cfg(target_os = "linux")] { Some(tauri::async_runtime::block_on(linux::spoken(command))) }
+    #[cfg(target_os = "linux")] { let original_app=app.clone();let check=std::sync::Arc::new(move||authorize_owner(&original_app).is_ok());Some(tauri::async_runtime::block_on(linux::spoken(command,check))) }
     #[cfg(not(target_os = "linux"))] { let _ = command; Some(Err("O controlo do som está disponível em Linux.".into())) }
 }
 

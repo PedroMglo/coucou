@@ -21,6 +21,34 @@ static FINISH: AtomicBool = AtomicBool::new(false);
 // An explicit session takes over from the hotword. After Super/timeout, the
 // microphone stays closed until a new session or an explicit hotword preference.
 static HOTWORD_SUSPENDED: AtomicBool = AtomicBool::new(false);
+
+/// The alias changes routing for later spoken requests, so failed persistence
+/// must not leave a new route (or evict the oldest one) in authoritative memory.
+fn commit_alias_with(
+    current: &Mutex<crate::settings::Settings>, pet: Pet, spelling: String,
+    configured: std::collections::BTreeMap<String, Vec<String>>,
+    persist: impl FnOnce(&crate::settings::Settings) -> std::io::Result<()>,
+    publish: impl FnOnce(&crate::settings::Settings),
+) -> std::io::Result<crate::settings::Settings> {
+    crate::settings::update_checked_with(current, |next| {
+        let invalid = || std::io::Error::new(std::io::ErrorKind::InvalidInput,
+            crate::i18n::t("This name already selects another pet. Try a different name."));
+        if spelling.is_empty() || spelling.len() > 80 { return Err(invalid()); }
+        let provider = pet.provider();
+        let mut candidate = next.voice_pet_aliases.clone();
+        for (provider, names) in configured { candidate.entry(provider).or_default().extend(names); }
+        candidate.entry(provider.into()).or_default().push(spelling.clone());
+        if !matches!(dialogue::parse_with_aliases(&spelling, &candidate), Command::Select(selected, ref question) if selected == pet && question.is_empty()) {
+            return Err(invalid());
+        }
+        let aliases = next.voice_pet_aliases.entry(provider.into()).or_default();
+        if !aliases.contains(&spelling) {
+            if aliases.len() >= 20 { aliases.remove(0); }
+            aliases.push(spelling);
+        }
+        Ok(())
+    }, persist, publish)
+}
 pub fn active() -> bool {
     SESSION.lock().unwrap().is_some()
 }
@@ -144,6 +172,7 @@ pub fn toggle(app: &AppHandle) {
 }
 
 fn begin(app:&AppHandle,selected:Option<Pet>)->Result<(),String> {
+    crate::settings::optional::check(crate::settings::optional::Operation::Voice)?;
     let configuration=crate::pet_config::pet_configuration()?;
     let _=app.emit("pet-configuration-changed",configuration.config);
     let stop=reserve(app)?;
@@ -204,17 +233,18 @@ fn admit_pet(app:&AppHandle,pet:Pet)->Result<(),super::admission::Failure>{
 
 /// Returns one speech segment or None on stop/inactivity. Bounded queues and
 /// VAD bound the audio retained in memory. No recording is saved on disk.
-fn listen(app: &AppHandle, stop: &Arc<AtomicBool>, idle: &mut Idle, ready: impl FnOnce()) -> Result<Option<Vec<f32>>, String> {
+struct Heard { samples: Vec<f32>, input: super::input::Input }
+fn listen(app: &AppHandle, stop: &Arc<AtomicBool>, idle: &mut Idle, ready: impl FnOnce()) -> Result<Option<Heard>, String> {
+    let input=super::input::Input::capture(app)?;
     let mut ready=Some(ready);
     let Some(_lease) = super::capture_lease(stop) else {
         return Ok(None);
     };
-    let mic = crate::flow::get(app)
-        .map(|f| f.store.lock().unwrap().prefs.mic.clone())
-        .unwrap_or_default();
+    input.check()?;
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(8);
-    let mut capture = audio::Capture::start(
-        audio::Source::Mic((!mic.is_empty()).then_some(mic)),
+    let mut capture = audio::Capture::start_stoppable(
+        input.source.clone(),
+        stop.clone(),
         move |data| {
             let _ = tx.try_send(data.to_vec());
         },
@@ -255,7 +285,7 @@ fn listen(app: &AppHandle, stop: &Arc<AtomicBool>, idle: &mut Idle, ready: impl 
         }
     };
     capture.stop();
-    Ok(segment)
+    Ok(segment.map(|samples|Heard{samples,input}))
 }
 
 fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
@@ -273,7 +303,7 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
     let mut answer = crate::i18n::t("Say a pet name, such as Codex or Gravity, or say dictation.");
     while !stop.load(Ordering::Relaxed) {
         view(app, stop, "preparing", if selected.is_none(){&last_heard}else{""}, &answer, selected);
-        let samples = match listen(app, stop, &mut idle, || view(app,stop,"listening",if selected.is_none(){&last_heard}else{""},&answer,selected)) {
+        let heard = match listen(app, stop, &mut idle, || view(app,stop,"listening",if selected.is_none(){&last_heard}else{""},&answer,selected)) {
             Ok(Some(samples)) => samples,
             Ok(None) => break,
             Err(error) => {
@@ -285,7 +315,8 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
             break;
         }
         view(app, stop, "transcribing", "", "", selected);
-        let transcript = super::transcribe(app, &samples, Some(stop)).map(|t|t.text).unwrap_or_default();
+        let input=heard.input;
+        let transcript = input.transcribe(&heard.samples, Some(stop)).map(|t|t.text).unwrap_or_default();
         if transcript.trim().is_empty() {
             answer = "Não consegui perceber. Podes repetir?".into();
             idle.touch(Instant::now()); continue;
@@ -294,18 +325,16 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
             break;
         }
         last_heard=transcript.clone();
-        let mut aliases = app
-            .state::<crate::Shared>()
-            .settings
-            .lock()
-            .unwrap()
-            .voice_pet_aliases
-            .clone();
-        if let Ok(configured)=crate::pet_config::aliases(){for(provider,names)in configured{aliases.entry(provider).or_default().extend(names);}}
+        let mut aliases = input.settings.voice_pet_aliases.clone();
+        for (id,pet) in &input.configuration.pets {
+            if crate::pet_config::retired(id) || (id!="integration_spotify" && pet.provider.is_empty()) {continue;}
+            let provider=if crate::pet_config::service(id){id}else{&pet.provider};
+            aliases.entry(provider.clone()).or_default().extend(pet.aliases.iter().cloned().chain(std::iter::once(pet.name.clone())));
+        }
         let command=dialogue::parse_with_aliases(&transcript,&aliases);
         if let Some(name)=(!super::admission::known_voice_address(&command)).then(||crate::pet_config::read_existing().ok().and_then(|c|c.unavailable_address(&transcript))).flatten() {
             answer=format!("{name} ainda não tem conversa de voz integrada. Escolhe Codex, Gravity ou outro pet com conversa disponível.");
-            view(app,stop,"speaking",&transcript,&answer,selected);super::speak_stoppable(app,&answer,Some(stop),None);
+            view(app,stop,"speaking",&transcript,&answer,selected);super::speak_prepared(app,&answer,Some(stop),None,None,&input);
             idle.touch(Instant::now());continue;
         }
         let question = match command {
@@ -316,7 +345,7 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
             Command::Select(pet, question) => {
                 if super::admission::uses_pet_response(&question){if let Err(reason)=admit_pet(app, pet) {
                     answer = reason.message().into();
-                    view(app,stop,"speaking",&transcript,&answer,selected);super::speak_stoppable(app,&answer,Some(stop),None);
+                    view(app,stop,"speaking",&transcript,&answer,selected);super::speak_prepared(app,&answer,Some(stop),None,None,&input);
                     idle.touch(Instant::now());
                     continue;
                 }}
@@ -333,7 +362,7 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
         };
         let Some(pet) = selected else {
             answer="Não reconheci o nome do pet. Diz, por exemplo, Codex, Gravity ou Spotify, seguido do pedido.".into();
-            view(app,stop,"speaking",&transcript,&answer,None);super::speak_stoppable(app,&answer,Some(stop),None);
+            view(app,stop,"speaking",&transcript,&answer,None);super::speak_prepared(app,&answer,Some(stop),None,None,&input);
             idle.touch(Instant::now());
             continue;
         };
@@ -352,26 +381,27 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
                 answer=if cancelled {format!("Pedi ao {} para interromper a tarefa.",pet.name())} else {format!("Não enviei nenhuma interrupção ao {}. Podes confirmar a tarefa no centro de tarefas.",pet.name())};
                 }
                 view(app,stop,"speaking",&question,&answer,Some(pet));
-                super::speak_stoppable(app,&answer,Some(stop),Some(pet.provider()));
+                super::speak_prepared(app,&answer,Some(stop),Some(pet.provider()),None,&input);
                 idle.touch(Instant::now());continue;
             },_=>{},
         }
         #[cfg(target_os="linux")]if let Some(text)=crate::cli_chat::goal_recipe_voice(app,pet.provider(),&question,stop){
-            answer=text;view(app,stop,"speaking",&question,&answer,Some(pet));super::speak_stoppable(app,&answer,Some(stop),Some(pet.provider()));idle.touch(Instant::now());continue;
+            answer=text;view(app,stop,"speaking",&question,&answer,Some(pet));super::speak_prepared(app,&answer,Some(stop),Some(pet.provider()),None,&input);idle.touch(Instant::now());continue;
         }
         if let Err(reason)=admit_pet(app,pet){
             answer=reason.message().into();
             view(app,stop,"speaking",&question,&answer,Some(pet));
-            super::speak_stoppable(app,&answer,Some(stop),Some(pet.provider()));
+            super::speak_prepared(app,&answer,Some(stop),Some(pet.provider()),None,&input);
             idle.touch(Instant::now());continue;
         }
         view(app, stop, "received", &question, "", Some(pet));
         let direct=if pet==Pet::Spotify {super::services::spotify(app,&question)}else{None};
-        let optional_assistant=direct.is_none()&&pet==Pet::Spotify&&crate::pet_config::read_existing().is_ok_and(|c|c.uses_optional_assistant(pet.pill()));
+        let optional_assistant=direct.is_none()&&pet==Pet::Spotify&&input.configuration.uses_optional_assistant(pet.pill());
         let reply = if let Some(reply)=direct {Some(reply)}else if pet==Pet::Spotify&&!optional_assistant {Some(super::brain::Reply{text:"Posso controlar a música e o som do PC. Diz, por exemplo, pausa, próxima música, volume do sistema 40 ou silenciar microfone.".into(),acted:false,language:Some("pt-PT".into())})}else{brains.entry(pet).or_default().respond_as(
             app,
             &question,
             pet.provider(),
+            &input,
             Some(work_token(pet,stop)),
         )};
         if stop.load(Ordering::Relaxed) {
@@ -389,7 +419,7 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
             &answer,
             Some(pet),
         );
-        super::speak_stoppable(app, &answer, Some(stop), Some(pet.provider()));
+        super::speak_prepared(app, &answer, Some(stop), Some(pet.provider()), None, &input);
         idle.touch(Instant::now());
     }
     false
@@ -405,30 +435,23 @@ pub async fn voice_learn_alias(app: AppHandle, provider: String) -> Result<Strin
         view(&app, &stop, "preparing", pet.name(), &crate::i18n::t("Say only this pet's name."), Some(pet));
         let result = (|| {
             let heard = listen(&app, &stop, &mut Idle::new(Instant::now(), 20), || view(&app,&stop,"listening",pet.name(),&crate::i18n::t("Say only this pet's name."),Some(pet)))?.ok_or_else(|| crate::i18n::t("No speech detected. Check your microphone."))?;
-            let spelling = super::transcribe(&app, &heard, Some(&stop)).map(|t| super::wake::normalize(&t.text)).filter(|s| !s.is_empty() && s.len() <= 80)
+            let spelling = heard.input.transcribe(&heard.samples, Some(&stop)).map(|t| super::wake::normalize(&t.text)).filter(|s| !s.is_empty() && s.len() <= 80)
                 .ok_or_else(|| crate::i18n::t("No speech detected. Check your microphone."))?;
             if stop.load(Ordering::Relaxed) { return Err(crate::i18n::t("Cancelled")); }
             let shared = app.state::<crate::Shared>();
-            let mut settings = shared.settings.lock().unwrap();
-            let mut candidate = settings.voice_pet_aliases.clone();
-            if let Ok(configured)=crate::pet_config::aliases(){for(provider,names)in configured{candidate.entry(provider).or_default().extend(names);}}
-            candidate.entry(provider.clone()).or_default().push(spelling.clone());
-            if !matches!(dialogue::parse_with_aliases(&spelling, &candidate), Command::Select(selected, ref question) if selected == pet && question.is_empty()) {
-                return Err(crate::i18n::t("This name already selects another pet. Try a different name."));
-            }
-            let aliases = settings.voice_pet_aliases.entry(provider.clone()).or_default();
-            if !aliases.contains(&spelling) {
-                if aliases.len() >= 20 { aliases.remove(0); }
-                aliases.push(spelling.clone());
-            }
-            crate::settings::save(&settings).map_err(|e| e.to_string())?;
-            let _ = app.emit("settings-changed", settings.clone());
+            commit_alias_with(&shared.settings, pet, spelling.clone(), crate::pet_config::aliases().unwrap_or_default(),
+                crate::settings::save, |fresh| { let _ = app.emit("settings-changed", fresh); })
+                .map_err(|err| crate::settings::save_error("Não foi possível confirmar o nome do pet", &err))?;
             Ok(spelling)
         })();
         finish(&app, &stop);
         result
     }).await.map_err(|e| e.to_string())?
 }
+
+#[cfg(test)]
+#[path = "session_alias_tests.rs"]
+mod alias_tests;
 
 #[cfg(test)]
 mod tests {

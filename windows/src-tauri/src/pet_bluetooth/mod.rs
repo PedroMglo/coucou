@@ -31,7 +31,7 @@ fn native_failure(error: crate::transport::Failure<binding::ipc::Failure>) -> Fa
     match error {
         Native::Guard(reason) => Failure::Context { reason },
         Native::Native { reason, .. } => match reason {
-            Error::Unavailable | Error::NativeFailure => Failure::Unavailable,
+            Error::Unavailable | Error::NativeFailure | Error::PreferencesUnconfirmed => Failure::Unavailable,
             Error::UntrustedPeer => Failure::UntrustedPeer,
             Error::OriginChanged => Failure::OriginChanged,
             Error::Timeout => Failure::Timeout,

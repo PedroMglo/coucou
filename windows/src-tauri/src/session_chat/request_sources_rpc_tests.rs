@@ -59,7 +59,7 @@ async fn captured_native(f:&Fixture,id:Value)->(Value,Ticket){
 #[tokio::test]async fn native_source_queued_writer_keeps_the_capture_until_its_final_expiry_check(){
     let f=Fixture::new().await;let (_,t)=captured_native(&f,json!(1)).await;
     let (client,mut packets)=queued_client();let client=Arc::new(client);let writer=client.clone();let guard=t.clone();
-    let writing=tokio::spawn(async move{writer.write_native_guarded(json!({"id":1,"result":{"decision":"accept"}}),None,Some(guard)).await});
+    let writing=tokio::spawn(async move{writer.write_native_guarded(json!({"id":1,"result":{"decision":"accept"}}),None,Some(guard),crate::pet_native_write::Use::Decision).await});
     let packet=timeout(Duration::from_secs(2),packets.recv()).await.unwrap().unwrap();assert!(packet.scope.gate.source.as_ref().unwrap().0.same_capture(&t));assert!(!packet.expired());
     f.emit(vec![json!({"method":"serverRequest/resolved","params":{"threadId":SETTINGS_THREAD,"requestId":1}})]).await;assert!(packet.expired(),"queued response must become ineligible before the writer sends");let _=packet.written.send(Err(()));assert!(writing.await.unwrap().is_err());
 }

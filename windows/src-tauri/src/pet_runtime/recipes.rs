@@ -4,6 +4,7 @@ use serde::{Serialize,Deserialize};
 pub(super)const MAX_STEPS:usize=64;
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Scope{
+    #[serde(default,skip_serializing_if="Option::is_none")]pub generated_plan:Option<super::generated_plans::Reference>,
     pub schema_version:u32,pub id:String,pub request_id:String,pub goal_id:String,pub pet_id:String,
     pub provider:String,pub decision_id:String,pub lease_id:String,pub controller_id:String,
     pub plan_id:String,pub proposal_hash:String,pub approved_at:u64,pub deadline_at:u64,pub steps:Vec<steps::Scope>,
@@ -12,13 +13,13 @@ pub struct Scope{
 impl Scope{
     pub(super)fn slot(&self)->model::Result<String>{slot(&self.decision_id,&self.plan_id)}
     pub(super)fn valid(&self)->bool{
-        if !matches!((self.schema_version,&self.verification),(1,None))&&!(self.schema_version==2&&self.verification.as_ref().is_some_and(|v|v.valid())){return false;}
+        if !match(self.schema_version,&self.generated_plan,&self.verification){(1,None,None)=>true,(2,None,Some(v))=>v.valid(),(3,Some(r),Some(v))=>r.valid()&&r.published_at<=self.approved_at&&r.plan_id==self.plan_id&&r.decision_id==self.decision_id&&r.proposal_hash==self.proposal_hash&&v.valid(),_=>false}{return false;}
         if !model::token(&self.id)||!model::key(&self.request_id)||!model::goal_id(&self.goal_id)
             ||!model::key(&self.pet_id)||!model::key(&self.provider)||!model::token(&self.decision_id)||!model::token(&self.lease_id)
             ||!model::token(&self.controller_id)||!model::key(&self.plan_id)||super::authority::decode(&self.proposal_hash).is_none()
             ||self.approved_at==0||self.approved_at>=self.deadline_at||self.steps.is_empty()||self.steps.len()>MAX_STEPS{return false;}
         let mut ids=std::collections::BTreeSet::new();let mut grants=std::collections::BTreeSet::new();let mut requests=std::collections::BTreeSet::new();
-        self.steps.iter().all(|s|s.valid()&&s.goal_id==self.goal_id&&s.pet_id==self.pet_id&&s.provider==self.provider
+        self.steps.iter().all(|s|s.valid()&&s.generated_plan==self.generated_plan&&s.goal_id==self.goal_id&&s.pet_id==self.pet_id&&s.provider==self.provider
             &&s.decision_id==self.decision_id&&s.lease_id==self.lease_id&&s.controller_id==self.controller_id&&s.plan_id==self.plan_id
             &&s.proposal_hash==self.proposal_hash&&s.approved_at==self.approved_at&&s.deadline_at==self.deadline_at
             &&s.resource==self.steps[0].resource&&ids.insert(&s.step_id)&&grants.insert(&s.grant_id)&&requests.insert(&s.request_id))

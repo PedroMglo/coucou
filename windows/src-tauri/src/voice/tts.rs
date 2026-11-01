@@ -1,202 +1,106 @@
-//! Explicit local, online Read Aloud, and cancellable system speech options.
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Mutex,
-};
-use std::time::Duration;
+//! Selected speech destinations; no implicit engine or system-voice fallback.
+use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc};
 use tauri::{AppHandle, Manager};
 
-/// Native streaming avoids waiting for the complete MP3 before playback.
-pub fn speak_streaming(app: &AppHandle, text: &str, stop: Option<&AtomicBool>) -> Option<bool> {
-    #[cfg(target_os = "linux")] {
-        let settings=app.state::<crate::Shared>().settings.lock().unwrap().clone();
-        let python=settings.edge_voice_python.strip_prefix("~/")
-            .map(|p|crate::platform::home_dir().join(p)).unwrap_or_else(||settings.edge_voice_python.into());
-        let epoch=epoch(); let began=std::time::Instant::now();
-        let result=crate::speech::edge_tts::speak(&python,text,
-            || self::epoch()==epoch && !stop.is_some_and(|s|s.load(Ordering::Relaxed)),
-            || crate::log::line(format!("voice: streaming audio started after {} ms",began.elapsed().as_millis())));
-        if let Some(played)=result {
-            crate::log::line(format!("voice: native streaming complete played={played}"));
-            if !played && self::epoch()==epoch && !stop.is_some_and(|s|s.load(Ordering::Relaxed)) {
-                crate::flow::pill::announce(app,"voice","#FFB84D","Não foi possível reproduzir a voz. A resposta continua disponível em texto.".into(),None,7);
-            }
+pub(super) type Current=Arc<dyn Fn()->bool+Send+Sync>;
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub(super) struct Plan {
+    pub output:String, pub gender:String,
+    python:std::path::PathBuf,
+    local:std::collections::BTreeMap<String,String>,
+}
+impl Plan {
+    pub(super) fn silent()->Self{Self{output:"off".into(),gender:"female".into(),python:Default::default(),local:Default::default()}}
+    pub(super) fn prepare(settings:&crate::settings::Settings,prefs:&crate::flow::store::Prefs)->Result<Self,String>{
+        if !matches!(prefs.voice_output.as_str(),"off"|"system"|"edge"|"local"|"elevenlabs")||!matches!(prefs.voice_gender.as_str(),"female"|"male"){
+            return Err("A seleção de voz não é suportada. Não foi escolhido outro serviço.".into());
         }
+        let python=settings.edge_voice_python.strip_prefix("~/").map(|p|crate::platform::home_dir().join(p)).unwrap_or_else(||settings.edge_voice_python.clone().into());
+        Ok(Self{output:prefs.voice_output.clone(),gender:prefs.voice_gender.clone(),python,local:settings.local_voice_dirs.clone()})
+    }
+    pub(super) fn matches(&self,prefs:&crate::flow::store::Prefs)->bool{self.output==prefs.voice_output&&self.gender==prefs.voice_gender}
+    pub(super) fn system_allowed(&self)->bool{self.output=="system"}
+    fn local_directory(&self,provider:Option<&str>)->Option<&str>{
+        provider.and_then(|p|self.local.get(p)).filter(|p|!p.trim().is_empty())
+            .or_else(||self.local.get("default").filter(|p|!p.trim().is_empty())).map(String::as_str)
+    }
+}
+
+/// Preview has its own captured output, without requiring ASR or microphone.
+/// This checks provenance and optional-component suspension, never grants.
+pub(super) fn preview(app:&AppHandle)->Result<(Plan,Current),String>{
+    crate::settings::optional::check(crate::settings::optional::Operation::Voice)?;
+    let (settings,origin)={let shared=app.state::<crate::Shared>();let settings=shared.settings.lock().map_err(|_|"As preferências da voz estão indisponíveis.")?;
+        (settings.clone(),crate::settings::capture_origin(&settings))};
+    let flow=crate::flow::get(app).ok_or("As preferências da voz estão indisponíveis.")?;
+    let plan=Plan::prepare(&settings,&flow.store.lock().map_err(|_|"As preferências da voz estão ocupadas.")?.prefs)?;
+    let expected=plan.clone();let owner=Arc::downgrade(&flow);
+    let diagnosed=AtomicBool::new(false);
+    let current:Current=Arc::new(move||{
+        let failure=||->Option<String>{
+            if crate::settings::optional::check_origin(crate::settings::optional::Operation::Voice,&origin).is_err(){return Some("captured optional origin no longer current".into());}
+            let Some(flow)=owner.upgrade()else{return Some("preference owner missing".into());};
+            let Ok(store)=flow.store.try_lock()else{return Some("preference reader busy".into());};
+            if !expected.matches(&store.prefs){return Some("output preference changed".into());}None
+        };
+        if let Some(reason)=failure(){if !diagnosed.swap(true,Ordering::AcqRel){crate::log::line(format!("voice preview retired: {reason}"));}false}else{true}
+    });
+    if !current(){return Err("A seleção de voz mudou antes do preview.".into());}Ok((plan,current))
+}
+
+pub(super) fn speak_streaming(app:&AppHandle,plan:&Plan,text:&str,current:Current)->Option<bool>{
+    #[cfg(target_os="linux")]{
+        if !current(){return Some(false);}
+        let began=std::time::Instant::now();
+        let result=crate::speech::edge_tts::speak(&plan.python,text,||current(),
+            ||crate::log::line(format!("voice: streaming audio started after {} ms",began.elapsed().as_millis())));
+        if result==Some(false)&&current(){crate::flow::pill::announce(app,"voice","#FFB84D","Não foi possível reproduzir a voz. A resposta continua disponível em texto.".into(),None,7);}
         result
     }
-    #[cfg(not(target_os = "linux"))] { let _=(app,text,stop); None }
+    #[cfg(not(target_os="linux"))]{let _=(app,plan,text,current);None}
 }
 
-pub fn generate(
-    app: &AppHandle,
-    output: &str,
-    provider: Option<&str>,
-    text: &str,
-    stop: Option<&AtomicBool>,
-) -> Option<String> {
-    if !matches!(output, "local" | "edge") {
-        return None;
+pub(super) fn generate(app:&AppHandle,plan:&Plan,provider:Option<&str>,text:&str,current:Current)->Option<String>{
+    if !current(){return None;}
+    if plan.output=="edge"{
+        let result=crate::speech::edge_tts::generate(&plan.python,text,||current());
+        if result.is_none()&&current(){crate::flow::pill::announce(app,"voice","#FFB84D",crate::i18n::t("Raquel is unavailable. Check the internet connection and voice runtime. The reply remains as text."),None,7);}
+        return if current(){result.map(|b|format!("data:audio/mpeg;base64,{}",super::base64(&b)))}else{None};
     }
-    let settings = app
-        .state::<crate::Shared>()
-        .settings
-        .lock()
-        .unwrap()
-        .clone();
-    if output == "edge" {
-        let epoch = NATIVE_EPOCH.load(Ordering::Relaxed);
-        let python = settings.edge_voice_python.strip_prefix("~/")
-            .map(|relative| crate::platform::home_dir().join(relative))
-            .unwrap_or_else(|| std::path::PathBuf::from(&settings.edge_voice_python));
-        let result = crate::speech::edge_tts::generate(
-            &python,
-            text,
-            || {
-                NATIVE_EPOCH.load(Ordering::Relaxed) == epoch
-                    && !stop.is_some_and(|s| s.load(Ordering::Relaxed))
-            },
-        );
-        if result.is_none()
-            && NATIVE_EPOCH.load(Ordering::Relaxed) == epoch
-            && !stop.is_some_and(|s| s.load(Ordering::Relaxed))
-        {
-            crate::flow::pill::announce(app, "voice", "#FFB84D", crate::i18n::t(
-                "Raquel is unavailable. Check the internet connection and voice runtime. The reply remains as text."
-            ), None, 7);
-        }
-        return result.map(|mp3| {
-            crate::log::line(format!("voice: Raquel synthesis ready ({} bytes)", mp3.len()));
-            format!("data:audio/mpeg;base64,{}", super::base64(&mp3))
-        });
-    }
-    let configured = provider
-        .and_then(|p| settings.local_voice_dirs.get(p))
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            settings
-                .local_voice_dirs
-                .get("default")
-                .filter(|s| !s.trim().is_empty())
-        });
-    if stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
-        return None;
-    }
-    let epoch = NATIVE_EPOCH.load(Ordering::Relaxed);
-    // No implicit voice: the evaluated Piper candidates were rejected. Only a
-    // folder explicitly chosen by the user can become their local voice.
-    let result = configured.and_then(|directory| {
-        crate::speech::local_tts::generate(std::path::Path::new(directory), text, move || {
-            NATIVE_EPOCH.load(Ordering::Relaxed) == epoch
-        })
+    if plan.output!="local"{return None;}
+    let result=plan.local_directory(provider).and_then(|directory|{
+        let guard=current.clone();crate::speech::local_tts::generate(std::path::Path::new(directory),text,move||guard())
     });
-    if result.is_none() && NATIVE_EPOCH.load(Ordering::Relaxed) == epoch {
-        crate::flow::pill::announce(
-            app,
-            "voice",
-            "#FFB84D",
-            crate::i18n::t(
-                "Local voice unavailable. Check the pt-PT model folder. Using the system voice.",
-            ),
-            None,
-            7,
-        );
-    }
-    result.map(|wav| format!("data:audio/wav;base64,{}", super::base64(&wav)))
+    if result.is_none()&&current(){crate::flow::pill::announce(app,"voice","#FFB84D",crate::i18n::t("Local voice unavailable. Check the pt-PT model folder. The reply remains as text."),None,7);}
+    if current(){result.map(|b|format!("data:audio/wav;base64,{}",super::base64(&b)))}else{None}
 }
 
-// Own only the process started for this reply. Never cancel another app's
-// speech service, desktop audio, or a user's CLI process.
-static NATIVE: Mutex<Option<std::process::Child>> = Mutex::new(None);
+// Cancellation revokes output, never renews an old native worker. The shared
+// helper supervisor owns its resource and child family until collected.
 static NATIVE_EPOCH: AtomicU64 = AtomicU64::new(0);
-pub fn epoch() -> u64 {
-    NATIVE_EPOCH.load(Ordering::Relaxed)
-}
-pub fn cancel_native() {
-    NATIVE_EPOCH.fetch_add(1, Ordering::Relaxed);
-    if let Some(mut child) = NATIVE.lock().unwrap().take() {
-        let _ = child.kill();
-        let _ = child.wait();
+pub fn epoch()->u64{NATIVE_EPOCH.load(Ordering::Acquire)}
+pub fn cancel_native(){let _=NATIVE_EPOCH.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|Some(n.saturating_add(1)));}
+
+#[cfg(test)]
+mod plan_tests{
+    use super::*;
+    #[test]
+    fn playback_plan_keeps_runtime_and_per_pet_local_voice_without_later_reread(){
+        let mut settings=crate::settings::Settings::default();settings.edge_voice_python="/fixture/original-python".into();settings.local_voice_dirs.insert("codex".into(),"/fixture/codex-voice".into());settings.local_voice_dirs.insert("default".into(),"/fixture/explicit-default".into());
+        let mut prefs=crate::flow::store::Prefs::default();prefs.voice_output="local".into();
+        let plan=Plan::prepare(&settings,&prefs).unwrap();settings.edge_voice_python="/changed/python".into();settings.local_voice_dirs.insert("codex".into(),"/changed/voice".into());prefs.voice_output="elevenlabs".into();
+        assert_eq!(plan.output,"local");assert_eq!(plan.python,std::path::PathBuf::from("/fixture/original-python"));assert_eq!(plan.local_directory(Some("codex")),Some("/fixture/codex-voice"));assert_eq!(plan.local_directory(Some("ollama")),Some("/fixture/explicit-default"));assert!(!plan.matches(&prefs));
     }
-}
-pub fn say_native(text: &str, lang: Option<&str>) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-        cancel_native();
-        let epoch = NATIVE_EPOCH.load(Ordering::Relaxed);
-        let language = lang.unwrap_or("").split('-').next().unwrap_or("");
-        let (exe, direct) = if let Some(exe) = crate::platform::find_on_path("espeak-ng") {
-            (exe, true)
-        } else if let Some(exe) = crate::platform::find_on_path("spd-say") {
-            (exe, false)
-        } else {
-            return false;
-        };
-        let mut cmd = Command::new(exe);
-        if direct {
-            cmd.arg("--stdin");
-            if !language.is_empty() {
-                cmd.args(["-v", language]);
-            }
-        } else {
-            cmd.arg("-w");
-            if !language.is_empty() {
-                cmd.args(["-l", language]);
-            }
-            cmd.arg(text);
+    #[test]
+    fn only_an_explicit_system_selection_may_request_system_speech(){
+        let settings=crate::settings::Settings::default();let mut prefs=crate::flow::store::Prefs::default();
+        for output in ["off","system","edge","local","elevenlabs"]{
+            prefs.voice_output=output.into();let plan=Plan::prepare(&settings,&prefs).unwrap();assert_eq!(plan.system_allowed(),output=="system");
         }
-        let mut child = match cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-        if direct {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-        }
-        {
-            let mut slot = NATIVE.lock().unwrap();
-            if NATIVE_EPOCH.load(Ordering::Relaxed) != epoch {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-            *slot = Some(child);
-        }
-        loop {
-            if NATIVE_EPOCH.load(Ordering::Relaxed) != epoch {
-                return false;
-            }
-            {
-                let mut slot = NATIVE.lock().unwrap();
-                let Some(child) = slot.as_mut() else {
-                    return false;
-                };
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        let success = status.success();
-                        *slot = None;
-                        return success;
-                    }
-                    Err(_) => {
-                        *slot = None;
-                        return false;
-                    }
-                    _ => {}
-                }
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        prefs.voice_output="unknown".into();assert!(Plan::prepare(&settings,&prefs).is_err());prefs.voice_output="system".into();prefs.voice_gender="unknown".into();assert!(Plan::prepare(&settings,&prefs).is_err());
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (text, lang);
-        false
+    #[test]
+    fn a_local_voice_requires_an_explicit_pet_or_default_directory(){
+        let settings=crate::settings::Settings::default();let plan=Plan::prepare(&settings,&crate::flow::store::Prefs::default()).unwrap();assert_eq!(plan.local_directory(Some("codex")),None);assert_eq!(plan.local_directory(None),None);
     }
 }

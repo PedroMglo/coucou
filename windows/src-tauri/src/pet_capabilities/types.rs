@@ -9,7 +9,7 @@ pub enum Support{Supported,Unsupported,Unknown}
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]#[serde(rename_all="camelCase")]
 pub enum Availability{Ready,Unavailable,Unknown}
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]#[serde(rename_all="camelCase")]
-pub enum Reason{NotImplemented,UnsupportedPlatform,NotConfigured,InactivePet,RetiredPet,ModelUnresolved,ModelUnsupported,NativeApprovalUnavailable,NativeControlUnavailable,ControlConflict,TurnRequired,TargetRequired,StaleObservation,ProviderUnavailable,Busy,PermissionDenied,PolicyDenied,LibraryUnavailable,Unknown}
+pub enum Reason{NotImplemented,UnsupportedPlatform,NotConfigured,InactivePet,RetiredPet,ModelUnresolved,ModelUnsupported,NativeApprovalUnavailable,NativeControlUnavailable,ControlConflict,TurnRequired,TargetRequired,StaleObservation,ProviderUnavailable,Busy,PermissionDenied,PolicyDenied,LibraryUnavailable,SettingsUnconfirmed,Unknown}
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]#[serde(rename_all="camelCase")]
 pub enum Source{BundledManifest,Configuration,ProviderCatalog,RuntimeObservation}
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]#[serde(rename_all="camelCase")]
@@ -27,7 +27,7 @@ impl Capability{
     pub(super) fn unsupported(id:&'static str)->Self{Self{id,support:Support::Unsupported,availability:Availability::Unavailable,reason:Some(Reason::NotImplemented),source:vec![Source::BundledManifest],observed_at:None,expires_at:None,model_binding:None,decision:Decision::None,callers:vec![Caller::NativeUser],limits:Limits::default(),limitations:vec![]}}
 }
 #[derive(Clone,Debug,Serialize)]#[serde(rename_all="camelCase")]
-pub struct Binding{pub adapter:Option<&'static str>,pub provider:Option<String>,pub model:Option<String>,pub profile:Option<String>}
+pub struct Binding{#[serde(skip_serializing_if="Option::is_none")]pub engine_binding:Option<crate::local_chat::lmstudio::Binding>,pub adapter:Option<&'static str>,pub provider:Option<String>,pub model:Option<String>,pub profile:Option<String>}
 #[derive(Clone,Debug,Serialize)]#[serde(rename_all="camelCase")]
 pub struct Concurrency{pub scope:Option<&'static str>,pub max_active:Option<usize>}
 #[derive(Clone,Debug,Serialize)]#[serde(rename_all="camelCase")]

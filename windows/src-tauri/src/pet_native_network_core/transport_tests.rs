@@ -44,7 +44,7 @@ impl Fixture {
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
         let executable = root.join("trusted-executable");
         symlink(std::env::current_exe().unwrap(), &executable).unwrap();
-        let config = Config {
+        let config = Config { io_probe:None,
             socket, runtime: root.clone(), uid: unsafe { libc::geteuid() },
             trusted_executable: executable, trusted_executable_uid: unsafe { libc::geteuid() },
             deadline: Duration::from_secs(2), discovery: None,
@@ -237,7 +237,7 @@ async fn malformed_greeting_cannot_invent_capabilities() {
 #[test]
 fn fixture_peer_incarnation_is_stable() {
     // The real kernel stat is used for every fixture connection above.
-    let config = Config {
+    let config = Config { io_probe:None,
         socket: PathBuf::new(), runtime: PathBuf::new(), uid: unsafe { libc::geteuid() },
         trusted_executable: std::env::current_exe().unwrap(), trusted_executable_uid: unsafe { libc::geteuid() },
         deadline: Duration::from_secs(1), discovery: None,

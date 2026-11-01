@@ -381,6 +381,7 @@ pub fn gravity_config_cli()->bool {
 /// Only ever called from an explicit click. Returns the backups taken, one per line.
 pub fn apply(id: &str, install: bool, fingerprint: &str) -> Result<String, String> {
     let agent = find(id)?;
+    crate::settings::optional::check(crate::settings::optional::Operation::Hooks)?;
     apply_in(agent, &platform::home_dir(), &Relay::current(), install, fingerprint)
 }
 

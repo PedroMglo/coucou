@@ -10,6 +10,9 @@ import { calls, emit, internals, sent } from "./tauri.mjs";
 installFakeDom();
 const { buildPrompt } = await import("../src/views/chat.ts");
 const { DEFAULT_SETTINGS, State } = await import("../src/core/state.ts");
+const {rememberDialogue}=await import("../src/core/chat-dialogue.ts");
+const {PROVIDERS}=await import("../src/core/providers.ts");
+const {PetFactory}=await import("../src/core/pet-factory.ts");
 
 /** What the mocked Rust side answers, by command. */
 let answers;
@@ -25,7 +28,9 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 let view;
 beforeEach(() => {
   calls.length = 0;
-  answers = {};
+  const providers=[...PROVIDERS.map(p=>p.id),...PetFactory.services];
+  for(const provider of providers)rememberDialogue(provider,{id:`ui-fixture-${provider}`,messages:[]});
+  answers = {chat_conversation:({provider})=>({id:`ui-fixture-${provider}`,messages:[]}),cli_agent_pending:[]};
   State.settings = { ...DEFAULT_SETTINGS, chatModels: {} };
   State.chatHistory = [];
   State.stateOverride = null;
@@ -134,6 +139,7 @@ test("a local answer streams into one reply, then the finished text replaces it"
   assert.equal(replies.length, 1);
   assert.equal(replies[0].find("STRONG")[0].textContent, "there");
 
+  answers.chat_conversation=()=>({id:sent("chat_send").at(-1).conversationId,messages:[{role:"user",content:"hello"},{role:"assistant",content:"Hello **there**!"}]});
   finish({ text: "Hello **there**!" });
   await flush();
   view.sync();
@@ -211,10 +217,10 @@ test("Antigravity selects models from its signed-in CLI account", async () => {
 
 test("a CLI turn can be stopped without showing a failure screen", async () => {
   State.settings = { ...State.settings, chatProvider: "codex" };
-  answers.chat_conversation={id:'stop-exact',messages:[],busy:false,turn:0};view.sync();await flush();
+  answers.chat_conversation={id:'stop-exact',messages:[],busy:false,turn:0};view.sync();await flush();view.sync();
   let reject;
   answers.chat_send = () => new Promise((_, no) => (reject = no));
-  $(".chat-input").value = "run this task";
+  $(".chat-input").value = "run this task";$('.chat-input').fire('input');
   $(".send-btn").fire("click");
   await flush();
   view.sync();
@@ -236,7 +242,7 @@ test("switching pets closes the old model picker and keeps each draft with its o
   view.sync();
   let finishModels;
   answers.chat_models = () => new Promise(resolve => { finishModels = resolve; });
-  $(".chat-input").value = "Codex draft";
+  $(".chat-input").value = "Codex draft";$('.chat-input').fire('input');
   $(".model-btn").fire("click");
   await flush();
   assert.deepEqual(chips(), ["Codex"]);
@@ -247,7 +253,7 @@ test("switching pets closes the old model picker and keeps each draft with its o
   finishModels([{id:"late-codex-model",label:"Late Codex model"}]);
   await flush();
   assert.deepEqual(sent("save_settings"), [], "a stale model response cannot modify another pet's settings");
-  $(".chat-input").value = "Ollama draft";
+  $(".chat-input").value = "Ollama draft";$('.chat-input').fire('input');
   answers.chat_models = [{id:"local-model",label:"Local model"}];
   $(".model-btn").fire("click");
   await flush();
@@ -264,7 +270,7 @@ test("restored CLI history and voice follow-ups belong to their exact pet",async
  State.settings={...DEFAULT_SETTINGS,companionMode:true,chatProvider:"ollama"};State.focusId="agent_codex";State.chatHistory=[];
  answers.chat_conversation=({provider})=>({id:`dialogue-${provider}`,messages:provider==="codex"?[{role:"user",content:"voice task"},{role:"assistant",content:"ready"}]:[]});
  view.sync();await flush();view.sync();assert.deepEqual(State.chatHistory.map(m=>m.content),["voice task","ready"]);
- State.focusId="agent_antigravity";State.chatHistory=[];view.sync();await flush();assert.equal(State.chatHistory.length,0);
+ State.focusId="agent_antigravity";State.chatHistory=[];view.sync();await flush();view.sync();assert.equal(State.chatHistory.length,0);
  State.focusId="agent_codex";view.sync();await flush();assert.equal(State.chatHistory.length,2);
  await flush();emit("assistant-history-changed","codex");await flush();assert.equal(State.chatHistory.length,2);
 });
@@ -279,11 +285,11 @@ test("late history loading cannot resurrect a chat the user explicitly cleared",
 test("different written pets work concurrently and keep streamed replies and Stop controls with their owners",async()=>{
  const finish=new Map(),native=new Map();answers.chat_send=({provider,query})=>new Promise(resolve=>finish.set(provider,reply=>{native.set(provider,[{role:'user',content:query},{role:'assistant',content:reply.text}]);resolve(reply);}));
  answers.chat_conversation=({provider})=>({id:`parallel-${provider}`,messages:native.get(provider)??[],busy:false,turn:native.has(provider)?provider==='codex'?1:2:0});
- State.settings={...DEFAULT_SETTINGS,companionMode:true,chatProvider:"ollama"};State.focusId="agent_codex";State.chatHistory=[];view.sync();await flush();
- $(".chat-input").value="codex task";$(".send-btn").fire("click");await flush();emit('chat-turn-state',{provider:'codex',conversationId:'parallel-codex',turn:1,busy:true,query:'codex task'});view.sync();
+ State.settings={...DEFAULT_SETTINGS,companionMode:true,chatProvider:"ollama"};State.focusId="agent_codex";State.chatHistory=[];view.sync();await flush();view.sync();
+ $(".chat-input").value="codex task";$('.chat-input').fire('input');$(".send-btn").fire("click");await flush();emit('chat-turn-state',{provider:'codex',conversationId:'parallel-codex',turn:1,busy:true,query:'codex task'});view.sync();
  assert.equal($(".send-btn").title,"Stop");
- State.focusId="agent_antigravity";State.chatHistory=[];view.sync();await flush();
- assert.equal($(".chat-input").disabled,false);$(".chat-input").value="gravity task";$(".send-btn").fire("click");await flush();emit('chat-turn-state',{provider:'antigravity',conversationId:'parallel-antigravity',turn:2,busy:true,query:'gravity task'});view.sync();
+ State.focusId="agent_antigravity";State.chatHistory=[];view.sync();await flush();view.sync();
+ assert.equal($(".chat-input").disabled,false);$(".chat-input").value="gravity task";$('.chat-input').fire('input');$(".send-btn").fire("click");await flush();emit('chat-turn-state',{provider:'antigravity',conversationId:'parallel-antigravity',turn:2,busy:true,query:'gravity task'});view.sync();
  assert.deepEqual(sent("chat_send").map(a=>a.provider),["codex","antigravity"]);
  emit("chat-delta",{provider:"codex",text:"codex progress"});
  emit("chat-delta",{provider:"antigravity",text:"gravity progress"});
@@ -309,7 +315,7 @@ test("one Gravity pet selects every native model family without extra pets or AP
 
 test("a monitor pet cannot silently submit a task to the globally selected AI",async()=>{
  State.settings={...DEFAULT_SETTINGS,companionMode:true,chatProvider:"codex"};State.focusId="agent_cursor";view.sync();
- $(".chat-input").value="must not run";$(".send-btn").fire("click");await flush();
+ $(".chat-input").value="must not run";$('.chat-input').fire('input');$(".send-btn").fire("click");await flush();
  assert.deepEqual(sent("chat_send"),[]);assert.equal($(".chat-bar").hidden,true);
  assert.match($(".pet-chat-unavailable").textContent,/sem chat integrado/);
 });
@@ -327,10 +333,10 @@ test("a folder is validated and saved for its original pet even if the user swit
 
 test("prepared service requests stay editable and never overwrite an existing user draft or auto-submit",async()=>{
  State.settings={...DEFAULT_SETTINGS,companionMode:true};State.focusId="agent_codex";view.sync();
- $(".chat-input").value="my own draft";State.preparedChat={provider:"codex",source:"GitHub",text:"review CI"};view.sync();
+ $(".chat-input").value="my own draft";$('.chat-input').fire('input');State.preparedChat={provider:"codex",source:"GitHub",text:"review CI"};view.sync();
  assert.equal($(".chat-input").value,"my own draft");assert.equal($(".prepared-chat").hidden,false);assert.deepEqual(sent("chat_send"),[]);
  $(".prepared-chat").fire("click");assert.equal($(".chat-input").value,"review CI");assert.equal(State.preparedChat,null);assert.deepEqual(sent("chat_send"),[]);
- $(".chat-input").value="";State.preparedChat={provider:"codex",source:"n8n",text:"review flows"};view.sync();assert.equal($(".chat-input").value,"review flows");assert.equal(State.preparedChat,null);assert.deepEqual(sent("chat_send"),[]);
+ $(".chat-input").value="";$('.chat-input').fire('input');State.preparedChat={provider:"codex",source:"n8n",text:"review flows"};view.sync();assert.equal($(".chat-input").value,"review flows");assert.equal(State.preparedChat,null);assert.deepEqual(sent("chat_send"),[]);
 });
 
 test('reset acknowledgement blocks only that pet and reset failures stay outside model messages',async()=>{
@@ -338,7 +344,7 @@ test('reset acknowledgement blocks only that pet and reset failures stay outside
   State.chatResettingProviders.add('codex');State.chatFeedback.set('codex','O pet ainda está a trabalhar.');view.sync();
   assert.ok($('.chat-input').disabled);assert.ok($('.send-btn').disabled);
   assert.equal($('.chat-feedback').textContent,'O pet ainda está a trabalhar.');
-  $('.chat-input').value='não enviar';$('.chat-input').fire('keydown',{key:'Enter'});await flush();
+  $('.chat-input').value='não enviar';$('.chat-input').fire('input');$('.chat-input').fire('keydown',{key:'Enter'});await flush();
   assert.equal(sent('chat_send').length,0);assert.deepEqual(State.chatHistory,[]);
   State.settings={...State.settings,chatProvider:'antigravity'};view.sync();
   assert.equal($('.chat-input').disabled,false);assert.ok($('.chat-feedback').hidden);
@@ -349,14 +355,14 @@ test('a Codex attachment cannot be sent with Gravity and a late copy keeps its o
   answers.chat_send={text:'ok'};
   State.setFileContext('codex',{name:'private.txt',path:'/tmp/original-private.txt'});
   State.settings={...State.settings,chatProvider:'antigravity'};State.replaceChatHistory('antigravity',[]);State.clearDialogueContext('antigravity');view.sync();
-  $('.chat-input').value='pedido Gravity';$('.send-btn').fire('click');await flush();
+  $('.chat-input').value='pedido Gravity';$('.chat-input').fire('input');$('.send-btn').fire('click');await flush();
   assert.equal(sent('chat_send').at(-1).provider,'antigravity');assert.equal(sent('chat_send').at(-1).context,null);
   const cid=(await import('../src/core/chat-dialogue.ts')).dialogueId('codex')??'fixture-codex';(await import('../src/core/chat-dialogue.ts')).rememberDialogue('codex',{id:cid,messages:[]});
   State.setFilesContext('codex',[{id:'private-1',name:'private.txt',path:'/tmp/inbox/private.txt',provider:'codex',conversationId:cid,sequence:1,kind:'file',size:3,entries:1}]);view.sync();
   assert.equal(State.droppedFile,null);assert.ok(!$('.chip-row').textContent.includes('private.txt'));
   State.settings={...State.settings,chatProvider:'codex'};State.replaceChatHistory('codex',[]);view.sync();
   assert.match($('.chip-row').textContent,/private.txt/);
-  $('.chat-input').value='pedido Codex';$('.send-btn').fire('click');await flush();
+  $('.chat-input').value='pedido Codex';$('.chat-input').fire('input');$('.send-btn').fire('click');await flush();
   assert.deepEqual(sent('chat_send').at(-1).context,{kind:'files',files:[{id:'private-1',name:'private.txt',path:'/tmp/inbox/private.txt',sequence:1}]});
   assert.equal(sent('chat_send').at(-1).provider,'codex');State.clearDialogueContext('codex');
 });
@@ -383,7 +389,7 @@ test('Ollama voice history is hydrated with a conversation id and written replie
  answers.chat_send={text:'written answer'};
  view.sync();await flush();view.sync();
  assert.deepEqual(State.chatHistory.map(m=>m.content),['spoken','saved answer']);
- $('.chat-input').value='continue in writing';$('.send-btn').fire('click');await flush();
+ $('.chat-input').value='continue in writing';$('.chat-input').fire('input');$('.send-btn').fire('click');await flush();
  assert.equal(sent('chat_send').at(-1).conversationId,'ollama-owned');
  assert.equal(sent('chat_send').at(-1).provider,'ollama');
 });
@@ -457,7 +463,7 @@ test('a refused stop is visible on its own pet and keeps the next draft',async()
  State.settings={...DEFAULT_SETTINGS,chatProvider:'codex'};State.chatFeedback.clear();
  answers.chat_conversation={id:'stop-error',messages:[],busy:true,turn:37,query:'Pedido em curso'};
  answers.chat_cancel=()=>{throw Error('Interrupção sintética recusada');};view.sync();await flush();view.sync();
- $('.chat-input').value='Próximo pedido';assert.equal($('.chat-input').disabled,false);
+ $('.chat-input').value='Próximo pedido';$('.chat-input').fire('input');assert.equal($('.chat-input').disabled,false);
  $('.send-btn').fire('click');await flush();view.sync();
  assert.equal(State.chatFeedback.get('codex'),'Interrupção sintética recusada');assert.match($('.chat-feedback').textContent,/sintética recusada/);
  assert.equal($('.chat-input').value,'Próximo pedido');assert.equal(sent('chat_send').length,0);
@@ -466,7 +472,7 @@ test('inline chat captures every original ID and retains all current siblings af
  const {rememberDialogue}=await import('../src/core/chat-dialogue.ts');const cid='collection-inline';rememberDialogue('codex',{id:cid,messages:[]});State.settings={...State.settings,chatProvider:'codex'};State.clearAllDialogueContexts();
  const a={id:'a',name:'same.txt',path:'/inbox/a',provider:'codex',conversationId:cid,sequence:1,kind:'file',size:3,entries:1},b={...a,id:'b',path:'/inbox/b'};let active=[a,b],finish;
  answers.chat_conversation=()=>({id:cid,messages:[],busy:false});answers.pet_document_contexts=()=>active;answers.chat_send=()=>new Promise(r=>finish=r);
- State.setFilesContext('codex',active);view.sync();await flush();view.sync();$('.chat-input').value='Read both';$('.send-btn').fire('click');await flush();
+ State.setFilesContext('codex',active);view.sync();await flush();view.sync();$('.chat-input').value='Read both';$('.chat-input').fire('input');$('.send-btn').fire('click');await flush();
  assert.deepEqual(sent('chat_send').at(-1).context.files.map(a=>a.id),['a','b']);active=[...active,{...a,id:'c',path:'/inbox/c'}];State.setFilesContext('codex',active);finish({text:'synthetic'});await flush();assert.deepEqual(State.filesFor('codex').map(a=>a.id),['a','b','c']);assert.equal(sent('pet_document_clear').length,0);
 });
 test('inline removal targets one ID while leaving the sibling selected and never starts inference',async()=>{
@@ -483,4 +489,10 @@ test('inline native approvals submit the explicit choice with the original conve
 test('inline typed MCP forms submit multiple captured values without including an omitted field',async()=>{
  await flush();const target={petId:'agent_codex',provider:'codex',origin:'mochi',sessionId:'typed-form-cid',conversationId:'typed-form-cid'};
  emit('agent-request',{id:'typed-inline',provider:'codex',kind:'question',nativeForm:'mcp',detail:'MCP fixture',target,questions:[{id:'many',question:'Multiple',inputType:'multi',required:true,options:[{label:'First',value:'first-id'},{label:'Second',value:'second-id'}]},{id:'optional',question:'Optional',inputType:'text',required:false}]});const card=$('.cli-request');const inputs=card.find('input');inputs[0].checked=true;inputs[1].checked=true;card.find('button').find(b=>b.classList.contains('cli-allow')).fire('click');await flush();assert.deepEqual(sent('cli_agent_answer').at(-1),{id:'typed-inline',answer:{allow:true,answers:{many:['first-id','second-id']}},target});assert.equal($('.cli-request'),null);
+});
+
+test('inline memory review preserves the unsent draft and uses a separate explicit one-use data decision',async()=>{
+ State.settings={...DEFAULT_SETTINGS,chatProvider:'ollama',companionMode:false,chatModels:{ollama:'fixture-free'}};State.clearDialogueContext('ollama');const cid='inline-memory-cid',record={id:'inline-note',revision:2,owner:{petId:'ai_ollama',scope:{kind:'pet'}},kind:'note',title:'Inline memory',content:'<img onerror=grant()> private fixture',sensitivity:'sensitive',provenance:'explicitUser',retention:'untilDeleted',createdAt:1,updatedAt:1,observedAt:1,expiresAt:null};
+ answers.chat_conversation={id:cid,messages:[],busy:false};answers.pet_memory_list=({request})=>({owner:request.owner,revision:'catalogue',items:request.owner.scope.kind==='pet'?[{entry:record,available:true}]:[],hasMore:false,nextOffset:null});answers.pet_memory_context_prepare=args=>({token:'inline-native-token',proposal:{schemaVersion:1,petId:'ai_ollama',conversationId:cid,destination:{kind:'server',provider:'ollama',endpoint:'http://127.0.0.1:11434/v1/chat/completions',model:'fixture-free'},question:args.query,records:[record],preparedAt:Date.now(),expiresAt:Date.now()+60000,requiredConsent:'thisRequest',nativeAccountCoverage:'nativeCredentialSnapshotNotExposed',requestContextHash:'a'.repeat(64),dispatchCoverage:{schemaVersion:1,kind:'exactNativeEndpoint',endpoints:['http://127.0.0.1:11434/v1/chat/completions'],providerInternalsObserved:false,modelSemantics:'requestedModelServerInternalsUnobserved',toolsContainmentObserved:false}}});answers.chat_send={text:'Accepted fixture response'};
+ view=buildPrompt(()=>{});view.sync();await flush();view.sync();view.el.find('button').find(b=>b.textContent==='Consultar recordações').fire('click');await flush();const choose=view.el.find('input').find(i=>i.getAttribute('aria-label')==='Selecionar recordação Inline memory revisão 2');choose.checked=true;choose.fire('change');const input=$('.chat-input');input.value='Question with selected data';input.fire('input');view.sync();$('.send-btn').fire('click');await flush();view.sync();assert.equal(sent('chat_send').length,0);assert.equal(input.value,'Question with selected data');assert.ok(!State.chatHistory.some(m=>m.content===input.value));assert.equal(view.el.find('img').length,0);const approve=view.el.find('button').find(b=>b.textContent==='Autorizar dados e enviar');assert.equal(approve.disabled,true);approve.fire('click');await flush();assert.equal(sent('chat_send').length,0);const consent=view.el.find('input').find(i=>i.getAttribute('aria-label')==='Autorizar dados no âmbito deste pedido');consent.checked=true;consent.fire('change');approve.fire('click');await flush();assert.equal(sent('chat_send').length,1);assert.deepEqual(sent('chat_send')[0].memoryDecision,{token:'inline-native-token',consent:'thisRequest'});assert.equal(sent('chat_send')[0].conversationId,cid);assert.equal(sent('chat_send')[0].selectedModel,'fixture-free');assert.equal(sent('pet_memory_context_prepare')[0].query,'Question with selected data');assert.ok(!JSON.stringify(sent('chat_send')).includes(record.content));
 });

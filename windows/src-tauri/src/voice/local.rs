@@ -169,8 +169,8 @@ impl Brain {
     /// Closing the microphone never erases the selected persistent dialogue.
     pub fn clear(&mut self) {}
 
-    pub fn respond(&mut self, app: &AppHandle, settings: &Settings, transcript: &str, stop: &AtomicBool) -> Option<Reply> {
-        if transcript.len() > 4_000 { return None; }
+    pub(super) fn respond(&mut self, app: &AppHandle, settings: &Settings, configuration: &crate::pet_config::Configuration, current:impl Fn()->Result<(),String>, transcript: &str, stop: &AtomicBool) -> Option<Reply> {
+        if transcript.len() > 4_000 || current().is_err() { return None; }
         let chat=app.state::<chat::Chat>();
         let turn=match chat.begin_cli("ollama",Arc::default()) {
             Ok(turn)=>turn,
@@ -178,15 +178,15 @@ impl Brain {
         };
         let usage_origin = chat.usage_capture_origin(&turn);
         let _lease=chat.lease(&turn).broadcast(app,transcript);
-        let identity = match crate::pet_config::read_existing()
-            .and_then(|config| chat.capture_local_identity(&turn, &config, "ai_ollama")) {
+        let identity = match chat.capture_local_identity(&turn, configuration, "ai_ollama") {
             Ok(identity) => identity,
             Err(text) => return Some(Reply { text, acted: false, language: None }),
         };
-        let settings=app.try_state::<crate::Shared>().map(|s|crate::cli_chat::voice_settings(&s.settings.lock().unwrap(),"ollama")).unwrap_or_else(||settings.clone());
-        let (url,mut model)=config(&settings)?;
-        let requested=chat::model_for(&settings,"ollama");let mut thinking=false;let mut selected_profile=None;
-        if requested.starts_with('@'){let profile=crate::pet_config::select("ollama",&requested,transcript).ok()?;model=profile.model.clone();thinking=profile.mode=="reasoning";selected_profile=Some(profile);}
+        let requested=chat::model_for(settings,"ollama");
+        let selection=configuration.select("ollama",&requested,transcript).ok()?;
+        let mut selected_settings=settings.clone();selected_settings.chat_models.insert("ollama".into(),selection.model.clone());
+        let (url,model)=config(&selected_settings)?;
+        let thinking=selection.mode=="reasoning";let selected_profile=Some(selection);
         let attachments=crate::pet_documents::contexts(identity.owner(),identity.conversation_id());
         if let Err(text)=crate::pet_documents::validate_attachments(&attachments){return Some(Reply{text,acted:false,language:None});}
         let pills = super::ask_island(app, "pills", json!({"action": "list"})).unwrap_or_default();
@@ -202,7 +202,7 @@ impl Brain {
         let base=crate::local_chat::user_text(turn.first,ordinary.as_ref(),transcript);
         let user_text=crate::pet_calendar::prepend_text(calendar.as_ref(),base);
         let user=json!({"role": "user", "content": user_text});
-        let context_current=||{documents.validate()?;crate::pet_calendar::validate(calendar.as_ref())};
+        let context_current=||{current()?;documents.validate()?;crate::pet_calendar::validate(calendar.as_ref())};
         let mut messages = vec![json!({"role": "system", "content": system})];
         messages.extend(turn.history.iter().cloned());messages.push(user.clone());
         if documents.validate_contents_blocking().and_then(|_|context_current()).is_err() { return None; }

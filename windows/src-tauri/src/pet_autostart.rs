@@ -1,21 +1,19 @@
 //! A versioned Linux install must retain the reviewed environment launcher.
 //! Registering the ELF directly would skip DMS discovery at the next login.
 use tauri_plugin_autostart::ManagerExt;
+#[cfg(target_os="linux")]#[path="autostart_plan.rs"]pub(crate)mod native;
+
+pub(crate) fn admit() -> Result<(), String> {
+    #[cfg(target_os="linux")]crate::pet_data::bootstrap::feature_allowed("autostart")?;
+    Ok(())
+}
 
 pub(crate) fn set(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        let home = crate::platform::home_dir();
-        let exe = std::env::current_exe().map_err(|_| "Não foi possível identificar a instalação do Coucou.")?;
-        let uid = unsafe { libc::geteuid() };
-        if linux::managed(&home, &exe, env!("CARGO_PKG_VERSION"), uid) {
-            let config = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| home.join(".config"));
-            return linux::save(&config, &home.join(".local/bin/coucou"), enabled, uid)
-                .map_err(|_| "Não foi possível atualizar o arranque automático através do launcher do Coucou.".to_string());
-        }
+    #[cfg(target_os="linux")]{let _=(app,enabled);Err("Prepara e aprova o plano exato de registo nas definições. O caminho antigo não pode repetir o efeito.".into())}
+    #[cfg(not(target_os="linux"))]{
+        crate::settings::optional::check(crate::settings::optional::Operation::Autostart)?;admit()?;
+        let manager=app.autolaunch();(if enabled{manager.enable()}else{manager.disable()}).map_err(|e|e.to_string())
     }
-    let manager = app.autolaunch();
-    (if enabled { manager.enable() } else { manager.disable() }).map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "linux")]
@@ -28,7 +26,7 @@ mod linux {
             m.is_file() && m.uid() == uid && m.mode() & 0o022 == 0 && m.mode() & 0o111 != 0)
     }
 
-    fn entry(launcher: &Path) -> io::Result<String> {
+    pub(super)fn entry(launcher: &Path) -> io::Result<String> {
         let path = launcher.to_str().filter(|s| !s.chars().any(char::is_control)).ok_or(io::ErrorKind::InvalidInput)?;
         if !launcher.is_absolute() || path.contains('=') { return Err(io::ErrorKind::InvalidInput.into()); }
         let safe = path.chars().all(|c| c.is_ascii_alphanumeric() || "/._-".contains(c));

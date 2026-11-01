@@ -10,7 +10,7 @@ impl Authority {
     }
     pub(in crate::pet_runtime) fn result_attempt(&self, spec: &AdmissionSpec, proof: &ConsentProof, request: &str) -> Result<(Option<Lease>, Option<Attempt>)> {
         if !model::key(request) { return Err(Failure::Invalid); }
-        let _lock = self.lock()?;
+        let _lock = self.lock_shared()?;
         let body = self.load(spec, proof)?;
         let attempt = body.budget_usage.as_ref().and_then(|l| l.attempts.iter().find(|a| a.request_id == request)).cloned();
         if attempt.as_ref().is_some_and(|a| a.kind != Kind::Model) { return Err(Failure::Invalid); }

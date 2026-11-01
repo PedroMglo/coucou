@@ -223,7 +223,7 @@ export const FlowBridge = {
   /** The pill has said what « OK Coucou » answered. */
   voiceDone: (id: number, played?: boolean) => call<void>("voice_done", { id, text: null, played: played ?? null }),
   /** speech-dispatcher or espeak-ng, where the webview has no voice. */
-  sayNative: (text: string, lang: string | null) => call<boolean>("voice_say_native", { text, lang }),
+  sayNative: (id: number) => call<boolean>("voice_say_native", { id }),
 };
 
 /** One colour per person in a call: you first, then the others. */

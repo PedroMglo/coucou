@@ -117,6 +117,7 @@ pub fn setup(app: &AppHandle) {
         }
         match builder.build() {
             Ok(win) => {
+                crate::voice::native_surface::register(&win);
                 if !platform::prepare_pill_window(&win, mode) {
                     let _ = win.destroy();
                     mode = DesktopMode::Off;

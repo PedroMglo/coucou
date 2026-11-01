@@ -43,6 +43,37 @@ fn readable(pin: File) -> Result<Node> {
     Ok(Node { file, initial: stamp(&before), directory: before.is_dir(), device: before.dev(), len: before.len() })
 }
 
+// Destination directories are live containers, unlike source snapshots below.
+// Pin their location/owner/mode without interpreting mutable entry metadata as
+// replacement. Named binding and private-mode checks remain staging_fs::Dir's.
+fn readable_directory(pin:File)->Result<Node>{readable_directory_with(pin,||{})}
+fn readable_directory_with(pin:File,after_metadata:impl FnOnce())->Result<Node>{
+    let before=metadata(&pin)?;
+    if !before.is_dir()||!owned(&before){return Err(Error::UnsafePath);}
+    let location_before=location(&pin)?;
+    after_metadata();
+    let file=OpenOptions::new().read(true).custom_flags(libc::O_CLOEXEC|libc::O_NONBLOCK|libc::O_DIRECTORY)
+        .open(format!("/proc/self/fd/{}",pin.as_raw_fd())).map_err(|_|Error::Unavailable)?;
+    let after=metadata(&file)?;
+    if !after.is_dir()||!owned(&after)||location(&file)?!=location_before||before.uid()!=after.uid()||before.gid()!=after.gid()||before.mode()!=after.mode(){return Err(Error::SourceChanged);}
+    Ok(Node{initial:stamp(&after),directory:true,device:after.dev(),len:after.len(),file})
+}
+fn root_pin(path:&Path)->Result<Option<File>>{
+    if !super::absolute(path){return Err(Error::UnsafePath);}
+    let mut at=OpenOptions::new().read(true).custom_flags(libc::O_PATH|libc::O_DIRECTORY|libc::O_CLOEXEC).open("/").map_err(|_|Error::Unavailable)?;
+    for part in path.components(){
+        let Component::Normal(name)=part else{continue;};
+        let Some(next)=pin(&at,name)?else{return Ok(None);};
+        if !ancestor(&metadata(&next)?){return Err(Error::UnsafePath);}at=next;
+    }Ok(Some(at))
+}
+pub(super)fn bound_directory_root(path:&Path)->Result<Option<Node>>{root_pin(path)?.map(readable_directory).transpose()}
+pub(super)fn bound_directory_child(parent:&File,name:&OsStr)->Result<Option<Node>>{
+    let node=pin(parent,name)?.map(readable_directory).transpose()?;
+    if let Some(node)=&node{let a=location(parent)?;let b=location(&node.file)?;if a.device!=b.device||a.mount!=b.mount{return Err(Error::UnsafePath);}}
+    Ok(node)
+}
+
 pub(super) fn child(parent: &File, name: &OsStr) -> Result<Option<Node>> {
     let node=pin(parent, name)?.map(readable).transpose()?;
     if let Some(node)=&node{
@@ -55,15 +86,7 @@ pub(super) fn child(parent: &File, name: &OsStr) -> Result<Option<Node>> {
 pub(super) struct Node { pub file: File, pub initial: Stamp, pub directory: bool, pub device: u64, pub len: u64 }
 impl Node {
     pub(super) fn root(path: &Path) -> Result<Option<Self>> {
-        if !super::absolute(path) { return Err(Error::UnsafePath); }
-        let mut at = OpenOptions::new().read(true).custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC).open("/").map_err(|_| Error::Unavailable)?;
-        for part in path.components() {
-            let Component::Normal(name) = part else { continue; };
-            let Some(next) = pin(&at, name)? else { return Ok(None); };
-            if !ancestor(&metadata(&next)?) { return Err(Error::UnsafePath); }
-            at = next;
-        }
-        readable(at).map(Some)
+        root_pin(path)?.map(readable).transpose()
     }
     pub(super) fn child(&self, name: &OsStr) -> Result<Option<Self>> {
         self.current()?;
@@ -86,3 +109,5 @@ impl Node {
         match self.child(name)? { Some(now) if now.initial == original.initial => Ok(()), _ => Err(Error::SourceChanged) }
     }
 }
+
+#[cfg(test)]#[path="directory_binding_tests.rs"]mod directory_binding_tests;

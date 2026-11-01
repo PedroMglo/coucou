@@ -7,7 +7,7 @@ pub(super) const MAX_DATE:u64=8_640_000_000_000_000;
 pub(super) struct Key{pub provider:String,pub endpoint:String,pub model:Option<String>}
 pub(crate) struct Ticket{pub(super) key:Key,sequence:u64,started:u64}
 #[derive(Clone)]
-pub(super) enum Evidence{Catalog,Model{completion:Option<bool>,tools:Option<bool>,thinking:Option<bool>,remote:bool},Unavailable}
+pub(super) enum Evidence{Catalog,LmStudio(crate::local_chat::lmstudio::Catalog),Model{completion:Option<bool>,tools:Option<bool>,thinking:Option<bool>,remote:bool},Unavailable}
 struct Slot{sequence:u64,started:u64,observed:Option<(u64,Evidence)>}
 #[derive(Default)]
 pub(super) struct Cache{next:u64,slots:BTreeMap<Key,Slot>}
@@ -26,7 +26,16 @@ impl Cache{
         if now<t.started||now>MAX_DATE||now-t.started>30_000{slot.observed=None;return false;}
         slot.observed=Some((now,evidence));true
     }
+    pub fn engine_binding(&self,key:&Key,now:u64)->Option<crate::local_chat::lmstudio::Binding>{
+        if key.provider!="lmstudio"{return None;}let requested=key.model.as_ref()?;let mut catalog=key.clone();catalog.model=None;
+        match self.get(&catalog,now).evidence{Some(Evidence::LmStudio(c))=>c.binding(requested).ok(),_=>None}
+    }
     pub fn get(&self,key:&Key,now:u64)->Observation{
+        if key.provider=="lmstudio"{if let Some(model)=&key.model{
+            let mut catalog=key.clone();catalog.model=None;let mut observation=self.get(&catalog,now);
+            if let Some(Evidence::LmStudio(c))=&observation.evidence{observation.evidence=Some(Evidence::Model{completion:Some(c.binding(model).is_ok()),tools:None,thinking:None,remote:false});}
+            return observation;
+        }}
         let Some(s)=self.slots.get(key)else{return Observation{at:None,expires:None,stale:false,evidence:None};};
         let Some((at,evidence))=&s.observed else{return Observation{at:None,expires:None,stale:now<s.started||now.saturating_sub(s.started)>30_000,evidence:None};};
         let expires=at.checked_add(TTL).filter(|n|*n<=MAX_DATE);let stale=now<*at||expires.is_none_or(|e|now>=e);

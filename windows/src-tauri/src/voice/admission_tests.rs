@@ -6,7 +6,7 @@ fn descriptor(provider: &str) -> Descriptor {
     let pet = Pet::from_provider(provider).unwrap();
     let adapter = match pet { Pet::Copilot => "copilot", Pet::Gravity => "antigravity", Pet::Ollama => "ollama", Pet::Spotify => "spotify", _ => "codex" };
     Descriptor { schema_version: 1, pet_id: pet.pill().into(), kind: if crate::pet_config::service(pet.pill()) { Kind::Service } else { Kind::Llm },
-        name: pet.name().into(), lifecycle: Lifecycle::Active, binding: Binding { adapter: Some(adapter), provider: Some(provider.into()), model: None, profile: Some("auto".into()) },
+        name: pet.name().into(), lifecycle: Lifecycle::Active, binding: Binding { engine_binding:None, adapter: Some(adapter), provider: Some(provider.into()), model: None, profile: Some("auto".into()) },
         revision: "synthetic:1".into(), observed_at: None, configuration_available: true, concurrency: Concurrency { scope: Some("provider"), max_active: Some(1) },
         capabilities: vec![Capability { id: "voice.respond", support: Support::Supported, availability: Availability::Unknown, reason: Some(Reason::TargetRequired),
             source: vec![Source::BundledManifest, Source::Configuration], observed_at: None, expires_at: None, model_binding: None,

@@ -29,11 +29,26 @@ fn action(step:&model::Step)->model::Result<Action>{
 }
 impl Owned{
     pub(in crate::pet_runtime)fn step_goal(&self,goal:&Record,config:&crate::pet_config::Configuration,now:u64)->model::Result<()>{
-        goal.validate()?;
-        if !self.policy_current(now)||goal.state!=model::State::Leased||goal.id!=self.live.lease.goal_id||goal.spec.owner!=self.live.spec.owner||goal.execution_context.as_ref()!=Some(&self.live.spec.context)
-            ||model::fingerprint(&goal.spec)?!=self.live.spec.intent_hash||goal.admissions.last().is_none_or(|a|model::fingerprint(&a.spec).ok()!=model::fingerprint(&self.live.spec).ok())||goal.admissions.last().and_then(|a|a.lease.as_ref())!=Some(&self.live.lease)||self.live.spec.schema_version!=2
-            ||!crate::pet_runtime::plans::matches(goal,&self.live.spec)||!config.permissions(&goal.spec.owner.pet_id).map_err(|_|error())?.music{return Err(error());}
-        Ok(())
+        if self.step_validity(goal,config,now)==Validity::Current{Ok(())}else{Err(error())}
+    }
+    pub(in crate::pet_runtime)fn step_validity(&self,goal:&Record,config:&crate::pet_config::Configuration,now:u64)->Validity{
+        self.step_validity_mode(goal,config,now,false)
+    }
+    pub(in crate::pet_runtime)fn pending_step_validity(&self,goal:&Record,config:&crate::pet_config::Configuration,now:u64)->Validity{
+        self.step_validity_mode(goal,config,now,true)
+    }
+    fn step_validity_mode(&self,goal:&Record,config:&crate::pet_config::Configuration,now:u64,pending:bool)->Validity{
+        if goal.validate().is_err()||goal.state!=model::State::Leased||goal.id!=self.live.lease.goal_id||goal.spec.owner!=self.live.spec.owner||goal.execution_context.as_ref()!=Some(&self.live.spec.context)
+            ||model::fingerprint(&goal.spec).ok().as_ref()!=Some(&self.live.spec.intent_hash)||goal.admissions.last().is_none_or(|a|model::fingerprint(&a.spec).ok()!=model::fingerprint(&self.live.spec).ok())||goal.admissions.last().and_then(|a|a.lease.as_ref())!=Some(&self.live.lease)||!matches!(self.live.spec.schema_version,2|3)
+            ||!crate::pet_runtime::plans::matches(goal,&self.live.spec)||!config.permissions(&goal.spec.owner.pet_id).is_ok_and(|p|p.music){return Validity::Changed;}
+        let validity=if pending{self.pending_validity(now)}else{self.policy_validity(now)};if validity!=Validity::Current{return validity;}
+        if self.live.spec.schema_version==3{
+            match Authority::existing(&self.live.authority_path).and_then(|a|a.verify_generated_goal(goal,false)){
+                Ok(())=>{},Err(crate::pet_runtime::authority::Failure::Busy|crate::pet_runtime::authority::Failure::Unavailable)=>return Validity::Unknown,
+                Err(_)=>return Validity::Changed,
+            }
+        }
+        Validity::Current
     }
     fn predecessors(&self,goal:&Record,plan:&str,step:&str,authority:&Authority)->model::Result<()>{
         let(p,_)=selected(goal,plan,step)?;
@@ -57,7 +72,9 @@ impl Owned{
         if output<2048{return Err(model::Error::LimitReached);}
         let _worker=self.readiness_worker(now)?;target.read().map_err(|_|error())?;
         let op=s.operation.as_ref().ok_or(error())?;let grant_id=nonce()?;
-        let scope=Scope{schema_version:1,request_id:format!("tool-{grant_id}"),grant_id,goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),provider:goal.spec.owner.provider.clone(),decision_id:self.live.spec.decision_id.clone(),lease_id:self.live.lease.id.clone(),controller_id:self.live.lease.controller_id.clone(),main_spec_hash:model::fingerprint(&self.live.spec)?,context_hash:self.live.spec.context_hash.clone(),proposal_hash:self.live.spec.proposal_hash.clone().ok_or(error())?,policy_revision:self.live.spec.policy_revision.clone(),plan_id:plan.into(),step_id:step.into(),operation_id:op.operation_id.clone(),version:op.version,arguments_hash:model::fingerprint(&op.arguments)?,resource:target.binding().clone(),approved_at:now,deadline_at:self.live.lease.deadline_at,max_output_bytes:output};
+        let generated_plan=if self.live.spec.schema_version==3{Some(goal.generated_plans.iter().find(|r|r.decision_id==self.live.spec.decision_id&&r.plan_id==plan).ok_or(error())?.clone())}else{None};
+        let proposal_hash=if generated_plan.is_some(){crate::pet_runtime::plans::fingerprint(goal)?}else{self.live.spec.proposal_hash.clone().ok_or(error())?};
+        let scope=Scope{schema_version:if generated_plan.is_some(){2}else{1},generated_plan,request_id:format!("tool-{grant_id}"),grant_id,goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),provider:goal.spec.owner.provider.clone(),decision_id:self.live.spec.decision_id.clone(),lease_id:self.live.lease.id.clone(),controller_id:self.live.lease.controller_id.clone(),main_spec_hash:model::fingerprint(&self.live.spec)?,context_hash:self.live.spec.context_hash.clone(),proposal_hash,policy_revision:self.live.spec.policy_revision.clone(),plan_id:plan.into(),step_id:step.into(),operation_id:op.operation_id.clone(),version:op.version,arguments_hash:model::fingerprint(&op.arguments)?,resource:target.binding().clone(),approved_at:now,deadline_at:self.live.lease.deadline_at,max_output_bytes:output};
         if !scope.valid()||!scope.matches(goal){return Err(error());}
         let proposal=Proposal{scope,goal_revision:goal.revision.clone(),intent:goal.spec.intent.clone(),criteria:goal.spec.criteria.clone(),arguments:op.arguments.clone(),postcondition:s.postcondition.clone(),prepared_at:now,expires_at:now.saturating_add(120_000).min(self.live.lease.deadline_at),max_uses:1,goal_criteria_verified:false};
         Ok(Review{proposal,target,action})
@@ -94,7 +111,8 @@ impl Owned{
                 let native=Attempt{id:nonce().map_err(|_|TargetFailure::NotAuthorized)?,request_id:ready.scope.request_id.clone(),input_hash:model::fingerprint(&ready.scope).map_err(|_|TargetFailure::NotAuthorized)?,kind:Kind::Tool,output_reserved:ready.scope.max_output_bytes,phase:APhase::Reserved,accepted_output:None,reserved_at:now,started_at:None,finished_at:None};
                 attempt=Some(native.clone());
                 authority.reserve_step(&self.live.spec,&self.live.proof,&self.live.lease,&ready.scope,&native,now).map_err(|_|TargetFailure::NotAuthorized)?;
-                authority.reserve_attempt(&self.live.spec,&self.live.proof,&self.live.lease,&native,crate::assistant_memory::now()).map_err(|_|TargetFailure::NotAuthorized)?;
+                let budget=if ready.scope.generated_plan.is_some(){authority.reserve_generated_step_budget(&self.live.spec,&self.live.proof,&self.live.lease,&ready.scope,&native,crate::assistant_memory::now())}else{authority.reserve_attempt(&self.live.spec,&self.live.proof,&self.live.lease,&native,crate::assistant_memory::now())};
+                budget.map_err(|_|TargetFailure::NotAuthorized)?;
                 authority.start_attempt(&self.live.spec,&self.live.proof,&self.live.lease,&native,crate::assistant_memory::now()).map_err(|_|TargetFailure::NotAuthorized)?;
                 authority.start_step(&self.live.spec,&self.live.proof,&self.live.lease,&ready.scope,&native,crate::assistant_memory::now()).map_err(|_|TargetFailure::NotAuthorized)?;
                 if !worker.in_flight_current(crate::assistant_memory::now())||!resource.current(){return Err(TargetFailure::Cancelled);}

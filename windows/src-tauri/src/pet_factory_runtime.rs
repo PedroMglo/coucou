@@ -8,8 +8,8 @@ use std::collections::{BTreeMap,BTreeSet};
 pub enum RuntimeKind {Llm,Service,Observer}
 #[derive(Clone,Copy,Debug,Deserialize,PartialEq,Eq)]
 #[serde(rename_all="camelCase")]
-pub enum Adapter {Codex,Copilot,Antigravity,Ollama,Spotify}
-impl Adapter {pub fn key(self)->&'static str{match self{Self::Codex=>"codex",Self::Copilot=>"copilot",Self::Antigravity=>"antigravity",Self::Ollama=>"ollama",Self::Spotify=>"spotify"}}}
+pub enum Adapter {Codex,Copilot,Antigravity,Ollama,Lmstudio,Spotify}
+impl Adapter {pub fn key(self)->&'static str{match self{Self::Codex=>"codex",Self::Copilot=>"copilot",Self::Antigravity=>"antigravity",Self::Ollama=>"ollama",Self::Lmstudio=>"lmstudio",Self::Spotify=>"spotify"}}}
 #[derive(Clone,Debug,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Runtime {pub kind:RuntimeKind,pub adapter:Option<Adapter>,#[serde(default)]pub assistant_adapter:Option<Adapter>}
@@ -20,6 +20,7 @@ pub struct Routing {pub chat:Option<String>,pub voice:Option<String>,pub execute
 pub struct Blueprint {pub id:String,pub service:bool,pub retired:bool,pub runtime:Runtime,pub routing:Routing,expected_provider:String}
 impl Blueprint {
     pub fn configured_adapter(&self,provider:&str)->Option<Adapter>{
+        if self.runtime.adapter==Some(Adapter::Lmstudio){return (provider=="lmstudio").then_some(Adapter::Lmstudio);}
         self.runtime.assistant_adapter.filter(|adapter|provider==adapter.key())
             .or_else(||(provider==self.expected_provider).then_some(self.runtime.adapter).flatten())
     }
@@ -33,7 +34,7 @@ impl Blueprint {
             }
     }
     pub fn accepts_provider(&self,provider:&str)->bool{
-        provider==self.expected_provider||self.runtime.assistant_adapter.is_some_and(|adapter|provider==adapter.key())
+        provider==self.expected_provider||self.runtime.adapter==Some(Adapter::Lmstudio)&&provider=="lmstudio"||self.runtime.assistant_adapter.is_some_and(|adapter|provider==adapter.key())
     }
     pub fn history_owner(&self)->bool{self.routing.chat.is_some()||self.routing.task_provider.is_some()}
 }
@@ -60,6 +61,7 @@ pub(super)fn parse(source:&Value,config:&super::Configuration)->Result<BTreeMap<
         let logical=if service{id.as_str()}else{provider.as_str()};
         if runtime.assistant_adapter.is_some()&&(!service||runtime.adapter!=Some(Adapter::Spotify)||runtime.assistant_adapter!=Some(Adapter::Codex)){return Err(invalid());}
         match runtime.adapter{
+            Some(Adapter::Lmstudio)=>{if runtime.kind!=RuntimeKind::Llm||service||!provider.is_empty()||routing.chat.as_deref()!=Some("lmstudio")||routing.task_provider.as_deref()!=Some("lmstudio")||routing.voice.is_some()||routing.execute{return Err(invalid());}},
             Some(Adapter::Spotify)=>{if !service||!provider.is_empty()||routing.chat.as_deref()!=runtime.assistant_adapter.map(|_|logical)||routing.voice.as_deref()!=Some(logical)||routing.task_provider.as_deref()!=Some(logical)||routing.execute!=runtime.assistant_adapter.is_some(){return Err(invalid());}},
             Some(adapter)=>{
                 if runtime.kind==RuntimeKind::Observer||provider!=adapter.key()||service&&adapter!=Adapter::Codex

@@ -6,7 +6,7 @@ use tokio::io::{AsyncRead,AsyncWrite,ReadBuf};
 pub(super)struct Scope{pub gate:crate::pet_native_write::Guard,retired:AtomicBool}
 impl Scope{
     pub(super)fn new(gate:crate::pet_native_write::Guard)->Arc<Self>{Arc::new(Self{gate,retired:AtomicBool::new(false)})}
-    pub(super)fn expired(&self)->bool{self.retired.load(Ordering::Acquire)||self.gate.reason().is_some()}
+    pub(super)fn expired(&self)->bool{self.retired.load(Ordering::Acquire)||self.gate.write_reason().is_some()}
     pub(super)fn retire(&self){self.retired.store(true,Ordering::Release);}
 }
 pub(super)type Slot=Arc<Mutex<Option<Arc<Scope>>>>;
@@ -27,11 +27,31 @@ pub(super)struct Caller(pub Arc<AtomicBool>);
 impl Drop for Caller{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
 #[cfg(test)]mod tests{
     use super::*;use tokio::io::AsyncWriteExt;use crate::{pet_config::Adapter,pet_native_decisions::{Endpoint,Transport,Capture,PolicyBinding}};
-    fn scope()->(Endpoint,crate::pet_native_decisions::Ticket,Arc<Scope>){let e=Endpoint::new(Adapter::Codex,Transport::ControlSocket).unwrap();let t=e.capture(Capture{request_id:Some(&json!(7)),session_id:"s",turn_id:Some("t"),prompt_id:None,method:"native/request",arguments:&json!({}),policy:PolicyBinding::unknown(),cancel:None}).unwrap();let s=Scope::new(crate::pet_native_write::Guard{deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:None,source:Some((t.clone(),crate::pet_native_write::Use::Decision))});(e,t,s)}
+    #[cfg(target_os="linux")]
+    fn assert_no_kernel_bytes(peer:&UnixStream){
+        use std::os::fd::AsRawFd;let mut bytes=[0u8;1];let n=unsafe{libc::recv(peer.as_raw_fd(),bytes.as_mut_ptr().cast(),bytes.len(),libc::MSG_DONTWAIT|libc::MSG_PEEK)};
+        assert!(n==0||(n==-1&&std::io::Error::last_os_error().kind()==std::io::ErrorKind::WouldBlock),"a refused frame left bytes readable in the kernel: {n}");
+    }
+    fn scope()->(Endpoint,crate::pet_native_decisions::Ticket,Arc<Scope>){let e=Endpoint::new(Adapter::Codex,Transport::ControlSocket).unwrap();let t=e.capture(Capture{request_id:Some(&json!(7)),session_id:"s",turn_id:Some("t"),prompt_id:None,method:"native/request",arguments:&json!({}),policy:PolicyBinding::unknown(),cancel:None}).unwrap();let s=Scope::new(crate::pet_native_write::Guard{dispatch:crate::pet_native_write::Dispatch::NewEffect,deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:None,source:Some((t.clone(),crate::pet_native_write::Use::Decision))});(e,t,s)}
+    #[cfg(target_os="linux")]
+    #[tokio::test]async fn final_dispatch_buffered_websocket_cannot_flush_new_effect_after_io_change(){
+        let io=crate::settings::EffectFixture::new();let(_e,_t,base)=scope();let gate=crate::pet_native_write::Guard{dispatch:crate::pet_native_write::Dispatch::ProbedEffect(io.probe.clone()),deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:None,source:base.gate.source.clone()};
+        let(client,peer)=UnixStream::pair().unwrap();let scoped=Scope::new(gate);let slot=Arc::new(Mutex::new(Some(scoped)));let stream=Socket::new(client,slot);let mut config=WebSocketConfig::default();config.write_buffer_size=1024*1024;
+        let mut ws=tokio_tungstenite::WebSocketStream::from_raw_socket(stream,tokio_tungstenite::tungstenite::protocol::Role::Client,Some(config)).await;ws.feed(Message::Text("captured-positive".into())).await.unwrap();io.external();assert!(ws.flush().await.is_err());let _=ws.close(None).await;assert_no_kernel_bytes(&peer);
+    }
+    #[cfg(target_os="linux")]
+    #[tokio::test]async fn final_dispatch_socket_control_ignores_io_but_not_source_resolution(){
+        use tokio::io::AsyncReadExt;let io=crate::settings::EffectFixture::new();let(_e,t,base)=scope();let gate=crate::pet_native_write::Guard{dispatch:crate::pet_native_write::Dispatch::Control,deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:None,source:base.gate.source.clone()};let(client,mut peer)=UnixStream::pair().unwrap();let mut stream=Socket::new(client,Arc::new(Mutex::new(Some(Scope::new(gate)))));io.external();stream.write_all(b"stop\n").await.unwrap();let mut bytes=[0;5];tokio::time::timeout(Duration::from_secs(2),peer.read_exact(&mut bytes)).await.unwrap().unwrap();assert_eq!(&bytes,b"stop\n");t.cancel();assert!(stream.write_all(b"again\n").await.is_err());assert_no_kernel_bytes(&peer);
+    }
+    #[cfg(target_os="linux")]
+    #[tokio::test]async fn final_dispatch_benign_commit_keeps_buffered_original_websocket_frame(){
+        let io=crate::settings::EffectFixture::new();let(_e,_t,base)=scope();let gate=crate::pet_native_write::Guard{dispatch:crate::pet_native_write::Dispatch::ProbedEffect(io.probe.clone()),deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:None,source:base.gate.source.clone()};let(client,peer)=UnixStream::pair().unwrap();let stream=Socket::new(client,Arc::new(Mutex::new(Some(Scope::new(gate)))));let mut config=WebSocketConfig::default();config.write_buffer_size=1024*1024;
+        let mut ws=tokio_tungstenite::WebSocketStream::from_raw_socket(stream,tokio_tungstenite::tungstenite::protocol::Role::Client,Some(config)).await;let mut server=tokio_tungstenite::WebSocketStream::from_raw_socket(peer,tokio_tungstenite::tungstenite::protocol::Role::Server,None).await;ws.feed(Message::Text("captured-original".into())).await.unwrap();io.save();ws.flush().await.unwrap();assert_eq!(tokio::time::timeout(Duration::from_secs(2),server.next()).await.unwrap().unwrap().unwrap(),Message::Text("captured-original".into()));
+    }
     #[tokio::test]async fn every_unix_write_checks_the_original_native_scope(){let(_e,t,scope)=scope();let(client,peer)=UnixStream::pair().unwrap();let slot=Arc::new(Mutex::new(Some(scope)));let mut stream=Socket::new(client,slot);t.cancel();assert!(stream.write_all(b"grant\n").await.is_err());let mut bytes=[0;64];assert!(matches!(peer.try_read(&mut bytes),Err(e)if e.kind()==std::io::ErrorKind::WouldBlock));}
     #[tokio::test]async fn buffered_websocket_frames_cannot_be_flushed_after_native_resolution_even_by_close(){
         let(_e,t,scope)=scope();let(client,peer)=UnixStream::pair().unwrap();let slot=Arc::new(Mutex::new(Some(scope)));let stream=Socket::new(client,slot);let mut config=WebSocketConfig::default();config.write_buffer_size=1024*1024;let mut ws=tokio_tungstenite::WebSocketStream::from_raw_socket(stream,tokio_tungstenite::tungstenite::protocol::Role::Client,Some(config)).await;
         ws.feed(Message::Text("stale-native-decision".into())).await.unwrap();let mut bytes=[0;128];assert!(matches!(peer.try_read(&mut bytes),Err(e)if e.kind()==std::io::ErrorKind::WouldBlock));t.cancel();assert!(ws.flush().await.is_err());let _=ws.close(None).await;match peer.try_read(&mut bytes){Ok(0)=>{},Err(e)if e.kind()==std::io::ErrorKind::WouldBlock=>{},other=>panic!("a closed/retired WebSocket must not flush an old native frame: {other:?}")}
     }
-    #[tokio::test]async fn retired_or_departed_callers_cannot_leave_a_flushable_buffer(){for retire in[false,true]{let(_e,_t,scope)=scope();let caller=Arc::new(AtomicBool::new(true));let s=Scope::new(crate::pet_native_write::Guard{deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:Some(caller.clone()),source:None});let(client,peer)=UnixStream::pair().unwrap();let mut stream=Socket::new(client,Arc::new(Mutex::new(Some(s.clone()))));if retire{s.retire();}else{drop(Caller(caller));}assert!(stream.write_all(b"old frame").await.is_err());let mut bytes=[0;64];assert!(matches!(peer.try_read(&mut bytes),Err(e)if e.kind()==std::io::ErrorKind::WouldBlock));drop(scope);}}
+    #[tokio::test]async fn retired_or_departed_callers_cannot_leave_a_flushable_buffer(){for retire in[false,true]{let(_e,_t,scope)=scope();let caller=Arc::new(AtomicBool::new(true));let s=Scope::new(crate::pet_native_write::Guard{dispatch:crate::pet_native_write::Dispatch::NewEffect,deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:Some(caller.clone()),source:None});let(client,peer)=UnixStream::pair().unwrap();let mut stream=Socket::new(client,Arc::new(Mutex::new(Some(s.clone()))));if retire{s.retire();}else{drop(Caller(caller));}assert!(stream.write_all(b"old frame").await.is_err());let mut bytes=[0;64];assert!(matches!(peer.try_read(&mut bytes),Err(e)if e.kind()==std::io::ErrorKind::WouldBlock));drop(scope);}}
 }

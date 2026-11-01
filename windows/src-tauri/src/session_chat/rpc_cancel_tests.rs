@@ -77,7 +77,7 @@ async fn cancellation_before_send_and_before_writer_ack_cleans_only_its_own_slot
     assert!(matches!(packets.try_recv(), Err(mpsc::error::TryRecvError::Empty)));
     let (written, _ack) = oneshot::channel();
     assert!(client.writer.try_send(Packet { message:json!({"method":"fixture/blocker"}), written,
-        scope:native_write::Scope::new(crate::pet_native_write::Guard{deadline:Instant::now()+Duration::from_secs(5),cancel:None,caller:None,source:None}) }).is_ok());
+        scope:native_write::Scope::new(crate::pet_native_write::Guard{dispatch:crate::pet_native_write::Dispatch::NewEffect,deadline:Instant::now()+Duration::from_secs(5),cancel:None,caller:None,source:None}) }).is_ok());
     assert!(timeout(Duration::from_millis(5), client.call("fixture/before-send",json!({}))).await.is_err());
     assert!(client.pending.lock().unwrap().is_empty());
     assert_eq!(packets.try_recv().unwrap().message["method"], "fixture/blocker");

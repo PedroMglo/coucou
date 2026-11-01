@@ -547,13 +547,16 @@
         "chat": "lmstudio",
         "voice": null,
         "execute": false,
-        "taskProvider": null,
+        "taskProvider": "lmstudio",
         "role": "Conversa no servidor local",
-        "taskName": null
+        "taskName": "LM Studio"
       },
       "runtime": {
         "kind": "llm",
-        "adapter": null
+        "adapter": "lmstudio"
+      },
+      "presentation": {
+        "profiles": true
       }
     },
     "integration_resend": {

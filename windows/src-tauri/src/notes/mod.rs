@@ -282,7 +282,7 @@ fn start_inner(app: &AppHandle, taker: &Arc<NoteTaker>) -> Result<String, String
     let mic_channel = Arc::new(Mutex::new(Channel::new(&dir.join("mic.wav")).map_err(|e| e.to_string())?));
     let mic_pref = crate::flow::get(app).map(|f| f.store.lock().unwrap().prefs.mic.clone()).unwrap_or_default();
     let sink = mic_channel.clone();
-    let mic = audio::Capture::start(audio::Source::Mic(if mic_pref.is_empty() { None } else { Some(mic_pref) }), move |s| {
+    let mic = audio::Capture::start(audio::Source::Mic(if mic_pref.is_empty() { None } else { Some(mic_pref) }), audio::CaptureUse::MeetingMicrophone, move |s| {
         sink.lock().unwrap().push(s)
     })
     .map_err(|err| {
@@ -295,7 +295,7 @@ fn start_inner(app: &AppHandle, taker: &Arc<NoteTaker>) -> Result<String, String
         Ok(channel) => {
             let channel = Arc::new(Mutex::new(channel));
             let sink = channel.clone();
-            match audio::Capture::start(audio::Source::System, move |s| sink.lock().unwrap().push(s)) {
+            match audio::Capture::start(audio::Source::System, audio::CaptureUse::MeetingSystem, move |s| sink.lock().unwrap().push(s)) {
                 Ok(capture) => (Some(capture), Some(channel)),
                 Err(err) => {
                     crate::log::line(format!("notes: system sound unavailable: {err}"));

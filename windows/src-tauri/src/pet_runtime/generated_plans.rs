@@ -84,8 +84,8 @@ impl Record {
             ||self.updated_at!=reference.source.updated_at||model::fingerprint(self)?!=reference.source.record_hash||self.events.len()>=model::MAX_EVENTS-1{return Err(model::Error::Conflict);}
         let super::planning_output::Outcome::Plan{candidate}=&output.body.outcome else{return Err(model::Error::InvalidInput);};
         add_data(self,&reference,candidate)?;if super::plans::fingerprint(self)?!=reference.proposal_hash{return Err(model::Error::Conflict);}
-        self.sequence=reference.target_sequence;self.revision=reference.target_revision.clone();self.updated_at=reference.published_at;self.schema_version=8;
+        self.sequence=reference.target_sequence;self.revision=reference.target_revision.clone();self.updated_at=reference.published_at;
         self.events.push(model::Event{sequence:self.sequence,at:self.updated_at,request_id:format!("publish-plan-{}",reference.output.attempt_id),fingerprint:model::fingerprint(&reference)?,kind:model::EventKind::PlanGenerated});
-        self.generated_plans.push(reference);self.validate()
+        self.generated_plans.push(reference);self.refresh_schema();self.validate()
     }
 }

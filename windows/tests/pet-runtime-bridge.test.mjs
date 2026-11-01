@@ -1,5 +1,18 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {Bridge} from '../src/core/bridge.ts';import {internals} from './tauri.mjs';
+test('unused authorization recovery accepts references only and cannot submit a fabricated authority or usage',async()=>{
+ const saved=internals.invoke,calls=[];try{internals.invoke=async(command,args)=>{calls.push({command,args});return null;};
+ const refs={petId:'agent_codex',goalId:'original-goal',revision:'reviewed'},prepare={...refs,decisionId:'unused-native-decision',requestId:'explicit-review'},confirm={...refs,decisionId:prepare.decisionId,token:'native-review-token',approve:true};
+ const forged={profile:{key:'forged'},reference:{targetUsageKnownZero:true},grant:{phase:'issued'},history:{accountingComplete:true},budget:{maxModelCalls:99},leaseId:'invented',path:'/arbitrary'};
+ await Bridge.petRuntimeHistory({...refs,...forged});await Bridge.petRuntimePrepareRetirement({...prepare,...forged});await Bridge.petRuntimeConfirmRetirement({...confirm,...forged});
+ assert.deepEqual(calls,[{command:'pet_runtime_history',args:{input:refs}},{command:'pet_runtime_prepare_retirement',args:{input:prepare}},{command:'pet_runtime_confirm_retirement',args:{input:confirm}}]);
+ }finally{internals.invoke=saved;}
+});
+test('a lost retirement response propagates without an automatic retry or another native operation',async()=>{
+ const saved=internals.invoke,calls=[];try{internals.invoke=async(command,args)=>{calls.push({command,args});throw Error('retirement response lost');};
+ await assert.rejects(Bridge.petRuntimeConfirmRetirement({petId:'ai_ollama',goalId:'original-goal',revision:'reviewed',decisionId:'original-decision',token:'original-token',approve:true}),/response lost/);assert.equal(calls.length,1);assert.equal(calls[0].command,'pet_runtime_confirm_retirement');
+ }finally{internals.invoke=saved;}
+});
 test('typed criterion proposals remain data and native completion only receives original references',async()=>{
  const saved=internals.invoke,calls=[];try{internals.invoke=async(command,args)=>{calls.push({command,args});return null;};
  const criteria=[{criterionIndex:0,criterionHash:'forged',predicate:{kind:'spotifyPlayback',status:'paused'}}];const refs={petId:'ai_ollama',goalId:'original',leaseId:'lease',revision:'reviewed',planId:'plan',requestId:'review'};
@@ -160,4 +173,29 @@ test('shared recipe requests send only references and predicate proposals and ne
 
 test('goal management can only send a goal decision and explicit metadata inspection never accepts a model or endpoint from the caller',async()=>{
  const saved=internals.invoke,calls=[];try{internals.invoke=async(command,args)=>{calls.push({command,args});return [];};const target={origin:'goal',petId:'ai_ollama',provider:'ollama',goalId:'original-goal',contextId:'context',leaseId:'lease',controllerId:'controller',recipeId:'recipe',planId:'plan',revision:'reviewed'};await Bridge.petRuntimeGoalPending();await Bridge.petRuntimeGoalAnswer('original-request',false,target);target.revision='changed-after-send';await Bridge.petRuntimeRefreshReadiness('ai_ollama','original-goal','https://foreign.invalid','foreign-model');assert.deepEqual(calls[0],{command:'pet_runtime_goal_pending',args:{}});assert.deepEqual(calls[1],{command:'pet_runtime_goal_answer',args:{input:{id:'original-request',approve:false,target:{...target,revision:'reviewed'}}}});assert.deepEqual(calls[2],{command:'pet_runtime_refresh_readiness',args:{petId:'ai_ollama',goalId:'original-goal'}});assert.ok(calls.every(c=>!['cli_agent_answer','pet_runtime_run_recipe','pet_runtime_respond_once'].includes(c.command)));}finally{internals.invoke=saved;}
+});
+
+test('fresh continuation sends only original references and explicit additional limits; native history and closure cannot be supplied',async()=>{
+ const saved=internals.invoke,calls=[];try{internals.invoke=async(command,args)=>{calls.push({command,args});return {status:'blocked',reason:'recoveryNotClosed'};};
+ const refs={petId:'ai_ollama',goalId:'original',revision:'closed-source',requestId:'new-allowance'},budget={deadlineAt:123456,maxModelCalls:4,maxToolCalls:6,maxOutputBytes:8192,maxTokens:null,maxCostMicros:null,payment:'localOnly'},limits={maxRounds:3,maxSteps:2,maxOutputBytes:2048,noProgressLimit:2};
+ await Bridge.petRuntimePrepareContinuation({...refs,budget:{...budget,previousCharge:0},limits:{...limits,permit:'forged'},continuation:{historyContinuityVerified:true},closure:{approved:true},leaseId:'old',approve:true});assert.deepEqual(calls[0],{command:'pet_runtime_prepare_continuation',args:{input:{...refs,budget,limits}}});
+ await Bridge.petRuntimePrepareContinuation({...refs,budget,history:{complete:true}});assert.deepEqual(calls[1],{command:'pet_runtime_prepare_continuation',args:{input:{...refs,budget,limits:null}}});assert.equal(calls.length,2);
+ }finally{internals.invoke=saved;}
+});
+
+test('explicit unknown-effect review submits no caller manifest, repaired result, target, grant or inherited permission',async()=>{
+ const saved=internals.invoke,calls=[];try{internals.invoke=async(command,args)=>{calls.push({command,args});return {status:'blocked',reason:'unreconciledEffects'};};const input={petId:'ai_ollama',goalId:'original',revision:'source',requestId:'review',budget:{deadlineAt:10000,maxModelCalls:3,maxToolCalls:6,maxOutputBytes:100000,maxTokens:null,maxCostMicros:null,payment:'localOnly'},limits:{maxRounds:3,maxSteps:2,maxOutputBytes:2048,noProgressLimit:2}};
+ await Bridge.petRuntimePrepareContinuation({...input,uncertainEffects:[{outcomeKnown:true}],grant:{approved:true},target:':1.1',reviewUncertainEffects:'true'});assert.equal(calls[0].args.input.reviewUncertainEffects,undefined);await Bridge.petRuntimePrepareContinuation({...input,reviewUncertainEffects:true,uncertainEffects:[{outcomeKnown:true}],grant:{approved:true},target:':1.1'});assert.deepEqual(calls[1],{command:'pet_runtime_prepare_continuation',args:{input:{...input,reviewUncertainEffects:true}}});assert.equal(calls.length,2);
+ }finally{internals.invoke=saved;}
+});
+
+test('memory goal bridge preserves exact selections and distinct consent but excludes forged authority',async()=>{
+ const saved=internals.invoke,calls=[];try{internals.invoke=async(command,args)=>{calls.push({command,args});return null;};const refs={petId:'ai_ollama',goalId:'native-goal',revision:'native-revision'},selection=[{id:'note',revision:4,grant:'forged'}];await Bridge.petRuntimePrepareContext({...refs,requestId:'context',mode:'dedicated',selectedMemory:selection,authority:{allow:true}});selection[0].revision=5;assert.deepEqual(calls[0],{command:'pet_runtime_prepare_context',args:{input:{...refs,requestId:'context',mode:'dedicated',selectedMemory:[{id:'note',revision:4}]}}});await Bridge.petRuntimeConfirmAdmission({...refs,token:'opaque',approve:true,memoryConsent:'boundedGoalContext',dataGrant:{consent:'forged'}});assert.deepEqual(calls[1],{command:'pet_runtime_confirm_admission',args:{input:{...refs,token:'opaque',approve:true,memoryConsent:'boundedGoalContext'}}});await Bridge.petRuntimeConfirmAdmission({...refs,token:'plain',approve:false});assert.equal('memoryConsent'in calls[2].args.input,false);}finally{internals.invoke=saved;}
+});
+
+test('manual data review and send preserve only typed native references, context, model and one-use data scope',async()=>{
+ const saved=internals.invoke,calls=[];try{internals.invoke=async(command,args)=>{calls.push({command,args});return null;};const context={kind:'files',files:[{id:'a',name:'same.txt',path:'/private/fixture/a',sequence:7}]},selected=[{id:'note',revision:3,permit:'forged'}],input={provider:'ollama',conversationId:'original-cid',query:'Original question',selectedModel:'reviewed-model',context,selected,documentSequence:7,grant:{allow:true}};
+ await Bridge.petMemoryContextPrepare(input);context.files[0].path='/changed';selected[0].revision=4;assert.deepEqual(calls[0],{command:'pet_memory_context_prepare',args:{provider:'ollama',conversationId:'original-cid',query:'Original question',selectedModel:'reviewed-model',context:{kind:'files',files:[{id:'a',name:'same.txt',path:'/private/fixture/a',sequence:7}]},selected:[{id:'note',revision:3}],documentSequence:7}});
+ const decision={token:'native-opaque',consent:'thisRequest',authority:'forged'};await Bridge.chatSend('Original question',calls[0].args.context,'ollama','original-cid','reviewed-model',7,decision);decision.token='changed';assert.deepEqual(calls[1].args.memoryDecision,{token:'native-opaque',consent:'thisRequest'});assert.equal(calls[1].args.context.files[0].path,'/private/fixture/a');await Bridge.petMemoryContextCancel('native-opaque');assert.deepEqual(calls[2],{command:'pet_memory_context_cancel',args:{token:'native-opaque'}});assert.equal(calls.length,3);
+ }finally{internals.invoke=saved;}
 });

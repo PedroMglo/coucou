@@ -224,6 +224,7 @@ fn plan_to_preview(plan: config_file::Plan) -> HookPreview {
 /// `fingerprint` is the one the preview was computed from: a settings.json that
 /// changed in between is refused rather than overwritten (see config_file).
 pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
+    crate::settings::optional::check(crate::settings::optional::Operation::Hooks)?;
     let backups = config_file::apply(&edits(install), fingerprint)?;
     Ok(backups.first().map(|p| p.to_string_lossy().to_string()).unwrap_or_default())
 }
@@ -301,6 +302,7 @@ pub fn status_line_preview(install: bool) -> Result<HookPreview, String> {
 /// the hooks. Installing first saves a status line of the user's own, removing
 /// puts it back (or removes the key if there was none).
 pub fn status_line_write(install: bool, fingerprint: &str) -> Result<String, String> {
+    crate::settings::optional::check(crate::settings::optional::Operation::Hooks)?;
     let before = config_file::read(&settings_path())
         .and_then(|bytes| config_file::parse_json(bytes.as_deref(), "settings.json"))?;
     let previous = read_status_line_previous();
@@ -348,6 +350,10 @@ fn save_status_line_previous(status_line: &Value) -> std::io::Result<()> {
 /// the relay was simply never installed. It only looked healthy on a developer
 /// machine, where a leftover copy from `tauri dev` was already sitting in bin/.
 pub fn ensure_hook_exe(app: &AppHandle) {
+    if crate::settings::optional::check(crate::settings::optional::Operation::Hooks).is_err() {
+        crate::log::line("hooks: preferences are unconfirmed; relay installation was not started");
+        return;
+    }
     let dest = settings::hook_exe_path();
     let Some(dir) = dest.parent() else { return };
     // Nobody else may swap the relay Claude Code runs: its folder is ours only.

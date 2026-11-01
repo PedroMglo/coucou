@@ -70,13 +70,14 @@ fn prepare(provider: &str, descriptor: &Descriptor) -> Result<Candidate, Failure
     if descriptor.binding.adapter!=Some(adapter.key())&&!declared.runtime.assistant_adapter.is_some_and(|a|descriptor.binding.adapter==Some(a.key())){return Err(Failure::UnsupportedPet);}
     let route = match adapter {
         Adapter::Codex=>Route::Codex,Adapter::Copilot=>Route::Copilot,
-        Adapter::Antigravity=>Route::Gravity,Adapter::Ollama=>Route::Ollama,Adapter::Spotify=>Route::Spotify,
+        Adapter::Antigravity=>Route::Gravity,Adapter::Ollama=>Route::Ollama,Adapter::Spotify=>Route::Spotify,Adapter::Lmstudio=>return Err(Failure::UnsupportedPet),
     };
     Ok(Candidate { pet, route })
 }
 
 /// Probe only existing local prerequisites, after resolving the original owner.
 pub(crate) fn admit(provider: &str, descriptor: &Descriptor, probe: impl FnOnce(Candidate) -> bool) -> Result<Candidate, Failure> {
+    #[cfg(target_os="linux")]if crate::pet_data::bootstrap::feature_allowed("voice").is_err(){return Err(Failure::StateUnavailable);}
     let candidate = prepare(provider, descriptor)?;
     if !probe(candidate) {
         return Err(if candidate.route == Route::Ollama { Failure::LocalModelUnavailable } else { Failure::AdapterUnavailable });

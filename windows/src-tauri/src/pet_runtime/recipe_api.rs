@@ -44,7 +44,7 @@ pub async fn pet_runtime_prepare_recipe(window:tauri::WebviewWindow,input:Recipe
         if !model::key(&input.request_id){return Err(model::Error::InvalidInput);}
         let goal=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?.read(&input.goal_id,&input.pet_id)?;
         if goal.revision!=input.revision{return Err(model::Error::Conflict);}let owner=super::lease_api::step_owner(&goal,&input.lease_id)?;
-        let binding=if input.criteria.is_empty(){None}else{Some(super::criteria::Binding::bind(&goal,&input.criteria)?)};
+        let binding=owner.recipe_input_binding(&goal,&input.plan_id,&input.criteria)?;
         {let mut c=cache().lock().map_err(|_|model::Error::StorageUnavailable)?;c.sweep(crate::assistant_memory::now());
             if let Some((token,p))=c.pending.iter().find(|(_,p)|{let v=p.review.proposal();p.window==label&&p.request==input.request_id&&v.goal_revision==input.revision&&v.scope.goal_id==input.goal_id&&v.scope.pet_id==input.pet_id&&v.scope.lease_id==input.lease_id&&v.scope.plan_id==input.plan_id}){if p.review.proposal().scope.verification!=binding{return Err(model::Error::Conflict);}return Ok(RecipeTicket{token:token.clone(),proposal:p.review.proposal()});}
             if c.pending.len()>=128||c.ready.len()>=64{return Err(model::Error::LimitReached);}}
@@ -92,10 +92,10 @@ pub async fn pet_runtime_run_recipe(app:tauri::AppHandle,window:tauri::WebviewWi
 #[cfg(target_os="linux")]#[tauri::command]
 pub async fn pet_runtime_recipe_progress(window:tauri::WebviewWindow,input:RecipeReadInput)->model::Result<Option<recipes::Progress>>{
     check(&window)?;tauri::async_runtime::spawn_blocking(move||{
-        let goal=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?.read(&input.goal_id,&input.pet_id)?;
+        let goal=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?.read_control(&input.goal_id,&input.pet_id)?;
         let row=goal.admissions.iter().find(|a|a.spec.decision_id==input.decision_id).ok_or(model::Error::NotFound)?;
         let a=Authority::existing(&super::admission_review::authority_root()).map_err(|_|model::Error::StorageUnavailable)?;
-        let mut progress=a.recipe_progress(&row.spec,row.proof.as_ref().ok_or(model::Error::Conflict)?,&input.plan_id).map_err(|_|model::Error::StorageUnavailable)?;
+        let mut progress=a.recipe_progress_for_goal(&goal,&row.spec,row.proof.as_ref().ok_or(model::Error::Conflict)?,&input.plan_id).map_err(super::authority::Failure::control_error)?;
         if goal.state==model::State::Completed{
             a.verify_completed_goal(&goal).map_err(|_|model::Error::StorageUnavailable)?;
             if let Some(p)=&mut progress{p.goal_complete=goal.completion.as_ref().is_some_and(|c|c.recipe_id==p.scope.id);}
@@ -103,13 +103,13 @@ pub async fn pet_runtime_recipe_progress(window:tauri::WebviewWindow,input:Recip
     }).await.map_err(|_|model::Error::StorageUnavailable)?
 }
 #[cfg(target_os="linux")]
-pub(super)fn complete_for_goal(store:&Store,authority:&Authority,goal:&model::Record,input:&RecipeCompleteInput,current:impl Fn(&model::Record)->bool)->model::Result<model::Receipt>{
+pub(super)fn complete_for_goal(store:&Store,authority:&Authority,goal:&model::Record,input:&RecipeCompleteInput,current:impl Fn(&model::Record)->model::Result<()>)->model::Result<model::Receipt>{
     if input.pet_id!=goal.spec.owner.pet_id||input.goal_id!=goal.id{return Err(model::Error::Conflict);}
     let accepted=if let Some(c)=&goal.completion{input.revision==c.source_revision||input.revision==c.target_revision}else{input.revision==goal.revision};
     if !accepted{return Err(model::Error::Conflict);}let row=goal.admissions.iter().find(|a|a.spec.decision_id==input.decision_id).ok_or(model::Error::NotFound)?;let proof=row.proof.as_ref().ok_or(model::Error::Conflict)?;
-    let scope=authority.read_recipe(&row.spec,proof,&input.plan_id).map_err(|_|model::Error::StorageUnavailable)?.ok_or(model::Error::NotFound)?;
+    let scope=authority.read_recipe(&row.spec,proof,&input.plan_id).map_err(|e|if e==super::authority::Failure::Busy{model::Error::Busy}else{model::Error::StorageUnavailable})?.ok_or(model::Error::NotFound)?;
     if scope.id!=input.recipe_id{return Err(model::Error::Conflict);}
-    let certificate=authority.certify_completion(&row.spec,proof,&scope,goal).map_err(|_|model::Error::StorageUnavailable)?;
+    let certificate=authority.certify_completion(&row.spec,proof,&scope,goal).map_err(|e|if e==super::authority::Failure::Busy{model::Error::Busy}else{model::Error::StorageUnavailable})?;
     store.complete_certified(&certificate,crate::assistant_memory::now(),current)
 }
 #[cfg(target_os="linux")]#[tauri::command]
@@ -118,7 +118,7 @@ pub async fn pet_runtime_complete_recipe(window:tauri::WebviewWindow,input:Recip
         let store=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?;let goal=store.read(&input.goal_id,&input.pet_id)?;
         let authority=Authority::existing(&super::admission_review::authority_root()).map_err(|_|model::Error::StorageUnavailable)?;
         let owner=goal.admissions.last().and_then(|r|r.lease.as_ref()).and_then(|l|super::lease_api::step_owner(&goal,&l.id).ok());
-        let finish=||complete_for_goal(&store,&authority,&goal,&input,|current|owner.as_ref().is_some_and(|o|o.completion_current(current,crate::assistant_memory::now())));
+        let finish=||complete_for_goal(&store,&authority,&goal,&input,|current|owner.as_ref().ok_or(model::Error::Conflict).and_then(|o|o.completion_authority(current,crate::assistant_memory::now())));
         let receipt=if goal.state==model::State::Completed{finish()?}else{owner.as_ref().ok_or(model::Error::Conflict)?.with_completion_lock(finish)?};
         if let Some(lease)=goal.admissions.last().and_then(|r|r.lease.as_ref()){if receipt.status!=model::CommitStatus::Uncertain{let _=super::lease_api::close_completed(&store,&input.goal_id,&input.pet_id,&lease.id);}}
         Ok(receipt)
@@ -167,7 +167,7 @@ pub async fn pet_runtime_request_recipe(app:tauri::AppHandle,window:tauri::Webvi
         let store=Arc::new(Store::existing_native(&root())?.ok_or(model::Error::NotFound)?);let goal=store.read(&input.goal_id,&input.pet_id)?;
         if goal.revision!=input.revision{return Err(model::Error::Conflict);}let owner=super::lease_api::step_owner(&goal,&input.lease_id)?;
         let config=crate::pet_config::read_existing().map_err(|_|model::Error::StorageUnavailable)?;owner.step_goal(&goal,&config,crate::assistant_memory::now())?;
-        let binding=if input.criteria.is_empty(){None}else{Some(super::criteria::Binding::bind(&goal,&input.criteria)?)};
+        let binding=owner.recipe_input_binding(&goal,&input.plan_id,&input.criteria)?;
         if let Some(r)=shared_retained(&input,&binding)?{return register_shared(&goal,&r);}
         {let mut c=cache().lock().map_err(|_|model::Error::StorageUnavailable)?;c.sweep(crate::assistant_memory::now());if c.ready.len()>=64{return Err(model::Error::LimitReached);}}
         let target=Arc::new(crate::spotify::goal::Target::capture().map_err(|_|model::Error::Conflict)?);

@@ -1,7 +1,7 @@
 //! Native observations survive the accounting/final-receipt transaction gap.
 //! Recovery only republishes authenticated evidence; it never dispatches IO.
 use super::*;
-use crate::pet_runtime::steps::{Assessment,Recovery,RecoveryStatus};
+use crate::pet_runtime::{steps::{Assessment,Recovery,RecoveryStatus},model::Record};
 
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -100,19 +100,42 @@ impl Authority{
         #[cfg(test)]if matches!(self.fault,Fault::AfterStepEvidencePublish){return Err(Failure::Uncertain);}
         self.evidence_stabilize(&evidence)
     }
-    pub(super)fn step_assessment_unlocked(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str,step:&str)->Result<Option<Assessment>>{
+    pub(in crate::pet_runtime::authority_store)fn step_reconciliation_unlocked(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str,step:&str)->Result<Option<(Assessment,Option<Receipt>,Option<String>)>>{
         let main=self.load(spec,proof)?;let Some(record)=self.step_load(spec,proof,plan,step)?else{return Ok(None);};
         let current=budget_attempt(&record,&main)?;let evidence=self.evidence_load(&record,current.as_ref())?;
         let status=if record.phase==Phase::Finished{RecoveryStatus::Finished}else if evidence.is_some(){RecoveryStatus::ResultRecorded}else{match record.phase{Phase::Approved=>RecoveryStatus::Prepared,Phase::Reserved=>RecoveryStatus::Reserved,_=>RecoveryStatus::ResultMissing}};
-        let recovery=Recovery{status,budget_phase:current.map(|a|a.phase.into()),recorded_effect_verified:record.result.as_ref().or(evidence.as_ref().map(|e|&e.result)).map(|r|r.observation.effect_verified),reconciliation_available:record.phase!=Phase::Finished&&evidence.is_some()};
-        self.fence()?;Ok(Some(Assessment{record,recovery}))
+        let recovery=Recovery{status,budget_phase:current.map(|a|a.phase.into()),recorded_effect_verified:record.result.as_ref().or(evidence.as_ref().map(|e|&e.result)).map(|r|r.observation.effect_verified),reconciliation_available:record.phase!=Phase::Finished&&evidence.is_some(),accounting_frozen:false,recorded_result:if record.result.is_none(){evidence.as_ref().map(|e|e.result.clone())}else{None}};
+        let observed=record.result.clone().or_else(||evidence.as_ref().map(|e|e.result.clone()));let evidence_hash=evidence.as_ref().map(model::fingerprint).transpose().map_err(|_|Failure::Invalid)?;
+        self.fence()?;Ok(Some((Assessment{record,recovery},observed,evidence_hash)))
+    }
+    pub(super)fn step_assessment_unlocked(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str,step:&str)->Result<Option<Assessment>>{
+        Ok(self.step_reconciliation_unlocked(spec,proof,plan,step)?.map(|(a,_,_)|a))
     }
     pub(in crate::pet_runtime)fn read_step_assessment(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str,step:&str)->Result<Option<Assessment>>{
         let _lock=self.lock()?;self.step_assessment_unlocked(spec,proof,plan,step)
     }
     /// Reconciles only existing native evidence, including after pause/restart.
-    pub(in crate::pet_runtime)fn recover_step(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,scope:&Scope,now:u64)->Result<Assessment>{
-        let _lock=self.lock()?;let mut main=self.budget_body(spec,proof,lease,now,false)?;
+    #[cfg(test)]pub(in crate::pet_runtime)fn recover_step(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,scope:&Scope,now:u64)->Result<Assessment>{
+        let _lock=self.lock()?;self.recover_step_unlocked(spec,proof,lease,scope,now)
+    }
+    /// Production calls hold the original goal catalog guard through this
+    /// authority transaction. A signed continuation freezes the charged grant.
+    pub(in crate::pet_runtime)fn recover_step_for_goal(&self,goal:&Record,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,scope:&Scope,now:u64)->Result<Assessment>{
+        let _lock=self.lock()?;self.budget_body(spec,proof,lease,now,false)?;
+        if self.accounting_frozen_unlocked(goal,spec)?{
+            let mut assessment=self.step_assessment_unlocked(spec,proof,&scope.plan_id,&scope.step_id)?.ok_or(Failure::Missing)?;
+            if assessment.record.scope!=*scope{return Err(Failure::Changed);}
+            assessment.recovery.freeze_accounting();self.fence()?;return Ok(assessment);
+        }
+        self.recover_step_unlocked(spec,proof,lease,scope,now)
+    }
+    pub(in crate::pet_runtime)fn read_step_assessment_for_goal(&self,goal:&Record,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str,step:&str)->Result<Option<Assessment>>{
+        let _lock=self.lock_shared()?;let mut assessment=self.step_assessment_unlocked(spec,proof,plan,step)?;
+        if self.accounting_frozen_unlocked(goal,spec)?{if let Some(value)=&mut assessment{value.recovery.freeze_accounting();}}
+        self.fence()?;Ok(assessment)
+    }
+    fn recover_step_unlocked(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,scope:&Scope,now:u64)->Result<Assessment>{
+        let mut main=self.budget_body(spec,proof,lease,now,false)?;
         let mut record=self.step_load(spec,proof,&scope.plan_id,&scope.step_id)?.ok_or(Failure::Missing)?;
         if record.scope!=*scope||now<record.updated_at{return Err(Failure::Invalid);}
         let current=budget_attempt(&record,&main)?;let evidence=self.evidence_load(&record,current.as_ref())?;
@@ -136,5 +159,15 @@ impl Authority{
         }else{self.stabilize(&main)?;}
         self.step_publish(&record,false)?;
         self.step_assessment_unlocked(spec,proof,&scope.plan_id,&scope.step_id)?.ok_or(Failure::Missing)
+    }
+}
+
+// Authenticate the original typed artifact before retirement uses its identity
+// as a negative fact. This scope is data, never an executable recovered permit.
+impl Authority{
+    pub(in crate::pet_runtime::authority_store)fn retirement_evidence_scope(&self,raw:&[u8])->Result<Scope>{
+        let e:EvidenceEnvelope=serde_json::from_slice(raw).map_err(|_|Failure::Invalid)?;
+        if !e.body.valid(){return Err(Failure::Invalid);}
+        hmac::verify(&self.key,&evidence_message(&e.body)?,&decode(&e.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;Ok(e.body.scope)
     }
 }

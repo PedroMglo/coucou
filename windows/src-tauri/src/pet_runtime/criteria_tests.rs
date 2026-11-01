@@ -12,6 +12,28 @@ fn verification_path(f:&Fixture,ready:&RecipeReady)->std::path::PathBuf{f.path.j
 fn completion_input(g:&Record,ready:&RecipeReady)->RecipeCompleteInput{let s=ready.scope();RecipeCompleteInput{pet_id:g.spec.owner.pet_id.clone(),goal_id:g.id.clone(),decision_id:s.decision_id.clone(),plan_id:s.plan_id.clone(),recipe_id:s.id.clone(),revision:g.revision.clone()}}
 
 #[test]
+fn completed_native_reads_share_the_existing_authority_reader_lock_without_replaying_effects(){
+    use std::os::fd::AsRawFd;
+    let(f,a,g,_p,o,_main)=setup();let bus=Bus::new();let player=Player::new(&bus,"Shared completion reader");let(approved,ready)=typed(&o,&g,&bus,&bindings());register(&a,&g,&o,&approved,&ready);
+    assert_eq!(o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|_|{}).unwrap().outcome,Outcome::GoalCompleted);
+    let authority=crate::pet_runtime::authority_tests::root(&f);let store=crate::pet_runtime::store::Store::existing_verified(&f.path.join("goals"),&authority).unwrap().unwrap();let saved=store.read(&g.id,"ai_ollama").unwrap();
+    let goal_path=f.path.join("goals").join(format!("{}.json",g.id));let grant_path=authority.join(format!("{}.json",g.admissions[0].spec.decision_id));let verification=verification_path(&f,&ready);let bytes=[&goal_path,&grant_path,&verification].map(|p|std::fs::read(p).unwrap());
+    let lock=std::fs::OpenOptions::new().read(true).write(true).open(authority.join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(lock.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);
+    let observed=store.read(&g.id,"ai_ollama").unwrap();assert_eq!(observed.revision,saved.revision);assert_eq!(observed.completion,saved.completion);a.verify_completed_goal(&observed).unwrap();
+    assert_eq!([&goal_path,&grant_path,&verification].map(|p|std::fs::read(p).unwrap()),bytes);assert_eq!(player.calls.lock().unwrap().len(),2);assert_eq!(o.workers(),0);drop(lock);
+}
+
+#[test]
+fn completed_native_reads_reject_a_real_writer_lock_and_corrupt_signed_verification(){
+    use std::os::fd::AsRawFd;
+    let(f,_a,g,_p,o,_main)=setup();let bus=Bus::new();let player=Player::new(&bus,"Exclusive completion fence");let(approved,ready)=typed(&o,&g,&bus,&bindings());register(&_a,&g,&o,&approved,&ready);
+    assert_eq!(o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|_|{}).unwrap().outcome,Outcome::GoalCompleted);
+    let authority=crate::pet_runtime::authority_tests::root(&f);let store=crate::pet_runtime::store::Store::existing_verified(&f.path.join("goals"),&authority).unwrap().unwrap();let lock=std::fs::OpenOptions::new().read(true).write(true).open(authority.join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(lock.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)},0);
+    assert_eq!(store.read(&g.id,"ai_ollama").err(),Some(crate::pet_runtime::model::Error::Busy));drop(lock);assert_eq!(store.read(&g.id,"ai_ollama").unwrap().state,State::Completed);
+    let path=verification_path(&f,&ready);let mut body:serde_json::Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();body["tag"]=serde_json::json!("00".repeat(32));let corrupt=serde_json::to_vec(&body).unwrap();std::fs::write(&path,&corrupt).unwrap();assert_eq!(store.read(&g.id,"ai_ollama").err(),Some(crate::pet_runtime::model::Error::InvalidRecord));assert_eq!(std::fs::read(&path).unwrap(),corrupt);assert_eq!(player.calls.lock().unwrap().len(),2);
+}
+
+#[test]
 fn typed_final_predicates_publish_native_evidence_then_complete_and_close_the_original_goal(){
     let(f,a,g,_p,o,main)=setup();let bus=Bus::new();let player=Player::new(&bus,"Private criteria player");let(approved,ready)=typed(&o,&g,&bus,&bindings());register(&a,&g,&o,&approved,&ready);
     let result=o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|_|{}).unwrap();assert_eq!(result.outcome,Outcome::GoalCompleted);assert!(result.progress.criteria_verified&&result.progress.goal_complete);assert_eq!(result.progress.verification.as_ref().unwrap().results.iter().map(|r|r.status).collect::<Vec<_>>(),vec![Status::Met,Status::Met]);
@@ -125,6 +147,40 @@ fn completion_references_are_exact_and_invalid_attempts_do_not_consume_or_replac
     let(f,a,g,_p,o,_)=setup();let bus=Bus::new();let player=Player::new(&bus,"Private criteria player");let(approved,ready)=typed(&o,&g,&bus,&bindings());register(&a,&g,&o,&approved,&ready);
     assert!(o.run_recipe(&g,&ready,||Ok(config()),|_|{}).unwrap().progress.criteria_verified);let before=fs::read(verification_path(&f,&ready)).unwrap();let input=completion_input(&g,&ready);
     let data=json!({"petId":input.pet_id,"goalId":input.goal_id,"decisionId":input.decision_id,"planId":input.plan_id,"recipeId":input.recipe_id,"revision":input.revision});
-    for key in ["petId","goalId","decisionId","planId","recipeId","revision"]{let mut forged=data.clone();forged[key]=json!("foreign");let wrong:RecipeCompleteInput=serde_json::from_value(forged).unwrap();assert!(complete_for_goal(&f.store(),&a,&g,&wrong,|current|o.completion_current(current,crate::assistant_memory::now())).is_err());assert_eq!(f.store().read(&g.id,&g.spec.owner.pet_id).unwrap().state,State::Leased);assert_eq!(fs::read(verification_path(&f,&ready)).unwrap(),before);}
-    let completed=o.with_completion_lock(||complete_for_goal(&f.store(),&a,&g,&input,|current|o.completion_current(current,crate::assistant_memory::now()))).unwrap();assert_eq!(completed.record.state,State::Completed);assert_eq!(player.calls.lock().unwrap().len(),2);assert_eq!(fs::read(verification_path(&f,&ready)).unwrap(),before);
+    for key in ["petId","goalId","decisionId","planId","recipeId","revision"]{let mut forged=data.clone();forged[key]=json!("foreign");let wrong:RecipeCompleteInput=serde_json::from_value(forged).unwrap();assert!(complete_for_goal(&f.store(),&a,&g,&wrong,|current|o.completion_authority(current,crate::assistant_memory::now())).is_err());assert_eq!(f.store().read(&g.id,&g.spec.owner.pet_id).unwrap().state,State::Leased);assert_eq!(fs::read(verification_path(&f,&ready)).unwrap(),before);}
+    let completed=o.with_completion_lock(||complete_for_goal(&f.store(),&a,&g,&input,|current|o.completion_authority(current,crate::assistant_memory::now()))).unwrap();assert_eq!(completed.record.state,State::Completed);assert_eq!(player.calls.lock().unwrap().len(),2);assert_eq!(fs::read(verification_path(&f,&ready)).unwrap(),before);
+}
+
+#[test]
+fn transient_completion_catalogue_locks_retain_original_proof_and_never_repeat_native_effects(){
+    use std::os::fd::AsRawFd;
+    for authority_writer in [false,true]{
+        let(f,a,g,_p,o,_)=setup();let bus=Bus::new();let player=Player::new(&bus,"Bounded completion reader contention");let(approved,ready)=typed(&o,&g,&bus,&bindings());register(&a,&g,&o,&approved,&ready);let mut release=None;
+        let result=o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|p|if p.criteria_verified&&release.is_none(){
+            let path=if authority_writer{crate::pet_runtime::authority_tests::root(&f)}else{f.path.join("goals")};let file=fs::OpenOptions::new().read(true).write(true).open(path.join(".catalog.lock")).unwrap();let mode=if authority_writer{libc::LOCK_EX}else{libc::LOCK_SH};assert_eq!(unsafe{libc::flock(file.as_raw_fd(),mode|libc::LOCK_NB)},0);
+            release=Some(std::thread::spawn(move||{std::thread::sleep(Duration::from_millis(120));drop(file);}));
+        }).unwrap();release.unwrap().join().unwrap();assert_eq!(result.outcome,Outcome::GoalCompleted);assert_eq!(player.calls.lock().unwrap().len(),2);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);assert_eq!(f.store().read(&g.id,&g.spec.owner.pet_id).unwrap().sequence,g.sequence+1);
+    }
+}
+#[test]
+fn unknown_commit_currentness_waits_for_known_policy_without_new_effects_or_authority(){
+    let unknown=Arc::new(AtomicBool::new(false));let check=unknown.clone();let(f,a,g,_p,o,_)=setup_plan_criteria(sequence(),2,Arc::new(move|_,_,mode|if matches!(mode,Validation::Commit(_))&&check.load(Ordering::Acquire){Validity::Unknown}else{Validity::Current}),vec!["Paused".into(),"Volume17".into()]);let bus=Bus::new();let player=Player::new(&bus,"Unknown completion policy");let(approved,ready)=typed(&o,&g,&bus,&bindings());register(&a,&g,&o,&approved,&ready);let mut release=None;
+    let result=o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|p|if p.criteria_verified&&release.is_none(){unknown.store(true,Ordering::Release);let flag=unknown.clone();release=Some(std::thread::spawn(move||{std::thread::sleep(Duration::from_millis(120));flag.store(false,Ordering::Release);}));}).unwrap();release.unwrap().join().unwrap();assert_eq!(result.outcome,Outcome::GoalCompleted);assert_eq!(player.calls.lock().unwrap().len(),2);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);
+}
+#[test]
+fn stop_takes_the_live_gate_during_completion_lock_wait_and_prevents_success(){
+    use std::os::fd::AsRawFd;
+    let(f,a,g,_p,o,_)=setup();let bus=Bus::new();let player=Player::new(&bus,"Stop during native completion wait");let(approved,ready)=typed(&o,&g,&bus,&bindings());register(&a,&g,&o,&approved,&ready);let mut stopper=None;let lease=o.lease().clone();let live=o.live.clone();let acquired=Arc::new(AtomicBool::new(false));
+    let result=o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|p|if p.criteria_verified&&stopper.is_none(){
+        let file=fs::OpenOptions::new().read(true).write(true).open(f.path.join("goals/.catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(file.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);let lease=lease.clone();let live=live.clone();let flag=acquired.clone();
+        stopper=Some(std::thread::spawn(move||{std::thread::sleep(Duration::from_millis(30));let until=Instant::now()+Duration::from_millis(500);loop{if let Ok(gate)=live.gate.try_lock(){flag.store(true,Ordering::Release);drop(gate);break;}assert!(Instant::now()<until,"Stop must not wait behind the completion retry loop");std::thread::sleep(Duration::from_millis(2));}crate::pet_runtime::lease_controller::signal_stop(&lease);drop(file);}));
+    });stopper.unwrap().join().unwrap();assert_eq!(result.err(),Some(model::Error::Conflict));assert!(acquired.load(Ordering::Acquire));assert_eq!(f.store().read(&g.id,&g.spec.owner.pet_id).unwrap().state,State::Leased);assert!(!o.current(crate::assistant_memory::now()));assert_eq!(player.calls.lock().unwrap().len(),2);
+}
+#[test]
+fn persistent_completion_busy_is_bounded_and_explicit_retry_reuses_the_original_evidence(){
+    use std::os::fd::AsRawFd;
+    let(f,a,g,_p,o,_)=setup();let bus=Bus::new();let player=Player::new(&bus,"Persistent completion reader");let(approved,ready)=typed(&o,&g,&bus,&bindings());register(&a,&g,&o,&approved,&ready);let mut hold=None;let start=Instant::now();
+    let result=o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|p|if p.criteria_verified&&hold.is_none(){let file=fs::OpenOptions::new().read(true).write(true).open(f.path.join("goals/.catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(file.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);hold=Some(file);});
+    assert_eq!(result.err(),Some(model::Error::Busy));assert!(start.elapsed()>=Duration::from_millis(900));assert!(start.elapsed()<Duration::from_secs(5));drop(hold);let original=progress(&a,&g).verification.unwrap().reference;assert_eq!(f.store().read(&g.id,&g.spec.owner.pet_id).unwrap().state,State::Leased);assert_eq!(player.calls.lock().unwrap().len(),2);
+    let result=o.run_recipe_for_store(&f.store(),&g,&ready,||panic!("completion retry must not dispatch native operations"),|_|{}).unwrap();assert_eq!(result.outcome,Outcome::GoalCompleted);assert_eq!(f.store().read(&g.id,&g.spec.owner.pet_id).unwrap().completion,Some(original));assert_eq!(player.calls.lock().unwrap().len(),2);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);
 }

@@ -7,12 +7,12 @@ pub fn run(permit:RunPermit,budget:&mut TurnOutputBudget,cancel:&Arc<AtomicBool>
  if cancel.load(Ordering::Acquire){receipt.finish(ReceiptState::Cancelled,Some(ReceiptCause::UserCancel));return ProcessResult{receipt,stdout:vec![],stderr:vec![]};}
  if Instant::now()>=deadline{receipt.finish(ReceiptState::TimedOut,Some(ReceiptCause::TaskDeadline));return ProcessResult{receipt,stdout:vec![],stderr:vec![]};}
  if !budget.can_run(){receipt.finish(ReceiptState::OutputLimit,Some(ReceiptCause::OutputBudget));return ProcessResult{receipt,stdout:vec![],stderr:vec![]};}
- #[cfg(target_os="linux")]{linux(permit,budget,cancel,deadline,receipt,on_uncertain)}
+ #[cfg(target_os="linux")]{linux(permit,budget,cancel,deadline,receipt,on_uncertain,||crate::settings::effect_allowed().is_ok())}
  #[cfg(not(target_os="linux"))]{let _=(permit,on_uncertain);receipt.finish(ReceiptState::FailedToStart,Some(ReceiptCause::SpawnError));ProcessResult{receipt,stdout:vec![],stderr:vec![]}}
 }
 
 #[cfg(target_os="linux")]
-fn linux(permit:RunPermit,budget:&mut TurnOutputBudget,cancel:&Arc<AtomicBool>,deadline:Instant,mut receipt:StepReceipt,mut on_uncertain:impl FnMut(&StepReceipt))->ProcessResult{
+fn linux(permit:RunPermit,budget:&mut TurnOutputBudget,cancel:&Arc<AtomicBool>,deadline:Instant,mut receipt:StepReceipt,mut on_uncertain:impl FnMut(&StepReceipt),before_spawn:impl FnOnce()->bool)->ProcessResult{
  use std::{io::Read,os::{fd::AsRawFd,unix::process::{CommandExt,ExitStatusExt}},process::{Command,Stdio}};
  let spec=permit.spec;
  if super::approval::stamp(&spec.executable).ok().as_ref()!=Some(&spec.executable_stamp){receipt.finish(ReceiptState::FailedToStart,Some(ReceiptCause::SpawnError));return ProcessResult{receipt,stdout:vec![],stderr:vec![]};}
@@ -24,25 +24,10 @@ fn linux(permit:RunPermit,budget:&mut TurnOutputBudget,cancel:&Arc<AtomicBool>,d
  unsafe{command.pre_exec(move||{if libc::setpgid(0,0)!=0{return Err(std::io::Error::last_os_error());}if libc::fchdir(fd)!=0{return Err(std::io::Error::last_os_error());}Ok(())});}
  let cancelled=cancel.load(Ordering::Acquire);
  if cancelled||Instant::now()>=deadline{receipt.finish(if cancelled{ReceiptState::Cancelled}else{ReceiptState::TimedOut},Some(if cancelled{ReceiptCause::UserCancel}else{ReceiptCause::TaskDeadline}));return ProcessResult{receipt,stdout:vec![],stderr:vec![]};}
- struct OwnedChild{child:std::process::Child,reaped:bool}
- impl Drop for OwnedChild{
-  fn drop(&mut self){
-   if self.reaped{return;}
-   let pid=self.child.id() as libc::pid_t;let mut info:libc::siginfo_t=unsafe{std::mem::zeroed()};
-   // Also retain ownership during an unwinding panic. A dropped std Child on
-   // its own would leave a real command running after Chat released its lease.
-   loop{
-    let result=unsafe{libc::waitid(libc::P_PID,pid as libc::id_t,&mut info,libc::WEXITED|libc::WNOHANG|libc::WNOWAIT)};
-    if result==0{unsafe{libc::kill(-pid,libc::SIGKILL);}loop{match self.child.wait(){Ok(_)=>break,Err(e) if e.raw_os_error()==Some(libc::ECHILD)=>break,Err(_)=>std::thread::sleep(Duration::from_millis(10))}}break;}
-    let error=std::io::Error::last_os_error();
-    if error.raw_os_error()==Some(libc::ECHILD){break;}
-    std::thread::sleep(Duration::from_millis(10));
-   }
-  }
- }
- let mut owned=match command.spawn(){Ok(child)=>OwnedChild{child,reaped:false},Err(_)=>{receipt.finish(ReceiptState::FailedToStart,Some(ReceiptCause::SpawnError));return ProcessResult{receipt,stdout:vec![],stderr:vec![]};}};
+ use crate::pet_process_group::OwnedChild;
+ if !before_spawn(){receipt.finish(ReceiptState::FailedToStart,Some(ReceiptCause::SpawnError));return ProcessResult{receipt,stdout:vec![],stderr:vec![]};}
+ let mut owned=match command.spawn(){Ok(child)=>OwnedChild::new(child),Err(_)=>{receipt.finish(ReceiptState::FailedToStart,Some(ReceiptCause::SpawnError));return ProcessResult{receipt,stdout:vec![],stderr:vec![]};}};
  receipt.state=ReceiptState::Starting;receipt.started_at=Some(now());
- let pid=owned.child.id() as libc::pid_t;
  let command_deadline=Instant::now()+Duration::from_millis(spec.timeout_ms);
  let mut stdout=owned.child.stdout.take();let mut stderr=owned.child.stderr.take();
  let mut output=Vec::new();let mut errors=Vec::new();
@@ -54,21 +39,19 @@ fn linux(permit:RunPermit,budget:&mut TurnOutputBudget,cancel:&Arc<AtomicBool>,d
   // Task deadline wins only when both are first observed expired together.
   // Preserve this cause throughout later cleanup, even across another deadline.
   if trigger.is_none(){trigger=if cancel.load(Ordering::Acquire){Some(ReceiptCause::UserCancel)}else if instant>=deadline{Some(ReceiptCause::TaskDeadline)}else if instant>=command_deadline{Some(ReceiptCause::CommandDeadline)}else{None};}
-  let mut info:libc::siginfo_t=unsafe{std::mem::zeroed()};
-  // WNOWAIT keeps the leader unreaped while its group is signalled: its PID
-  // cannot be reused as a different process group in that interval.
-  let wait=unsafe{libc::waitid(libc::P_PID,pid as libc::id_t,&mut info,libc::WEXITED|libc::WNOHANG|libc::WNOWAIT)};
-  let exited=wait==0&&unsafe{info.si_pid()}==pid;
+  let observation=owned.exited();
+  let wait=if observation.is_ok(){0}else{-1};
+  let exited=observation.unwrap_or(false);
   if exited&&exited_at.is_none(){exited_at=Some(instant);}
   if trigger.is_none()&&exited_at.is_some_and(|at|instant.duration_since(at)>=Duration::from_millis(250))&&(stdout.is_some()||stderr.is_some()){trigger=Some(ReceiptCause::ProcessExit);}
   if trigger.is_some()&&stopping.is_none(){
    stopping=Some(instant);
-   if wait==0{unsafe{libc::kill(-pid,libc::SIGTERM);}}
+   if wait==0{let _=owned.signal(libc::SIGTERM);}
   }
   if let Some(at)=stopping{
    if !kill_sent&&instant.duration_since(at)>=Duration::from_millis(250){
     // Still not reaped here. Never signal by a PID recovered from disk.
-    if wait==0{unsafe{libc::kill(-pid,libc::SIGKILL);}}kill_sent=true;
+    if wait==0{let _=owned.signal(libc::SIGKILL);}kill_sent=true;
    }
    if !reported&&instant.duration_since(at)>=Duration::from_secs(2){
     let mut uncertain=receipt.clone();uncertain.state=ReceiptState::Unknown;uncertain.cause=Some(ReceiptCause::CleanupUnconfirmed);uncertain.trigger=trigger;uncertain.stdout_bytes=output.len() as u64;uncertain.stderr_bytes=errors.len() as u64;
@@ -90,13 +73,13 @@ fn linux(permit:RunPermit,budget:&mut TurnOutputBudget,cancel:&Arc<AtomicBool>,d
   if exited&&stdout.is_none()&&stderr.is_none(){
    // Signal cleanup before reaping the leader; a terminated leader may still
    // have group children even when they closed their inherited output pipes.
-   unsafe{libc::kill(-pid,libc::SIGKILL);}
-   match owned.child.wait(){
-    Ok(status)=>{
-     owned.reaped=true;receipt.exit_code=status.code();receipt.signal=status.signal();
+   let _=owned.signal(libc::SIGKILL);
+   match owned.finish_ready(){
+    Ok(Some(status))=>{
+     receipt.exit_code=status.code();receipt.signal=status.signal();
      let (state,cause)=match trigger{Some(ReceiptCause::UserCancel)=>(ReceiptState::Cancelled,trigger),Some(ReceiptCause::TaskDeadline|ReceiptCause::CommandDeadline)=>(ReceiptState::TimedOut,trigger),Some(ReceiptCause::OutputBudget)=>(ReceiptState::OutputLimit,trigger),Some(ReceiptCause::SpawnError)=>(ReceiptState::Unknown,trigger),_=>(ReceiptState::Exited,None)};
      receipt.finish(state,cause);receipt.trigger=trigger;break;
-    },Err(_)=>{if !reported{let mut r=receipt.clone();r.state=ReceiptState::Unknown;r.cause=Some(ReceiptCause::CleanupUnconfirmed);r.trigger=trigger;on_uncertain(&r);reported=true;}}
+    },Ok(None)=>{if stopping.is_none(){stopping=Some(instant);trigger.get_or_insert(ReceiptCause::ProcessExit);}},Err(_)=>{if !reported{let mut r=receipt.clone();r.state=ReceiptState::Unknown;r.cause=Some(ReceiptCause::CleanupUnconfirmed);r.trigger=trigger;on_uncertain(&r);reported=true;}}
    }
   }
   // Cleanup that cannot be confirmed retains Child, the worker and Chat lease.
@@ -120,4 +103,12 @@ fn linux(permit:RunPermit,budget:&mut TurnOutputBudget,cancel:&Arc<AtomicBool>,d
  #[test]fn already_cancelled_permit_never_spawns(){let mut b=TurnOutputBudget::new(1024);let r=execute(permit("/bin/true",&[],1000,&std::env::temp_dir()),&mut b,Arc::new(AtomicBool::new(true)));assert_eq!(r.receipt.state,ReceiptState::Cancelled);assert!(r.receipt.started_at.is_none());}
  #[test]fn output_cap_during_cancel_cleanup_closes_capture_without_changing_cause(){let cancel=Arc::new(AtomicBool::new(false));let flag=cancel.clone();let stop=std::thread::spawn(move||{std::thread::sleep(Duration::from_millis(100));flag.store(true,Ordering::Release);});let mut b=TurnOutputBudget::new(12);let r=execute(permit("/bin/sh",&["-c","trap 'printf 123456789012' TERM; while :; do sleep 0.01; done"],1000,&std::env::temp_dir()),&mut b,cancel);stop.join().unwrap();assert_eq!(r.receipt.state,ReceiptState::Cancelled);assert_eq!(r.receipt.cause,Some(ReceiptCause::UserCancel));assert_eq!(r.stdout.len()+r.stderr.len(),12);assert!(r.receipt.truncated);}
  #[test]fn cwd_handle_survives_path_replacement(){let base=std::env::temp_dir().join(format!("coucou-cwd-{}-{}",std::process::id(),now()));std::fs::create_dir_all(base.join("original")).unwrap();let p=permit("/bin/pwd",&[],1000,&base.join("original"));std::fs::rename(base.join("original"),base.join("sealed")).unwrap();std::fs::create_dir(base.join("original")).unwrap();let mut b=TurnOutputBudget::new(1024);let r=execute(p,&mut b,Arc::default());assert!(String::from_utf8_lossy(&r.stdout).contains("/sealed"));std::fs::remove_dir_all(base).unwrap();}
+ #[test]fn final_dispatch_local_io_failure_refuses_spawn_without_output_budget_or_false_started_receipt(){
+  let io=crate::settings::EffectFixture::new();let p=permit("/bin/sh",&["-c","printf started > child-marker"],1000,&io.root);let mut budget=TurnOutputBudget::new(1024);io.external();let result=linux(p,&mut budget,&Arc::default(),Instant::now()+Duration::from_secs(2),StepReceipt::proposed(1),|_|panic!("no uncertain child"),||io.probe.check().is_ok());
+  assert_eq!(result.receipt.state,ReceiptState::FailedToStart);assert_eq!(result.receipt.cause,Some(ReceiptCause::SpawnError));assert!(result.receipt.started_at.is_none());assert!(!io.root.join("child-marker").exists());assert_eq!(budget.raw_remaining,1024);assert!(result.stdout.is_empty()&&result.stderr.is_empty());
+ }
+ #[test]fn final_dispatch_local_result_is_preserved_if_io_changes_after_real_child_started(){
+  let io=crate::settings::EffectFixture::new();let p=permit("/bin/sh",&["-c","printf observed > child-marker; printf changed > settings.json; printf result"],1000,&io.root);let mut budget=TurnOutputBudget::new(1024);let result=linux(p,&mut budget,&Arc::default(),Instant::now()+Duration::from_secs(2),StepReceipt::proposed(1),|_|{},||io.probe.check().is_ok());
+  assert_eq!(result.receipt.state,ReceiptState::Exited);assert!(result.receipt.started_at.is_some());assert_eq!(result.receipt.exit_code,Some(0));assert_eq!(result.stdout,b"result");assert_eq!(std::fs::read(io.root.join("child-marker")).unwrap(),b"observed");assert!(io.probe.check().is_err());
+ }
 }

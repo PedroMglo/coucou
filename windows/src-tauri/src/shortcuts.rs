@@ -129,6 +129,8 @@ pub fn effective(def: &ActionDef, stored: &Bindings) -> Binding {
 pub enum Status {
     /// Registered and listening.
     Active,
+    /// Desired binding preserved; preferences have no confirmed provenance.
+    PreferencesUnconfirmed,
     /// Turned off, or no key.
     Off,
     /// Another app already holds this combination.
@@ -194,12 +196,35 @@ pub struct Report {
 /// What is registered right now: hot-key id → action id, plus the last report.
 #[derive(Default)]
 pub struct Registry {
-    by_id: Mutex<HashMap<u32, &'static str>>,
+    by_id: Mutex<HashMap<u32, Registered>>,
+    physical: Mutex<()>,
     report: Mutex<Vec<ActionStatus>>,
     portal: Mutex<Option<PortalState>>,
+    revision: std::sync::atomic::AtomicU64,
+    instance: std::sync::OnceLock<String>,
+    #[cfg(target_os="linux")]closed:Mutex<Option<review::Closed>>,
     #[cfg(target_os = "linux")]
     wayland: Mutex<wayland::Link>,
 }
+#[derive(Clone)]
+struct Registered { action: &'static str, shortcut: Shortcut, published: bool }
+impl Registry {
+    fn invalidate_review(&self) {
+        use std::sync::atomic::Ordering;
+        let mut previous=self.revision.load(Ordering::Acquire);
+        loop{let next=previous.saturating_add(1);match self.revision.compare_exchange_weak(previous,next,Ordering::AcqRel,Ordering::Acquire){Ok(_)=>break,Err(actual)=>previous=actual}}
+    }
+}
+
+#[cfg(target_os="linux")]
+#[path="shortcuts_review.rs"]
+pub(crate) mod review;
+#[cfg(target_os="linux")]
+#[path="shortcuts_settings.rs"]
+pub(crate) mod preferences;
+#[cfg(not(target_os="linux"))]
+#[path="shortcuts_review_unsupported.rs"]
+pub(crate) mod review;
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
 
@@ -311,7 +336,7 @@ pub fn plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
                 return;
             }
             let Some(registry) = app.try_state::<Registry>() else { return };
-            let action = registry.by_id.lock().unwrap().get(&shortcut.id()).copied();
+            let action = registry.by_id.lock().unwrap().get(&shortcut.id()).filter(|entry|entry.published).map(|entry|entry.action);
             if let Some(action) = action {
                 dispatch(app, action);
             }
@@ -329,25 +354,54 @@ pub fn dispatch<R: Runtime>(app: &AppHandle<R>, action: &str) {
     }
 }
 
-/// Unregisters everything Coucou holds.
-fn release<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(gs) = app.try_state::<GlobalShortcut<R>>() {
-        if let Err(err) = gs.unregister_all() {
-            crate::log::line(format!("shortcuts: unregister failed: {err}"));
-        }
+/// Release exactly our typed keys without holding either registry mutex during
+/// native IO. In plugin 2.4 unregister_all holds its callback mutex while the
+/// X11 worker can be delivering a key event; unregister(key) avoids that cycle.
+struct ReleaseResult { started:bool, complete:bool }
+fn owned_keys(registry:&Registry)->Vec<(u32,Shortcut)>{let mut keys:Vec<_>=registry.by_id.lock().unwrap().iter().map(|(id,r)|(*id,r.shortcut)).collect();keys.sort_by_key(|(id,_)|*id);keys}
+fn release_owned(registry:&Registry,keys:&[(u32,Shortcut)],allowed:impl Fn()->bool,mut unregister:impl FnMut(Shortcut)->bool)->ReleaseResult{
+    let mut started=false;
+    for(id,key)in keys{
+        if !allowed(){return ReleaseResult{started,complete:false};}
+        if let Some(entry)=registry.by_id.lock().unwrap().get_mut(id){entry.published=false;}
+        started=true;
+        if !unregister(*key){return ReleaseResult{started,complete:false};}
+        registry.by_id.lock().unwrap().remove(id);
     }
-    if let Some(registry) = app.try_state::<Registry>() {
-        registry.by_id.lock().unwrap().clear();
-    }
+    ReleaseResult{started,complete:true}
+}
+fn release<R:Runtime>(app:&AppHandle<R>)->bool{
+    let Some(registry)=app.try_state::<Registry>()else{return true};registry.invalidate_review();
+    for entry in registry.by_id.lock().unwrap().values_mut(){entry.published=false;}
+    let keys=owned_keys(&registry);let Some(gs)=app.try_state::<GlobalShortcut<R>>()else{return keys.is_empty()};
+    release_owned(&registry,&keys,||true,|key|match gs.unregister(key){Ok(())=>true,Err(error)=>{crate::log::line(format!("shortcuts: release unconfirmed: {error}"));false}}).complete
 }
 
 /// Registers the shortcuts in `stored` in place of the current ones, and
 /// tells the settings window how each one went. Never fails: a shortcut that
 /// can't be had is reported, not fatal.
 pub fn apply<R: Runtime>(app: &AppHandle<R>, stored: &Bindings) {
-    release(app);
+    let Some(registry)=app.try_state::<Registry>()else{return};
+    let Ok(_physical)=registry.physical.try_lock()else{return};
     let blocked = crate::platform::global_shortcuts_blocked();
     let plan = plan(stored, typed_character);
+    if crate::settings::optional::check(crate::settings::optional::Operation::Shortcuts).is_err() {
+        if let Some(registry) = app.try_state::<Registry>() {
+            let mut report=registry.report.lock().unwrap();
+            // A failed admission is not a request to release existing keys or
+            // hide working decision navigation. Only initialize an empty view.
+            if report.is_empty(){*report = plan.iter().map(|(def,outcome)| match outcome {
+                Err(status)=>status.clone(),
+                Ok(_)=>ActionStatus{id:def.id,status:Status::PreferencesUnconfirmed,typed:None,trigger:None},
+            }).collect();}
+        }
+        let _ = app.emit("shortcuts-status", status(app));
+        return;
+    }
+    if !release(app){
+        for action in registry.report.lock().unwrap().iter_mut(){if matches!(action.status,Status::Active|Status::Pending){action.status=Status::PreferencesUnconfirmed;action.trigger=None;}}
+        let _=app.emit("shortcuts-status",status(app));return;
+    }
     // Wayland: to the desktop's portal when there is one. Without one, as
     // below: every shortcut unsupported, and Settings shows the commands to
     // bind by hand.
@@ -371,7 +425,7 @@ pub fn apply<R: Runtime>(app: &AppHandle<R>, stored: &Bindings) {
                 let result = gs.as_ref().map(|gs| gs.register(shortcut));
                 let status = match result {
                     Some(Ok(())) => {
-                        by_id.insert(shortcut.id(), def.id);
+                        by_id.insert(shortcut.id(), Registered{action:def.id,shortcut,published:true});
                         Status::Active
                     }
                     Some(Err(err)) => {
@@ -397,10 +451,36 @@ pub fn apply<R: Runtime>(app: &AppHandle<R>, stored: &Bindings) {
 /// Lets go of every shortcut while a new one is being recorded in Settings,
 /// so pressing a combination Coucou already holds records it instead of
 /// running it.
-pub fn suspend<R: Runtime>(app: &AppHandle<R>) {
-    release(app);
+pub fn revoke<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(target_os="linux")]review::stop();
+    if let Some(registry)=app.try_state::<Registry>(){
+        registry.invalidate_review();
+        for entry in registry.by_id.lock().unwrap().values_mut(){entry.published=false;}
+        for action in registry.report.lock().unwrap().iter_mut(){if matches!(action.status,Status::Active|Status::Pending|Status::Refused){action.status=Status::PreferencesUnconfirmed;action.trigger=None;}}
+        *registry.portal.lock().unwrap()=None;
+    }
+    let _=app.emit("shortcuts-status",status(app));
+}
+/// The command revokes synchronously, then runs only physical cleanup on a
+/// blocking worker. Never block the UI while a native callback needs it.
+pub fn finish_suspend<R:Runtime>(app:&AppHandle<R>){
+    let Some(registry)=app.try_state::<Registry>()else{return};
+    let Ok(_physical)=registry.physical.try_lock()else{
+        // Revocation above is immediate; the owning worker keeps the physical
+        // gate until IO/cleanup returns. Never run another registrar alongside it.
+        return;
+    };
+    #[cfg(target_os="linux")]let candidate=review::reconciliation::closed_candidate(app);
+    let complete=release(app);
+    #[cfg(target_os="linux")]if let Some(mut candidate)=candidate{candidate.complete=complete;*registry.closed.lock().unwrap()=Some(candidate);}
+    #[cfg(not(target_os="linux"))]let _=complete;
     #[cfg(target_os = "linux")]
     wayland::release(app);
+    if let Some(registry)=app.try_state::<Registry>(){
+        for action in registry.report.lock().unwrap().iter_mut(){if matches!(action.status,Status::Active|Status::Pending|Status::Refused){action.status=Status::PreferencesUnconfirmed;action.trigger=None;}}
+        *registry.portal.lock().unwrap()=None;
+    }
+    let _=app.emit("shortcuts-status",status(app));
 }
 
 pub fn status<R: Runtime>(app: &AppHandle<R>) -> Report {
@@ -457,6 +537,33 @@ mod wayland {
         /// No portal (or no session bus): today's commands instead, for the
         /// rest of the run.
         Gone,
+    }
+
+    /// Explicit human observation can resolve a new read-only portal peer
+    /// after the previous actor ended. Never a bind or automatic fallback.
+    pub(super)fn refresh_observer<R:Runtime>(app:&AppHandle<R>){
+        let Some(registry)=app.try_state::<Registry>()else{return};let mut link=registry.wayland.lock().unwrap();
+        if matches!(*link,Link::Gone){let events=app.clone();*link=match portal::start(move|event|on_event(&events,event)){Some(handle)=>Link::Running{handle,gen:0},None=>Link::Gone};registry.invalidate_review();}
+    }
+    /// Reserve paths on the existing worker without changing its bindings or
+    /// projecting Pending/Active. Never wait while holding the callback mutex.
+    pub(super) fn reserve<R: Runtime>(app: &AppHandle<R>, stored: &Bindings) -> Result<portal::Reservation, String> {
+        let registry=app.try_state::<Registry>().ok_or("shortcuts registry unavailable")?;
+        let (current, reply)={
+            let mut link=registry.wayland.lock().map_err(|_|"shortcuts unavailable")?;
+            if matches!(*link, Link::NotStarted) {
+                let events=app.clone();
+                *link=match portal::start(move |event| on_event(&events,event)){Some(handle)=>Link::Running{handle,gen:0},None=>Link::Gone};
+            }
+            let Link::Running{handle,gen}=&*link else{return Err("GlobalShortcuts unavailable; no fallback was selected".into())};
+            let next=gen.checked_add(1).ok_or("shortcut generation exhausted")?;
+            let wanted=plan(stored,typed_character).into_iter().filter(|(_,result)|result.is_ok()).map(|(def,_)|Wanted{id:def.id.into(),description:crate::i18n::t(description(def.id)),trigger:portal::xdg_trigger(&effective(def,stored).keys)}).collect();
+            (*gen,handle.reserve(next,wanted).ok_or("GlobalShortcuts worker stopped")?)
+        };
+        let reservation=reply.recv_timeout(std::time::Duration::from_secs(30)).map_err(|_|"Native shortcut preparation did not answer; no binding was requested")??;
+        let link=registry.wayland.lock().map_err(|_|"shortcuts unavailable")?;
+        if !matches!(&*link,Link::Running{gen,..}if *gen==current){return Err("Native shortcuts changed during preparation".into());}
+        Ok(reservation)
     }
 
     /// Hands the planned shortcuts to the desktop. False when there is no
@@ -520,13 +627,22 @@ mod wayland {
         }
     }
 
+    /// Keep the native generation fence through publication. A release/rebind
+    /// either wins before this check, or follows this accepted UI event. This
+    /// is navigation/input provenance, not permission for the final executor.
+    fn forward_activation(link: &Mutex<Link>, report: &Mutex<Vec<ActionStatus>>, gen: u64, id: &str, publish: impl FnOnce(&str)) -> bool {
+        let owner = link.lock().unwrap();
+        if !matches!(&*owner, Link::Running { gen: current, .. } if *current == gen) || find(id).is_none_or(|def| !def.ported) { return false; }
+        if !report.lock().unwrap().iter().any(|status| status.id == id && status.status == Status::Active) { return false; }
+        publish(id);
+        true
+    }
+
     /// What the portal thread says. Runs on that thread.
     fn on_event<R: Runtime>(app: &AppHandle<R>, event: Event) {
         let Some(registry) = app.try_state::<Registry>() else { return };
-        if let Event::Activated(id) = &event {
-            if let Some(def) = find(id).filter(|d| d.ported) {
-                dispatch(app, def.id);
-            }
+        if let Event::Activated { gen, id } = &event {
+            forward_activation(&registry.wayland, &registry.report, *gen, id, |id| dispatch(app, id));
             return;
         }
         let mut link = registry.wayland.lock().unwrap();
@@ -539,17 +655,20 @@ mod wayland {
             let mut portal = registry.portal.lock().unwrap();
             match event {
                 Event::Bound { gen, shortcuts } if gen == current => {
+                    registry.invalidate_review();
                     crate::log::line("shortcuts: registered with the desktop portal");
                     mark_bound(&mut report, shortcuts.as_deref());
                     *portal = Some(PortalState::Active);
                 }
-                Event::Changed { gen, shortcuts } if gen == current => mark_changed(&mut report, &shortcuts),
+                Event::Changed { gen, shortcuts } if gen == current => { registry.invalidate_review(); mark_changed(&mut report, &shortcuts); },
                 Event::Failed { gen, reason } if gen == current => {
+                    registry.invalidate_review();
                     crate::log::line(format!("shortcuts: the desktop portal didn't take them: {reason}"));
                     mark_failed(&mut report);
                     *portal = None;
                 }
                 Event::Unavailable(reason) => {
+                    registry.invalidate_review();
                     crate::log::line(format!("shortcuts: no portal, commands instead ({reason})"));
                     *link = Link::Gone;
                     mark_failed(&mut report);
@@ -589,12 +708,7 @@ mod wayland {
 
     /// The user gave some shortcuts other keys in the desktop's settings.
     pub fn mark_changed(report: &mut [ActionStatus], shortcuts: &[Bound]) {
-        for st in report.iter_mut().filter(|st| handed_over(st.status)) {
-            if let Some(b) = shortcuts.iter().find(|b| b.id == st.id) {
-                st.status = Status::Active;
-                st.trigger = b.trigger.clone();
-            }
-        }
+        mark_bound(report,Some(shortcuts));
     }
 
     /// No portal after all: what a Wayland session showed before it.
@@ -673,6 +787,15 @@ mod wayland {
                 assert_eq!(s.trigger, None);
             }
             assert_eq!(of(&r, "openChat").status, Status::Unsupported);
+        }
+
+        #[test]fn activation_requires_current_generation_and_an_active_ported_action(){
+            let link=Mutex::new(Link::Running{handle:portal::Handle::fixture(),gen:2});let mut statuses=report();mark_bound(&mut statuses,Some(&[bound("openChat",None)]));let report=Mutex::new(statuses);let calls=std::cell::Cell::new(0);
+            for(gen,id)in[(1,"openChat"),(2,"muteToggle"),(2,"toggleIsland"),(2,"attachFrontWindow"),(2,"notAnAction")]{assert!(!forward_activation(&link,&report,gen,id,|_|panic!("stale/unowned action published")));}
+            assert!(forward_activation(&link,&report,2,"openChat",|_|{assert!(link.try_lock().is_err(),"release/rebind must not pass publication");calls.set(calls.get()+1);}));assert_eq!(calls.get(),1);
+        }
+        #[test]fn a_callback_queued_before_release_cannot_publish_in_the_next_generation(){
+            let link=std::sync::Arc::new(Mutex::new(Link::Running{handle:portal::Handle::fixture(),gen:1}));let mut statuses=report();mark_bound(&mut statuses,Some(&[bound("goToAlert",None)]));let report=std::sync::Arc::new(Mutex::new(statuses));let(mutator_tx,mutator_rx)=std::sync::mpsc::channel();let mut held=link.lock().unwrap();let target=link.clone();let states=report.clone();let callback=std::thread::spawn(move||{mutator_tx.send(()).unwrap();forward_activation(&target,&states,1,"goToAlert",|_|panic!("old callback crossed release"))});mutator_rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();if let Link::Running{gen,..}=&mut *held{*gen=2;}drop(held);assert!(!callback.join().unwrap());assert!(forward_activation(&link,&report,2,"goToAlert",|_|{}),"current decision navigation remains usable");
         }
 
         #[test]

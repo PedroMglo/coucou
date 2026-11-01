@@ -15,9 +15,11 @@ fn write(f:&Fixture,g:&Record) {std::fs::write(f.path.join("goals").join(format!
     assert!(generated_plans::content_matches(&actual,&actual.generated_plans[0],&e));assert!(super::plans::matches(&actual,&actual.admissions[0].spec));assert_eq!(actual.generated_plans[0].proposal_hash,super::plans::fingerprint(&actual).unwrap());
     assert_eq!(grant(&f,&g)["body"]["budgetUsage"],before);assert_eq!(grant(&f,&g)["body"]["planningUsage"]["rounds"][0]["publication"]["phase"],"acknowledged");
     let again=o.publish_generated_plan(&store,"plan-1",100_014).unwrap();assert!(again.acknowledged);assert_eq!(again.receipt.status,CommitStatus::Unchanged);assert_eq!(again.receipt.record.revision,actual.revision);assert_eq!(o.workers(),0);
-    // This boundary does not yet provide generated effect scopes. A stored
-    // canonical plan cannot bypass the existing native executor's scope guard.
-    assert!(o.step_goal(&actual,&crate::pet_config::defaults(),100_014).is_err());
+    // Acknowledged plan readiness is data, not human effect approval. The shared
+    // budget still contains just the original model call and no signed step.
+    o.step_goal(&actual,&crate::pet_config::defaults(),100_014).unwrap();
+    assert!(a.read_step(&actual.admissions[0].spec,actual.admissions[0].proof.as_ref().unwrap(),&actual.plans[0].id,&actual.plans[0].steps[0].id).unwrap().is_none());
+    assert_eq!(grant(&f,&g)["body"]["budgetUsage"]["attempts"].as_array().unwrap().len(),1);
     a.verify_generated_goal(&actual,false).unwrap();
 }
 #[test]fn publication_requires_the_original_opaque_gate_and_no_active_workers() {
@@ -80,4 +82,9 @@ fn write(f:&Fixture,g:&Record) {std::fs::write(f.path.join("goals").join(format!
     let stopped=super::authority_store::mutate_with_authority(&store,&root(&f),&g.id,"ai_ollama",&current.revision,"cancel-acknowledged".into(),model::Action::Cancel,100_014).unwrap();assert_eq!(stopped.record.state,State::Stopping);
     let drain=o.drain(DrainOutcome::Confirmed).unwrap();assert_eq!(store.drain_owned(&a,&drain,100_015).unwrap().record.state,State::Cancelled);
     assert!(o.abandon_unpublished_plan(&store,"plan-1",100_016).is_err());assert_eq!(grant(&f,&g)["body"]["planningUsage"]["rounds"][0]["publication"]["phase"],"acknowledged");
+}
+
+#[test]fn a_shared_native_reader_keeps_publication_busy_without_repeating_the_model_result(){
+    use std::{fs::OpenOptions,os::fd::AsRawFd};let(f,_a,g,_pending,owner,_output)=proposal();let store=native(&f);let reader=OpenOptions::new().read(true).write(true).open(root(&f).join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(reader.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);let before=super::reconciliation_tests::inventory(&f.path);
+    assert_eq!(owner.publish_generated_plan(&store,"plan-1",100_013).err(),Some(model::Error::Busy));assert_eq!(super::reconciliation_tests::inventory(&f.path),before);drop(reader);let receipt=owner.publish_generated_plan(&store,"plan-1",100_014).unwrap();assert!(receipt.acknowledged);assert_eq!(grant(&f,&g)["body"]["budgetUsage"]["attempts"].as_array().unwrap().len(),1);assert_eq!(receipt.receipt.record.generated_plans.len(),1);
 }

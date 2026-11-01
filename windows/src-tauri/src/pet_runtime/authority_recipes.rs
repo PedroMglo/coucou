@@ -7,14 +7,15 @@ pub(in crate::pet_runtime)use completion::Certified as CompletionCertified;
 const MAX_RECIPE:usize=256*1024;
 #[derive(Serialize,Deserialize)]#[serde(deny_unknown_fields)]
 struct Envelope{body:RecipeScope,tag:String}
-fn message(scope:&RecipeScope)->Result<Vec<u8>>{let mut bytes=match scope.schema_version{1=>b"coucou-native-goal-recipe-v1\0".to_vec(),2=>b"coucou-native-goal-recipe-v2\0".to_vec(),_=>return Err(Failure::Invalid)};bytes.extend(serde_json::to_vec(scope).map_err(|_|Failure::Invalid)?);Ok(bytes)}
+fn message(scope:&RecipeScope)->Result<Vec<u8>>{let mut bytes=match scope.schema_version{1=>b"coucou-native-goal-recipe-v1\0".to_vec(),2=>b"coucou-native-goal-recipe-v2\0".to_vec(),3=>b"coucou-native-generated-recipe-v1\0".to_vec(),_=>return Err(Failure::Invalid)};bytes.extend(serde_json::to_vec(scope).map_err(|_|Failure::Invalid)?);Ok(bytes)}
 impl Authority{
-    fn recipe_load(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str)->Result<Option<RecipeScope>>{
+    pub(in crate::pet_runtime)fn recipe_load(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str)->Result<Option<RecipeScope>>{
         let main=self.load(spec,proof)?;let lease=main.lease.as_ref().ok_or(Failure::Missing)?;
         let Some(dir)=self.step_directory(false)?else{return Ok(None);};let slot=recipe_model::slot(&spec.decision_id,plan).map_err(|_|Failure::Invalid)?;
         let Some((raw,_))=dir.bytes(&format!("{slot}.recipe.json"),MAX_RECIPE).map_err(|_|Failure::Unsafe)?else{return Ok(None);};
         let e:Envelope=serde_json::from_slice(&raw).map_err(|_|Failure::Invalid)?;
         if !e.body.belongs(spec,lease)||e.body.plan_id!=plan{return Err(Failure::Invalid);}
+        if let Some(reference)=&e.body.generated_plan{Self::generated_acknowledged(&main,spec,reference)?;}
         hmac::verify(&self.key,&message(&e.body)?,&decode(&e.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;self.fence()?;Ok(Some(e.body))
     }
     fn recipe_stabilize(&self,scope:&RecipeScope)->Result<()>{
@@ -24,7 +25,7 @@ impl Authority{
         if e.body!=*scope{return Err(Failure::Changed);}hmac::verify(&self.key,&message(&e.body)?,&decode(&e.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;self.fence()
     }
     pub(in crate::pet_runtime)fn recipe_headroom(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,calls:usize,output:u64,now:u64)->Result<()>{
-        let _lock=self.lock()?;let main=self.budget_body(spec,proof,lease,now,true)?;Self::recipe_budget(&main,spec,calls,output)
+        let _lock=self.lock_shared()?;let main=self.budget_body(spec,proof,lease,now,true)?;Self::recipe_budget(&main,spec,calls,output)
     }
     fn recipe_budget(main:&Grant,spec:&AdmissionSpec,calls:usize,output:u64)->Result<()>{
         if spec.budget.max_tokens.is_some()||spec.budget.max_cost_micros.is_some(){return Err(Failure::Invalid);}
@@ -35,6 +36,7 @@ impl Authority{
     pub(in crate::pet_runtime)fn issue_recipe(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,approved:&Approved,now:u64)->Result<RecipeScope>{
         let scope=approved.scope();if !scope.belongs(spec,lease)||now<scope.approved_at||now>=scope.deadline_at{return Err(Failure::Invalid);}
         let _lock=self.lock()?;let main=self.budget_body(spec,proof,lease,now,true)?;
+        if let Some(reference)=&scope.generated_plan{Self::generated_acknowledged(&main,spec,reference)?;}
         if let Some(old)=self.recipe_load(spec,proof,&scope.plan_id)?{if old!=*scope{return Err(Failure::RecoveryRequired);}self.recipe_stabilize(&old)?;return Ok(old);}
         Self::recipe_budget(&main,spec,scope.steps.len(),scope.steps.iter().map(|s|s.max_output_bytes).sum())?;
         for step in &scope.steps{if self.step_load(spec,proof,&step.plan_id,&step.step_id)?.is_some(){return Err(Failure::RecoveryRequired);}}
@@ -47,10 +49,15 @@ impl Authority{
         self.recipe_stabilize(scope)?;Ok(scope.clone())
     }
     pub(in crate::pet_runtime)fn read_recipe(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str)->Result<Option<RecipeScope>>{
-        let _lock=self.lock()?;self.recipe_load(spec,proof,plan)
+        let _lock=self.lock_shared()?;self.recipe_load(spec,proof,plan)
+    }
+    pub(in crate::pet_runtime)fn recipe_progress_for_goal(&self,goal:&Record,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str)->Result<Option<Progress>>{
+        let _lock=self.lock_shared()?;let mut progress=self.recipe_progress(spec,proof,plan)?;
+        if self.accounting_frozen_unlocked(goal,spec)?{if let Some(value)=&mut progress{for step in &mut value.steps{if let Some(recovery)=&mut step.recovery{recovery.freeze_accounting();}}}}
+        self.fence()?;Ok(progress)
     }
     pub(in crate::pet_runtime)fn recipe_progress(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str)->Result<Option<Progress>>{
-        let _lock=self.lock()?;let Some(scope)=self.recipe_load(spec,proof,plan)?else{return Ok(None);};
+        let _lock=self.lock_shared()?;let Some(scope)=self.recipe_load(spec,proof,plan)?else{return Ok(None);};
         let mut steps=Vec::with_capacity(scope.steps.len());let mut verified=0;let mut unsafe_result=false;let mut prefix_open=false;
         for step in &scope.steps{
             let saved=self.step_assessment_unlocked(spec,proof,plan,&step.step_id)?;
@@ -66,5 +73,13 @@ impl Authority{
         let criteria_verified=verification.as_ref().is_some_and(|v|v.criteria_verified);
         let progress=Progress{total_steps:scope.steps.len(),scope,phase,verified_steps:verified,steps,verification,criteria_verified,goal_complete:false,execution_available:false};
         if serde_json::to_vec(&progress).map_err(|_|Failure::Invalid)?.len()>2*1024*1024{return Err(Failure::Capacity);}self.fence()?;Ok(Some(progress))
+    }
+}
+
+impl Authority{
+    pub(in crate::pet_runtime::authority_store)fn retirement_recipe_scope(&self,raw:&[u8])->Result<RecipeScope>{
+        let e:Envelope=serde_json::from_slice(raw).map_err(|_|Failure::Invalid)?;
+        if !e.body.valid(){return Err(Failure::Invalid);}
+        hmac::verify(&self.key,&message(&e.body)?,&decode(&e.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;Ok(e.body)
     }
 }

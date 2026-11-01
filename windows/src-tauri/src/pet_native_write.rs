@@ -2,12 +2,19 @@
 //! source through every actual IO attempt; skipped writes never sent a byte.
 use std::{io::{self,Write},sync::{Arc,atomic::{AtomicBool,Ordering}},time::{Instant,Duration}};
 use crate::pet_native_decisions::Ticket;
-#[derive(Clone,Copy)]pub(crate)enum Use{Decision,Withdrawal}
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub(crate)enum Reason{CallerGone,Expired,Cancelled,SourceEnded,Transport}
+#[derive(Clone,Copy)]pub(crate)enum Use{Decision,Refusal,Withdrawal}
+/// Chosen by the typed backend route, never by serialized caller/model data.
+/// A refusal that persists a policy is still a new effect, not Control.
+#[derive(Clone)]pub(crate)enum Dispatch{NewEffect,Control,#[cfg(test)]ProbedEffect(crate::settings::EffectProbe)}
+impl Dispatch{
+    fn allowed(&self)->bool{match self{Self::NewEffect=>crate::settings::effect_allowed().is_ok(),Self::Control=>true,#[cfg(test)]Self::ProbedEffect(probe)=>probe.check().is_ok()}}
+}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub(crate)enum Reason{CallerGone,Expired,Cancelled,SourceEnded,PreferencesUnconfirmed,Transport}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub(crate)enum Outcome{Written,Skipped(Reason)}
 #[derive(Debug)]pub(crate)struct Fault{pub reason:Reason,pub partial:bool}
 /// Transport-owned values only. No deserialization or frontend-supplied guard.
 pub(crate)struct Guard{
+    pub dispatch:Dispatch,
     pub deadline:Instant,pub cancel:Option<Arc<AtomicBool>>,pub caller:Option<Arc<AtomicBool>>,
     pub source:Option<(Ticket,Use)>,
 }
@@ -19,13 +26,16 @@ impl Guard{
         if self.source.as_ref().is_some_and(|(t,use_)|!t.current()&&!(matches!(use_,Use::Withdrawal)&&t.withdrawal_pending())){return Some(Reason::SourceEnded);}
         None
     }
+    /// Do not mix this with callback/result lifetime. IO changes block another
+    /// write, but do not turn an already observed result into an unstarted one.
+    pub(crate)fn write_reason(&self)->Option<Reason>{self.reason().or_else(||(!self.dispatch.allowed()).then_some(Reason::PreferencesUnconfirmed))}
 }
 /// `writer` must be unbuffered: expiry must not leave buffered bytes to flush
 /// later. A partial fault requires the owner to retire this exact pipe; no retry.
 pub(crate)fn frame(writer:&mut impl Write,bytes:&[u8],guard:&Guard)->Result<Outcome,Fault>{
     let mut offset=0;
     while offset<bytes.len(){
-        if let Some(reason)=guard.reason(){return if offset==0{Ok(Outcome::Skipped(reason))}else{Err(Fault{reason,partial:true})};}
+        if let Some(reason)=guard.write_reason(){return if offset==0{Ok(Outcome::Skipped(reason))}else{Err(Fault{reason,partial:true})};}
         match writer.write(&bytes[offset..]){
             Ok(0)=>return Err(Fault{reason:Reason::Transport,partial:offset>0}),
             Ok(n)=>offset+=n,
@@ -42,7 +52,7 @@ pub(crate)fn frame(writer:&mut impl Write,bytes:&[u8],guard:&Guard)->Result<Outc
 #[cfg(test)]mod tests{
     use super::*;use crate::{pet_config::Adapter,pet_native_decisions::{Endpoint,Transport,Capture,PolicyBinding}};use serde_json::json;
     fn native()->(Endpoint,Ticket){let e=Endpoint::new(Adapter::Codex,Transport::ManagedPipe).unwrap();let t=e.capture(Capture{request_id:Some(&json!(7)),session_id:"s",turn_id:Some("t"),prompt_id:None,method:"native/request",arguments:&json!({}),policy:PolicyBinding::unknown(),cancel:None}).unwrap();(e,t)}
-    fn guard(t:&Ticket)->Guard{Guard{deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:None,source:Some((t.clone(),Use::Decision))}}
+    fn guard(t:&Ticket)->Guard{Guard{dispatch:Dispatch::NewEffect,deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:None,source:Some((t.clone(),Use::Decision))}}
     struct BlockThen{bytes:Vec<u8>,on_first:Option<Box<dyn FnOnce()>>,partial:bool}
     impl Write for BlockThen{
         fn write(&mut self,b:&[u8])->io::Result<usize>{if let Some(f)=self.on_first.take(){if self.partial{self.bytes.extend_from_slice(&b[..2]);f();return Ok(2);}f();return Err(io::ErrorKind::WouldBlock.into());}self.bytes.extend_from_slice(b);Ok(b.len())}
@@ -57,3 +67,5 @@ pub(crate)fn frame(writer:&mut impl Write,bytes:&[u8],guard:&Guard)->Result<Outc
     #[test]fn resolved_or_closed_sources_never_receive_a_policy_withdrawal_replay(){for close in[true,false]{let(e,t)=native();t.invalidate_policy();if close{e.close();}else{t.cancel();}let mut g=guard(&t);g.source=Some((t,Use::Withdrawal));let mut out=vec![];assert_eq!(frame(&mut out,b"withdraw\n",&g).unwrap(),Outcome::Skipped(Reason::SourceEnded));assert!(out.is_empty());}}
     #[test]fn a_complete_frame_keeps_its_written_result_if_the_source_resolves_on_the_last_byte(){let(_e,t)=native();let old=t.clone();struct Complete{out:Vec<u8>,ticket:Ticket}impl Write for Complete{fn write(&mut self,b:&[u8])->io::Result<usize>{self.out.extend_from_slice(b);self.ticket.cancel();Ok(b.len())}fn flush(&mut self)->io::Result<()>{Ok(())}}let mut out=Complete{out:vec![],ticket:old};assert_eq!(frame(&mut out,b"native\n",&guard(&t)).unwrap(),Outcome::Written);assert_eq!(out.out,b"native\n");}
 }
+#[cfg(all(test,target_os="linux"))]
+#[path="pet_native_write_settings_tests.rs"]mod settings_tests;

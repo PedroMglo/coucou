@@ -15,7 +15,7 @@ use crate::codex_chat::rpc::timing::{self, Entry, Report, Stage, Trace};
 static NEXT: AtomicU64 = AtomicU64::new(1);
 #[path="cli_decisions.rs"]mod decisions;
 #[cfg(target_os="linux")]#[path="cli_goal_decisions.rs"]mod goal_decisions;
-#[cfg(target_os="linux")]pub(crate)use goal_decisions::{ask_goal_recipe,goal_recipe_voice,goal_recipe_voice_requested,goal_pending,goal_answer};
+#[cfg(target_os="linux")]pub(crate)use goal_decisions::{ask_goal_recipe,ask_goal_recipe_decision,goal_recipe_voice,goal_recipe_voice_requested,goal_pending,goal_answer};
 #[cfg(all(test,target_os="linux"))]pub(crate)use goal_decisions::fixture as goal_decision_fixture;
 enum RequestPolicy {Native{cancel:Arc<AtomicBool>,source:Option<crate::pet_native_decisions::Ticket>},LocalOnce{deadline:Instant,cancel:Arc<AtomicBool>},#[cfg(target_os="linux")]GoalRecipe{source:crate::pet_runtime::recipe_decisions::Source}}
 struct PendingRequest {native_form:Option<crate::pet_mcp_form::Form>,choices:Option<crate::pet_native_choices::Choices>,reply:mpsc::Sender<Value>,request:Value,policy:RequestPolicy,expires_at:Instant}
@@ -208,10 +208,12 @@ pub fn assistant_set_workspace(app:AppHandle,provider:String,path:String)->Resul
     use tauri::Manager;
     if backend(&provider).is_none() && provider!="ollama" {return Err("Este pet não tem pasta de execução configurável.".into());}
     let path=if path.trim().is_empty() {String::new()} else {workspace_path(path.trim())?.to_string_lossy().to_string()};
-    let shared=app.state::<crate::Shared>();let mut settings=shared.settings.lock().unwrap();let mut next=settings.clone();
-    if path.is_empty() {next.cli_workspaces.remove(&provider);} else {next.cli_workspaces.insert(provider,path.clone());}
-    crate::settings::save(&next).map_err(|_|"Não foi possível guardar a pasta de trabalho.".to_string())?;
-    *settings=next;let _=app.emit("settings-changed",settings.clone());Ok(path)
+    let shared=app.state::<crate::Shared>();
+    crate::settings::update_with(&shared.settings,|next|{
+        if path.is_empty(){next.cli_workspaces.remove(&provider);}else{next.cli_workspaces.insert(provider,path.clone());}
+    },crate::settings::save,|fresh|{let _=app.emit("settings-changed",fresh);})
+        .map_err(|err|crate::settings::save_error("Não foi possível confirmar a pasta de trabalho",&err))?;
+    Ok(path)
 }
 
 pub fn system_prompt(voice: bool) -> String {
@@ -254,10 +256,22 @@ pub fn backend(provider:&str)->Option<&'static str> {
         "codex"=>Some("codex"),"copilot"=>Some("copilot"),"antigravity"|"gemini-cli"|"claude-cli"=>Some("antigravity"),_=>None
     }
 }
+/// A saved native binding is never an instruction to create another session.
+/// Creation preferences are historical intent, not the current native policy.
+fn managed_session<'a>(provider:&str,owner:&str,saved:Option<&'a crate::chat::CliSession>,cwd:&str,full_access:bool)->Result<Option<&'a str>,String>{
+    if backend(owner)!=Some(provider){return Err("O adaptador não corresponde ao pet desta conversa.".into());}
+    let Some(saved)=saved else{return Ok(None);};
+    if saved.id.trim().is_empty()||saved.id.len()>512||saved.id.chars().any(char::is_control){return Err("A associação da sessão nativa é inválida; a conversa foi preservada.".into());}
+    #[cfg(target_os="linux")]crate::pet_data::bootstrap::restored_native_session(owner,&saved.id)?;
+    if saved.cwd!=cwd{return Err("A pasta de trabalho mudou. A sessão nativa e o histórico foram preservados. Repõe a pasta anterior para continuar ou escolhe Nova conversa para trabalhar na nova pasta.".into());}
+    if provider!="copilot"&&saved.full_access!=full_access{return Err("A opção de acesso total mudou desde a criação desta conversa. A sessão nativa foi preservada. Repõe a opção anterior para continuar ou escolhe Nova conversa para aplicar a nova preferência.".into());}
+    Ok(Some(&saved.id))
+}
 pub fn model_matches(provider:&str,model:&str)->bool {
     let name=model.to_ascii_lowercase();
     match provider {"gemini-cli"=>name.starts_with("gemini-"),"claude-cli"=>name.starts_with("claude-"),_=>true}
 }
+#[cfg(test)]#[path="cli_continuation_tests.rs"]mod continuation_tests;
 pub async fn resolve_model(settings:&Settings,provider:&str,selected:&str)->Result<String,String> {
     crate::pet_config::require_active_provider(provider)?;
     if backend(provider).is_none() {return Err("Este pet não tem uma conta CLI de conversação.".into());}
@@ -304,6 +318,7 @@ async fn send_inner(
     model: &str, query: String, context: Option<ChatContext>, timing: Option<Trace>,
 ) -> Result<ChatReply, String> {
     timing::mark(timing.as_ref(), Stage::CliEntry);
+    chat.check_new_effect()?;
     chat.check_admission(provider)?;
     let model=resolve_model(settings,provider,model).await?;
     chat.check_admission(provider)?;
@@ -333,6 +348,8 @@ async fn send_inner(
             None,
             |_| {},
             timing,
+            None,
+            None,
         ))
         .map(|(text, _)| ChatReply { text })
     })
@@ -362,7 +379,17 @@ pub fn run(
     resume_from: Option<&str>,
     on_delta: impl FnMut(String),
 ) -> Result<(String, bool), String> {
-    run_inner(app, chat, settings, provider, pet_provider, model, query, context, voice, tools, cancel, resume_from, on_delta, None)
+    run_inner(app, chat, settings, provider, pet_provider, model, query, context, voice, tools, cancel, resume_from, on_delta, None, None, None)
+}
+
+/// Voice keeps the factory profile captured before audio/resource waits.
+/// Admission, native policy, memory and operation brokers remain unchanged.
+pub(crate) fn run_voice_prepared(
+    app:&AppHandle, chat:&Chat, settings:&Settings, configuration:&crate::pet_config::Configuration,
+    provider:&str, pet_provider:&str, model:&str, query:&str, context:Option<&ChatContext>,
+    tools:&[Value], cancel:Option<Arc<AtomicBool>>, current:impl Fn()->Result<(),String>+Sync,
+)->Result<(String,bool),String>{
+    run_inner(app,chat,settings,provider,pet_provider,model,query,context,true,tools,cancel,None,|_|{},None,Some(configuration),Some(&current))
 }
 
 /// Direct/voice diagnostic entry; does not include ASR, TTS or caller queue time.
@@ -376,7 +403,7 @@ pub(crate) fn run_with_timing(
         return (Err("Timing diagnostics are available only for Mochi Codex conversations.".into()), Report::disabled(Entry::Direct));
     }
     let trace = Trace::new(Entry::Direct);
-    let result = run_inner(app, chat, settings, provider, pet_provider, model, query, context, voice, tools, cancel, resume_from, on_delta, Some(trace.clone()));
+    let result = run_inner(app, chat, settings, provider, pet_provider, model, query, context, voice, tools, cancel, resume_from, on_delta, Some(trace.clone()), None, None);
     trace.finish(&result);
     (result, trace.report())
 }
@@ -385,18 +412,21 @@ fn run_inner(
     app: &AppHandle, chat: &Chat, settings: &Settings, provider: &str,
     pet_provider: &str, model: &str, query: &str, context: Option<&ChatContext>,
     voice: bool, tools: &[Value], cancel: Option<Arc<AtomicBool>>,
-    resume_from: Option<&str>, mut on_delta: impl FnMut(String), timing: Option<Trace>,
+    resume_from: Option<&str>, mut on_delta: impl FnMut(String), timing: Option<Trace>, configuration: Option<&crate::pet_config::Configuration>, validity:Option<&(dyn Fn()->Result<(),String>+Sync)>,
 ) -> Result<(String, bool), String> {
     timing::mark(timing.as_ref(), Stage::RunEntry);
-    let selection=crate::pet_config::select(pet_provider,model,query)?;
+    if let Some(current)=validity{current()?;}
+    let selection=match configuration {Some(config)=>config.select(pet_provider,model,query)?,None=>crate::pet_config::select(pet_provider,model,query)?};
     let model=selection.model.as_str();
     if !model_matches(pet_provider,model) {return Err("O modelo configurado não pertence a este pet.".into());}
     timing::mark(timing.as_ref(), Stage::SelectionReady);
+    let cwd=workspace_for(settings,pet_provider);
+    #[cfg(target_os="linux")]let channel=chat.bind_native_memory(pet_provider,provider,model,query,cwd.as_ref().map(|p|p.as_path()))?;
+    #[cfg(target_os="linux")]let chat=&channel;
     let turn = chat.begin_cli(pet_provider, cancel.unwrap_or_default())?;
     let _lease = chat.lease(&turn).broadcast(app,query);
     let original_origin=chat.request_origin(&turn)?;
     let documents=crate::pet_documents::Request::capture(chat,&turn,context)?;
-    let cwd=workspace_for(settings,pet_provider);
     // A retry must not retire its original row if its folder disappeared
     // after the command's preflight. A new ordinary request keeps its error log.
     if resume_from.is_some(){cwd.as_ref().map_err(|error|error.clone())?;}
@@ -426,17 +456,20 @@ fn run_inner(
     } else {None};
     let cwd = cwd?;
     let cwd_text = cwd.to_string_lossy().to_string();
-    let session = turn
-        .session
-        .as_ref()
-        .filter(|s| s.cwd == cwd_text && (provider=="copilot" || s.full_access == settings.cli_full_access))
-        .map(|s| s.id.as_str());
-    let name=crate::pet_config::identity_name(crate::pet_config::pet_id(pet_provider).unwrap_or(pet_provider));
+    let session=managed_session(provider,pet_provider,turn.session.as_ref(),&cwd_text,settings.cli_full_access)?;
+    #[cfg(target_os="linux")]chat.publish_native_memory(&turn)?;
+    #[cfg(target_os="linux")]let user_text=chat.native_memory_prompt(&turn,provider,model,&cwd,session,query,user_text)?;
+    let identity_id=crate::pet_config::pet_id(pet_provider).unwrap_or(pet_provider);
+    let name=match configuration {
+        Some(config)=>config.pets.get(identity_id).ok_or("A identidade capturada deste pet está indisponível.")?.name.clone(),
+        None=>crate::pet_config::identity_name(identity_id),
+    };
     let thread_name=format!("Mochi · {name}");
     let specialty=if crate::pet_config::service(pet_provider){format!("Your specialty is the app/service belonging to {name:?}. Use its real controls and data. For Spotify, a search does not start the requested track: use native desktop/CLI tools to select it and verify playback when asked. Keep the user informed if the app or account is unavailable.")}else{String::new()};
     let system = format!("{}\nYour stable pet identity is {pet_provider:?}; your displayed name is {name:?}. {specialty}",system_prompt(voice));
     documents.validate_contents_blocking()?;crate::pet_calendar::validate(calendar.as_ref())?;
     let context_current = || {
+        if let Some(current)=validity{current()?;}
         if !chat.is_current(&turn) { return Err(crate::net::CANCELLED.to_string()); }
         documents.validate()?;
         crate::pet_calendar::validate(calendar.as_ref())
@@ -462,7 +495,7 @@ fn run_inner(
             let observer_current = crate::pet_calendar::callback_guard(calendar.as_ref());
             let documents_current=documents.callback_guard();
             client.observe(move |event| { if documents_current()&&observer_current() {if let Some((phase,text)) = crate::pet_activity::codex_progress(event) { observer.update(phase,&text); }} });
-            context_current()?;
+            context_current()?;chat.check_new_effect()?;
             let reply = client.answer_native_tools(
                 crate::codex_chat::rpc::TurnOptions {
                     model,
@@ -476,6 +509,7 @@ fn run_inner(
                     name:Some(&thread_name),
                 },
                 |name, args,native| {
+                    if let Err(error)=chat.check_new_effect(){return(error,false);}
                     if !native.current(){return ("O pedido nativo terminou; nenhuma nova operação foi iniciada.".into(),false);}
                     if let Err(error) = documents.validate_contents_blocking().and_then(|_|context_current()) { return (error, false); }
                     if crate::pet_calendar::query::is_name(name) {
@@ -526,7 +560,7 @@ fn run_inner(
     };
     let commit = timing::Span::new(timing.as_ref(), Stage::Commit);
     documents.validate_contents_blocking()?;context_current()?;
-    let plain = if calendar.is_some()||context.is_some_and(|c|c.has_files()) { crate::chat::plain_question(true, context, query) } else { user_text.clone() };
+    let plain = if calendar.is_some()||context.is_some_and(|c|c.has_files()) { crate::chat::plain_question(true, context, query) } else { public_user_text.clone() };
     let result=chat.commit_task_reply(
         &turn,
         json!({"role":"user","content":public_user_text}),

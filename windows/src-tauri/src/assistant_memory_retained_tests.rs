@@ -100,7 +100,7 @@ fn isolated_goal_loading_refuses_opaque_history_unknown_fields_and_unknown_owner
 
 #[test]
 fn the_inactive_namespace_requires_version6_and_a_known_private_format() {
-    for version in [4,5,6,7] {
+    for version in [4,5,6,8] {
         let mut v=known(); v["version"]=json!(version);
         v["unavailableHistory"]=opaque(json!({"foreign":[{}]}),json!({}),json!({}));
         if version==6 { v["unavailableHistory"]["format"]=json!(2); }

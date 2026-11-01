@@ -23,9 +23,6 @@ pub const KEY: &str = "anthropic-api-key";
 const DEFAULT_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const BASE_URL_VAR: &str = "COUCOU_ANTHROPIC_BASE_URL";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// Server-side fallback: on a policy decline the API retries the same request on
-/// a fallback model inside the same call, so the island never shows a dead end.
-const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 const MAX_TOKENS: u32 = 4096;
 /// Text and code files are inlined; anything larger is skipped, as on macOS.
 const MAX_INLINE_TEXT: u64 = 200_000;
@@ -34,7 +31,7 @@ pub const DEFAULT_MODEL: &str = "claude-opus-5";
 
 /// The Messages endpoint: Anthropic's, or the gateway in COUCOU_ANTHROPIC_BASE_URL.
 /// Read once; the gateway's host (never the key) goes to the log once.
-fn endpoint() -> Result<Url, String> {
+pub(crate) fn endpoint() -> Result<Url, String> {
     static ENDPOINT: OnceLock<Result<Url, String>> = OnceLock::new();
     ENDPOINT
         .get_or_init(|| {
@@ -112,7 +109,6 @@ fn request_body(model: &str, system: &str, history: &[Value], user: &Value) -> V
         "max_tokens": MAX_TOKENS,
         "system": system,
         "tools": [{ "type": "web_search_20260209", "name": "web_search", "max_uses": 5 }],
-        "fallbacks": "default",
         "messages": messages,
     })
 }
@@ -161,7 +157,13 @@ pub async fn send(
 ) -> Result<ChatReply, String> {
     let key = secrets::get(KEY).ok_or_else(|| t("API key missing. Open settings."))?;
     let endpoint = endpoint()?;
+    send_resolved(chat,model,query,context,&endpoint,&key).await
+}
 
+// Shared native path after credential/endpoint resolution. Neither a new IPC
+// endpoint nor a fallback: production always calls this from send above.
+async fn send_resolved(chat:&Chat,model:&str,query:String,context:Option<ChatContext>,endpoint:&Url,key:&str)->Result<ChatReply,String>{
+    chat.check_new_effect()?;
     let turn = chat.begin_cli(chat::ANTHROPIC,std::sync::Arc::default())?;
     let _lease=chat.lease(&turn);
     let documents=crate::pet_documents::Request::capture_async(chat,&turn,context.as_ref()).await?;
@@ -170,6 +172,7 @@ pub async fn send(
     let content=tokio::task::spawn_blocking(move||user_content(first,ordinary.as_ref(),&question)).await.map_err(|_|"A preparação dos anexos foi interrompida.".to_string())?;
     let user=crate::pet_calendar::prepend_message(calendar.as_ref(),json!({"role":"user","content":content}))?;
     let mut body = request_body(model, &chat::system_prompt(true), &turn.history, &user);
+    chat.append_selected_memory(chat::ANTHROPIC,&query,&crate::pet_memory::context_model::Destination::Api{provider:chat::ANTHROPIC.into(),endpoint:endpoint.to_string(),model:model.into()},Some(key),body["messages"].as_array_mut().unwrap())?;
     let mut calendar_tools = crate::pet_calendar::wire::Session::new(calendar.as_ref(),crate::pet_calendar::wire::Format::Claude);
     if let Some(tools) = &calendar_tools {tools.prepare(&mut body)?;}
 
@@ -179,7 +182,7 @@ pub async fn send(
         let response = net::while_current(
             || chat.is_current(&turn) && documents.validate().is_ok() && crate::pet_calendar::validate(calendar.as_ref()).is_ok()
                 && calendar_tools.as_ref().is_none_or(|tools|tools.validate().is_ok()),
-            || call(&endpoint,&key,&body),
+            || async {chat.check_new_effect()?;call(endpoint,key,&body).await},
         ).await?;
         if let Some(tools) = &mut calendar_tools {
             if tools.follow_up(&response,&mut body).await? {continue;}
@@ -195,6 +198,11 @@ pub async fn send(
     let plain = chat::plain_question(turn.first, context.as_ref(), &query);
     chat.commit_reply(&turn, user, json!({ "role": "assistant", "content": blocks }), &plain, &text)?;
     Ok(ChatReply { text })
+}
+
+#[cfg(test)]
+pub(crate)async fn memory_wire_fixture(chat:&Chat,model:&str,query:String,context:Option<ChatContext>,endpoint:&Url,key:&str)->Result<ChatReply,String>{
+    send_resolved(chat,model,query,context,endpoint,key).await
 }
 
 /// One question, one answer, no history: the dictation clean-up and the notes
@@ -222,6 +230,7 @@ pub async fn complete(model: &str, system: &str, user: &str, max_tokens: u32, ti
 /// One turn of « OK Coucou »'s conversation with tools: the API's whole answer
 /// (content blocks and stop_reason).
 pub async fn voice_turn(model: &str, system: &str, messages: &[Value], tools: &[Value]) -> Result<Value, String> {
+    crate::settings::effect_allowed()?;
     let key = secrets::get(KEY).ok_or_else(|| t("API key missing. Open settings."))?;
     let endpoint = endpoint()?;
     let body = json!({
@@ -239,11 +248,10 @@ async fn call(endpoint: &Url, key: &str, body: &Value) -> Result<Value, String> 
 }
 
 async fn call_with_timeout(endpoint: &Url, key: &str, body: &Value, timeout: Duration) -> Result<Value, String> {
-    let response = net::client(endpoint, timeout)?
+    let response = net::exact_destination_client(endpoint, timeout)?
         .post(endpoint.clone())
         .header("x-api-key", key)
         .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("anthropic-beta", FALLBACK_BETA)
         .header("content-type", "application/json")
         .json(body)
         .send()
@@ -263,7 +271,7 @@ async fn call_with_timeout(endpoint: &Url, key: &str, body: &Value, timeout: Dur
 /// The models on the user's Anthropic account, newest first, as the API lists them.
 pub async fn models(key: &str) -> Result<Vec<ModelInfo>, String> {
     let url = models_endpoint(&endpoint()?);
-    let response = net::client(&url, Duration::from_secs(10))?
+    let response = net::exact_destination_client(&url, Duration::from_secs(10))?
         .get(url.clone())
         .header("x-api-key", key)
         .header("anthropic-version", ANTHROPIC_VERSION)

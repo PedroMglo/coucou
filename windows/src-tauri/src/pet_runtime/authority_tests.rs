@@ -5,6 +5,34 @@ pub(super)fn queued(f:&Fixture,g:&Record,a:&Authority)->Record{let approved=appr
 fn hash_file(path:&Path)->String{hash(&fs::read(path).unwrap())}
 fn refresh_event(g:&mut Record){let spec=&g.admissions.last().unwrap().spec;let at=spec.source_sequence as usize;g.events[at].fingerprint=fingerprint(spec).unwrap();}
 
+fn held_reader(f:&Fixture)->std::fs::File{
+ use std::os::fd::AsRawFd;
+ let lock=fs::OpenOptions::new().read(true).write(true).open(root(f).join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(lock.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);lock
+}
+#[test]fn native_catalog_read_only_proof_uses_shared_lock_without_obtaining_write_access(){
+ use std::os::fd::AsRawFd;
+ let f=Fixture::new();let goal=f.goal("codex");let a=Authority::ensure(&root(&f)).unwrap();let queued=queued(&f,&goal,&a);drop(a);
+ let path=root(&f).join(".catalog.lock");fs::set_permissions(&path,fs::Permissions::from_mode(0o400)).unwrap();let a=Authority::existing(&root(&f)).unwrap();
+ let before=fs::read_dir(root(&f)).unwrap().map(|p|{let p=p.unwrap().path();(p.clone(),fs::read(p).unwrap())}).collect::<Vec<_>>();
+ assert!(a.verify_queued(&queued,100_007).is_ok());
+ let other=fs::OpenOptions::new().read(true).open(&path).unwrap();assert_eq!(unsafe{libc::flock(other.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)},0);assert_eq!(a.verify_queued(&queued,100_008).err(),Some(Failure::Busy));drop(other);assert!(a.verify_queued(&queued,100_009).is_ok());
+ let new_goal=f.goal_named("codex","new-readonly-proof");let new_approval=approved(&new_goal,"queue");assert_eq!(a.certify(&new_approval,&new_goal,100_004).err(),Some(Failure::Unsafe));assert!(!root(&f).join(format!("{}.json",new_approval.spec().decision_id)).exists());
+ for(p,b)in before{assert_eq!(fs::read(p).unwrap(),b);}
+}
+#[test]fn native_catalog_writer_waits_for_a_transient_reader_without_minting_another_consent(){
+ let f=Fixture::new();let g=f.goal("codex");let approved=approved(&g,"queue");let a=Authority::ensure(&root(&f)).unwrap();let lock=held_reader(&f);let release=std::thread::spawn(move||{std::thread::sleep(std::time::Duration::from_millis(20));drop(lock);});
+ let cert=a.certify(&approved,&g,100_004).unwrap();release.join().unwrap();let grant=root(&f).join(format!("{}.json",approved.spec().decision_id));let body:serde_json::Value=serde_json::from_slice(&fs::read(grant).unwrap()).unwrap();assert_eq!(body["body"]["approvedAt"],approved.spec().approved_at);assert_eq!(body["body"]["phase"],"issued");assert_eq!(f.store().read(&g.id,"agent_codex").unwrap().state,State::Draft);assert_eq!(body["body"]["lease"],serde_json::Value::Null);
+ assert_eq!(f.store().enqueue_certified(&cert,100_005).unwrap().record.admissions[0].spec.decision_id,approved.spec().decision_id);
+}
+#[test]fn native_catalog_writer_exhaustion_is_busy_without_publication_or_renewing_the_choice(){
+ let f=Fixture::new();let g=f.goal("codex");let approved=approved(&g,"queue");let a=Authority::ensure(&root(&f)).unwrap();let lock=held_reader(&f);let start=std::time::Instant::now();assert_eq!(a.certify(&approved,&g,100_004).err(),Some(Failure::Busy));assert!(start.elapsed()<std::time::Duration::from_secs(2));assert!(!root(&f).join(format!("{}.json",approved.spec().decision_id)).exists());assert_eq!(f.store().read(&g.id,"agent_codex").unwrap().state,State::Draft);drop(lock);
+ let cert=a.certify(&approved,&g,100_005).unwrap();let queued=f.store().enqueue_certified(&cert,100_006).unwrap().record;assert_eq!(queued.admissions[0].spec.decision_id,approved.spec().decision_id);assert_eq!(queued.admissions[0].spec.approved_at,approved.spec().approved_at);
+}
+#[test]fn native_catalog_writer_cannot_adopt_a_replaced_lock_while_waiting(){
+ let f=Fixture::new();let g=f.goal("codex");let approved=approved(&g,"queue");let a=Authority::ensure(&root(&f)).unwrap();let lock=held_reader(&f);let path=root(&f);let replace=std::thread::spawn(move||{std::thread::sleep(std::time::Duration::from_millis(20));fs::rename(path.join(".catalog.lock"),path.join(".original-held-lock")).unwrap();fs::write(path.join(".catalog.lock"),b"").unwrap();fs::set_permissions(path.join(".catalog.lock"),fs::Permissions::from_mode(0o600)).unwrap();drop(lock);});
+ assert_eq!(a.certify(&approved,&g,100_004).err(),Some(Failure::Changed));replace.join().unwrap();assert!(!root(&f).join(format!("{}.json",approved.spec().decision_id)).exists());assert_eq!(f.store().read(&g.id,"agent_codex").unwrap().state,State::Draft);
+}
+
 #[test]fn native_consent_proof_survives_reopen_without_exporting_a_key_or_permit(){
  let f=Fixture::new();let g=f.goal("codex");let a=Authority::ensure(&root(&f)).unwrap();let g=queued(&f,&g,&a);assert_eq!(g.schema_version,6);assert!(a.verify_queued(&g,100_006).is_ok());drop(a);
  let reopened=Authority::existing(&root(&f)).unwrap();assert!(reopened.verify_queued(&g,100_007).is_ok());let status=serde_json::to_value(ProvenanceStatus::from_result(reopened.verify_queued(&g,100_007))).unwrap();assert_eq!(status["verified"],true);assert_eq!(status["executionAvailable"],false);assert!(status.get("key").is_none());

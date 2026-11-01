@@ -162,6 +162,21 @@ for line in sys.stdin:
     impl Drop for Fixture {fn drop(&mut self){let _=fs::remove_dir_all(&self.dir);}}
     fn options(session:Option<&str>)->TurnOptions<'_>{TurnOptions{model:"model-b",effort:"high",system:"Follow AGENTS.md and native permissions",history:&[],query:"Synthetic task",session_id:session}}
 
+    #[cfg(target_os="linux")]
+    #[test]fn final_dispatch_copilot_rechecks_after_human_callback_without_blocking_exact_denial(){
+        for approve in [true,false]{let io=crate::settings::EffectFixture::new();let f=Fixture::new("normal");let mut client=f.client();client.io_probe=Some(io.probe.clone());
+            let reply=client.answer_native(options(None),|_|{},|_|{},|_|{},|_,_|{io.external();Some(json!({"allow":approve}))}).unwrap();assert_eq!(reply.text,"Olá equipa");drop(client);
+            let wire=f.wire();let responses=wire.iter().filter(|v|v["id"]=="own-permission"&&v.get("method").is_none()).collect::<Vec<_>>();assert_eq!(responses.len(),1);
+            assert_eq!(responses[0]["result"],if approve{cancelled_outcome()}else{json!({"outcome":{"outcome":"selected","optionId":"deny"}})});
+        }
+    }
+    #[cfg(target_os="linux")]
+    #[test]fn final_dispatch_copilot_benign_commit_keeps_original_positive_choice(){
+        let io=crate::settings::EffectFixture::new();let f=Fixture::new("normal");let mut client=f.client();client.io_probe=Some(io.probe.clone());
+        client.answer_native(options(None),|_|{},|_|{},|_|{},|_,_|{io.save();Some(json!({"allow":true}))}).unwrap();drop(client);
+        let wire=f.wire();let responses=wire.iter().filter(|v|v["id"]=="own-permission"&&v.get("method").is_none()).collect::<Vec<_>>();assert_eq!(responses.len(),1);assert_eq!(responses[0]["result"],json!({"outcome":{"outcome":"selected","optionId":"once"}}));
+    }
+
     #[test]
     fn native_turn_selects_the_advertised_model_and_once_permission_without_exposing_other_channels() {
         let f=Fixture::new("normal");let mut c=f.client();let mut sessions=vec![];let mut deltas=vec![];let mut phases=vec![];let mut permissions=0;
@@ -293,15 +308,27 @@ for line in sys.stdin:
     #[test]fn queued_native_packet_retains_source_and_caller_until_the_writer_proves_no_bytes_were_sent(){
         let f=Fixture::new("normal");let mut c=f.client();let(ticket,source)= {let e=Endpoint::new(Adapter::Copilot,Transport::ManagedPipe).unwrap();let t=e.capture(Capture{request_id:Some(&json!(91)),session_id:"owned-session",turn_id:None,prompt_id:Some(&json!(2)),method:"session/request_permission",arguments:&json!({}),policy:PolicyBinding::unknown(),cancel:None}).unwrap();(t,e)};
         let(tx,rx)=mpsc::sync_channel(1);let _original=c.input.replace(tx).unwrap();let t=ticket.clone();
-        let worker=std::thread::spawn(move||{let result=c.respond_native(json!({"outcome":{"outcome":"selected","optionId":"synthetic"}}),&t);(c,result)});
+        let worker=std::thread::spawn(move||{let result=c.respond_native(json!({"outcome":{"outcome":"selected","optionId":"synthetic"}}),&t,&json!({}));(c,result)});
         let packet=rx.recv_timeout(Duration::from_secs(2)).unwrap();assert!(packet.guard.source.as_ref().unwrap().0.same_capture(&ticket));assert!(packet.guard.caller.as_ref().unwrap().load(Ordering::Acquire));assert_eq!(serde_json::from_slice::<Value>(&packet.bytes).unwrap()["id"],91);ticket.cancel();
         let mut out=Vec::new();let outcome=crate::pet_native_write::frame(&mut out,&packet.bytes,&packet.guard).unwrap();assert_eq!(outcome,crate::pet_native_write::Outcome::Skipped(crate::pet_native_write::Reason::SourceEnded));assert!(out.is_empty());let caller=packet.guard.caller.as_ref().unwrap().clone();packet.ack.send(Ok(outcome)).unwrap();let(c,result)=worker.join().unwrap();assert_eq!(result.unwrap(),outcome);assert!(!caller.load(Ordering::Acquire));drop(c);drop(source);
+    }
+    #[cfg(target_os="linux")]
+    #[test]fn final_dispatch_copilot_queued_packet_rechecks_current_io_at_actual_writer(){
+        let io=crate::settings::EffectFixture::new();let f=Fixture::new("normal");let mut c=f.client();c.io_probe=Some(io.probe.clone());let endpoint=Endpoint::new(Adapter::Copilot,Transport::ManagedPipe).unwrap();let ticket=endpoint.capture(Capture{request_id:Some(&json!(91)),session_id:"owned-session",turn_id:None,prompt_id:None,method:"session/request_permission",arguments:&json!({}),policy:PolicyBinding::unknown(),cancel:None}).unwrap();let(tx,rx)=mpsc::sync_channel(1);let _original=c.input.replace(tx).unwrap();
+        let worker=std::thread::spawn(move||{let result=c.respond_native(json!({"outcome":{"outcome":"selected","optionId":"positive"}}),&ticket,&json!({}));(c,result)});
+        let packet=rx.recv_timeout(Duration::from_secs(2)).unwrap();io.external();let mut out=Vec::new();let outcome=crate::pet_native_write::frame(&mut out,&packet.bytes,&packet.guard).unwrap();assert_eq!(outcome,crate::pet_native_write::Outcome::Skipped(crate::pet_native_write::Reason::PreferencesUnconfirmed));assert!(out.is_empty());packet.ack.send(Ok(outcome)).unwrap();let(c,result)=worker.join().unwrap();assert_eq!(result.unwrap(),outcome);drop(c);drop(endpoint);
+    }
+    #[cfg(target_os="linux")]
+    #[test]fn final_dispatch_copilot_partial_io_loss_retires_owned_writer_without_completing_frame(){
+        struct Partial{io:Arc<crate::settings::EffectFixture>,bytes:Arc<Mutex<Vec<u8>>>,first:bool}
+        impl Write for Partial{fn write(&mut self,b:&[u8])->std::io::Result<usize>{if self.first{self.first=false;self.bytes.lock().unwrap().extend_from_slice(&b[..2]);self.io.external();Ok(2)}else{panic!("must retire partial IO frame")}}fn flush(&mut self)->std::io::Result<()>{Ok(())}}
+        let io=Arc::new(crate::settings::EffectFixture::new());let source=Endpoint::new(Adapter::Copilot,Transport::ManagedPipe).unwrap();let bytes=Arc::new(Mutex::new(Vec::new()));let(tx,rx)=mpsc::sync_channel(1);let(ack,answer)=mpsc::sync_channel(1);let guard=crate::pet_native_write::Guard{dispatch:crate::pet_native_write::Dispatch::ProbedEffect(io.probe.clone()),deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:None,source:None};tx.send(Outbound{bytes:b"grant\n".to_vec(),guard,ack}).unwrap_or_else(|_|panic!("queue unavailable"));run_writer(Partial{io:io.clone(),bytes:bytes.clone(),first:true},rx,source.clone());let error=answer.recv().unwrap().unwrap_err();assert!(error.partial);assert_eq!(error.reason,crate::pet_native_write::Reason::PreferencesUnconfirmed);assert_eq!(*bytes.lock().unwrap(),b"gr");assert!(!source.is_open());
     }
     #[test]fn a_native_writer_partial_fault_closes_its_source_and_never_accepts_a_following_frame(){
         struct Partial{source:Endpoint,bytes:Arc<Mutex<Vec<u8>>>,first:bool}
         impl Write for Partial{fn write(&mut self,b:&[u8])->std::io::Result<usize>{if self.first{self.first=false;self.bytes.lock().unwrap().extend_from_slice(&b[..2]);self.source.close();Ok(2)}else{panic!("must not complete a partial native response")}}fn flush(&mut self)->std::io::Result<()>{Ok(())}}
         let source=Endpoint::new(Adapter::Copilot,Transport::ManagedPipe).unwrap();let ticket=source.capture(Capture{request_id:Some(&json!(91)),session_id:"owned-session",turn_id:None,prompt_id:None,method:"session/request_permission",arguments:&json!({}),policy:PolicyBinding::unknown(),cancel:None}).unwrap();let bytes=Arc::new(Mutex::new(Vec::new()));let(tx,rx)=mpsc::sync_channel(2);let(ack,answer)=mpsc::sync_channel(1);
-        assert!(tx.send(Outbound{bytes:b"grant\n".to_vec(),ack,guard:crate::pet_native_write::Guard{deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:None,source:Some((ticket,crate::pet_native_write::Use::Decision))}}).is_ok());run_writer(Partial{source:source.clone(),bytes:bytes.clone(),first:true},rx,source.clone());let fault=answer.recv().unwrap().unwrap_err();assert!(fault.partial);assert_eq!(*bytes.lock().unwrap(),b"gr");assert!(!source.is_open());let(ack,_)=mpsc::sync_channel(1);assert!(tx.send(Outbound{bytes:b"again\n".to_vec(),ack,guard:crate::pet_native_write::Guard{deadline:Instant::now()+Duration::from_secs(1),cancel:None,caller:None,source:None}}).is_err());
+        assert!(tx.send(Outbound{bytes:b"grant\n".to_vec(),ack,guard:crate::pet_native_write::Guard{dispatch:crate::pet_native_write::Dispatch::NewEffect,deadline:Instant::now()+Duration::from_secs(2),cancel:None,caller:None,source:Some((ticket,crate::pet_native_write::Use::Decision))}}).is_ok());run_writer(Partial{source:source.clone(),bytes:bytes.clone(),first:true},rx,source.clone());let fault=answer.recv().unwrap().unwrap_err();assert!(fault.partial);assert_eq!(*bytes.lock().unwrap(),b"gr");assert!(!source.is_open());let(ack,_)=mpsc::sync_channel(1);assert!(tx.send(Outbound{bytes:b"again\n".to_vec(),ack,guard:crate::pet_native_write::Guard{dispatch:crate::pet_native_write::Dispatch::NewEffect,deadline:Instant::now()+Duration::from_secs(1),cancel:None,caller:None,source:None}}).is_err());
     }
 
     #[test]fn a_saved_session_accepts_no_echo_but_rejects_a_conflicting_echo_without_replacement(){

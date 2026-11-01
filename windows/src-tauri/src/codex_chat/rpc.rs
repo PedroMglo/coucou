@@ -58,6 +58,7 @@ pub struct Reply {
 }
 
 pub struct Client {
+    #[cfg(test)] io_probe:Option<crate::settings::EffectProbe>,
     child: Child,
     input: Option<ChildStdin>,
     output: Receiver<Result<Frame, String>>,
@@ -132,6 +133,7 @@ impl Client {
             return Err("The CLI request was cancelled.".into());
         }
         let spawn = timing::Span::new(timing.as_ref(), Stage::Spawn);
+        crate::settings::effect_allowed()?;
         let child = cmd.spawn().map_err(|err| {
             format!("Cannot start Codex. Install Codex CLI and sign in with codex login: {err}")
         });
@@ -168,6 +170,7 @@ impl Client {
             "Cannot start the Codex response reader.".to_string()
         })?;
         let mut client = Self {
+            #[cfg(test)] io_probe:None,
             child,
             input,
             output,
@@ -206,6 +209,7 @@ impl Client {
         match self.write_frame_guarded(message,deadline,cleanup,None,crate::pet_native_write::Use::Decision)?{
             crate::pet_native_write::Outcome::Written=>Ok(()),
             crate::pet_native_write::Outcome::Skipped(crate::pet_native_write::Reason::Cancelled)=>Err("The CLI request was cancelled.".into()),
+            crate::pet_native_write::Outcome::Skipped(crate::pet_native_write::Reason::PreferencesUnconfirmed)=>Err("A origem das preferências não está confirmada; o novo pedido Codex não foi enviado.".into()),
             crate::pet_native_write::Outcome::Skipped(_)=>Err("Codex did not receive the request in time.".into()),
         }
     }
@@ -215,7 +219,9 @@ impl Client {
         if source.is_some_and(|t|message.get("id")!=Some(&t.identity().request_id)){return Err("The response does not belong to the captured native Codex request.".into());}
         let mut bytes=serde_json::to_vec(&message).map_err(|_|"Cannot encode Codex request.")?;
         if bytes.len()>=MAX_TOTAL{return Err("Codex request exceeds the local transport limit.".into());}bytes.push(b'\n');
-        let guard=crate::pet_native_write::Guard{deadline,cancel:if cleanup{None}else{self.cancel.clone()},caller:None,source:source.map(|t|(t.clone(),use_))};
+        let dispatch=if cleanup||matches!(use_,crate::pet_native_write::Use::Refusal|crate::pet_native_write::Use::Withdrawal){crate::pet_native_write::Dispatch::Control}else{crate::pet_native_write::Dispatch::NewEffect};
+        #[cfg(test)]let dispatch=match (&dispatch,&self.io_probe){(crate::pet_native_write::Dispatch::NewEffect,Some(p))=>crate::pet_native_write::Dispatch::ProbedEffect(p.clone()),_=>dispatch};
+        let guard=crate::pet_native_write::Guard{dispatch,deadline,cancel:if cleanup{None}else{self.cancel.clone()},caller:None,source:source.map(|t|(t.clone(),use_))};
         let result=crate::pet_native_write::frame(self.input.as_mut().ok_or("Codex closed its input.")?,&bytes,&guard);
         match result{
             Ok(outcome)=>Ok(outcome),
@@ -306,13 +312,26 @@ impl Client {
     fn reject_request(&mut self, message: &Frame) -> Result<(), String> {
         if message.get("id").is_some() && message.get("method").is_some() {
             let response=json!({ "id": message["id"], "error": { "code": -32601, "message": "This request is unavailable in Mochi chat." } });
-            self.write_frame_guarded(response,self.deadline,false,message.ticket.as_ref(),crate::pet_native_write::Use::Decision)?;
+            self.write_frame_guarded(response,self.deadline,false,message.ticket.as_ref(),crate::pet_native_write::Use::Refusal)?;
         }
         Ok(())
     }
 
     fn withdraw_policy_request(&mut self,message:&Frame)->Result<(),String>{
         self.write_frame_guarded(json!({"id":message["id"],"error":{"code":-32000,"message":"The native session policy changed while this request was pending. Request a fresh native decision under the current policy; do not replay a previous effect."}}),Instant::now()+Duration::from_millis(100),true,message.ticket.as_ref(),crate::pet_native_write::Use::Withdrawal).map(|_|())
+    }
+
+    fn finish_skipped_response(&mut self,message:&Frame,outcome:crate::pet_native_write::Outcome)->Result<(),String>{
+        use crate::pet_native_write::{Outcome,Reason,Use};
+        if matches!(outcome,Outcome::Skipped(_))&&message.ticket.as_ref().is_some_and(|t|t.policy_invalidated()){
+            return self.withdraw_policy_request(message);
+        }
+        if outcome==Outcome::Skipped(Reason::PreferencesUnconfirmed)&&message.ticket.as_ref().is_some_and(|t|t.current()){
+            // Safe fixed control only: no tool data or positive decision. A
+            // previous tool effect may already have happened; never invite replay.
+            self.write_frame_guarded(json!({"id":message["id"],"error":{"code":-32000,"message":"Preferences are unconfirmed. This response was not delivered; a previous tool effect may have occurred. Do not retry effects automatically."}}),Instant::now()+Duration::from_millis(100),true,message.ticket.as_ref(),Use::Refusal)?;
+        }
+        Ok(())
     }
 
     pub fn require_account(&mut self) -> Result<(), String> {
@@ -404,7 +423,9 @@ impl Client {
             format!("{native}\n\n{system}")
         };
         // Keep the CLI's native tools, MCP servers, skills and permissions.
-        // Only an explicit setting in Mochi enables unattended full access.
+        // Explicit full access applies only when creating a new session.
+        // Resuming must inherit the current native policy, including a change
+        // made in the terminal after this conversation was originally created.
         let mut params = json!({
             "model": if model.is_empty() { Value::Null } else { json!(model) },
             "modelProvider": "openai", "developerInstructions": instructions
@@ -418,7 +439,7 @@ impl Client {
             }
             "thread/start"
         };
-        if full_access {
+        if full_access && session_id.is_none() {
             params["sandbox"] = json!("danger-full-access");
             params["approvalPolicy"] = json!("never");
         }
@@ -492,7 +513,7 @@ impl Client {
                     response=json!({"id":message["id"],"result":{"contentItems":[{"type":"inputText","text":"The tool callback returned an oversized result; its effect is unconfirmed. Do not retry the operation automatically."}],"success":false}});
                 }
                 let outcome=self.write_frame_guarded(response,self.deadline,false,Some(source),crate::pet_native_write::Use::Decision)?;
-                if matches!(outcome,crate::pet_native_write::Outcome::Skipped(_))&&source.policy_invalidated(){self.withdraw_policy_request(&message)?;}
+                self.finish_skipped_response(&message,outcome)?;
                 self.requests.finish(source);
                 continue;
             }
@@ -515,8 +536,9 @@ impl Client {
                     if ticket.policy_invalidated(){self.withdraw_policy_request(&message)?;self.requests.finish(ticket);}continue;
                 }
                 if let Some(result) = result {
-                    let outcome=self.write_frame_guarded(json!({ "id": message["id"], "result": result }),self.deadline,false,message.ticket.as_ref(),crate::pet_native_write::Use::Decision)?;
-                    if matches!(outcome,crate::pet_native_write::Outcome::Skipped(_))&&message.ticket.as_ref().is_some_and(|t|t.policy_invalidated()){self.withdraw_policy_request(&message)?;}
+                    let use_=if crate::pet_native_choices::pure_refusal("codex",method,params,&result){crate::pet_native_write::Use::Refusal}else{crate::pet_native_write::Use::Decision};
+                    let outcome=self.write_frame_guarded(json!({ "id": message["id"], "result": result }),self.deadline,false,message.ticket.as_ref(),use_)?;
+                    self.finish_skipped_response(&message,outcome)?;
                 } else {
                     self.reject_request(&message)?;
                 }
@@ -793,9 +815,12 @@ for line in sys.stdin:
     if method=='initialized': continue
     if method=='account/read': result={'account':{'type':'apiKey' if pathlib.Path('api-key').exists() else 'chatgpt'}}
     if method=='thread/name/set':pathlib.Path('name.json').write_text(json.dumps(p))
-    if method=='thread/start':
+    if method in ('thread/start','thread/resume'):
         pathlib.Path('request.json').write_text(json.dumps(p))
+        pathlib.Path('request-method.txt').write_text(method)
         result={'thread':{'id':'owned-thread'}}
+        if method=='thread/resume':
+            result['thread'].update({'name':'Original native terminal session'})
     if method=='turn/start':
         pathlib.Path('turn.json').write_text(json.dumps(p))
         send({'method':'item/agentMessage/delta','params':{'threadId':'owned-thread','turnId':'turn-1','itemId':'a','delta':'partial'}})
@@ -815,7 +840,7 @@ for line in sys.stdin:
     #[test]
     #[cfg(unix)]
     fn native_permissions_are_inherited_and_early_events_are_not_lost() {
-        for full_access in [false, true] {
+        for (full_access,session_id) in [(false,None),(true,None),(false,Some("owned-thread")),(true,Some("owned-thread"))] {
             let (cwd, exe) = mock();
             let mut client = Client::start(&exe, &cwd, Duration::from_secs(5), true).unwrap();
             let mut asked = false;
@@ -828,7 +853,7 @@ for line in sys.stdin:
                         history: &[],
                         query: "hello",
                         tools: &[],
-                        session_id: None,
+                        session_id,
                         full_access,
                         effort: if full_access {Some("low")} else {None},
                         name: Some("Mochi · Codex"),
@@ -846,7 +871,7 @@ for line in sys.stdin:
                 .unwrap();
             let sent_turn: Value = serde_json::from_slice(&std::fs::read(cwd.join("turn.json")).unwrap()).unwrap();
             assert_eq!(sent_turn["effort"], if full_access {json!("low")} else {Value::Null});
-            let label:Value=serde_json::from_slice(&std::fs::read(cwd.join("name.json")).unwrap()).unwrap();assert_eq!(label["threadId"],"owned-thread");assert_eq!(label["name"],"Mochi · Codex");
+            if session_id.is_none(){let label:Value=serde_json::from_slice(&std::fs::read(cwd.join("name.json")).unwrap()).unwrap();assert_eq!(label["threadId"],"owned-thread");assert_eq!(label["name"],"Mochi · Codex");}else{assert!(!cwd.join("name.json").exists(),"resume preserves the original native session name");}
             assert!(asked);
             assert!(deltas.iter().any(|text| text == "partial"));
             assert_eq!(reply.text, "accepted");
@@ -855,12 +880,15 @@ for line in sys.stdin:
                 serde_json::from_slice(&std::fs::read(cwd.join("request.json")).unwrap()).unwrap();
             assert_eq!(
                 request["sandbox"],
-                if full_access {
+                if full_access && session_id.is_none() {
                     json!("danger-full-access")
                 } else {
                     Value::Null
                 }
             );
+            assert_eq!(std::fs::read_to_string(cwd.join("request-method.txt")).unwrap(),if session_id.is_some(){"thread/resume"}else{"thread/start"});
+            assert_eq!(request.get("approvalPolicy").cloned(),if full_access&&session_id.is_none(){Some(json!("never"))}else{None});
+            if session_id.is_some(){assert_eq!(request["threadId"],"owned-thread");assert!(request.get("sandbox").is_none(),"resume never reapplies a cached full-access policy");}
             assert!(
                 request.get("config").is_none(),
                 "native MCP and shell configuration is inherited"

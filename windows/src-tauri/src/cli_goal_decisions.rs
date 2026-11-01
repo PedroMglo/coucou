@@ -8,22 +8,35 @@ fn register(requests:&Mutex<HashMap<String,PendingRequest>>,source:Source)->Opti
     let request=json!({"id":id,"provider":source.target().provider,"kind":"permission","origin":format!("Objetivo · {} · {}",source.target().pet_id,source.target().goal_id),"approvalScope":"recipe","voiceCode":code,"goalTarget":source.target(),"goalReview":source.review(),"detail":serde_json::to_string_pretty(source.review()).ok()?});
     let(tx,rx)=mpsc::channel();decisions::register(requests,id.clone(),PendingRequest{native_form:None,choices:None,reply:tx,request:request.clone(),policy:RequestPolicy::GoalRecipe{source},expires_at:deadline}).ok()?;Some((id,request,rx))
 }
-pub(crate)fn ask_goal_recipe(app:&AppHandle,source:Source)->Option<bool>{
+pub(crate)fn ask_goal_recipe(app:&AppHandle,source:Source)->Option<bool>{ask_goal_recipe_decision(app,source).map(|d|d.approved())}
+pub(crate)fn ask_goal_recipe_decision(app:&AppHandle,source:Source)->Option<crate::pet_runtime::recipe_decisions::Decision>{
     let(id,request,rx)=register(pending(),source.clone())?;
     let answer=if app.emit("agent-request",request).is_ok(){loop{
-        if !source.current(){break None;}
+        if !source.pending(){break None;}
         match rx.recv_timeout(source.deadline().saturating_duration_since(Instant::now()).min(Duration::from_millis(50))){
-            Ok(answer)=>break if source.current(){answer["allow"].as_bool()}else{None},
+            Ok(answer)=>break answer["allow"].as_bool(),
             Err(mpsc::RecvTimeoutError::Disconnected)=>break None,Err(mpsc::RecvTimeoutError::Timeout)=>{},
         }
     }}else{None};
-    if let Ok(mut all)=pending().lock(){all.remove(&id);}source.retire();let _=app.emit("agent-request-ended",json!({"id":id}));answer
+    if let Ok(mut all)=pending().lock(){all.remove(&id);}
+    let decision=answer.and_then(|allow|decide_received(source.clone(),allow));source.retire();let _=app.emit("agent-request-ended",json!({"id":id}));decision
 }
-#[cfg(test)]pub(crate)struct Fixture{requests:Mutex<HashMap<String,PendingRequest>>,pub(crate)id:String,pub(crate)request:Value,pub(crate)reply:mpsc::Receiver<Value>}
-#[cfg(test)]pub(crate)fn fixture(source:Source)->Fixture{let requests=Mutex::new(HashMap::new());let(id,request,reply)=register(&requests,source).unwrap();Fixture{requests,id,request,reply}}
+fn decide_received(source:Source,allow:bool)->Option<crate::pet_runtime::recipe_decisions::Decision>{
+    loop{
+        if let Some(decision)=crate::pet_runtime::recipe_decisions::Decision::from_transport(source.clone(),allow){break Some(decision);}
+        if !source.pending(){break None;}
+        // Revalidate the same received answer under the original deadline.
+        // Waiting creates no new request, approval, budget or effect.
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+#[cfg(test)]pub(crate)struct Fixture{source:Source,requests:Mutex<HashMap<String,PendingRequest>>,pub(crate)id:String,pub(crate)request:Value,pub(crate)reply:mpsc::Receiver<Value>}
+#[cfg(test)]pub(crate)fn fixture(source:Source)->Fixture{let requests=Mutex::new(HashMap::new());let(id,request,reply)=register(&requests,source.clone()).unwrap();Fixture{source,requests,id,request,reply}}
 #[cfg(test)]impl Fixture{
+    pub(crate)fn decision(&self)->Option<crate::pet_runtime::recipe_decisions::Decision>{let answer=self.reply.recv_timeout(Duration::from_secs(1)).ok()?;decide_received(self.source.clone(),answer["allow"].as_bool()?)}
     pub(crate)fn answer(&self,answer:Value,target:Value)->Result<(),String>{decisions::answer_in(&Chat::default(),&self.requests,&self.id,answer,Some(target))}
     pub(crate)fn count(&self)->usize{self.requests.lock().unwrap().len()}
+    pub(crate)fn panel_pending(&self)->Vec<Value>{goal_pending_in(&self.requests).unwrap()}
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]enum Spoken{Review,Approve,Deny}

@@ -1,4 +1,4 @@
-import type {PetAttachment,NativeTargetCapabilities} from './bridge';
+import type {PetAttachment,NativeTargetCapabilities,PetMemoryDecision} from './bridge';
 /** A conversation surface is pinned to an explicit origin, never the last pet
  * or terminal that happened to emit an event. Late reads and sends cannot move it. */
 export interface SessionTarget {
@@ -26,12 +26,12 @@ export interface SessionSummary {
 }
 export interface SessionTransport {
   history(target:SessionTarget):Promise<SessionSnapshot>;
-  send(target:SessionTarget,query:string,model?:string,attachments?:PetAttachment[]):Promise<unknown>;
+  send(target:SessionTarget,query:string,model?:string,attachments?:PetAttachment[],memoryDecision?:PetMemoryDecision):Promise<unknown>;
   cancel(target:SessionTarget,turn:string):Promise<boolean>;
   removeAttachment?(target:SessionTarget,attachment:PetAttachment):Promise<unknown>;
   clearAttachment?(target:SessionTarget,attachment:SessionAttachment):Promise<unknown>;
 }
-export const sessionTargetKey=(t:SessionTarget)=>JSON.stringify([t.petId,t.provider,t.origin,t.sessionId,t.conversationId??'']);
+export const sessionTargetKey=(t:{readonly petId:string;readonly provider:string;readonly origin:string;readonly sessionId:string;readonly conversationId?:string})=>JSON.stringify([t.petId,t.provider,t.origin,t.sessionId,t.conversationId??'']);
 export const sameSession=(a:SessionTarget|null|undefined,b:SessionTarget|null|undefined)=>!!a&&!!b&&sessionTargetKey(a)===sessionTargetKey(b);
 export const sessionOrigin=(t:SessionTarget)=>`${t.origin==='mochi'?'Mochi':'Terminal'} #${t.sessionId.slice(0,8)}`;
 const message=(e:unknown)=>String(e).replace(/^Error:\s*/,'');
@@ -107,14 +107,15 @@ export class SessionChat {
     }catch(e){if(ticket===this.reads&&sameSession(target,this.target))this.error=message(e);}
     finally{if(ticket===this.reads){this.loading=false;this.changed();if(this.again){this.again=false;void this.refresh();}}}
   }
-  async send(text:string,expectedModel?:string):Promise<boolean>{
-    const target=this.target,snapshot=this.snapshot,query=text.trim();
+  async send(text:string,expectedModel?:string,memory?:{target:SessionTarget;attachments:PetAttachment[];decision:PetMemoryDecision}):Promise<boolean>{
+    const target=this.target?structuredClone(this.target):null,snapshot=this.snapshot,query=text.trim();
     if(!target||!snapshot||!query||this.error||snapshot.busy||!snapshot.capabilities.send||!nativeSessionReady(snapshot,'session.send')||this.sending)return false;
-    const attachments=(snapshot.attachments??[]).map(a=>({...a}));
+    if(memory&&(target.origin!=='mochi'||!sameSession(target,memory.target)))throw Error('A revisão de memória não pertence a esta conversa Mochi.');
+    const decision=memory?structuredClone(memory.decision):undefined,attachments=(memory?.attachments??snapshot.attachments??[]).map(a=>({...a}));
     const key=sessionTargetKey(target),model=expectedModel??this.models.get(key);this.failures.delete(key);this.pending.set(key,{query,messageIds:new Set(snapshot.messages.map(m=>m.id)),acknowledged:false});this.changed();
     this.invalidate(target);
     let ok=false,error='';
-    try{await this.transport.send(target,query,model,attachments);ok=true;}
+    try{if(decision)await this.transport.send(target,query,model,attachments,decision);else await this.transport.send(target,query,model,attachments);ok=true;}
     catch(e){error=message(e);if(sameSession(target,this.target))this.error=error;}
     finally{
       if(sameSession(target,this.target)){

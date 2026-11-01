@@ -120,3 +120,33 @@ impl Drop for Temp { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
         assert!(!layout.data().exists());
     }
 }
+
+#[test] fn legacy_import_rejects_delivered_memory_even_with_an_old_version_marker() {
+    for version in 1..=4 {
+        for field in ["native_memory_context", "nativeMemoryContext"] {
+            for archived in [false, true] {
+                let t=Temp::new();let layout=t.basic();let path=layout.legacy_data.join("assistant/conversations.json");
+                let mut c=serde_json::json!({"id":"preserved-cid","messages":[],"created":101,"updated":101});
+                c[field]=serde_json::json!({"schemaVersion":1,"petId":"agent_codex","possiblyDeliveredAt":101});
+                let disk=if archived{serde_json::json!({"version":version,"pets":{},"archives":{"codex":[c]}})}else{serde_json::json!({"version":version,"pets":{"codex":c},"archives":{}})};
+                let bytes=serde_json::to_vec(&disk).unwrap();fs::write(&path,&bytes).unwrap();
+                assert!(matches!(LegacyReview::inspect(layout.clone()),Err(Error::UnsupportedProfile)),"{version}/{field}/archive={archived}");
+                assert_eq!(fs::read(&path).unwrap(),bytes);assert!(!layout.config().exists());assert!(!layout.data().exists());
+            }
+        }
+    }
+}
+#[test] fn legacy_import_cannot_silently_exclude_new_runtime_catalogues() {
+    for name in ["pet-runtime-results-v1","pet-runtime-planning-v1","pet-runtime-step-consent-v1","pet-runtime-consent-v1.owners-v1","pet-runtime-future-v2"] {
+        let t=Temp::new();let layout=t.basic();let state=layout.legacy_config.join(name).join("private-state.json");
+        let bytes=b"{\"syntheticRetainedState\":true}";t.file(&state,bytes);
+        assert!(matches!(LegacyReview::inspect(layout.clone()),Err(Error::UnsupportedProfile)),"{name}");
+        assert_eq!(fs::read(&state).unwrap(),bytes);assert!(!layout.config().exists());assert!(!layout.data().exists());
+    }
+}
+#[test] fn legacy_import_refuses_v7_without_creating_or_rewriting_a_profile() {
+    let t=Temp::new();let layout=t.basic();let path=layout.legacy_data.join("assistant/conversations.json");
+    let bytes=br#"{"version":7,"pets":{},"archives":{}}"#;fs::write(&path,bytes).unwrap();
+    assert!(matches!(LegacyReview::inspect(layout.clone()),Err(Error::UnsupportedProfile)));
+    assert_eq!(fs::read(&path).unwrap(),bytes);assert!(!layout.config().exists());assert!(!layout.data().exists());
+}

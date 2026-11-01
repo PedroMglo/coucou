@@ -33,13 +33,13 @@ impl Store {
     }
     pub(in crate::pet_runtime)fn commit_generated<'a>(&'a self,certificate:&PlanCertified<'_,'_>,now:u64)->Result<PlanCommit<'a>> {
         let _guard=self.lock(true)?;let (mut goal,before)=self.load_with_pending(certificate.goal_id(),true)?.ok_or(Error::NotFound)?;
-        certificate.current(&goal,now).map_err(|_|Error::Conflict)?;
+        certificate.current(&goal,now).map_err(|reason|reason.control_error())?;
         let reference=certificate.reference();
         let receipt=if goal.generated_plans.contains(reference) {self.stabilize(goal)}
         else {
             let source=goal.clone();
             goal.append_generated(reference.clone(),certificate.output())?;
-            certificate.current(&source,now).map_err(|_|Error::Conflict)?;self.publish(goal,Some(&before),false)?
+            certificate.current(&source,now).map_err(|reason|reason.control_error())?;self.publish(goal,Some(&before),false)?
         };
         if receipt.status==CommitStatus::Uncertain{return Ok(PlanCommit {receipt,published:None});}
         let (readback,_)=self.load_with_pending(certificate.goal_id(),true)?.ok_or(Error::NotFound)?;
@@ -50,6 +50,6 @@ impl Store {
     /// It cannot issue a worker, model channel or effect permit.
     pub(in crate::pet_runtime)fn read_control(&self,id:&str,pet:&str)->Result<Record> {
         let _guard=self.lock(false)?;let (goal,_)=self.load_with_pending(id,true)?.ok_or(Error::NotFound)?;
-        if goal.spec.owner.pet_id!=pet{return Err(Error::Conflict);}Ok(goal)
+        if goal.spec.owner.pet_id!=pet{return Err(Error::Conflict);}self.require_current_goal(&goal)?;Ok(goal)
     }
 }

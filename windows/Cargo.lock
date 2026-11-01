@@ -790,7 +790,7 @@ dependencies = [
 
 [[package]]
 name = "coucou"
-version = "0.5.1-mochi.31"
+version = "0.5.1-mochi.32"
 dependencies = [
  "arboard",
  "chrono",
@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "coucou-hook"
-version = "0.5.1-mochi.31"
+version = "0.5.1-mochi.32"
 dependencies = [
  "libc",
  "serde_json",

@@ -1,7 +1,8 @@
 use super::types::*;
 use serde_json::Value;
-use std::{collections::hash_map::DefaultHasher, hash::{Hash, Hasher}, process::Stdio, sync::OnceLock, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
-use tokio::{io::AsyncReadExt, process::Command, sync::Mutex};
+use std::{collections::hash_map::DefaultHasher, hash::{Hash, Hasher}, sync::OnceLock, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use tokio::sync::Mutex;
+use crate::pet_helper::{Lane,Session};
 
 const LIMIT: usize = 4 * 1024 * 1024;
 const GONE: &str = "O dispositivo ou a aplicação mudou. Atualiza a lista e tenta novamente.";
@@ -10,24 +11,14 @@ static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
 fn cache() -> &'static Mutex<Cache> { CACHE.get_or_init(|| Mutex::new(Cache::default())) }
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 }
 
-// Bounded output and kill-on-drop apply while reading too; a hung daemon cannot
-// retain a GTK thread or grow an unbounded buffer. stderr stays private.
+// Workers retain their physical holds until the owned group is stopped and
+// reaped. Dropping an await cancels that worker without detaching the helper.
 async fn run(program: &str, args: &[String], seconds: u64) -> Result<Vec<u8>, String> {
-    let operation = async {
-        let mut child = Command::new(program).args(args).env("LC_ALL", "C")
-            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())
-            .kill_on_drop(true).spawn().map_err(|_| "O serviço de som não está disponível.".to_string())?;
-        let mut bytes = Vec::new();
-        child.stdout.take().ok_or("O serviço de som não respondeu.")?.take((LIMIT + 1) as u64)
-            .read_to_end(&mut bytes).await.map_err(|_| "Não foi possível ler o estado do som.".to_string())?;
-        if bytes.len() > LIMIT { return Err("A lista de som excedeu o limite de leitura.".into()); }
-        if !child.wait().await.map_err(|_| "O serviço de som foi interrompido.".to_string())?.success() {
-            return Err("O serviço de som não confirmou o pedido. Atualiza e tenta novamente.".into());
-        }
-        Ok(bytes)
-    };
-    tokio::time::timeout(Duration::from_secs(seconds), operation).await
-        .map_err(|_| "O serviço de som não respondeu a tempo.".to_string())?
+    run_checked(program,args,seconds,||Ok(())).await
+}
+async fn run_checked(program:&str,args:&[String],seconds:u64,before_spawn:impl FnOnce()->Result<(),String>+Send+'static)->Result<Vec<u8>,String>{
+    let session=Session::acquire(Lane::AudioRead,Duration::from_secs(seconds))?;
+    session.run(crate::pet_helper::command(program,args),LIMIT,Duration::from_secs(seconds),before_spawn).await
 }
 async fn pactl(args: &[String]) -> Result<Vec<u8>, String> { run("/usr/bin/pactl", args, 4).await }
 async fn json(args: &[&str]) -> Result<Value, String> {
@@ -169,25 +160,35 @@ fn confirmed(s: &Snapshot, r: &Request) -> bool {
         Action::Balance => n.balance.zip(r.value).is_some_and(|(a, b)| (a - b).abs() < 0.04),
     }
 }
-pub async fn control(request: Request) -> Result<Receipt, String> { control_for(request,None).await }
-pub(super) async fn system_control(request: Request, check: std::sync::Arc<dyn Fn()->bool+Send+Sync>) -> Result<Receipt, String> { control_for(request,Some(check)).await }
-async fn control_for(request: Request, system: Option<std::sync::Arc<dyn Fn()->bool+Send+Sync>>) -> Result<Receipt, String> {
+pub async fn control(request: Request) -> Result<Receipt, String> { control_for(request,None,false).await }
+pub(super) async fn control_with(request:Request,check:std::sync::Arc<dyn Fn()->bool+Send+Sync>)->Result<Receipt,String>{control_for(request,Some(check),false).await}
+pub(super) async fn system_control(request: Request, check: std::sync::Arc<dyn Fn()->bool+Send+Sync>) -> Result<Receipt, String> { control_for(request,Some(check),true).await }
+fn validate_dispatch(caller:Option<&(dyn Fn()->bool+Send+Sync)>,origin:impl FnOnce()->Result<(),String>)->Result<(),String>{
+    // Caller validation may wait on native/settings locks. Check current IO
+    // after it returns, immediately before spawn, not before that possible wait.
+    if caller.is_some_and(|check|!check()){return Err("A autorização original do som mudou; nenhum novo helper foi iniciado.".into());}
+    origin()
+}
+async fn control_for(request: Request, caller: Option<std::sync::Arc<dyn Fn()->bool+Send+Sync>>, devices_only:bool) -> Result<Receipt, String> {
+    crate::settings::effect_allowed()?;
     // Serialize requests from both surfaces and always reread identities before
     // mutation. IDs from a detached headset/closed app never select a new node.
+    let effect=Session::acquire(Lane::AudioEffect,Duration::from_secs(60))?;
     let mut cache = cache().lock().await;
     let before = read().await;
-    if system.as_ref().is_some_and(|check|!super::system_policy::request_allowed(&before,&request,check.as_ref())){
+    if devices_only&&caller.as_ref().is_some_and(|check|!super::system_policy::request_allowed(&before,&request,check.as_ref())){
         return Err("Escolhe um dispositivo de entrada, saída ou perfil nesta página. O som das aplicações pertence ao Spoty.".into());
     }
     let operation = plan(&before, &request)?;
+    let before_spawn=move||validate_dispatch(caller.as_deref(),crate::settings::effect_allowed);
     let mut warning = None;
     match operation {
-        Operation::Pactl(args) => { pactl(&args).await?; }
+        Operation::Pactl(args) => { effect.run(crate::pet_helper::command("/usr/bin/pactl",&args),LIMIT,Duration::from_secs(4),before_spawn).await?; }
         Operation::Input(name) => {
             let home = std::env::var_os("HOME").ok_or("A sessão não tem uma pasta pessoal.")?;
             let helper = std::path::PathBuf::from(home).join(".local/bin/audio-barra");
             let helper = helper.to_str().ok_or("O seletor de microfone não está disponível.")?;
-            let bytes = run(helper, &[name], 30).await?;
+            let bytes = effect.run(crate::pet_helper::command(helper,&[name]),LIMIT,Duration::from_secs(30),before_spawn).await?;
             let result: Value = serde_json::from_slice(&bytes).map_err(|_| "A troca de microfone não foi confirmada.")?;
             if result["ok"] != true { return Err("A troca de microfone não foi confirmada.".into()); }
             warning = result["warning"].as_str().map(|s| s.chars().filter(|c| !c.is_control()).take(400).collect());
@@ -200,11 +201,12 @@ async fn control_for(request: Request, system: Option<std::sync::Arc<dyn Fn()->b
         after = read().await; accepted = confirmed(&after, &request);
     }
     cache.value = Some((Instant::now(), after.clone()));
+    if crate::settings::effect_allowed().is_err(){warning=Some("A operação anterior foi enviada, mas a origem das preferências já não está confirmada. O estado observado foi conservado; não repitas a ação automaticamente.".into());}
     if !accepted && warning.is_none() { warning = Some("O pedido foi enviado, mas o estado ainda não o confirma. Atualiza antes de repetir.".into()); }
     Ok(Receipt { snapshot: after, confirmed: accepted, warning })
 }
 
-pub async fn spoken(command: super::commands::SoundCommand) -> Result<(String, bool), String> {
+pub async fn spoken(command: super::commands::SoundCommand,check:std::sync::Arc<dyn Fn()->bool+Send+Sync>) -> Result<(String, bool), String> {
     use super::commands::SoundCommand;
     let snapshot = snapshot().await;
     if !snapshot.available { return Err(snapshot.error.unwrap_or_else(|| "O serviço de som está indisponível.".into())); }
@@ -220,7 +222,7 @@ pub async fn spoken(command: super::commands::SoundCommand) -> Result<(String, b
         SoundCommand::Mute {muted,..} => Request { target_key: node.key.clone(), action: Action::Mute, value: None, muted: Some(muted), destination_key: None, option: None },
         SoundCommand::Status => unreachable!(),
     };
-    let result = control(request).await?;
+    let result = control_with(request,check).await?;
     if !result.confirmed { return Ok((result.warning.unwrap_or_else(|| "O sistema ainda não confirmou a alteração do som.".into()), false)); }
     Ok((match command {
         SoundCommand::Volume {percent,..} => format!("Volume {} definido para {percent:.0} por cento.", if input { "do microfone" } else { "do sistema" }),
@@ -232,6 +234,26 @@ pub async fn spoken(command: super::commands::SoundCommand) -> Result<(String, b
 #[cfg(test)] mod tests {
     use super::*;
     use serde_json::json;
+    #[tokio::test]async fn system_io_audio_helper_checks_current_origin_when_the_future_is_polled(){
+        let io=crate::settings::EffectFixture::new();let marker=io.root.join("must-not-spawn");let args=vec!["-I".into(),"-c".into(),"import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('effect');print('ok')".into(),marker.to_str().unwrap().into()];
+        let probe=io.probe.clone();let pending=run_checked("/usr/bin/python3",&args,2,move||probe.check());io.external();assert!(pending.await.is_err());assert!(!marker.exists());
+    }
+    #[tokio::test]async fn system_io_audio_late_original_caller_refusal_prevents_spawn(){
+        let io=crate::settings::EffectFixture::new();let marker=io.root.join("caller-must-not-spawn");let args=vec!["-I".into(),"-c".into(),"import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('effect')".into(),marker.to_str().unwrap().into()];let current=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let probe=io.probe.clone();let original_current=current.clone();let pending=run_checked("/usr/bin/python3",&args,2,move||{probe.check()?;if original_current.load(std::sync::atomic::Ordering::Acquire){Ok(())}else{Err("original caller ended".into())}});current.store(false,std::sync::atomic::Ordering::Release);assert!(pending.await.is_err());assert!(!marker.exists());assert!(io.probe.check().is_ok());
+    }
+    #[tokio::test]async fn system_io_audio_origin_is_checked_after_original_caller_validation_returns(){
+        let io=crate::settings::EffectFixture::new();let marker=io.root.join("no-spawn-after-caller-wait");let args=vec!["-I".into(),"-c".into(),"import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('effect')".into(),marker.to_str().unwrap().into()];
+        let probe=io.probe.clone();let io=std::sync::Arc::new(io);let original_io=io.clone();let original_caller=move||{original_io.external();true};let reply=run_checked("/usr/bin/python3",&args,2,move||validate_dispatch(Some(&original_caller),||probe.check())).await;
+        assert!(reply.is_err());assert!(!marker.exists());
+    }
+    #[tokio::test]async fn system_io_audio_benign_commit_uses_current_owner_without_changing_captured_command(){
+        let io=crate::settings::EffectFixture::new();let args=vec!["-I".into(),"-c".into(),"import sys;print(sys.argv[1])".into(),"captured-original".into()];let probe=io.probe.clone();let pending=run_checked("/usr/bin/python3",&args,2,move||probe.check());io.save();assert_eq!(pending.await.unwrap(),b"captured-original\n");
+    }
+    #[tokio::test]async fn system_io_audio_observed_result_is_retained_after_child_changes_private_origin(){
+        let io=crate::settings::EffectFixture::new();let args=vec!["-I".into(),"-c".into(),"import os,json,pathlib,sys;p=pathlib.Path(sys.argv[1]);p.write_bytes(p.read_bytes());print(json.dumps({'pid':os.getpid(),'observed':'done'}))".into(),io.path.to_str().unwrap().into()];
+        let probe=io.probe.clone();let bytes=run_checked("/usr/bin/python3",&args,2,move||probe.check()).await.unwrap();let value:Value=serde_json::from_slice(&bytes).unwrap();assert_eq!(value["observed"],"done");assert!(io.probe.check().is_err());let pid=value["pid"].as_i64().unwrap()as libc::pid_t;assert_eq!(unsafe{libc::kill(pid,0)},-1);assert_eq!(std::io::Error::last_os_error().raw_os_error(),Some(libc::ESRCH));
+    }
     fn device(index: u64, serial: u64, name: &str) -> Value {
         json!({"index":index,"name":name,"description":"Som sintético","properties":{"object.serial":serial.to_string()},
             "mute":false,"volume":{"front-left":{"value":32768},"front-right":{"value":32768}},"balance":0.0,

@@ -1,3 +1,4 @@
+import {buildShortcutReconciliation} from './shortcuts-reconciliation';
 import {SettingsRequestIntent} from './request-intent';
 // The Coucou window (settings.html): Flow dictation, the Notetaker and, under
 // Notch, every setting of the island — the place where anything that writes to
@@ -7,6 +8,11 @@ import {SettingsRequestIntent} from './request-intent';
 import "./settings.css";
 import {parseRecapPrefs,parseRecapReceipt,recapReceiptSuccess,recapFailureMessage} from "../recap/recap";
 import {buildIslandAvailability} from "./island-availability";
+import {buildAutostartSetting} from './autostart-setting';
+import {buildAutostartReview} from './autostart-review';
+import {buildShortcutReview} from './shortcuts-review';
+import {ShortcutPreferenceWriter} from '../core/shortcuts-settings';
+import {buildSettingsIoStatus} from './io-status';
 import {islandAvailabilityValues,type IslandAvailabilityValues} from "../core/island-availability";
 import {OllamaModelSelection} from "../core/ollama-selection";
 import { Bridge, onEvent, type HookPreview, type HookStatus, type ShortcutsReport } from "../core/bridge";
@@ -40,6 +46,7 @@ const KEY_STORE = navigator.userAgent.includes("Windows")
   : "Secret Service (GNOME Keyring, KWallet)";
 
 let settings: Settings = { ...DEFAULT_SETTINGS };
+const storageStatus=buildSettingsIoStatus(()=>Bridge.settingsIoStatus(),{prepare:()=>Bridge.settingsReviewPrepare(),apply:request=>Bridge.settingsReviewApply(request),cancel:request=>Bridge.settingsReviewCancel(request)});
 let rosterSaving=false;
 const rosterPreferences=new PetRosterPreferences({save:request=>Bridge.petRosterSettingsPatch(request),adopt:roster=>{settings={...settings,...roster};for(const redraw of declaredViews)redraw();}});
 async function changeRoster(request:PetRosterRequest){
@@ -50,12 +57,19 @@ async function changeRoster(request:PetRosterRequest){
 }
 let version = "";
 let islandAvailability:ReturnType<typeof buildIslandAvailability>|null=null;
+let autostartSetting:ReturnType<typeof buildAutostartSetting>|ReturnType<typeof buildAutostartReview>|null=null;
 let observedIslandAvailability:IslandAvailabilityValues|null=null;
 let settingsObservation=0,settingsListenerReady=false;
 let settingsSubscription:Promise<boolean>|null=null;
 function availabilityControls(){
   islandAvailability??=buildIslandAvailability({initial:observedIslandAvailability,save:value=>Bridge.petCenterSettingsPatch(value),read:async()=>{if(!await ensureSettingsSubscription())throw Error("Preferences unavailable");const boot=await Bridge.boot();if(!boot)throw Error("Preferences unavailable");return boot.settings;},adopt:flags=>{observedIslandAvailability={...flags};settings={...settings,...flags};}});
   islandAvailability.render();return islandAvailability.el;
+}
+function autostartControls(){
+ if(navigator.userAgent.includes('Linux')){
+  autostartSetting??=buildAutostartReview({status:()=>Bridge.autostartReviewStatus(),prepare:request=>Bridge.autostartReviewPrepare(request),apply:request=>Bridge.autostartReviewApply(request),cancel:request=>Bridge.autostartReviewCancel(request)},{initial:settings.autostart,adopt:value=>{settings={...settings,autostart:value};}});
+ }else autostartSetting??=buildAutostartSetting({initial:settings.autostart,save:async value=>{const receipt=await Bridge.autostartSettingsPatch({enabled:value});if(receipt.registration==='unconfirmed')throw Error(receipt.reason??'O registo de arranque não foi confirmado.');return receipt;},read:async()=>{if(!await ensureSettingsSubscription())throw Error('As preferências estão indisponíveis.');const boot=await Bridge.boot();if(!boot)throw Error('As preferências estão indisponíveis.');return boot.settings.autostart;},adopt:value=>{settings={...settings,autostart:value};}});
+ autostartSetting.render();return autostartSetting.el;
 }
 
 const windowRoot = document.getElementById("hub")!;
@@ -74,7 +88,7 @@ function settingsSectionCurrent(section:HTMLElement){
 }
 
 async function save() {
-  await Bridge.saveSettings(settings);
+  try{await Bridge.saveSettings(settings);}finally{void storageStatus.refresh();}
 }
 
 /** A colour was picked for a pill's Mochi (see ./colors.ts): the island follows. */
@@ -597,8 +611,8 @@ function chatProvidersSection(
   list.append(h("div", { class: "row" }, h("label", { text: t("Working folder") }), workspace));
   const fullAccess = h("input", { type: "checkbox", checked: settings.cliFullAccess }) as HTMLInputElement;
   fullAccess.addEventListener("change", () => { settings.cliFullAccess = fullAccess.checked; void save().catch(Bridge.reportSettingsError); });
-  list.append(h("label", { class: "row" }, fullAccess, h("span", { text: t("Run CLI agents without approval prompts") })),
-    h("div", { class: "hint", text: t("Enabled: commands and file changes run with your user account. Disabled: use each CLI's permissions; Antigravity actions that need a prompt must be approved in its terminal.") }));
+  list.append(h("label", { class: "row" }, fullAccess, h("span", { text: t("Full access in new Codex/Gravity conversations") })),
+    h("div", { class: "hint", text: t("Full access runs commands and file changes with your user account. It applies only to new Codex/Gravity conversations. Existing sessions keep their native policy; choose a new conversation after changing this option or the working folder. Copilot keeps its native permissions.") }));
   return h(
     "section",
     {},
@@ -638,7 +652,7 @@ function exposureNotice(url: string, withKey: boolean): HTMLElement | null {
   }
 }
 
-function localSection(customKey: boolean): HTMLElement {
+function localSection(customKey: boolean,lmstudioKey=false): HTMLElement {
   const body = h("div", { style: "display:flex;flex-direction:column;gap:14px" });
   const section = h(
     "section",
@@ -685,9 +699,9 @@ function localSection(customKey: boolean): HTMLElement {
       disconnect.addEventListener("click", async () => {
         settings[field] = "";
         if (settings.chatProvider === id) settings.chatProvider = "anthropic";
-        if (id === "custom") {
-          await Bridge.secretClear(CUSTOM_SERVER_KEY).catch(() => {});
-          customKey = false;
+        if (["custom","lmstudio"].includes(id)) {
+          await Bridge.secretClear(id==="lmstudio"?"lmstudio-local-api-key":CUSTOM_SERVER_KEY).catch(() => {});
+          if(id==="lmstudio")lmstudioKey=false;else customKey=false;
         }
         try{await save();redraw();}catch(error){Bridge.reportSettingsError(error);}
       });
@@ -695,7 +709,7 @@ function localSection(customKey: boolean): HTMLElement {
         h("div", { class: "row" }, label, h("span", { class: "path", text: settings[field] }), statusDot(true), use, disconnect),
         status,
       );
-      exposure.append(exposureNotice(settings[field], id === "custom" && customKey) ?? "");
+      exposure.append(exposureNotice(settings[field], id==="lmstudio"?lmstudioKey:id==="custom"&&customKey) ?? "");
       block.append(exposure);
       return block;
     }
@@ -711,7 +725,7 @@ function localSection(customKey: boolean): HTMLElement {
     const key = h("input", {
       type: "password",
       "aria-label": `${CHAT_STRINGS.keyOptional} · ${t(def.name)}`,
-      placeholder: customKey ? CHAT_STRINGS.stored : CHAT_STRINGS.keyOptional,
+      placeholder: (id==="lmstudio"?lmstudioKey:customKey) ? CHAT_STRINGS.stored : CHAT_STRINGS.keyOptional,
       style: "flex:1 1 auto;min-width:0",
       autocomplete: "off",
       spellcheck: "false",
@@ -725,7 +739,7 @@ function localSection(customKey: boolean): HTMLElement {
 
     const showExposure = () => {
       clear(exposure);
-      const withKey = id === "custom" && (customKey || key.value.trim() !== "");
+      const withKey = ["custom","lmstudio"].includes(id) && ((id==="lmstudio"?lmstudioKey:customKey) || key.value.trim() !== "");
       const notice = exposureNotice(input.value || def.usual, withKey);
       if (notice) exposure.append(notice);
     };
@@ -740,10 +754,10 @@ function localSection(customKey: boolean): HTMLElement {
       const attached=()=>current()&&block.isConnected;
       clear(status);status.append(h("div",{class:"hint",text:CHAT_STRINGS.connecting}));
       try{
-        if(id==="custom"&&secret){
+        if(["custom","lmstudio"].includes(id)&&secret){
           // Bind the already-authorized key write to the address captured by this gesture.
-          await Bridge.localSetKey(address||def.usual,secret);
-          if(!attached())return;key.value="";customKey=true;
+          await Bridge.localSetKey(address||def.usual,secret,id==="lmstudio"?"lmstudio":undefined);
+          if(!attached())return;key.value="";if(id==="lmstudio")lmstudioKey=true;else customKey=true;
         }
         const server=await Bridge.localConnect(id,address);
         if(!attached())return;
@@ -769,7 +783,7 @@ function localSection(customKey: boolean): HTMLElement {
     });
 
     block.append(h("div", { class: "row" }, label, input, connect));
-    if (id === "custom") block.append(h("div", { class: "row" }, h("label", { text: "" }), key));
+    if (["custom","lmstudio"].includes(id)) block.append(h("div", { class: "row" }, h("label", { text: "" }), key));
     block.append(status, exposure);
     showExposure();
     return block;
@@ -994,10 +1008,7 @@ function generalSection(): HTMLElement {
       h("label", { text: t("Island lives on") }),
       screen,
     ),
-    h("div", { class: "row" },
-      h("label", { text: t("Launch at startup") }),
-      toggle(settings.autostart, (v) => { settings.autostart = v; void save().catch(Bridge.reportSettingsError); }),
-    ),
+    autostartControls(),
     ...recapRows(notchContext),
     languageRow(),
   );
@@ -1058,17 +1069,22 @@ const SHORTCUTS_UI = {
 };
 
 function shortcutsSection(initial: ShortcutsReport | null,context?:HubContext): HTMLElement {
+  let sectionAlive=true,shortcutWrite:Promise<void>=Promise.resolve();
+  const shortcutWriter=navigator.userAgent.includes('Linux')?new ShortcutPreferenceWriter({current:()=>settings.shortcuts,observation:()=>settingsObservation,alive:()=>sectionAlive,save:request=>Bridge.shortcutsSettingsPatch(request),adopt:bindings=>{settings={...settings,shortcuts:bindings};}}):null;
+  const nativeReview=navigator.userAgent.includes('Linux')?buildShortcutReview({prepare:()=>Bridge.shortcutsReviewPrepare(),prepareCurrentScope:()=>Bridge.shortcutsReviewPrepareCurrentScope(),inspect:key=>Bridge.shortcutsReviewInspect(key),cancel:key=>Bridge.shortcutsReviewCancel(key),apply:decision=>Bridge.shortcutsReviewApply(decision),status:()=>Bridge.shortcutsReviewStatus()}):null;
+  const nativeReconciliation=navigator.userAgent.includes('Linux')?buildShortcutReconciliation({prepare:()=>Bridge.shortcutsReconcilePrepare(),inspect:key=>Bridge.shortcutsReconcileInspect(key),cancel:key=>Bridge.shortcutsReviewCancel(key),apply:decision=>Bridge.shortcutsReconcileApply(decision)}):null;
   let report = initial;
   const list = h("div", { class: "shortcut-list" });
   const feedback = h("div", {});
   const blockedNote = h("div", {});
 
   let stopRecording: (() => void) | null = null;
-  if(context)context.onLeave=()=>{stopRecording?.();shortcutsListener=null;};
+  if(context)context.onLeave=()=>{sectionAlive=false;stopRecording?.();nativeReview?.dispose();nativeReconciliation?.dispose();shortcutsListener=null;};
 
   function store(id: string, binding: Binding) {
-    settings.shortcuts = { ...settings.shortcuts, [id]: binding };
-    void save().catch(Bridge.reportSettingsError);
+    nativeReview?.invalidate();nativeReconciliation?.invalidate();
+    if(shortcutWriter)shortcutWrite=shortcutWriter.change(id,binding).catch(Bridge.reportSettingsError).finally(draw);
+    else{settings.shortcuts = { ...settings.shortcuts, [id]: binding };shortcutWrite=save().catch(Bridge.reportSettingsError).finally(draw);}
   }
 
   function tagFor(id: string, dups: Set<string>): HTMLElement | null {
@@ -1081,6 +1097,7 @@ function shortcutsSection(initial: ShortcutsReport | null,context?:HubContext): 
       case "typesCharacter": return h("span", { class: "tag warn", text: SHORTCUTS_UI.types(st.typed ?? "?") });
       case "unsupported": return h("span", { class: "tag", text: SHORTCUTS_UI.unavailable });
       case "refused": return h("span", { class: "tag warn", text: SHORTCUTS_UI.refused });
+      case "preferencesUnconfirmed": return h("span", { class: "tag warn", text: "As preferências aguardam confirmação; o atalho não foi registado." });
       // Wayland: the desktop may run it on other keys than the ones asked for.
       case "active": return st.trigger ? h("span", { class: "tag", text: SHORTCUTS_UI.desktopKeys(st.trigger) }) : null;
       default: return null;
@@ -1134,7 +1151,7 @@ function shortcutsSection(initial: ShortcutsReport | null,context?:HubContext): 
       window.removeEventListener("blur", onBlur);
       stopRecording = null;
       // Takes the global shortcuts back, from what is saved by now.
-      void Bridge.shortcutsSuspend(false);
+      void shortcutWrite.then(()=>Bridge.shortcutsSuspend(false));
       draw();
     }
     stopRecording = finish;
@@ -1203,9 +1220,10 @@ function shortcutsSection(initial: ShortcutsReport | null,context?:HubContext): 
     text: SHORTCUTS_UI.reset,
     onclick: () => {
       stopRecording?.();
-      settings.shortcuts = {};
+      nativeReview?.invalidate();nativeReconciliation?.invalidate();
       clear(feedback);
-      void save().catch(Bridge.reportSettingsError);
+      if(shortcutWriter)shortcutWrite=shortcutWriter.reset().catch(Bridge.reportSettingsError).finally(draw);
+      else{settings.shortcuts = {};shortcutWrite=save().catch(Bridge.reportSettingsError).finally(draw);}
       draw();
     },
   });
@@ -1217,6 +1235,7 @@ function shortcutsSection(initial: ShortcutsReport | null,context?:HubContext): 
       if (!stopRecording) draw();
     },
     settingsChanged() {
+      nativeReview?.invalidate();nativeReconciliation?.invalidate();
       if (!stopRecording) draw();
     },
   };
@@ -1226,6 +1245,8 @@ function shortcutsSection(initial: ShortcutsReport | null,context?:HubContext): 
     "section",
     {},
     h("h2", {}, h("span", { text: SHORTCUTS_UI.title })),
+    nativeReview?.el??h('span',{}),
+    nativeReconciliation?.el??h('span',{}),
     h("div", { class: "hint", text: SHORTCUTS_UI.hint }),
     h("div", { class: "subhead", text: SHORTCUTS_UI.global }),
     list,
@@ -1301,12 +1322,14 @@ function applyDirection() {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 function receiveSettings(s:Settings){
+  void storageStatus.refresh();
   settingsObservation++;
   const before = `${settings.chatProvider}|${settings.ollamaUrl}|${settings.lmstudioUrl}|${settings.customUrl}`;
   settings = OllamaModelSelection.applySettings({ ...settings, ...s });
   rosterPreferences.observe(s);
   observedIslandAvailability=islandAvailabilityValues(s);
   islandAvailability?.observe(s);
+  autostartSetting?.observe(s.autostart);
   shortcutsListener?.settingsChanged();
   for(const redraw of declaredViews)redraw();
   const after = `${settings.chatProvider}|${settings.ollamaUrl}|${settings.lmstudioUrl}|${settings.customUrl}`;
@@ -1341,6 +1364,7 @@ async function main() {
       root = container;
       notchContext=context;
       await render();
+      container.append(storageStatus.el);void storageStatus.refresh();
     },
   });
   onLanguageChange(() => {
@@ -1394,6 +1418,7 @@ async function render() {
     chatKeys[key] = (await Bridge.secretPresent(key)) ?? false;
   }
   const customKey = (await Bridge.secretPresent(CUSTOM_SERVER_KEY)) ?? false;
+  const lmstudioKey=(await Bridge.secretPresent("lmstudio-local-api-key"))??false;
 
   // A slow metadata read for a page the user left must never redraw the new
   // page or discard the fields they have already started editing there.
@@ -1406,7 +1431,7 @@ async function render() {
     general: () => [generalSection()],
     pills: () => [activePillsSection(connected)],
     agents: () => [claudeSection(status), agentsSection(agents), planSection(status)],
-    chat: () => [apiSection(hasKey), chatProvidersSection(chatKeys, keyChanged), localSection(customKey)],
+    chat: () => [apiSection(hasKey), chatProvidersSection(chatKeys, keyChanged), localSection(customKey,lmstudioKey)],
     integrations: () => [integrationsSection(present)],
     phone: () => [phoneSection(settings.phoneLink ?? false, toggle, settings)],
     shortcuts: () => [shortcutsSection(shortcutReport,targetContext)],

@@ -26,7 +26,7 @@ pub const ANTHROPIC: &str = "anthropic";
 pub enum ChatContext {
     File { name: String, path: String },
     Files { files:Vec<ContextFile> },
-    Window { app_name: String, title: String, url: Option<String> },
+    Window { #[serde(alias="appName")] app_name: String, title: String, url: Option<String> },
 }
 #[derive(Debug,Clone,Deserialize,Serialize,PartialEq,Eq)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -63,6 +63,12 @@ pub struct Chat {
     admission:Option<Arc<AdmissionTicket>>,
     resources:Arc<crate::pet_resources::Coordinator>,
     _context_guard:Option<Arc<dyn ContextFence>>,
+    settings_effects:Option<crate::settings::EffectProbe>,
+    #[cfg(target_os="linux")]restored_history:Option<Arc<crate::pet_data::restored_history::History>>,
+    #[cfg(target_os="linux")]
+    selected_memory:Option<Arc<crate::pet_memory::context::Accepted>>,
+    #[cfg(target_os="linux")]
+    native_memory:Option<Arc<crate::pet_memory::native::Binding>>,
 }
 
 struct AdmissionTicket {
@@ -75,7 +81,11 @@ struct AdmissionTicket {
 }
 
 pub(crate) struct PublicSnapshot{pub messages:Vec<Value>,pub source_messages:usize}
-pub(crate) trait ContextFence:Send+Sync{fn current(&self)->bool;fn goal_id(&self)->&str;}
+pub(crate) trait ContextFence:Send+Sync{
+    fn current(&self)->bool;
+    fn goal_id(&self)->&str;
+    fn selected_memory_message(&self)->Result<Option<Value>,String>{Ok(None)}
+}
 
 #[derive(Default,Clone)]
 struct Conversations { next: u64, pets: HashMap<String, Conversation>, archives:HashMap<String,Vec<SavedConversation>>, retained:crate::assistant_memory::Retained }
@@ -107,6 +117,10 @@ struct Conversation {
     observability_task_epoch: Option<u64>,
     save_error:Option<String>,
     local_capability:Option<LocalCapability>,
+    // A user memory creation pins this identity through concurrent reset. The
+    // catalog restores retention after restart; this is not activity/authority.
+    memory_retained:bool,
+    native_memory_context:Option<crate::pet_memory::context_model::NativeContext>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -121,6 +135,7 @@ pub struct SavedConversation {
     #[serde(default,skip_serializing_if="Option::is_none")] pub task_notice_id: Option<String>,
     #[serde(default,skip_serializing_if="Vec::is_empty")] pub request_history:Vec<RequestRecord>,
     #[serde(default,skip_serializing_if="Vec::is_empty")]pub attachment_history:Vec<crate::attachment_history::Record>,
+    #[serde(default,skip_serializing_if="Option::is_none")]pub(crate) native_memory_context:Option<crate::pet_memory::context_model::NativeContext>,
 }
 
 #[derive(Serialize)]
@@ -243,6 +258,7 @@ fn active_matches(conversation:&Conversation,ticket:&Arc<AdmissionTicket>)->bool
 }
 
 impl Conversation {
+    fn has_retained_history(&self)->bool{!self.plain.is_empty()||self.session.is_some()||self.task_notice_id.is_some()||!self.request_history.is_empty()||!self.attachment_history.is_empty()||self.native_memory_context.is_some()}
     fn identify(&mut self) {
         if self.id.is_empty() {self.id=crate::assistant_memory::new_id();}
         if self.created==0 {self.created=crate::assistant_memory::now();self.updated=self.created;}
@@ -255,8 +271,8 @@ impl Conversation {
             return Err("Este turno já tem uma resposta ou perdeu a posição original dos anexos.".into());
         }Ok(())
     }
-    fn saved(&self)->SavedConversation {SavedConversation{id:self.id.clone(),created:self.created,updated:self.updated,messages:self.plain.clone(),session:self.session.clone(),tasks:self.tasks.clone(),task_notice_id:self.task_notice_id.clone(),request_history:self.request_history.clone(),attachment_history:self.attachment_history.clone()}}
-    fn from_saved(c:SavedConversation)->Self {Self{id:c.id,created:c.created,updated:c.updated,native:crate::assistant_memory::context(&c.messages),plain:c.messages,session:c.session,tasks:c.tasks,task_notice_id:c.task_notice_id,request_history:c.request_history,attachment_history:c.attachment_history,..Default::default()}}
+    fn saved(&self)->SavedConversation {SavedConversation{id:self.id.clone(),created:self.created,updated:self.updated,messages:self.plain.clone(),session:self.session.clone(),tasks:self.tasks.clone(),task_notice_id:self.task_notice_id.clone(),request_history:self.request_history.clone(),attachment_history:self.attachment_history.clone(),native_memory_context:self.native_memory_context.clone()}}
+    fn from_saved(c:SavedConversation)->Self {Self{id:c.id,created:c.created,updated:c.updated,native:crate::assistant_memory::context(&c.messages),plain:c.messages,session:c.session,tasks:c.tasks,task_notice_id:c.task_notice_id,request_history:c.request_history,attachment_history:c.attachment_history,native_memory_context:c.native_memory_context,..Default::default()}}
     fn busy(&self)->bool {self.active.is_some() || self.pending.is_some()}
     fn view(&self,provider:&str)->ConversationView {
         let busy=self.busy();
@@ -314,7 +330,10 @@ impl LocalIdentity {
 }
 pub(crate) const LOCAL_LANGUAGE_POLICY: &str = "By default, reply in European Portuguese from Portugal (pt-PT), including vocabulary and phrasing. Honor any language explicitly requested by the user. Preserve code blocks and technical names without translating them.";
 pub const BUSY_ERROR:&str="Este pet já está a executar uma tarefa. Abre a tarefa para a acompanhar ou interromper.";
-pub struct TurnLease {chat:Chat,turn:Turn,app:Option<AppHandle>,_resource:Option<Arc<crate::pet_resources::Hold>>}
+#[cfg(target_os="linux")]
+struct MemoryWatch(tauri::async_runtime::JoinHandle<()>);
+#[cfg(target_os="linux")]impl Drop for MemoryWatch{fn drop(&mut self){self.0.abort();}}
+pub struct TurnLease {chat:Chat,turn:Turn,app:Option<AppHandle>,_resource:Option<Arc<crate::pet_resources::Hold>>,#[cfg(target_os="linux")]memory_watch:Option<MemoryWatch>}
 impl TurnLease {
     pub fn broadcast(mut self,app:&AppHandle,query:&str)->Self {
         self.app=Some(app.clone());
@@ -331,6 +350,7 @@ impl TurnLease {
 }
 impl Drop for TurnLease {
     fn drop(&mut self) {
+        #[cfg(target_os="linux")]drop(self.memory_watch.take());
         let mut all=self.chat.inner.lock().unwrap();
         if let Some(c)=all.pets.get_mut(&self.turn.provider).filter(|c|c.epoch==self.turn.epoch
             &&c.turn_cancel.as_ref().is_some_and(|cancel|Arc::ptr_eq(cancel,&self.turn.cancel))
@@ -349,11 +369,29 @@ impl Drop for TurnLease {
 }
 
 impl Chat {
+    pub(crate) fn check_new_effect(&self)->Result<(),String>{
+        self.settings_effects.as_ref().map_or_else(crate::settings::effect_allowed,|probe|probe.check())
+    }
+    #[cfg(test)]pub(crate)fn with_effect_probe(mut self,probe:crate::settings::EffectProbe)->Self{self.settings_effects=Some(probe);self}
     #[cfg(test)]pub(crate)fn native_codec_projection(&self)->std::io::Result<Value>{
         if self.disk_error{return Err(std::io::Error::other("library unreadable"));}
         let all=self.inner.lock().map_err(|_|std::io::Error::other("library unavailable"))?;
         let library=crate::assistant_memory::Library{pets:all.pets.iter().map(|(p,c)|(p.clone(),c.saved())).collect(),archives:all.archives.clone(),retained:all.retained.clone()};
         crate::assistant_memory::native_codec_projection(&library)
+    }
+    fn restored_notice(&self,provider:&str,cid:&str,existing:Option<String>)->Option<String>{
+        #[cfg(target_os="linux")]if self.restored_history.as_ref().is_some_and(|h|h.historical_conversation(provider,cid)){
+            let notice=crate::pet_data::restored_history::NOTICE;return Some(match existing{Some(old)=>format!("{notice}\n\n{old}"),None=>notice.into()});
+        }
+        let _=(provider,cid);existing
+    }
+    fn restored_turn_allowed(&self,provider:&str,cid:&str,sid:Option<&str>)->Result<(),String>{
+        #[cfg(target_os="linux")]if let Some(history)=&self.restored_history{
+            crate::pet_data::bootstrap::restored_pet_allowed(provider)?;
+            crate::pet_data::bootstrap::write_allowed().map_err(|_|"O perfil de dados está indisponível.".to_string())?;
+            history.conversation_allowed(provider,cid,sid).map_err(|_|crate::pet_data::restored_history::NOTICE.to_string())?;
+        }
+        let _=(provider,cid,sid);Ok(())
     }
     pub fn persistent(path: std::path::PathBuf) -> Self {
         let (saved,disk_error)=match crate::assistant_memory::load(&path) {Ok(saved)=>(saved,false),Err(_)=>{crate::log::line("assistant memory: could not read library; keeping disk unchanged");(Default::default(),true)}};
@@ -372,14 +410,106 @@ impl Chat {
             let tasks=saved.pets.get(provider).map(|c|c.tasks.iter().filter(|t|task_ids.get(&t.id)==Some(&1)).cloned().collect::<Vec<_>>()).unwrap_or_default();
             for c in archives{seed_legacy_requests(provider,c,&tasks);for record in &mut c.request_history{record.recover();}for record in &mut c.attachment_history{record.recover();}}
         }
+        #[cfg(target_os="linux")]let(restored_history,disk_error)=match crate::pet_data::bootstrap::restored_history(){Ok(history)=>(history,disk_error),Err(_)=>(None,true)};
         let pets=saved.pets.into_iter().map(|(provider,c)|(provider,Conversation::from_saved(c))).collect();
-        Self {inner:Arc::new(Mutex::new(Conversations{next:0,pets,archives:saved.archives,retained:saved.retained})),disk:Some(Arc::new(path)),disk_error,admission:None,resources:Default::default(),_context_guard:None}
+        Self {inner:Arc::new(Mutex::new(Conversations{next:0,pets,archives:saved.archives,retained:saved.retained})),disk:Some(Arc::new(path)),disk_error,admission:None,resources:Default::default(),_context_guard:None,settings_effects:None,#[cfg(target_os="linux")]restored_history,#[cfg(target_os="linux")]selected_memory:None,#[cfg(target_os="linux")]native_memory:None}
+    }
+
+    #[cfg(target_os="linux")]
+    pub(crate)fn with_selected_memory(&self,accepted:Arc<crate::pet_memory::context::Accepted>)->Self{let mut channel=self.clone();channel.selected_memory=Some(accepted);channel}
+    fn selected_memory_current(&self,provider:&str)->bool{
+        #[cfg(target_os="linux")]if self.selected_memory.is_some()||self.native_memory.is_some(){
+            let cid={let Ok(all)=self.inner.lock()else{return false;};let Some(c)=all.pets.get(provider)else{return false;};c.id.clone()};let now=crate::assistant_memory::now();
+            if self.native_memory.as_ref().is_some_and(|memory|memory.verify_owner(provider,&cid,now).is_err()){
+                let _=Self::revoke_native_at(&self.inner,self.disk.as_ref().map(|p|p.as_path()),self.disk_error,self._context_guard.as_deref(),provider,&cid);return false;
+            }
+            if self.selected_memory.as_ref().is_some_and(|memory|memory.verify_owner(provider,&cid,now).is_err()){return false;}
+        }
+        let _=provider;true
+    }
+    /// Native snapshots carry no fresh consent or permission ticket.
+    pub(crate)fn native_memory_info(&self,provider:&str)->Result<(String,Option<CliSession>,Option<crate::pet_memory::context_model::NativeContext>),String>{
+        if self.disk_error{return Err("A biblioteca de conversas está indisponível.".into());}
+        let mut all=self.inner.lock().map_err(|_|"A conversa está indisponível.")?;let c=all.pets.entry(provider.into()).or_default();c.identify();Ok((c.id.clone(),c.session.clone(),c.native_memory_context.clone()))
+    }
+    #[cfg(all(test,target_os="linux"))]
+    pub(crate)fn fixture_native_memory(&self,binding:crate::pet_memory::native::Binding)->Self{let mut channel=self.clone();channel.native_memory=Some(Arc::new(binding));channel}
+    #[cfg(target_os="linux")]
+    pub(crate)fn bind_native_memory(&self,provider:&str,adapter:&str,model:&str,query:&str,cwd:Result<&std::path::Path,&String>)->Result<Self,String>{
+        let(cid,session,previous)=self.native_memory_info(provider)?;
+        if previous.is_none()&&self.selected_memory.is_none(){return Ok(self.clone());}
+        if self.disk.is_none(){return Err("O contexto nativo precisa de uma biblioteca durável antes do envio.".into());}
+        let cwd=cwd.map_err(Clone::clone)?;
+        let destination=crate::pet_memory::native::destination(provider,adapter,model,cwd,session.as_ref().map(|s|s.id.as_str())).map_err(|_|"O destino nativo da memória é inválido.")?;
+        let binding=crate::pet_memory::native::Binding::current(destination,&cid,previous.as_ref(),self.selected_memory.as_deref(),query,crate::assistant_memory::now());
+        let binding=match binding{Ok(binding)=>binding,Err(code)=>{
+            if matches!(code,"memorySelectionChanged"|"memorySelectionExpired"|"memoryClockChanged"|"memorySelectionRevoked")||code.starts_with("registry"){
+                let _=Self::revoke_native_at(&self.inner,self.disk.as_ref().map(|p|p.as_path()),self.disk_error,self._context_guard.as_deref(),provider,&cid);
+            }
+            return Err("O contexto de memória desta sessão foi alterado, revogado ou deixou de corresponder ao destino. A sessão e o histórico foram preservados. Usa Nova conversa para uma transição explícita; não foi iniciada outra sessão.".into());
+        }};
+        let mut channel=self.clone();channel.native_memory=Some(Arc::new(binding));Ok(channel)
+    }
+    #[cfg(target_os="linux")]
+    pub(crate)fn publish_native_memory(&self,turn:&Turn)->Result<(),String>{
+        let Some(binding)=&self.native_memory else{return Ok(());};
+        if !self.is_current(turn){return Err(crate::net::CANCELLED.into());}
+        let metadata=binding.metadata().map_err(|_|"O contexto nativo está indisponível.")?;
+        let mut all=self.inner.lock().unwrap();self.flush_pending(&mut all)?;let mut next=all.clone();
+        let c=next.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch&&!turn.cancel.load(Ordering::Acquire)&&c.active.as_ref().is_some_and(|f|Arc::ptr_eq(f,&turn.cancel))).ok_or("O turno nativo já não está ativo.")?;
+        if c.native_memory_context.as_ref()!=binding.previous(){return Err("A proveniência nativa foi alterada antes do envio.".into());}
+        let changed=c.native_memory_context.as_ref()!=Some(&metadata);c.native_memory_context=Some(metadata);c.memory_retained=true;
+        if changed{self.persist_checked(&next)?;*all=next;}
+        binding.mark_published();Ok(())
+    }
+    #[cfg(target_os="linux")]
+    pub(crate)fn native_memory_prompt(&self,turn:&Turn,adapter:&str,model:&str,cwd:&std::path::Path,session:Option<&str>,query:&str,ordinary:String)->Result<String,String>{
+        let Some(binding)=&self.native_memory else{return Ok(ordinary);};
+        let actual=crate::pet_memory::native::destination(&turn.provider,adapter,model,cwd,session).map_err(|_|"O destino nativo mudou.")?;let now=crate::assistant_memory::now();
+        binding.before_prompt(&actual,now).map_err(|_|"Não foi possível validar a entrega durável do contexto nativo.")?;
+        if let Some(fresh)=&self.selected_memory{
+            fresh.verify(&actual,query,None,now).map_err(|_|"A revisão de memória deixou de corresponder ao pedido.")?;
+            let data=fresh.message(now).map_err(|_|"A memória selecionada foi revogada.")?;let content=data["content"].as_str().ok_or("Contexto de memória inválido.")?;
+            return Ok(format!("{content}\n\n{ordinary}"));
+        }Ok(ordinary)
+    }
+
+    /// All stateless transports call this with their actual native parameters.
+    /// It changes the ephemeral request only; the ordinary user message stays intact.
+    pub(crate)fn append_selected_memory(&self,provider:&str,query:&str,destination:&crate::pet_memory::context_model::Destination,key:Option<&str>,messages:&mut Vec<Value>)->Result<(),String>{
+        #[cfg(target_os="linux")]if let Some(memory)=&self.selected_memory{
+            let now=crate::assistant_memory::now();let cid=self.conversation_id(provider)?;
+            memory.verify_owner(provider,&cid,now).and_then(|_|memory.verify(destination,query,key,now)).map_err(|_|"A memória ou o destino mudou. Revê a seleção antes de enviar.".to_string())?;
+            let message=memory.message(now).map_err(|_|"A memória selecionada deixou de estar disponível.".to_string())?;
+            if messages.last().is_none_or(|m|m["role"]!="user"){return Err("Falta a mensagem original deste pedido.".into());}
+            messages.insert(messages.len()-1,message);
+        }
+        let _=(provider,query,destination,key,messages);Ok(())
     }
 
     pub(crate) fn isolated_goal(&self,path:std::path::PathBuf,provider:&str,cid:&str,guard:Arc<dyn ContextFence>)->Result<Self,String>{
         if !crate::assistant_memory::supported(provider)||!crate::assistant_memory::valid_id(cid)||!guard.current(){return Err("Contexto de objetivo inválido.".into());}
         let library=crate::assistant_memory::load_goal(&path,provider,cid).map_err(|_|"A biblioteca do objetivo não pertence ao dono e CID originais.")?;
         let mut isolated=Self::from_library(path,library,false);isolated.resources=self.resources.clone();isolated._context_guard=Some(guard);Ok(isolated)
+    }
+    /// Metadata-only ownership check. Does not create a conversation, select it,
+    /// copy messages or authorize sending any context to a model.
+    pub(crate) fn contains_public_conversation(&self,provider:&str,cid:&str)->Result<bool,String>{
+        if self.disk_error||!crate::assistant_memory::valid_id(cid){return Err("A biblioteca de conversas está indisponível.".into());}
+        let all=self.inner.lock().map_err(|_|"A biblioteca de conversas está indisponível.")?;
+        Ok(all.pets.get(provider).is_some_and(|c|c.id==cid)||all.archives.get(provider).is_some_and(|rows|rows.iter().any(|c|c.id==cid)))
+    }
+    /// Native memory/draft creation calls this after validating its input and
+    /// original catalog revision. No user/model text is manufactured.
+    pub(crate)fn retain_public_conversation(&self,provider:&str,cid:&str)->Result<(),String>{
+        if self.disk_error||self.disk.is_none()||!crate::assistant_memory::supported(provider)||!crate::assistant_memory::valid_id(cid){return Err("A conversa não tem armazenamento durável disponível.".into());}
+        let mut all=self.inner.lock().map_err(|_|"A biblioteca de conversas está indisponível.")?;
+        if let Some(c)=all.pets.get_mut(provider).filter(|c|c.id==cid){
+            let write=!c.has_retained_history()||c.save_error.is_some();c.memory_retained=true;
+            if write{self.persist_checked(&all)?;}return Ok(());
+        }
+        if all.archives.get(provider).is_some_and(|rows|rows.iter().any(|c|c.id==cid)){return Ok(());}
+        Err("A conversa original já não existe.".into())
     }
     pub(crate) fn snapshot_public_context(&self,provider:&str,cid:&str)->Result<PublicSnapshot,String>{
         if self.disk_error||!crate::assistant_memory::valid_id(cid){return Err("O histórico de origem não está disponível.".into());}
@@ -401,16 +531,27 @@ impl Chat {
     fn persist(&self,c:&Conversations) {
         if self.persist_checked(c).is_err() {crate::log::line("assistant memory: could not save local conversation");}
     }
-    fn persist_checked(&self,c:&Conversations)->Result<(),String> {
-        if self._context_guard.as_ref().is_some_and(|g|!g.current()){return Err("O contexto privado do objetivo mudou. A gravação foi recusada.".into());}
-        if self.disk_error {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
-        let Some(path)=&self.disk else{return Ok(())};
+    fn persist_checked(&self,c:&Conversations)->Result<(),String>{
+        Self::persist_at_checked(self.disk.as_ref().map(|p|p.as_path()),self.disk_error,self._context_guard.as_deref(),c)
+    }
+    fn persist_at_checked(disk:Option<&std::path::Path>,disk_error:bool,guard:Option<&dyn ContextFence>,c:&Conversations)->Result<(),String>{
+        if guard.as_ref().is_some_and(|g|!g.current()){return Err("O contexto privado do objetivo mudou. A gravação foi recusada.".into());}
+        if disk_error {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
+        let Some(path)=disk else{return Ok(())};
         let pets=c.pets.iter().filter(|(p,_)|crate::assistant_memory::supported(p)).map(|(p,c)|(p.clone(),c.saved())).collect();
         let library=crate::assistant_memory::Library{pets,archives:c.archives.clone(),retained:c.retained.clone()};
-        let saved=if let Some(guard)=&self._context_guard{
+        let saved=if let Some(guard)=guard{
             crate::assistant_memory::save_checked(path,&library,||guard.current()).and_then(|receipt|if receipt.durable{Ok(())}else{Err(std::io::Error::other("goal context publication uncertain"))})
         }else{crate::assistant_memory::save(path,&library)};
         saved.map_err(|_|"Não foi possível guardar a biblioteca (limite de 128 MiB). O ficheiro anterior foi preservado; verifica o espaço e as permissões da pasta local.".into())
+    }
+
+    #[cfg(target_os="linux")]
+    fn revoke_native_at(inner:&Mutex<Conversations>,disk:Option<&std::path::Path>,disk_error:bool,guard:Option<&dyn ContextFence>,provider:&str,cid:&str)->Result<(),String>{
+        let mut all=inner.lock().map_err(|_|"A conversa está indisponível.")?;
+        let Some(c)=all.pets.get_mut(provider).filter(|c|c.id==cid)else{return Ok(());};let Some(context)=&mut c.native_memory_context else{return Ok(());};
+        if context.revoked{return Ok(());}context.revoked=true;
+        if let Err(error)=Self::persist_at_checked(disk,disk_error,guard,&all){if let Some(c)=all.pets.get_mut(provider){c.save_error=Some(format!("{error} O contexto foi revogado nesta sessão e a gravação tem de ser recuperada antes de continuar."));}return Err(error);}Ok(())
     }
 
     /// Retry a failed dialogue write before starting work or replacing a channel.
@@ -429,7 +570,9 @@ impl Chat {
         if self.disk_error {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
         if !crate::assistant_memory::supported(provider) {return Err("Este pet não tem biblioteca de conversas.".into());}
         let mut all=self.inner.lock().unwrap();let c=all.pets.entry(provider.into()).or_default();c.identify();
-        Ok(c.view(provider))
+        let mut view=c.view(provider);
+        view.notice=self.restored_notice(provider,&c.id,view.notice);
+        Ok(view)
     }
 
     /// Capture a document drop's owner without cloning its public archive.
@@ -456,11 +599,11 @@ impl Chat {
         if self.disk_error {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
         if !crate::assistant_memory::supported(provider) || !crate::assistant_memory::valid_id(id) {return Err("Conversa inválida para este pet.".into());}
         let all=self.inner.lock().unwrap();
-        if let Some(c)=all.pets.get(provider).filter(|c|c.id==id) {return Ok(c.view(provider));}
+        if let Some(c)=all.pets.get(provider).filter(|c|c.id==id) {let mut view=c.view(provider);view.notice=self.restored_notice(provider,id,view.notice);return Ok(view);}
         let saved=all.archives.get(provider).and_then(|list|list.iter().find(|c|c.id==id)).ok_or("A conversa não pertence a este pet ou já não existe.")?;
         let tasks=all.pets.get(provider).map(|c|c.tasks.as_slice()).unwrap_or(&[]);
         let task_notice=project_task_notice(provider,&saved.id,saved.task_notice_id.as_deref(),tasks);
-        let notice=conversation_notice(None,task_notice.as_ref());
+        let notice=self.restored_notice(provider,id,conversation_notice(None,task_notice.as_ref()));
         Ok(ConversationView{id:saved.id.clone(),messages:saved.messages.clone(),busy:false,turn:0,stream:String::new(),query:String::new(),notice,local_execution:None,task_notice,request_history:saved.request_history.clone(),attachment_history:saved.attachment_history.clone()})
     }
 
@@ -473,6 +616,10 @@ impl Chat {
     pub fn reserve_conversation(&self,provider:&str,expected:Option<&str>)->Result<ConversationReservation,String> {self.reserve_until(provider,expected,None)}
     pub(crate)fn runtime_resources(&self)->Arc<crate::pet_resources::Coordinator>{self.resources.clone()}
     pub(crate)fn goal_context_current(&self,goal_id:&str)->bool{!self.disk_error&&self._context_guard.as_ref().is_some_and(|f|f.goal_id()==goal_id&&f.current())}
+    pub(crate)fn goal_memory_message(&self,goal_id:&str)->Result<Option<Value>,String>{
+        let guard=self._context_guard.as_ref().filter(|g|!self.disk_error&&g.goal_id()==goal_id&&g.current()).ok_or("O contexto ou as recordações do objetivo mudaram.")?;
+        guard.selected_memory_message()
+    }
     pub(crate) fn reserve_until(&self,provider:&str,expected:Option<&str>,deadline:Option<std::time::Instant>)->Result<ConversationReservation,String> {
         self.reserve_with_resource(provider,expected,deadline,None)
     }
@@ -488,6 +635,7 @@ impl Chat {
         if self.disk_error {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
         if let Some((goal_id,hold))=&owned{if !self.goal_context_current(goal_id)||hold.provider_for(&self.resources)!=Some(provider){return Err("O owner do contexto ou recurso do objetivo mudou.".into());}}
         let mut all=self.inner.lock().unwrap();self.flush_pending(&mut all)?;let c=all.pets.entry(provider.into()).or_default();c.identify();
+        self.restored_turn_allowed(provider,&c.id,c.session.as_ref().map(|s|s.id.as_str()))?;
         if expected.is_some_and(|id|id!=c.id) {return Err("A conversa mudou noutra janela. Atualiza o histórico antes de enviar.".into());}
         if c.busy() {return Err(BUSY_ERROR.into());}
         let cancel=Arc::new(AtomicBool::new(false));
@@ -512,6 +660,7 @@ impl Chat {
         let task=matching.next().cloned().ok_or("A tarefa já não está no histórico local.")?;
         if matching.next().is_some(){return Err("O identificador da tarefa é ambíguo. A retoma foi recusada.".into());}
         crate::pet_config::require_active_provider(&task.provider)?;
+        #[cfg(target_os="linux")]if let Some(history)=&self.restored_history{crate::pet_data::bootstrap::write_allowed().map_err(|_|"O perfil de dados está indisponível.")?;history.task_allowed(&task.provider,&task.id,task.conversation_id.as_deref(),task.session_id.as_deref()).map_err(|_|crate::pet_data::restored_history::NOTICE.to_string())?;}
         task.resume_prompt()?;
         let provider=task.provider.clone();
         if all.pets.get(&provider).is_some_and(Conversation::busy){return Err(BUSY_ERROR.into());}
@@ -533,7 +682,7 @@ impl Chat {
             if next.pets.get(&provider).is_none_or(|c|c.id!=target){
                 let list=next.archives.get_mut(&provider).unwrap();
                 let at=list.iter().position(|c|c.id==target).unwrap();let saved=list.remove(at);
-                Self::archive(&mut next,&provider)?;
+                self.archive(&mut next,&provider)?;
                 let tasks=next.pets.get_mut(&provider).map(|c|std::mem::take(&mut c.tasks)).unwrap_or_default();
                 let mut restored=Conversation::from_saved(saved);restored.tasks=tasks;
                 next.pets.insert(provider.clone(),restored);changed=true;
@@ -541,7 +690,7 @@ impl Chat {
         }else{
             // Legacy rows with neither logical nor native origin start clean;
             // they must never inherit a different task's public context.
-            Self::archive(&mut next,&provider)?;
+            self.archive(&mut next,&provider)?;
             let tasks=next.pets.get_mut(&provider).map(|c|std::mem::take(&mut c.tasks)).unwrap_or_default();
             let mut fresh=Conversation{tasks,..Default::default()};fresh.identify();
             next.pets.insert(provider.clone(),fresh);changed=true;
@@ -593,8 +742,11 @@ impl Chat {
         result.sort_by_key(|c|(std::cmp::Reverse(c.current),std::cmp::Reverse(c.updated)));Ok(result)
     }
 
-    fn archive(all:&mut Conversations,provider:&str)->Result<(),String> {
-        if let Some(c)=all.pets.get(provider).filter(|c|!c.plain.is_empty() || c.session.is_some() || c.task_notice_id.is_some() || !c.request_history.is_empty() || !c.attachment_history.is_empty()) {
+    fn archive(&self,all:&mut Conversations,provider:&str)->Result<(),String> {
+        if let Some(c)=all.pets.get(provider).filter(|c|c.has_retained_history()||c.memory_retained||self.disk.as_ref().is_some_and(|path|crate::pet_memory::retains_conversation(path,provider,&c.id)||{
+            #[cfg(target_os="linux")]{crate::pet_drafts::retains_conversation(path,provider,&c.id)}
+            #[cfg(not(target_os="linux"))]{false}
+        })) {
             let mut saved=c.saved();saved.tasks.clear();
             let archives=all.archives.entry(provider.into()).or_default();
             if archives.len()>=crate::assistant_memory::MAX_ARCHIVES {return Err("A biblioteca deste pet atingiu 100 conversas arquivadas. A conversa atual foi preservada.".into());}
@@ -611,7 +763,7 @@ impl Chat {
         if let Some(c)=all.pets.get(provider).filter(|c|c.id==id) {return Ok(c.view(provider));}
         let mut next=all.clone();
         let saved=next.archives.get_mut(provider).and_then(|list|list.iter().position(|c|c.id==id).map(|at|list.remove(at))).ok_or("A conversa não pertence a este pet ou já não existe.")?;
-        Self::archive(&mut next,provider)?;
+        self.archive(&mut next,provider)?;
         let tasks=next.pets.get_mut(provider).map(|c|std::mem::take(&mut c.tasks)).unwrap_or_default();
         let mut c=Conversation::from_saved(saved);c.tasks=tasks;next.next+=1;c.epoch=next.next;
         let view=c.view(provider);next.pets.insert(provider.into(),c);
@@ -742,7 +894,7 @@ impl Chat {
         let mut next=all.clone();let providers:Vec<_>=next.pets.keys().cloned().collect();
         for provider in providers{
             if !crate::assistant_memory::supported(&provider){continue;}
-            Self::archive(&mut next,&provider)?;
+            self.archive(&mut next,&provider)?;
             let tasks=next.pets.get_mut(&provider).map(|c|std::mem::take(&mut c.tasks)).unwrap_or_default();
             next.next+=1;let mut c=Conversation{epoch:next.next,tasks,..Default::default()};c.identify();next.pets.insert(provider,c);
         }
@@ -753,14 +905,36 @@ impl Chat {
 
     pub fn begin_with_cancel(&self,provider:&str,cancel:Arc<AtomicBool>)->Turn {
         if cancel.load(Ordering::Acquire){return Turn{resource:Default::default(),epoch:0,provider:provider.into(),first:false,history:vec![],session:None,cancel};}
-        self.start(provider,cancel,false).unwrap()
+        match self.start(provider,cancel.clone(),false){Ok(turn)=>turn,Err(_)=>{cancel.store(true,Ordering::Release);Turn{resource:Default::default(),epoch:0,provider:provider.into(),first:false,history:vec![],session:None,cancel}}}
     }
 
     pub fn begin_cli(&self,provider:&str,cancel:Arc<AtomicBool>)->Result<Turn,String> {self.start(provider,cancel,true)}
+    /// A request-local supervisor covers approval waits and owned native command
+    /// execution, not just model IO. Weak references cannot keep the physical
+    /// turn lease alive. Dropping TurnLease aborts this timer.
+    #[cfg(target_os="linux")]
+    fn watch_selected_memory(&self,turn:&Turn)->Option<MemoryWatch>{
+        let selected=self.selected_memory.clone();let native=self.native_memory.clone();if selected.is_none()&&native.is_none(){return None;}
+        let state=Arc::downgrade(&self.inner);let turn=turn.clone();let disk=self.disk.clone();let disk_error=self.disk_error;let goal=self._context_guard.as_ref().map(Arc::downgrade);
+        Some(MemoryWatch(tauri::async_runtime::spawn(async move{loop{
+            if turn.cancel.load(Ordering::Acquire)||turn.resource.upgrade().is_none_or(|r|!r.current()){break;}
+            let cid={
+                let Some(state)=state.upgrade()else{break;};let Ok(all)=state.lock()else{break;};
+                let Some(c)=all.pets.get(&turn.provider).filter(|c|c.epoch==turn.epoch&&c.active.as_ref().is_some_and(|flag|Arc::ptr_eq(flag,&turn.cancel)))else{break;};c.id.clone()
+            };
+            let now=crate::assistant_memory::now();let native_revoked=native.as_ref().is_some_and(|m|m.verify_owner(&turn.provider,&cid,now).is_err());
+            if native_revoked||selected.as_ref().is_some_and(|m|m.verify_owner(&turn.provider,&cid,now).is_err()){
+                turn.cancel.store(true,Ordering::Release);
+                if native_revoked{if let Some(state)=state.upgrade(){let guard=goal.as_ref().and_then(|g|g.upgrade());if goal.is_none()||guard.is_some(){let _=Self::revoke_native_at(&state,disk.as_ref().map(|p|p.as_path()),disk_error,guard.as_deref(),&turn.provider,&cid);}}}break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }})))
+    }
+
     pub fn lease(&self,turn:&Turn)->TurnLease {
         let active=self.inner.lock().unwrap().pets.get(&turn.provider).is_some_and(|c|c.epoch==turn.epoch&&c.active.as_ref().is_some_and(|f|Arc::ptr_eq(f,&turn.cancel)));
         let resource=if active{turn.resource.upgrade().filter(|r|r.current())}else{None};
-        TurnLease{chat:self.clone(),turn:turn.clone(),app:None,_resource:resource}
+        TurnLease{chat:self.clone(),turn:turn.clone(),app:None,_resource:resource,#[cfg(target_os="linux")]memory_watch:self.watch_selected_memory(turn)}
     }
 
     pub fn publish_delta(&self,app:&AppHandle,turn:&Turn,text:&str) {
@@ -793,8 +967,18 @@ impl Chat {
 
     fn start(&self,provider:&str,cancel:Arc<AtomicBool>,exclusive:bool)->Result<Turn,String> {
         crate::pet_config::require_active_provider(provider)?;
+        {let all=self.inner.lock().map_err(|_|"A conversa está indisponível.")?;if let Some(c)=all.pets.get(provider){self.restored_turn_allowed(provider,&c.id,c.session.as_ref().map(|s|s.id.as_str()))?;}}
+        if !self.selected_memory_current(provider){return Err("A memória selecionada foi alterada ou revogada. Revê a seleção antes de enviar.".into());}
+        #[cfg(target_os="linux")]if let Some(memory)=&self.selected_memory{memory.claim_turn().map_err(|_|"Esta revisão de memória já foi utilizada. Faz uma nova revisão para outro pedido.".to_string())?;}
+        #[cfg(target_os="linux")]if let Some(memory)=&self.native_memory{memory.claim_turn().map_err(|_|"A validação desta sessão de memória já foi utilizada.".to_string())?;}
         if self.disk_error && exclusive {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
         let mut all=self.inner.lock().unwrap();
+        if let Some(c)=all.pets.get(provider){
+            #[cfg(target_os="linux")]let validated=self.native_memory.as_ref().is_some_and(|m|m.matches_start(provider,&c.id,c.native_memory_context.as_ref(),c.session.as_ref().map(|s|s.id.as_str())));
+            #[cfg(not(target_os="linux"))]let validated=false;
+            if c.native_memory_context.is_some()&&!validated{return Err("Esta conversa conserva contexto de memória nativo. Valida o destino e as referências originais antes de retomar; o histórico e a sessão foram preservados.".into());}
+            #[cfg(target_os="linux")]if self.native_memory.is_some()&&!validated{return Err("A sessão nativa mudou antes da admissão da memória.".into());}
+        }
         if let Some(ticket)=&self.admission {
             // Validate before creating entries, incrementing epochs, flushing
             // history, or touching a later pending/active turn.
@@ -832,7 +1016,7 @@ impl Chat {
             // Starting a fresh dialogue must never erase the task journal or
             // secretly stop voice/recovery work that the text view cannot see.
             if all.pets.get(provider).is_some_and(Conversation::busy) {return Err(BUSY_ERROR.into());}
-            let mut next=all.clone();Self::archive(&mut next,provider)?;
+            let mut next=all.clone();self.archive(&mut next,provider)?;
             let tasks=next.pets.get_mut(provider).map(|c|std::mem::take(&mut c.tasks)).unwrap_or_default();
             next.next+=1;let mut c=Conversation{epoch:next.next,tasks,..Default::default()};c.identify();
             next.pets.insert(provider.into(),c);self.persist_checked(&next)?;*all=next;return Ok(());
@@ -846,9 +1030,10 @@ impl Chat {
 
     pub fn is_current(&self,turn:&Turn)->bool {
         if turn.cancel.load(Ordering::Acquire){return false;}
+        {let all=self.inner.lock().unwrap();if let Some(c)=all.pets.get(&turn.provider){if self.restored_turn_allowed(&turn.provider,&c.id,c.session.as_ref().map(|s|s.id.as_str())).is_err(){turn.cancel.store(true,Ordering::Release);return false;}}}
         let owned=self.inner.lock().unwrap().pets.get(&turn.provider).is_some_and(|c|c.epoch==turn.epoch&&c.turn_cancel.as_ref().is_some_and(|cancel|Arc::ptr_eq(cancel,&turn.cancel)));
         if !owned||turn.resource.upgrade().is_none_or(|r|!r.current()){return false;}
-        if self._context_guard.as_ref().is_some_and(|g|!g.current()){turn.cancel.store(true,Ordering::Release);return false;}true
+        if self._context_guard.as_ref().is_some_and(|g|!g.current())||!self.selected_memory_current(&turn.provider){turn.cancel.store(true,Ordering::Release);return false;}true
     }
     pub(crate) fn capture_attachment_history(&self,turn:&Turn,files:Vec<crate::attachment_history::Reference>)->Result<(),String>{
         if files.is_empty(){return Ok(());}
@@ -910,12 +1095,30 @@ impl Chat {
     }
 
     pub fn remember_session(&self,turn:&Turn,id:&str,cwd:&str,full_access:bool) {
+        #[cfg(target_os="linux")]if self.restored_history.as_ref().is_some_and(|h|h.historical_native_session(&turn.provider,id)){turn.cancel.store(true,Ordering::Release);return;}
+
+        #[cfg(target_os="linux")]if self.native_memory.is_some(){
+            if let Err(error)=self.remember_memory_session(turn,id,cwd,full_access){turn.cancel.store(true,Ordering::Release);if let Ok(mut all)=self.inner.lock(){if let Some(c)=all.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch){c.save_error=Some(error);}}}return;
+        }
         let mut all=self.inner.lock().unwrap();
         if let Some(c)=all.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch && !turn.cancel.load(Ordering::Relaxed)) {
             c.session=Some(CliSession{id:id.into(),cwd:cwd.into(),full_access});c.session_epoch=Some(turn.epoch);
             if let Some(task)=c.tasks.last_mut(){task.session_id=Some(id.into());}
             self.persist(&all);
         }
+    }
+
+    #[cfg(target_os="linux")]
+    fn remember_memory_session(&self,turn:&Turn,id:&str,cwd:&str,full_access:bool)->Result<(),String>{
+        let binding=self.native_memory.as_ref().ok_or("Falta a proveniência nativa.")?;
+        if !self.is_current(turn){return Err(crate::net::CANCELLED.into());}
+        let metadata=binding.adopted_metadata(id).map_err(|_|"O agente confirmou outra sessão nativa; o contexto anterior foi preservado.")?;
+        if !matches!(&metadata.destination,crate::pet_memory::context_model::Destination::NativeSession{workspace,..}if workspace==cwd){return Err("A pasta confirmada da sessão mudou.".into());}
+        let before=binding.metadata().map_err(|_|"A proveniência nativa está indisponível.")?;
+        let mut all=self.inner.lock().unwrap();let mut next=all.clone();let c=next.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch&&!turn.cancel.load(Ordering::Acquire)&&c.active.as_ref().is_some_and(|f|Arc::ptr_eq(f,&turn.cancel))).ok_or("O turno nativo já terminou.")?;
+        if c.native_memory_context.as_ref()!=Some(&before){return Err("A proveniência nativa mudou antes de guardar a sessão.".into());}
+        c.session=Some(CliSession{id:id.into(),cwd:cwd.into(),full_access});c.session_epoch=Some(turn.epoch);c.native_memory_context=Some(metadata);if let Some(task)=c.tasks.last_mut(){task.session_id=Some(id.into());}
+        self.persist_checked(&next)?;*all=next;binding.mark_adopted(id).map_err(|_|"Não foi possível confirmar a associação nativa.".into())
     }
 
     /// Only successful public turns are saved. Native tool blocks, audio,
@@ -926,8 +1129,10 @@ impl Chat {
     }
 
     fn commit_outcome(&self,turn:&Turn,user:Value,assistant:Value,user_text:&str,answer:&str,finish_task:bool)->Result<(String,Option<String>),String>{
+        if !self.selected_memory_current(&turn.provider){turn.cancel.store(true,Ordering::Release);return Err("A memória selecionada mudou durante o pedido. A resposta não foi publicada como concluída.".into());}
         let mut all=self.inner.lock().unwrap();
         let Some(c)=all.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch && !turn.cancel.load(Ordering::Relaxed)) else{return Err("Esta resposta já não pertence ao turno ativo da conversa.".into());};
+        self.restored_turn_allowed(&turn.provider,&c.id,c.session.as_ref().map(|s|s.id.as_str()))?;
         c.check_attachment_commit(turn.epoch)?;
         if let Some(record)=c.attachment_record(turn.epoch){record.finish(crate::attachment_history::Phase::Done,Some(2));}
         if finish_task{
@@ -985,6 +1190,7 @@ impl Chat {
     /// grants a single native permit; no JSON or old receipt can recreate one.
     pub(crate) fn admit_local_step(&self,scope:&crate::local_tasks::types::ExecutionScope,command:crate::local_tasks::types::ApprovedCommand,receipt:&crate::local_tasks::types::StepReceipt)->Result<crate::local_tasks::types::RunPermit,String>{
         use crate::local_tasks::types::{ReceiptState,RunPermit};
+        if !self.is_current(&scope.turn){return Err("O contexto do comando foi alterado ou revogado. Nenhum novo passo foi autorizado.".into());}
         if !scope.valid_target()||scope.policy.mode!=crate::pet_config::LocalExecutionMode::Ask{return Err("Destino ou permissão de execução local inválidos.".into());}
         let mut all=self.inner.lock().unwrap();
         if scope.turn.cancel.load(Ordering::Acquire)||std::time::Instant::now()>=scope.deadline||!command.belongs_to(&scope.task_id,&receipt.step_id){return Err("O comando já não pode ser iniciado.".into());}
@@ -1017,6 +1223,7 @@ impl Chat {
 
     pub(crate) fn commit_local_terminal(&self,scope:&crate::local_tasks::types::ExecutionScope,phase:crate::local_tasks::types::LocalTerminal,user:Value,plain:&str,text:&str)->Result<crate::local_tasks::types::LocalCommit,String>{
         use crate::local_tasks::types::{LocalCommit,LocalTerminal};
+        if !self.selected_memory_current(&scope.turn.provider){scope.turn.cancel.store(true,Ordering::Release);}
         if !scope.valid_target(){return Err("Destino local inválido.".into());}
         let mut all=self.inner.lock().unwrap();
         let c=all.pets.get_mut("ollama").filter(|c|c.id==scope.target.session_id&&c.epoch==scope.turn.epoch&&c.turn_cancel.as_ref().is_some_and(|f|Arc::ptr_eq(f,&scope.turn.cancel))).ok_or("O turno local já terminou.")?;
@@ -1238,6 +1445,7 @@ pub async fn send(
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
+    chat.check_new_effect()?;
     let provider = if settings.chat_provider.is_empty(){ANTHROPIC}else{settings.chat_provider.as_str()};
     let reservation=chat.bind_reservation(provider)?.broadcast(app,&query);
     let channel=reservation.channel();let chat=&channel;
@@ -1255,7 +1463,7 @@ pub async fn send(
         return openai_compat::send(chat, p, &model, query, context).await;
     }
     if let Some(server) = local_chat::server(settings, provider) {
-        let selection=if provider=="ollama"{Some(crate::pet_config::select(provider,&model,&query)?)}else{None};
+        let selection=if provider=="ollama"||provider=="lmstudio"&&crate::pet_config::read_existing()?.pets.get("ai_lmstudio").is_some_and(|p|p.provider=="lmstudio"){Some(crate::pet_config::select(provider,&model,&query)?)}else{None};
         let model=selection.as_ref().map(|s|s.model.as_str()).unwrap_or(&model);
         return local_chat::send(app, chat, settings, &server, model, selection.as_ref(), query, context).await;
     }
@@ -1273,6 +1481,7 @@ pub async fn send_for_phone(
     query: String,
     on_delta: impl FnMut(String),
 ) -> Result<ChatReply, String> {
+    chat.check_new_effect()?;
     if provider == ANTHROPIC {
         return claude::send(chat, model, query, None).await;
     }
@@ -1289,6 +1498,7 @@ pub async fn send_for_phone(
 /// that provider, and only once it has a key (or, for a local server, an
 /// address): nothing is sent anywhere before that.
 pub async fn models(settings: &Settings, provider: &str) -> Result<Vec<ModelInfo>, String> {
+    crate::settings::effect_allowed()?;
     crate::pet_config::require_active_provider(provider)?;
     if provider=="copilot" {return crate::copilot_adapter::models().await;}
     if crate::cli_chat::backend(provider)==Some("codex") { return crate::codex_chat::models().await; }
@@ -2806,3 +3016,5 @@ mod process_census_chat_tests {
   let second=chat.begin_with_cancel("codex",stop.clone());assert!(!chat.is_current(&first));assert!(!stop.load(Ordering::Acquire));let stale=chat.lease(&first);drop(stale);assert!(chat.is_current(&second));assert!(!stop.load(Ordering::Acquire));
  }
 }
+
+#[cfg(all(test,target_os="linux"))]#[path="chat_restored_history_tests.rs"]mod restored_history_tests;

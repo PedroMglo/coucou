@@ -39,7 +39,8 @@ impl AppChat {
 impl ChatBackend for AppChat {
     fn config(&self) -> ChatConfig {
         let s = self.settings();
-        ChatConfig { enabled: s.phone_chat, allowed: options(&s.phone_chat_models) }
+        let available=crate::settings::effect_allowed().is_ok();
+        ChatConfig { enabled: s.phone_chat&&available, allowed: if available {options(&s.phone_chat_models)}else{vec![]} }
     }
 
     fn send(&self, model_id: &str, text: String, deltas: UnboundedSender<String>) -> BoxFuture<Result<String, ChatFail>> {
@@ -47,6 +48,7 @@ impl ChatBackend for AppChat {
         let chat = self.chat.clone();
         let id = model_id.to_string();
         Box::pin(async move {
+            crate::settings::effect_allowed().map_err(|_|ChatFail::Internal)?;
             let Some((provider, model)) = parse_model_id(&id) else { return Err(ChatFail::Internal) };
             if let Some(key) = key_name(provider) {
                 if secrets::get(key).is_none() {

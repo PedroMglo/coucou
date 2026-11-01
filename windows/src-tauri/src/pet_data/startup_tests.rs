@@ -25,6 +25,7 @@ pub(in crate::pet_data)struct Harness{owner:Connection,bus:Bus}
 impl Harness{
     pub(in crate::pet_data)fn new()->Self{let bus=Bus::new();let owner=bus.owner();Self{owner,bus}}
     pub(in crate::pet_data)fn claim(&self,layout:&Layout)->Result<Claim>{claim(&self.bus,layout)}
+    pub(in crate::pet_data)fn address(&self)->&str{&self.bus.address}
     pub(in crate::pet_data)fn release(&self){self.owner.release_name(name(APP).unwrap()).unwrap();}
 }
 

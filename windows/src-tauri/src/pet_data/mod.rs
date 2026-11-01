@@ -1,11 +1,20 @@
-//! Native .30 migration review and private data-copy candidates. No startup
-//! redirect, live profile publication, restore or grant adoption is enabled.
-#![allow(dead_code)] // Private migration foundation, not yet wired to startup.
+//! Native data ownership, migration, backups and reviewed inactive restoration.
+//! Restored history never constitutes executable admission or renewed consent.
+#![allow(dead_code)] // Recovery helpers also expose isolated private QA paths.
 mod inventory;
 mod private_fs;
 mod staging;
+mod current_profile;
+pub(crate)mod restored_history;
+pub(crate)mod restored_projection;
+pub(crate)mod restored_transaction;
+pub(crate)mod backup_cli;
+pub(crate)mod restore_cli;
 mod staging_fs;
 mod startup;
+mod settings_io;
+pub(crate)use settings_io::Format as SettingsIoFormat;
+#[cfg(test)]pub(crate)use startup::fixture_native_claim;
 mod publication;
 pub(crate)mod bootstrap;
 #[cfg(test)] mod tests;
@@ -75,3 +84,5 @@ impl LegacyReview {
         }
     }
 }
+
+mod revision_fence;

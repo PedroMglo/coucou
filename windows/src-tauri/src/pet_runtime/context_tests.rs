@@ -5,7 +5,7 @@ use std::{fs,path::PathBuf,os::unix::fs::PermissionsExt,sync::{Arc,atomic::Atomi
 struct Fixture{path:PathBuf}
 impl Fixture{fn new()->Self{let path=std::env::temp_dir().join(format!("coucou-context-{}",nonce().unwrap()));fs::create_dir(&path).unwrap();fs::set_permissions(&path,fs::Permissions::from_mode(0o700)).unwrap();Self{path}}fn root(&self)->PathBuf{self.path.join("contexts")}fn main(&self)->Chat{Chat::persistent(self.path.join("main.json"))}}
 impl Drop for Fixture{fn drop(&mut self){let _=fs::remove_dir_all(&self.path);}}
-fn goal(provider:&str,context:Context)->Record{let id=crate::pet_config::pet_id(provider).unwrap();Record::new(Spec{request_id:"goal-one".into(),owner:Owner{pet_id:id.into(),provider:provider.into(),adapter:if crate::pet_config::service(id){"codex".into()}else{provider.into()},model_hint:None},context,intent:"Complete the original goal".into(),criteria:vec!["Verify results".into()]},100_000,nonce().unwrap()).unwrap()}
+fn goal(provider:&str,context:Context)->Record{let id=crate::pet_config::pet_id(provider).unwrap();Record::new(Spec{restored_from:None,request_id:"goal-one".into(),owner:Owner{pet_id:id.into(),provider:provider.into(),adapter:if crate::pet_config::service(id){"codex".into()}else{provider.into()},model_hint:None},context,intent:"Complete the original goal".into(),criteria:vec!["Verify results".into()]},100_000,nonce().unwrap()).unwrap()}
 fn message(chat:&Chat,provider:&str,q:&str){let t=chat.begin(provider);chat.commit(&t,json!({"role":"user","content":q}),json!({"role":"assistant","content":"answer"}),q,"answer").unwrap();}
 fn bind(r:&mut Record,binding:ContextBinding){r.apply("prepare".into(),Action::BindContext{binding},100_001,nonce().unwrap()).unwrap();}
 

@@ -41,6 +41,7 @@ struct RawDisk {
 
 fn conversation(value: Value, version: u32) -> std::io::Result<SavedConversation> {
     let saved: SavedConversation = serde_json::from_value(value)?;
+    if version<7&&saved.native_memory_context.is_some(){return Err(std::io::Error::other("delivered memory provenance requires version7"));}
     if version < 5 && !saved.attachment_history.is_empty() {
         return Err(std::io::Error::other("attachment history requires version5"));
     }
@@ -50,7 +51,7 @@ fn conversation(value: Value, version: u32) -> std::io::Result<SavedConversation
 
 pub(super) fn decode(bytes: &[u8], goal: Option<(&str, &str)>) -> std::io::Result<Library> {
     let raw: RawDisk = serde_json::from_slice(bytes)?;
-    if !matches!(raw.version, 1..=6) { return Err(std::io::Error::other("unknown memory version")); }
+    if !matches!(raw.version, 1..=7) { return Err(std::io::Error::other("unknown memory version")); }
     if raw.version < 6 && raw.unavailable_history.is_some() {
         return Err(std::io::Error::other("inactive history requires version6"));
     }

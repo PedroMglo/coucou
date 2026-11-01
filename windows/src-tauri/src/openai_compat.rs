@@ -77,6 +77,9 @@ const MAX_INLINE_TEXT: u64 = 200_000;
 /// Images are sent inline as data URLs; past this size they are skipped.
 const MAX_IMAGE: u64 = 5_000_000;
 
+/// Shared dispatch/review route choice. A preview describes the known set,
+/// not provider-side tools, model aliases or internal routing.
+pub(crate)fn completion_tail(provider:&str,calendar:bool)->&'static str{if provider=="openai"&&calendar{"responses"}else{"chat/completions"}}
 fn url(p: &Provider, tail: &str) -> Result<Url, String> {
     let base = Url::parse(p.base_url).map_err(|e| e.to_string())?;
     Url::parse(&net::join(&base, tail)).map_err(|e| e.to_string())
@@ -166,6 +169,13 @@ pub async fn send(
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
     let key = secrets::get(p.key).ok_or_else(|| tf("{name} API key missing. Add it in Settings.", &[("name", p.name)]))?;
+    send_resolved(chat,p,model,query,context,&key).await
+}
+
+// Production supplies its original native Provider and credential. Test-only
+// callers use synthetic resolved inputs through the same complete send path.
+async fn send_resolved(chat:&Chat,p:&'static Provider,model:&str,query:String,context:Option<ChatContext>,key:&str)->Result<ChatReply,String>{
+    chat.check_new_effect()?;
     if model.is_empty() {
         return Err(tf("Pick a {name} model above the chat box.", &[("name", p.name)]));
     }
@@ -177,19 +187,20 @@ pub async fn send(
     let user=tokio::task::spawn_blocking(move||user_message(first,ordinary.as_ref(),&question)).await.map_err(|_|"A preparação dos anexos foi interrompida.".to_string())?;
     let user=crate::pet_calendar::prepend_message(calendar.as_ref(),user)?;
     let mut body = request_body(p, model, &chat::system_prompt(false), &turn.history, &user);
+    chat.append_selected_memory(p.id,&query,&crate::pet_memory::context_model::Destination::Api{provider:p.id.into(),endpoint:Url::parse(p.base_url).map_err(|_|"Destino inválido.")?.to_string(),model:model.into()},Some(key),body["messages"].as_array_mut().unwrap())?;
     use crate::pet_calendar::wire::{Session,Format};
     let format = if p.id == "openai" {Format::Responses} else {Format::Chat};
     let mut calendar_tools = Session::new(calendar.as_ref(),format);
     if let Some(tools) = &calendar_tools { tools.prepare(&mut body)?; }
 
-    let endpoint = url(p,if calendar_tools.is_some() && format == Format::Responses {"responses"} else {"chat/completions"})?;
+    let endpoint = url(p,completion_tail(p.id,calendar_tools.is_some()))?;
     let response = loop {
         documents.validate_contents().await?;
         crate::pet_calendar::validate(calendar.as_ref())?;
         let response = net::while_current(
             || chat.is_current(&turn) && documents.validate().is_ok() && crate::pet_calendar::validate(calendar.as_ref()).is_ok()
                 && calendar_tools.as_ref().is_none_or(|tools|tools.validate().is_ok()),
-            || call(p,&endpoint,&key,&body),
+            || async {chat.check_new_effect()?;call(p,&endpoint,key,&body).await},
         ).await?;
         if let Some(tools) = &mut calendar_tools {
             if tools.follow_up(&response,&mut body).await? {continue;}
@@ -206,8 +217,13 @@ pub async fn send(
     Ok(ChatReply { text })
 }
 
+#[cfg(test)]
+pub(crate)async fn memory_wire_fixture(chat:&Chat,p:&'static Provider,model:&str,query:String,context:Option<ChatContext>,key:&str)->Result<ChatReply,String>{
+    send_resolved(chat,p,model,query,context,key).await
+}
+
 async fn call(p: &Provider, endpoint: &Url, key: &str, body: &Value) -> Result<Value, String> {
-    let response = net::client(endpoint, Duration::from_secs(90))?
+    let response = net::exact_destination_client(endpoint, Duration::from_secs(90))?
         .post(endpoint.clone())
         .bearer_auth(key)
         .json(body)
@@ -227,7 +243,7 @@ async fn call(p: &Provider, endpoint: &Url, key: &str, body: &Value) -> Result<V
 /// picked this provider in the chat.
 pub async fn models(p: &Provider, key: &str) -> Result<Vec<ModelInfo>, String> {
     let endpoint = url(p, p.models_path)?;
-    let response = net::client(&endpoint, Duration::from_secs(15))?
+    let response = net::exact_destination_client(&endpoint, Duration::from_secs(15))?
         .get(endpoint)
         .bearer_auth(key)
         .send()

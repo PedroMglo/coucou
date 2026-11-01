@@ -58,6 +58,12 @@ class FakeElement {
   get firstChild() {
     return this.childNodes[0] ?? null;
   }
+  get firstElementChild() {
+    return this.children[0] ?? null;
+  }
+  get options() {
+    return this.find('option');
+  }
   get textContent() {
     return this.childNodes.map((n) => n.textContent).join("");
   }
@@ -65,6 +71,8 @@ class FakeElement {
     this.childNodes = [];
     if (text !== "") this.append(new FakeText(text));
   }
+  get disabled() { return this.attributes.has("disabled"); }
+  set disabled(value) { if(value)this.attributes.set("disabled", "");else this.attributes.delete("disabled"); }
   setAttribute(k, v) {
     this.attributes.set(k, String(v));
   }
@@ -93,6 +101,10 @@ class FakeElement {
       node.parentNode = this;
       this.childNodes.push(node);
     }
+  }
+  prepend(...nodes) {
+    const first = this.firstChild;
+    for (const n of nodes) this.insertBefore(typeof n === 'string' ? new FakeText(n) : n, first);
   }
   replaceChildren(...nodes) {
     this.childNodes = [];
@@ -140,6 +152,10 @@ class FakeElement {
   }
   /** Descendants by tag name ("A") or class (".md-p"). */
   find(selector) {
+    if (selector.includes(',')) {
+      const matches = new Set(selector.split(',').flatMap((part) => this.find(part.trim())));
+      return [...this.walk()].filter((e) => matches.has(e));
+    }
     const match = selector.startsWith(".")
       ? (e) => e.classList.contains(selector.slice(1))
       : (e) => e.tagName === selector.toUpperCase();

@@ -188,5 +188,26 @@ pub(crate)fn copilot_response(params:&Value,answer:Option<&Value>)->Value{
     answer.and_then(|a|response("copilot","session/request_permission",params,a)).unwrap_or_else(||json!({"outcome":{"outcome":"cancelled"}}))
 }
 
+/// Exact non-persistent refusals. `allow:false` alone is insufficient: native
+/// choices may still persist a network rule or a remembered reject policy.
+pub(crate)fn pure_refusal(adapter:&str,method:&str,params:&Value,result:&Value)->bool{
+    if adapter=="codex"&&codex_fixed_refusal(method,result){return true;}
+    if adapter=="copilot"&&method=="session/request_permission"&&*result==json!({"outcome":{"outcome":"cancelled"}}){return true;}
+    collect(adapter,method,params).ok().flatten().is_some_and(|(_,entries)|entries.into_iter().any(|c|!c.allow&&matches!(c.scope,"once"|"turnCancellation")&&c.response==*result))
+}
+/// Control-socket replies retain only the native method/hash, not a second
+/// copy of private arguments. Only these fixed protocol refusal forms qualify;
+/// the response must already have passed the original request's choice broker.
+pub(crate)fn codex_fixed_refusal(method:&str,result:&Value)->bool{
+    match method{
+        "execCommandApproval"|"applyPatchApproval"=>*result==json!({"decision":"abort"})||*result==json!({"decision":{"denied":{"rejection":"The request was not approved."}}}),
+        "item/commandExecution/requestApproval"|"item/fileChange/requestApproval"=>*result==json!({"decision":"decline"})||*result==json!({"decision":"cancel"}),
+        "item/permissions/requestApproval"=>*result==json!({"permissions":{},"scope":"turn"}),
+        "mcpServer/elicitation/request"=>*result==json!({"action":"decline","content":null,"_meta":null}),
+        "item/tool/requestUserInput"=>exact_keys(result,&["answers"])&&result["answers"].as_object().is_some_and(|a|a.len()<=64&&a.iter().all(|(id,v)|!id.is_empty()&&id.len()<=256&&!id.chars().any(char::is_control)&&*v==json!({"answers":[]}))),
+        _=>false,
+    }
+}
+
 #[cfg(test)]
 #[path="pet_native_choices_tests.rs"]mod tests;

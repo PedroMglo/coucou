@@ -6,6 +6,7 @@ use tauri::AppHandle;
 #[cfg(target_os="linux")]use super::store::Store;
 #[cfg(target_os="linux")]
 async fn inspect(server:&crate::local_chat::Server,model:&str,current:impl Fn()->bool)->model::Result<()> {
+    if server.id=="lmstudio"{return crate::local_chat::lmstudio::inspect(server,model,current).await.map(|_|()).map_err(|_|model::Error::Conflict);}
     if server.id!="ollama"||model.is_empty()||model.starts_with('@')||model.ends_with(":cloud")||model.ends_with("-cloud"){return Err(model::Error::InvalidInput);}
     let base=crate::local_chat::base_url(server).map_err(|_|model::Error::InvalidInput)?;
     if !crate::net::is_loopback_url(&base){return Err(model::Error::InvalidInput);}
@@ -17,16 +18,16 @@ pub async fn pet_runtime_refresh_readiness(app:AppHandle,window:tauri::WebviewWi
     #[cfg(not(target_os="linux"))]{let _=(app,pet_id,goal_id);Err(model::Error::UnsupportedPlatform)}
     #[cfg(target_os="linux")]{
         let root=crate::settings::config_dir().join("pet-runtime-v1");let store=Store::existing_native(&root)?.ok_or(model::Error::NotFound)?;let goal=store.read(&goal_id,&pet_id)?;
-        if !matches!(goal.state,model::State::Draft|model::State::Queued){return Err(model::Error::Conflict);}
+        if !matches!(goal.state,model::State::Draft|model::State::Queued|model::State::RecoveryRequired){return Err(model::Error::Conflict);}
         let projection=crate::pet_capabilities::native_projection(&app,None).map_err(|_|model::Error::StorageUnavailable)?;
         let descriptor=projection.snapshot.pets.iter().find(|p|p.pet_id==pet_id).ok_or(model::Error::NotFound)?;
-        let owner=model::Owner::from_descriptor(descriptor)?;if !owner.same_runtime_binding(&goal.spec.owner)||owner.provider!="ollama"||owner.adapter!="ollama"{return Err(model::Error::Conflict);}
+        let owner=model::Owner::from_descriptor(descriptor)?;if !owner.same_runtime_binding(&goal.spec.owner)||!owner.local_engine(){return Err(model::Error::Conflict);}
         let model=descriptor.binding.model.as_ref().ok_or(model::Error::Conflict)?;
         let server=crate::local_chat::server(&projection.settings,&owner.provider).ok_or(model::Error::Conflict)?;
         let stop=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));let until=std::time::Instant::now()+std::time::Duration::from_secs(6);
         let chat=app.state::<crate::chat::Chat>();let hold=chat.runtime_resources().acquire(&owner.provider,stop,Some(until)).map_err(|_|model::Error::Busy)?;
         let revision=goal.revision.clone();
-        inspect(&server,model,||hold.current()&&store.read(&goal_id,&pet_id).is_ok_and(|g|g.revision==revision&&g.spec.owner==goal.spec.owner&&matches!(g.state,model::State::Draft|model::State::Queued))).await?;
+        inspect(&server,model,||hold.current()&&store.read(&goal_id,&pet_id).is_ok_and(|g|g.revision==revision&&g.spec.owner==goal.spec.owner&&matches!(g.state,model::State::Draft|model::State::Queued|model::State::RecoveryRequired))).await?;
         drop(hold);let current=store.read(&goal_id,&pet_id)?;if current.revision!=revision{return Err(model::Error::Conflict);}
         let fresh=crate::pet_capabilities::provider_descriptor(&app,&owner.provider).map_err(|_|model::Error::StorageUnavailable)?;
         if model::Owner::from_descriptor(&fresh)?!=owner||fresh.binding.model.as_ref()!=Some(model){return Err(model::Error::Conflict);}Ok(fresh)

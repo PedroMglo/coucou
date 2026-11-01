@@ -6,16 +6,29 @@ use serde::{Deserialize,Serialize};
 use tauri::AppHandle;
 #[cfg(target_os="linux")]use tauri::Manager;
 #[cfg(target_os="linux")]struct Entry{source_revision:String,request_id:String,pending:Pending,owned:Option<Arc<Owned>>}
-#[cfg(target_os="linux")]struct Service{controller:Controller,entries:BTreeMap<String,Entry>}
+#[cfg(target_os="linux")]struct Service{controller:Controller,entries:BTreeMap<String,Entry>,maintenance_after:Option<String>}
+#[cfg(target_os="linux")]#[path="lease_maintenance.rs"]mod maintenance;
+#[cfg(target_os="linux")]pub(super)use maintenance::cleanup_unstarted;
 #[cfg(target_os="linux")]fn service()->model::Result<&'static Mutex<Service>>{
     static SERVICE:OnceLock<model::Result<Mutex<Service>>>=OnceLock::new();
-    SERVICE.get_or_init(||Controller::new().map(|controller|Mutex::new(Service{controller,entries:BTreeMap::new()}))).as_ref().map_err(|e|*e)
+    SERVICE.get_or_init(||Controller::new().map(|controller|Mutex::new(Service{controller,entries:BTreeMap::new(),maintenance_after:None}))).as_ref().map_err(|e|*e)
 }
 #[cfg(target_os="linux")]fn root()->std::path::PathBuf{crate::settings::config_dir().join("pet-runtime-v1")}
 #[cfg(target_os="linux")]pub(super)fn step_owner(goal:&Record,lease:&str)->model::Result<Arc<Owned>>{
     let service=service()?.lock().map_err(|_|Error::StorageUnavailable)?;
     let owner=service.entries.get(&goal.id).and_then(|e|e.owned.clone()).ok_or(Error::Conflict)?;
     if owner.lease().id!=lease{return Err(Error::Conflict);}Ok(owner)
+}
+/// Cleanup is authorized by the original opaque drain proof, after durable
+/// closure. A stored lease or UI status never removes a live native owner.
+#[cfg(target_os="linux")]pub(super)fn retire_driver(store:&Store,proof:&super::lease_controller::DrainProof)->model::Result<()> {
+    if !proof.confirmed(){return Err(Error::Conflict);}let lease=proof.lease();
+    let mut service=service()?.lock().map_err(|_|Error::StorageUnavailable)?;
+    let Some(entry)=service.entries.get(&lease.goal_id)else{return Ok(());};
+    if entry.pending.lease()!=lease||entry.pending.workers()!=0{return Err(Error::Conflict);}
+    let pet=crate::pet_config::pet_id(&lease.provider).ok_or(Error::Conflict)?;let goal=store.read_control(&lease.goal_id,pet)?;
+    if matches!(goal.state,model::State::Leased|model::State::Stopping){return Err(Error::Conflict);}
+    service.entries.remove(&lease.goal_id);super::step_api::release(&lease.id);super::recipe_api::release(&lease.id);Ok(())
 }
 /// Only the original live owner may confirm its workers ended. A stored lease
 /// alone never allows this cleanup after restart.
@@ -36,7 +49,7 @@ pub struct ReleaseInput{pub pet_id:String,pub goal_id:String,pub lease_id:String
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct ClaimResult{pub receipt:model::Receipt,pub lease:Lease,pub owned:bool,pub reservation_owned:bool,pub execution_available:bool}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
-pub struct LeaseStatus{pub record:Record,pub lease:Option<Lease>,pub owned:bool,pub reservation_owned:bool,pub source:&'static str,pub current:bool,pub workers:Option<usize>,pub execution_available:bool}
+pub struct LeaseStatus{pub record:Record,pub lease:Option<Lease>,pub owned:bool,pub reservation_owned:bool,pub source:&'static str,pub current:bool,pub workers:Option<usize>,pub execution_available:bool,pub native_owner:super::runtime_owner::Observation}
 fn check(window:&tauri::WebviewWindow)->model::Result<()>{if super::adapter::allowed(window.label()){Ok(())}else{Err(Error::InvalidInput)}}
 #[cfg(target_os="linux")]
 #[tauri::command]
@@ -59,24 +72,28 @@ pub async fn pet_runtime_claim(app:AppHandle,window:tauri::WebviewWindow,input:C
             });
             let pending=service.controller.prepare(&goal,&authority_path,&context_path,app.state::<crate::chat::Chat>().inner(),&observation,input.request_id.clone(),now,fence)?;
             service.entries.insert(goal.id.clone(),Entry{source_revision:input.revision.clone(),request_id:input.request_id.clone(),pending,owned:None});
+            maintenance::start(root(),authority_path);
         }
         let entry=service.entries.get_mut(&goal.id).ok_or(Error::Conflict)?;
         if entry.source_revision!=input.revision||entry.request_id!=input.request_id{return Err(Error::Conflict);}
-        if let Some(owned)=&entry.owned{return Ok(ClaimResult{receipt:model::Receipt{record:goal,status:model::CommitStatus::Unchanged},lease:owned.lease().clone(),owned:true,reservation_owned:true,execution_available:false});}
+        if let Some(owned)=&entry.owned{return Ok(ClaimResult{receipt:model::Receipt{record:goal,status:model::CommitStatus::Unchanged},lease:owned.lease().clone(),owned:true,reservation_owned:entry.pending.hold().occupies_slot(),execution_available:false});}
         let observation=admission_review::evidence(&app,&goal,crate::assistant_memory::now(),Some(entry.pending.hold()))?.map_err(|_|Error::Conflict)?;
         let authority=Authority::existing(&admission_review::authority_root()).map_err(|_|Error::StorageUnavailable)?;
         let(receipt,owned)=entry.pending.claim(&store,&authority,&observation,crate::assistant_memory::now())?;entry.owned=owned.map(Arc::new);
-        Ok(ClaimResult{receipt,lease:entry.pending.lease().clone(),owned:entry.owned.is_some(),reservation_owned:true,execution_available:false})
+        Ok(ClaimResult{receipt,lease:entry.pending.lease().clone(),owned:entry.owned.is_some(),reservation_owned:entry.pending.hold().occupies_slot(),execution_available:false})
     }).await.map_err(|_|Error::StorageUnavailable)?
 }
 #[cfg(target_os="linux")]
 #[tauri::command]
 pub async fn pet_runtime_claim_status(window:tauri::WebviewWindow,pet_id:String,goal_id:String)->model::Result<LeaseStatus>{
     check(&window)?;tauri::async_runtime::spawn_blocking(move||{
-        let store=Store::existing_native(&root())?.ok_or(Error::NotFound)?;let goal=store.read(&goal_id,&pet_id)?;let service=service()?.lock().map_err(|_|Error::StorageUnavailable)?;
+        // Status observes authenticated in-flight publication. Strict execution
+        // validation still belongs to the original native owner/operation.
+        let store=Store::existing_native(&root())?.ok_or(Error::NotFound)?;let goal=store.read_control(&goal_id,&pet_id)?;let service=service()?.lock().map_err(|_|Error::StorageUnavailable)?;
         let entry=service.entries.get(&goal.id);let owned=entry.and_then(|e|e.owned.as_ref());let stored=goal.admissions.last().and_then(|a|a.lease.clone());
         let lease=entry.map(|e|e.pending.lease().clone()).or(stored);let source=if entry.is_some(){"liveController"}else if lease.is_some(){"storedLease"}else{"none"};
-        Ok(LeaseStatus{current:owned.is_some_and(|o|o.current(crate::assistant_memory::now())),workers:entry.map(|e|e.pending.workers()),owned:owned.is_some(),reservation_owned:entry.is_some(),source,lease,record:goal,execution_available:false})
+        let native_owner=if let Some(row)=goal.admissions.last(){let proof=row.proof.as_ref().ok_or(Error::Conflict)?;Authority::existing(&admission_review::authority_root()).and_then(|a|a.owner_observation(&row.spec,proof)).map_err(|_|Error::StorageUnavailable)?}else{super::runtime_owner::Observation::without_owner(super::runtime_owner::State::NotClaimed,None)};
+        Ok(LeaseStatus{current:owned.is_some_and(|o|o.current(crate::assistant_memory::now())),workers:entry.map(|e|e.pending.workers()),owned:owned.is_some(),reservation_owned:entry.is_some_and(|e|e.pending.hold().occupies_slot()),source,lease,record:goal,execution_available:false,native_owner})
     }).await.map_err(|_|Error::StorageUnavailable)?
 }
 #[cfg(target_os="linux")]

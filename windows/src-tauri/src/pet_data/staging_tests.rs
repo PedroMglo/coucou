@@ -1,3 +1,4 @@
+use crate::pet_data::Layout;
 use super::*;
 use crate::pet_data::tests::Temp;
 use std::{fs, os::unix::fs::{symlink, DirBuilderExt, PermissionsExt}};
@@ -200,4 +201,10 @@ fn native_known_legacy_data_backup_acceptance(){
     assert_eq!(output.verify().unwrap(),Summary{files:0,directories:0,bytes:0,excluded_roots:0});
     assert_eq!(inspect(&workspace,output.id()).unwrap().phase,Phase::VerifiedData);
     assert!(!layout.legacy_data.exists());assert!(!layout.legacy_config.exists());assert!(!layout.data().exists());assert!(!layout.config().exists());
+}
+
+#[test]fn current_profile_partial_copy_keeps_its_id_and_cannot_be_mistaken_for_a_complete_backup(){
+    use crate::pet_data::{current_profile::Review,publication::Publication,startup::tests::Harness};
+    let t=Temp::new();let layout=t.basic();let h=Harness::new();let active=Publication::begin(h.claim(&layout).unwrap(),layout).ok().unwrap().publish().ok().unwrap();let work=t.0.join("current-copy-work");fs::create_dir(&work).unwrap();fs::set_permissions(&work,fs::Permissions::from_mode(0o700)).unwrap();
+    let review=Review::capture(active,&work).unwrap();let failure=prepare_using(review,&work,|step|if matches!(step,Step::Node(0)){Err(Error::Unavailable)}else{Ok(())}).err().unwrap();let id=failure.candidate_id.unwrap();let root=work.join(format!("current-profile-{id}"));assert!(root.is_dir());assert!(!root.join("ready.json").exists());assert_eq!(inspect_current(&work,&id).unwrap().phase,Phase::Incomplete);assert!(inspect(&work,&id).is_err());
 }

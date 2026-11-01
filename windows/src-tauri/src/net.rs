@@ -142,14 +142,17 @@ pub fn anthropic_endpoint(raw: &str) -> Result<Url, String> {
 
 /// A client for `url`: requests to this machine skip any system proxy, which
 /// would otherwise see (and usually fail) a loopback address.
+fn client_builder(url:&Url,timeout:Duration)->reqwest::ClientBuilder{
+    let mut builder=reqwest::Client::builder().connect_timeout(Duration::from_secs(10).min(timeout)).timeout(timeout);
+    if is_loopback_url(url){builder=builder.no_proxy();}builder
+}
 pub fn client(url: &Url, timeout: Duration) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10).min(timeout))
-        .timeout(timeout);
-    if is_loopback_url(url) {
-        builder = builder.no_proxy();
-    }
-    builder.build().map_err(|e| e.to_string())
+    client_builder(url,timeout).build().map_err(|e|e.to_string())
+}
+/// API credentials/data belong to the exact native endpoint being used. A
+/// redirect is a response to surface, never authority to resend elsewhere.
+pub(crate)fn exact_destination_client(url:&Url,timeout:Duration)->Result<reqwest::Client,String>{
+    client_builder(url,timeout).redirect(reqwest::redirect::Policy::none()).build().map_err(|e|e.to_string())
 }
 
 /// Autonomous local-model requests never follow redirects or proxy off host.

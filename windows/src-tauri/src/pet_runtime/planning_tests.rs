@@ -20,6 +20,29 @@ pub(super)fn setup()->(Fixture,Authority,Record,super::lease_controller::Pending
 fn attempt(request:&str)->Attempt {Attempt {id:nonce().unwrap(),request_id:request.into(),input_hash:"a".repeat(64),kind:Kind::Model,output_reserved:2048,phase:Phase::Reserved,accepted_output:None,reserved_at:100_008,started_at:None,finished_at:None}}
 pub(super)fn grant(f:&Fixture,g:&Record)->Value {serde_json::from_slice(&std::fs::read(root(f).join(format!("{}.json",g.admissions[0].spec.decision_id))).unwrap()).unwrap()}
 pub(super)fn output()->Value {json!({"kind":"plan","description":"Pause the private player","steps":[{"description":"Pause","postcondition":"Playback is paused","operation":{"operationId":"spotify.control","version":1,"arguments":{"action":"pause"}}}],"criteria":[{"criterionIndex":0,"predicate":{"kind":"spotifyPlayback","status":"paused"}}]})}
+
+#[test]fn shared_planning_budget_and_journal_readers_do_not_block_each_other_but_writes_stay_exclusive(){
+    use std::{fs::OpenOptions,os::fd::AsRawFd};
+    let(f,a,g,_pending,owner)=setup();let row=&g.admissions[0];let proof=row.proof.as_ref().unwrap();
+    let reader=OpenOptions::new().read(true).write(true).open(root(&f).join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(reader.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);
+    let before=super::reconciliation_tests::inventory(&f.path);
+    assert_eq!(a.output_remaining(&row.spec,proof,owner.lease(),100_008).unwrap(),row.spec.budget.max_output_bytes);
+    assert!(a.planning_ledger(&row.spec,proof,owner.lease(),100_008).unwrap().rounds.is_empty());
+    let request=planning_journal::Request::capture(&g,&row.spec,owner.lease(),"shared-context").unwrap();let context=a.planning_context(&row.spec,proof,owner.lease(),request,100_008).unwrap();
+    assert_eq!(context.input.remaining.model_calls,row.spec.budget.max_model_calls);assert_eq!(super::reconciliation_tests::inventory(&f.path),before);
+    let call=attempt("shared-context");assert_eq!(a.reserve_planning_attempt(&row.spec,proof,owner.lease(),&call,&context.request,100_009).err(),Some(Failure::Busy));assert_eq!(super::reconciliation_tests::inventory(&f.path),before);
+    drop(reader);a.reserve_planning_attempt(&row.spec,proof,owner.lease(),&call,&context.request,100_009).unwrap();
+    let reader=OpenOptions::new().read(true).write(true).open(root(&f).join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(reader.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);let before=super::reconciliation_tests::inventory(&f.path);
+    assert_eq!(a.start_attempt(&row.spec,proof,owner.lease(),&call,100_010).err(),Some(Failure::Busy));assert_eq!(super::reconciliation_tests::inventory(&f.path),before);
+}
+
+#[test]fn shared_generated_candidate_recipe_and_headroom_reads_preserve_original_signed_sources(){
+    use std::{fs::OpenOptions,os::fd::AsRawFd};
+    let(f,a,g,_pending,owner,_main)=super::generated_effect_tests::setup(true);let row=&g.admissions[0];let proof=row.proof.as_ref().unwrap();let plan=&g.generated_plans.last().unwrap().plan_id;let now=crate::assistant_memory::now();
+    let reader=OpenOptions::new().read(true).write(true).open(root(&f).join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(reader.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);let before=super::reconciliation_tests::inventory(&f.path);
+    assert!(a.generated_candidate(&row.spec,proof,owner.lease(),&g,plan).is_ok());assert!(a.read_recipe(&row.spec,proof,plan).unwrap().is_none());assert!(a.recipe_progress(&row.spec,proof,plan).unwrap().is_none());
+    a.recipe_headroom(&row.spec,proof,owner.lease(),2,4096,now).unwrap();assert!(a.planning_ledger(&row.spec,proof,owner.lease(),now).is_ok());assert_eq!(super::reconciliation_tests::inventory(&f.path),before);
+}
 #[test] fn malformed_stored_policy_cannot_relax_the_parser_allocation_or_step_bounds() {
     let f=Fixture::new();let g=f.goal("ollama");
     for field in ["maxOutputBytes","maxRounds","maxSteps","noProgressLimit"] {
@@ -75,7 +98,7 @@ macro_rules! invoke {($a:expr,$g:expr,$o:expr,$method:ident,$($args:expr),*)=>{{
     let(f,a,g,_p,o)=setup();assert_eq!(g.schema_version,8);let row=&g.admissions[0];let proof=row.proof.as_ref().unwrap();assert_eq!(proof.operation,Operation::GoalPlanning);assert_eq!(proof.schema_version,2);
     assert!(authority::consent_message(proof,&row.spec).unwrap().starts_with(b"coucou-native-goal-planning-consent-v1\0"));
     let mut swapped=proof.clone();swapped.operation=Operation::ConversationRespond;swapped.schema_version=1;assert!(authority::consent_message(&swapped,&row.spec).is_err());
-    let b=grant(&f,&g);assert_eq!(b["body"]["schemaVersion"],4);assert_eq!(b["body"]["planningUsage"]["rounds"],json!([]));assert!(invoke!(a,g,o,output_remaining,100_008).is_ok());
+    let b=grant(&f,&g);assert_eq!(b["body"]["schemaVersion"],6);assert_eq!(b["body"]["planningUsage"]["rounds"],json!([]));assert!(invoke!(a,g,o,output_remaining,100_008).is_ok());
     let legacy=f.goal("codex");let approved=super::admission_tests::approved(&legacy,"legacy");let spec=approved.spec();assert!(serde_json::to_value(spec).unwrap().get("planningPolicy").is_none());
     let proof=authority::ConsentProof {schema_version:1,key_id:"a".repeat(32),operation:Operation::ConversationRespond,tag:"b".repeat(64)};
     let mut exact=b"coucou-native-goal-consent-v1\0".to_vec();exact.extend(serde_json::to_vec(&(1,&proof.key_id,Operation::ConversationRespond,spec)).unwrap());assert_eq!(authority::consent_message(&proof,spec).unwrap(),exact);
@@ -90,7 +113,7 @@ macro_rules! invoke {($a:expr,$g:expr,$o:expr,$method:ident,$($args:expr),*)=>{{
     assert_eq!(invoke!(a,g,o,reserve_attempt,&call,100_008).err(),Some(Failure::Invalid));assert!(grant(&f,&g)["body"].get("budgetUsage").is_none());
     invoke!(a,g,o,reserve_planning_attempt,&call,&req,100_008).unwrap();let b=grant(&f,&g);assert_eq!(b["body"]["budgetUsage"]["attempts"].as_array().unwrap().len(),1);assert_eq!(b["body"]["planningUsage"]["rounds"][0]["source"]["recordHash"],model::fingerprint(&g).unwrap());assert_eq!(invoke!(a,g,o,output_remaining,100_008).unwrap(),2048);
     invoke!(a,g,o,start_attempt,&call,100_009).unwrap();assert_eq!(grant(&f,&g)["body"]["planningUsage"]["rounds"][0]["phase"],"started");
-    invoke!(a,g,o,finish_attempt,&call,Some(100),100_010).unwrap();let b=grant(&f,&g);assert_eq!(b["body"]["schemaVersion"],4);assert_eq!(b["body"]["planningUsage"]["rounds"][0]["phase"],"settled");assert_eq!(invoke!(a,g,o,output_remaining,100_010).unwrap(),3996);
+    invoke!(a,g,o,finish_attempt,&call,Some(100),100_010).unwrap();let b=grant(&f,&g);assert_eq!(b["body"]["schemaVersion"],6);assert_eq!(b["body"]["planningUsage"]["rounds"][0]["phase"],"settled");assert_eq!(invoke!(a,g,o,output_remaining,100_010).unwrap(),3996);
     // A settled attempt alone is not an authenticated plan/outcome ACK.
     let req2=planning_journal::Request::capture(&g,&g.admissions[0].spec,o.lease(),"round-2").unwrap();assert_eq!(invoke!(a,g,o,reserve_planning_attempt,&attempt("round-2"),&req2,100_011).err(),Some(Failure::RecoveryRequired));
 }

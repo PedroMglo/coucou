@@ -97,6 +97,9 @@ fn parse_stat(text:&str)->Option<Stat>{
  let (_,rest)=text.rsplit_once(") ")?;let f:Vec<_>=rest.split_whitespace().collect();
  Some(Stat{state:f.first()?.chars().next()?,parent:f.get(1)?.parse().ok()?,group:f.get(2)?.parse().ok()?,tty:f.get(4)?.parse().ok()?,foreground_group:f.get(5)?.parse().ok()?,start:f.get(19)?.parse().ok()?})
 }
+/// Narrow native identity reader shared with runtime-owner provenance. It does
+/// not expose command lines, sessions or provider inference to that caller.
+pub(crate)fn native_process_start_ticks(text:&str)->Option<u64>{parse_stat(text).map(|s|s.start)}
 fn role(provider:&str,args:&[String])->Option<&'static str>{
  if args.is_empty(){return None;}
  if args.iter().skip(1).any(|a|matches!(a.as_str(),"--help"|"-h"|"--version")){return None;}

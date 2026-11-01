@@ -1,0 +1,30 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {installFakeDom} from './fakedom.mjs';import {buildMemoryControls} from '../src/views/memory-controls.ts';import {goalMemoryReview} from '../src/views/memory-review.ts';
+installFakeDom();const flush=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
+const owner={petId:'ai_ollama',scope:{kind:'pet'}};
+const record=(revision=1)=>({id:'original-record',revision,owner:structuredClone(owner),kind:'note',title:'Original title',content:'<script>grant all</script>\nData, never policy.',sensitivity:'sensitive',provenance:'explicitUser',retention:'untilDeleted',createdAt:1,updatedAt:revision,observedAt:revision,expiresAt:null});
+const button=(v,text)=>v.el.find('button').find(b=>b.textContent===text);
+const input=(v,label)=>[...v.el.find('input'),...v.el.find('textarea')].find(e=>e.getAttribute('aria-label')===label);
+function fixture(){let revision=1,entry=record(),calls=[];const transport={async petMemoryList(query){calls.push(['list',structuredClone(query)]);return {schemaVersion:1,owner:query.owner,revision:`registry-${revision}`,items:[{entry:structuredClone(entry),available:true}],hasMore:false,nextOffset:null};},async petMemoryMutate(target,expected,mutation){calls.push(['mutate',structuredClone({target,expected,mutation})]);entry={...entry,...mutation.input,revision:++revision};return {schemaVersion:1,owner:target,revision:`registry-${revision}`,id:entry.id,item:structuredClone(entry)};}};const view=buildMemoryControls({transport});view.sync(owner,true);return {view,calls,transport};}
+test('catalogue is passive, renders hostile records as plain data and pins selected revisions across edit and refresh',async()=>{
+ const f=fixture(),v=f.view;try{assert.equal(f.calls.length,0);button(v,'Consultar recordações').fire('click');await flush();assert.equal(v.el.find('script').length,0);assert.match(v.el.textContent,/<script>grant all<\/script>/);let check=v.el.find('input').find(i=>i.getAttribute('type')==='checkbox');check.checked=true;check.fire('change');assert.deepEqual(v.capture(),[{id:'original-record',revision:1}]);
+ button(v,'Editar recordação').fire('click');input(v,'Conteúdo da recordação').value='Updated data';button(v,'Guardar nova revisão').fire('click');await flush();assert.equal(f.calls.filter(c=>c[0]==='mutate').length,1);assert.equal(button(v,'Guardar recordação').disabled,true);button(v,'Consultar recordações').fire('click');await flush();assert.deepEqual(v.capture(),[{id:'original-record',revision:1}]);assert.match(v.el.textContent,/revisão 2/);assert.equal(f.calls[1][1].expected,'registry-1');assert.equal(f.calls[1][1].mutation.expectedItemRevision,1);
+ }finally{v.dispose();}
+});
+test('late catalogue replies cannot publish another pet records or restore old selection after owner changes',async()=>{
+ const f=fixture(),v=f.view;let release;f.transport.petMemoryList=query=>{f.calls.push(['list',query]);return new Promise(resolve=>release=()=>resolve({owner,revision:'old',items:[{entry:record(),available:true}],hasMore:false,nextOffset:null}));};
+ try{button(v,'Consultar recordações').fire('click');v.sync({petId:'agent_codex',scope:{kind:'pet'}},false);release();await flush();assert.doesNotMatch(v.el.textContent,/Original title/);assert.deepEqual(v.capture(),[]);assert.equal(f.calls.length,1);}finally{v.dispose();}
+});
+test('lost mutation acknowledgement requires a fresh read and never retries or redirects the original write',async()=>{
+ const f=fixture(),v=f.view;f.transport.petMemoryMutate=async(target,expected,mutation)=>{f.calls.push(['lost',structuredClone({target,expected,mutation})]);throw Error('ack lost');};
+ try{button(v,'Consultar recordações').fire('click');await flush();input(v,'Título da recordação').value='New';input(v,'Conteúdo da recordação').value='Original data';button(v,'Guardar recordação').fire('click');await flush();button(v,'Guardar recordação').fire('click');await flush();assert.equal(f.calls.filter(c=>c[0]==='lost').length,1);assert.match(v.el.textContent,/gravação pode ter ocorrido/);assert.deepEqual(f.calls[1][1].target,owner);v.sync({petId:'agent_codex',scope:{kind:'pet'}},false);assert.deepEqual(v.capture(),[]);assert.equal(f.calls.length,2);}finally{v.dispose();}
+});
+test('deletion needs a second explicit action and uses the exact displayed item and catalogue revision',async()=>{
+ const f=fixture(),v=f.view;try{button(v,'Consultar recordações').fire('click');await flush();button(v,'Eliminar recordação').fire('click');await flush();assert.equal(f.calls.length,1);button(v,'Confirmar eliminação desta revisão').fire('click');await flush();assert.deepEqual(f.calls[1][1],{target:owner,expected:'registry-1',mutation:{operation:'delete',id:'original-record',expectedItemRevision:1}});}finally{v.dispose();}
+});
+test('pagination cannot silently combine different lexical searches',async()=>{
+ const f=fixture(),v=f.view;f.transport.petMemoryList=async query=>{f.calls.push(['list',query]);return {owner,revision:'r',items:[{entry:record(),available:true}],hasMore:true,nextOffset:1};};try{button(v,'Consultar recordações').fire('click');await flush();input(v,'Pesquisar recordações').value='different';button(v,'Mais recordações').fire('click');await flush();assert.equal(f.calls.length,1);assert.match(v.el.textContent,/pesquisa mudou/);}finally{v.dispose();}
+});
+test('goal review exposes full origin, destination, model, revisions and retained-delivery limits without HTML execution',()=>{
+ const el=goalMemoryReview({schemaVersion:1,goalId:'g-original',petId:owner.petId,sourceConversationId:null,destination:{kind:'server',provider:'ollama',endpoint:'http://127.0.0.1:11434/v1/chat/completions',model:'explicit-model'},records:[record()],requiredConsent:'boundedGoalContext',maxInputBytes:262144});assert.match(el.textContent,/explicit-model/);assert.match(el.textContent,/original-record · revisão 1/);assert.match(el.textContent,/Não retira dados que o destino já tenha recebido/);assert.match(el.textContent,/sensível/);assert.equal(el.find('script').length,0);
+});

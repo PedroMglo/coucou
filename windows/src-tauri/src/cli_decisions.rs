@@ -6,6 +6,8 @@ use ring::rand::{SecureRandom,SystemRandom};
 const ENDED:&str="Este pedido já terminou.";
 const MAX_PENDING:usize=128;
 const MAX_REVIEW:usize=256*1024;
+#[cfg(target_os="linux")]const MAX_GOAL_REVIEW:usize=2*1024*1024;
+#[cfg(target_os="linux")]const MAX_GOAL_PENDING:usize=16;
 const MAX_ANSWER:usize=64*1024;
 
 impl RequestPolicy{
@@ -13,7 +15,7 @@ impl RequestPolicy{
         now<expires&&match self{
             Self::Native{cancel,source}=>!cancel.load(Ordering::Acquire)&&source.as_ref().is_none_or(|source|source.current()),
             Self::LocalOnce{deadline,cancel}=>now<*deadline&&!cancel.load(Ordering::Acquire),
-            #[cfg(target_os="linux")]Self::GoalRecipe{source}=>now<source.deadline()&&source.current(),
+            #[cfg(target_os="linux")]Self::GoalRecipe{source}=>now<source.deadline()&&source.pending(),
         }
     }
 }
@@ -39,11 +41,13 @@ fn questions(request:&Value)->Result<Vec<&str>,String>{
 }
 pub(super)fn validate_decision(request:&PendingRequest,answer:&Value,supplied:Option<&Value>)->Result<(),String>{
     if !live(request){return Err(ENDED.into());}
+    #[cfg(target_os="linux")]if let RequestPolicy::GoalRecipe{source}=&request.policy{if answer["allow"].as_bool()!=Some(false)&&!source.current(){return Err("A validação nativa está temporariamente indisponível. Repete a decisão neste mesmo pedido.".into());}}
     let supplied=target(supplied.ok_or("A decisão exige o destino exato do pedido." )?)?;
     if supplied!=target(request_target(request))?{return Err("A decisão não pertence à sessão apresentada.".into());}
     if serde_json::to_vec(answer).map_err(|_|"Decisão inválida.")?.len()>MAX_ANSWER{return Err("A resposta excede o limite deste pedido.".into());}
     let object=answer.as_object().ok_or("Decisão inválida.")?;
     let allow=answer["allow"].as_bool().ok_or("Escolhe permitir ou recusar este pedido." )?;
+    if allow{crate::settings::effect_allowed()?;}
     if object.keys().any(|key|key!="allow"&&key!="answers"&&key!="nativeChoice"){return Err("A decisão não pode alterar o âmbito do pedido nativo.".into());}
     if let Some(choices)=&request.choices{choices.resolve(answer)?;}else if answer.get("nativeChoice").is_some(){return Err("Este pedido não oferece escolhas nativas.".into());}
     let ids=questions(&request.request)?;
@@ -71,10 +75,13 @@ pub(super)fn register(requests:&Mutex<HashMap<String,PendingRequest>>,id:String,
     }
     #[cfg(target_os="linux")]match &request.policy{RequestPolicy::GoalRecipe{source}=>{if !source.matches(&request.request)||request.native_form.is_some()||request.choices.is_some(){return Err("A revisão não pertence à origem nativa do objetivo.".into());}},_=>{if request.request.get("goalTarget").is_some()||request.request["target"]["origin"]=="goal"{return Err("Este pedido não tem uma origem nativa de objetivo.".into());}}}
     target(request_target(&request))?;questions(&request.request)?;if request.request["id"]!=id{return Err("O identificador do pedido não corresponde ao registo.".into());}
-    if serde_json::to_vec(&request.request).map_err(|_|"Pedido inválido.")?.len()>MAX_REVIEW{return Err("O pedido excede o limite da revisão.".into());}
+    let review_limit=MAX_REVIEW;
+    #[cfg(target_os="linux")]let review_limit=if matches!(&request.policy,RequestPolicy::GoalRecipe{..}){MAX_GOAL_REVIEW}else{review_limit};
+    if serde_json::to_vec(&request.request).map_err(|_|"Pedido inválido.")?.len()>review_limit{return Err("O pedido excede o limite da revisão.".into());}
     let mut all=requests.lock().map_err(|_|"Os pedidos estão indisponíveis.".to_string())?;
     if !live(&request){return Err(ENDED.into());}
     #[cfg(target_os="linux")]if matches!(&request.policy,RequestPolicy::GoalRecipe{..}){
+        if all.values().filter(|r|matches!(&r.policy,RequestPolicy::GoalRecipe{..})).count()>=MAX_GOAL_PENDING{return Err("Já existem demasiadas receitas pendentes.".into());}
         let code=request.request["voiceCode"].as_str().filter(|s|s.len()==6&&s.bytes().all(|c|c.is_ascii_digit())).ok_or("O código de revisão é inválido.")?;
         if all.values().any(|r|r.request.get("goalTarget").is_some()&&r.request["goalTarget"]==request.request["goalTarget"]){return Err("Esta receita já tem uma decisão pendente.".into());}
         if all.values().any(|r|r.request["goalTarget"].is_object()&&r.request["voiceCode"]==code){return Err("O código de revisão já está em uso. Repete o pedido.".into());}

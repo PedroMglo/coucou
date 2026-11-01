@@ -1,3 +1,9 @@
+import {parseShortcutReconciliationPreview,parseShortcutReconciliationReceipt,type ShortcutReconciliationDecision} from './shortcuts-reconciliation';
+import {parseAutostartPreview,parseAutostartReceipt,parseAutostartStatus,type AutostartRequest,type AutostartDecision} from './autostart-review';
+import {parseShortcutReviewPreview,parseShortcutReviewReceipt,parseShortcutReviewStatus,type ShortcutReviewKey,type ShortcutReviewDecision} from './shortcuts-review';
+import {parseShortcutPatchReceipt,type ShortcutPatch} from './shortcuts-settings';
+import {settingsIoStatus as parseSettingsIoStatus} from './settings-io';
+import {parseSettingsReviewPreview,parseSettingsReviewReceipt,type SettingsReviewDecision} from './settings-review';
 import {captureAttachments} from './document-collection';
 // Thin wrapper over the Tauri commands/events. Every call is a no-op when the
 // page is opened in a plain browser, so the island can be iterated on with
@@ -54,7 +60,7 @@ export interface NativeApprovalChoice {id:string;label:string;scope:'once'|'turn
 export interface AgentRequest {
   id:string;provider:string;kind:string;detail:string;origin?:string;
   approvalScope?:'turn'|'once'|'recipe';
-  goalTarget?:GoalRecipeTarget;goalReview?:{recipe:RuntimeRecipeProposal;budget:unknown;approvalScope:'exactReviewedRecipe';executionStarted:false;modelPlanningGranted:false};voiceCode?:string;
+  goalTarget?:GoalRecipeTarget;goalReview?:{recipe:Omit<RuntimeRecipeProposal,'steps'>&{steps:Omit<RuntimeStepProposal,'intent'|'criteria'>[]};budget:unknown;approvalScope:'exactReviewedRecipe';executionStarted:false;modelPlanningGranted:false;additionalModelPlanningGranted?:false;existingGoalConsentOperation?:'conversationRespond'|'goalPlanning'};voiceCode?:string;
   nativeChoices?:NativeApprovalChoice[];nativeChoicesSource?:'nativeAdvertised'|'protocolFallback'|'nativePermissionProtocol'|'nativeOptions'|'nativeLegacyProtocol';
   target?:import('./session-chat').SessionTarget;
   nativeForm?:'mcp';
@@ -237,6 +243,25 @@ export const Bridge = {
   setSystemLanguages: (languages: string[]) => call<void>("set_system_languages", { languages }),
 
   saveSettings: (settings: Settings) => callOrThrow<void>("save_settings", { settings }),
+  settingsIoStatus:async()=>parseSettingsIoStatus(await callOrThrow<unknown>('settings_io_status')),
+  settingsReviewPrepare:async()=>parseSettingsReviewPreview(await callOrThrow<unknown>('settings_review_prepare')),
+  settingsReviewApply:async(request:SettingsReviewDecision)=>parseSettingsReviewReceipt(await callOrThrow<unknown>('settings_review_apply',{request})),
+  settingsReviewCancel:(request:{token:string;fingerprint:string})=>callOrThrow<void>('settings_review_cancel',{request}),
+  autostartReviewStatus:async()=>parseAutostartStatus(await callOrThrow<unknown>('pet_autostart_review_status')),
+  shortcutsReconcilePrepare:async()=>parseShortcutReconciliationPreview(await callOrThrow<unknown>('shortcuts_reconcile_prepare')),
+  shortcutsReconcileInspect:async(request:ShortcutReviewKey)=>parseShortcutReconciliationPreview(await callOrThrow<unknown>('shortcuts_reconcile_inspect',{request:{token:request.token,fingerprint:request.fingerprint}})),
+  shortcutsReconcileApply:async(request:ShortcutReconciliationDecision)=>parseShortcutReconciliationReceipt(await callOrThrow<unknown>('shortcuts_reconcile_apply',{request:{token:request.token,fingerprint:request.fingerprint,previewSchemaVersion:request.previewSchemaVersion,reviewedObservation:request.reviewedObservation,understandPastUncertainty:request.understandPastUncertainty,keepRegistrationSuspended:request.keepRegistrationSuspended}})),
+  shortcutsReviewPrepare:async()=>parseShortcutReviewPreview(await callOrThrow<unknown>('shortcuts_review_prepare')),
+  shortcutsReviewPrepareCurrentScope:async()=>parseShortcutReviewPreview(await callOrThrow<unknown>('shortcuts_review_prepare_current_scope')),
+  shortcutsSettingsPatch:async(request:ShortcutPatch)=>parseShortcutPatchReceipt(await callOrThrow<unknown>('shortcuts_settings_patch',{request:{changes:Object.fromEntries(Object.entries(request.changes).map(([id,c])=>[id,{before:c.before===null?null:{keys:c.before.keys,enabled:c.before.enabled},after:c.after===null?null:{keys:c.after.keys,enabled:c.after.enabled}}]))}})),
+  shortcutsReviewInspect:async(request:ShortcutReviewKey)=>parseShortcutReviewPreview(await callOrThrow<unknown>('shortcuts_review_inspect',{request:{token:request.token,fingerprint:request.fingerprint}})),
+  shortcutsReviewCancel:(request:ShortcutReviewKey)=>callOrThrow<void>('shortcuts_review_cancel',{request:{token:request.token,fingerprint:request.fingerprint}}),
+  shortcutsReviewApply:async(request:ShortcutReviewDecision)=>parseShortcutReviewReceipt(await callOrThrow<unknown>('shortcuts_review_apply',{request:{token:request.token,fingerprint:request.fingerprint,reviewedPlan:request.reviewedPlan,understandNativeEffects:request.understandNativeEffects,keepOtherComponentsSuspended:request.keepOtherComponentsSuspended,...(request.previewSchemaVersion===undefined?{}:{previewSchemaVersion:request.previewSchemaVersion}),...(request.acknowledgeRetainedUncertainty===undefined?{}:{acknowledgeRetainedUncertainty:request.acknowledgeRetainedUncertainty})}})),
+  shortcutsReviewStatus:async()=>parseShortcutReviewStatus(await callOrThrow<unknown>('shortcuts_review_status')),
+  autostartReviewPrepare:async(request:AutostartRequest)=>parseAutostartPreview(await callOrThrow<unknown>('pet_autostart_review_prepare',{request:(request.action==='reconcileArchivedObservation'||request.action==='reconcileLegacyObservation')?{action:request.action,archivedEffectId:request.archivedEffectId}:request.action!=='reconcileObservation'?{action:request.action,enabled:request.enabled}:{action:request.action}})),
+  autostartReviewApply:async(request:AutostartDecision)=>parseAutostartReceipt(await callOrThrow<unknown>('pet_autostart_review_apply',{request:{token:request.token,fingerprint:request.fingerprint,reviewedPlan:request.reviewedPlan,understandEffect:request.understandEffect,keepOtherComponentsSuspended:request.keepOtherComponentsSuspended,...(request.acknowledgeExternalUncertainty===undefined?{}:{acknowledgeExternalUncertainty:request.acknowledgeExternalUncertainty}),...(request.acknowledgeLegacyUncertainty===undefined?{}:{acknowledgeLegacyUncertainty:request.acknowledgeLegacyUncertainty})}})),
+  autostartReviewCancel:(request:{token:string;fingerprint:string})=>callOrThrow<void>('pet_autostart_review_cancel',{request:{token:request.token,fingerprint:request.fingerprint}}),
+  autostartSettingsPatch:(patch:{enabled:boolean})=>callOrThrow<AutostartPreferenceReceipt>('pet_autostart_settings_patch',{patch:{enabled:patch.enabled}}),
   petRosterSettingsPatch:(request:import('./pet-roster-settings').PetRosterRequest)=>callOrThrow<import('./pet-roster-settings').PetRosterValues>('pet_roster_settings_patch',{request:request.action==='setMain'?{action:request.action,id:request.id}:{action:request.action,id:request.id,enabled:request.enabled}}),
   petCenterSettingsPatch:(request:import('./island-availability').IslandAvailabilityPatch)=>callOrThrow<import('./island-availability').IslandAvailabilityValues>('pet_center_settings_patch',{request:{...(request.petControlBar!==undefined?{petControlBar:request.petControlBar}:{}),...(request.petSystemCenter!==undefined?{petSystemCenter:request.petSystemCenter}:{})}}),
   reportSettingsError,
@@ -397,8 +422,8 @@ export const Bridge = {
 
   // ── Chat, files, secrets ──────────────────────────────────────────────────
   /** One chat turn. The API key and any file bytes never leave Rust. */
-  chatSend: (query: string, context: ChatContext | null, provider?: string,conversationId?:string,selectedModel?:string,documentSequence?:number) =>
-    callOrThrow<{ text: string }>("chat_send", { query, context, provider,...(conversationId===undefined?{}:{conversationId}),...(selectedModel===undefined?{}:{selectedModel}),...(documentSequence===undefined?{}:{documentSequence}) }),
+  chatSend: (query: string, context: ChatContext | null, provider?: string,conversationId?:string,selectedModel?:string,documentSequence?:number,memoryDecision?:PetMemoryDecision) =>
+    callOrThrow<{ text: string }>("chat_send", { query, context:structuredClone(context), provider,...(conversationId===undefined?{}:{conversationId}),...(selectedModel===undefined?{}:{selectedModel}),...(documentSequence===undefined?{}:{documentSequence}),...(memoryDecision?{memoryDecision:{token:memoryDecision.token,consent:memoryDecision.consent}}:{}) }),
   chatReset: (provider?: string) => callOrThrow<ConversationView|null>("chat_reset", {provider}),
   chatCancel: (provider?:string,conversationId?:string,turn?:number) => callOrThrow<boolean>("chat_cancel",{provider,...(conversationId===undefined?{}:{conversationId}),...(turn===undefined?{}:{turn})}),
   chatHistory: (provider:string) => call<{role:"user"|"assistant";content:string}[]>("chat_history",{provider}),
@@ -461,7 +486,7 @@ export const Bridge = {
   chatModels: (provider: string) => callOrThrow<ModelInfo[]>("chat_models", { provider }),
   /** Settings → Local models → Connect: does the server answer, and with which models? */
   /** The custom server's key, bound to the address it is entered for. */
-  localSetKey: (url: string, key: string) => callOrThrow<void>("local_set_key", { url, key }),
+  localSetKey: (url: string, key: string,provider?:'lmstudio') => provider!==undefined&&provider!=='lmstudio'?Promise.reject(Error('Servidor de credenciais desconhecido.')):callOrThrow<void>("local_set_key", { url, key,...(provider==='lmstudio'?{provider}:{}) }),
 
   localConnect: (provider: "ollama" | "lmstudio" | "custom", url: string) =>
     callOrThrow<LocalServer>("local_connect", { provider, url }),
@@ -524,12 +549,16 @@ export const Bridge = {
   companionsInput: (rects: number[][]) => call<void>("companions_input", { rects }),
   petConfiguration: () => callOrThrow<PetDocument>("pet_configuration"),
   petCapabilities:(petId?:string)=>callOrThrow<PetCapabilitiesSnapshot>('pet_capabilities_snapshot',{petId}),
+  petMemoryContextPrepare:(input:PetMemoryPrepare)=>callOrThrow<PetMemoryTicket>('pet_memory_context_prepare',{provider:input.provider,conversationId:input.conversationId,query:input.query,selected:input.selected.map(({id,revision})=>({id,revision})),context:structuredClone(input.context),...(input.selectedModel===undefined?{}:{selectedModel:input.selectedModel}),...(input.documentSequence===undefined?{}:{documentSequence:input.documentSequence})}),
+  petMemoryContextCancel:(token:string)=>callOrThrow<void>('pet_memory_context_cancel',{token}),
+  petMemoryList:(request:PetMemoryQuery)=>callOrThrow<PetMemoryPage>('pet_memory_list',{request:structuredClone(request)}),
+  petMemoryMutate:(owner:PetMemoryOwner,expectedRevision:string,mutation:PetMemoryMutation)=>callOrThrow<PetMemoryReceipt>('pet_memory_mutate',{owner:structuredClone(owner),expectedRevision,mutation:structuredClone(mutation)}),
   petRuntimeCreate:(input:RuntimeCreateInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_create',{input:{petId:input.petId,requestId:input.requestId,intent:input.intent,criteria:[...input.criteria],conversationId:input.conversationId??null}}),
   petRuntimeGoalPending:()=>callOrThrow<AgentRequest[]>('pet_runtime_goal_pending'),
   petRuntimeGoalAnswer:(id:string,approve:boolean,target:GoalRecipeTarget)=>callOrThrow<void>('pet_runtime_goal_answer',{input:{id,approve,target:structuredClone(target)}}),
   petRuntimeRefreshReadiness:(petId:string,goalId:string)=>callOrThrow<PetCapabilityDescriptor>('pet_runtime_refresh_readiness',{petId,goalId}),
   petRuntimeList:(petId?:string)=>callOrThrow<RuntimeListing>('pet_runtime_list',{petId}),
-  petRuntimePrepareContext:(input:RuntimePrepareContextInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_prepare_context',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,mode:input.mode}}),
+  petRuntimePrepareContext:(input:RuntimePrepareContextInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_prepare_context',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,mode:input.mode,...(input.selectedMemory?{selectedMemory:input.selectedMemory.map(({id,revision})=>({id,revision}))}:{})}}),
   petRuntimeContextRead:(petId:string,goalId:string)=>callOrThrow<RuntimeContextView>('pet_runtime_context_read',{petId,goalId}),
   petRuntimeClaim:(input:RuntimeClaimInput)=>callOrThrow<RuntimeClaimResult>('pet_runtime_claim',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId}}),
   petRuntimeClaimStatus:(petId:string,goalId:string)=>callOrThrow<RuntimeLeaseStatus>('pet_runtime_claim_status',{petId,goalId}),
@@ -548,8 +577,19 @@ export const Bridge = {
   petRuntimeCompleteRecipe:(input:RuntimeRecipeCompleteInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_complete_recipe',{input:{petId:input.petId,goalId:input.goalId,decisionId:input.decisionId,planId:input.planId,recipeId:input.recipeId,revision:input.revision}}),
   petRuntimeResult:(input:RuntimeResultInput)=>callOrThrow<RuntimeResult>('pet_runtime_result',{input:{petId:input.petId,goalId:input.goalId,decisionId:input.decisionId,requestId:input.requestId}}),
   petRuntimeAdmissionStatus:(petId:string,goalId:string)=>callOrThrow<RuntimeProvenanceStatus>('pet_runtime_admission_status',{petId,goalId}),
+  petRuntimePreparePlanning:(input:RuntimePlanningInput)=>callOrThrow<RuntimeAdmissionReview>('pet_runtime_prepare_planning',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,budget:runtimeBudget(input.budget),limits:{maxRounds:input.limits.maxRounds,maxSteps:input.limits.maxSteps,maxOutputBytes:input.limits.maxOutputBytes,noProgressLimit:input.limits.noProgressLimit}}}),
+  petRuntimeStartDriver:(input:RuntimeDriverInput)=>callOrThrow<RuntimeDriverStatus>('pet_runtime_start_driver',{input:{petId:input.petId,goalId:input.goalId,leaseId:input.leaseId}}),
+  petRuntimeDriverStatus:(input:RuntimeDriverInput)=>callOrThrow<RuntimeDriverStatus>('pet_runtime_driver_status',{input:{petId:input.petId,goalId:input.goalId,leaseId:input.leaseId}}),
+  petRuntimePrepareContinuation:(input:RuntimeContinuationInput)=>callOrThrow<RuntimeAdmissionReview>('pet_runtime_prepare_continuation',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,budget:runtimeBudget(input.budget),limits:input.limits?{maxRounds:input.limits.maxRounds,maxSteps:input.limits.maxSteps,maxOutputBytes:input.limits.maxOutputBytes,noProgressLimit:input.limits.noProgressLimit}:null,...(input.reviewUncertainEffects===true?{reviewUncertainEffects:true}:{})}}),
   petRuntimePrepareAdmission:(input:RuntimeAdmissionInput)=>callOrThrow<RuntimeAdmissionReview>('pet_runtime_prepare_admission',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,budget:runtimeBudget(input.budget)}}),
-  petRuntimeConfirmAdmission:(input:RuntimeAdmissionConfirm)=>callOrThrow<RuntimeAdmissionResult>('pet_runtime_confirm_admission',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,token:input.token,approve:input.approve}}),
+  petRuntimeConfirmAdmission:(input:RuntimeAdmissionConfirm)=>callOrThrow<RuntimeAdmissionResult>('pet_runtime_confirm_admission',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,token:input.token,approve:input.approve,...(input.memoryConsent?{memoryConsent:input.memoryConsent}:{})}}),
+  petRuntimePrepareRestoredFuture:(input:RuntimeFuturePrepareInput)=>callOrThrow<RuntimeFuturePrepared>('pet_runtime_prepare_restored_future',{input:structuredClone(input)}),
+  petRuntimeConfirmRestoredFuture:(input:RuntimeFutureConfirmInput)=>callOrThrow<RuntimeFutureConfirmed>('pet_runtime_confirm_restored_future',{input:structuredClone(input)}),
+  petRuntimeHistory:(input:RuntimeHistoryInput)=>callOrThrow<RuntimeHistorySnapshot>('pet_runtime_history',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision}}),
+  petRuntimePrepareRetirement:(input:RuntimeRetirementPrepareInput)=>callOrThrow<RuntimeRetirementPrepared>('pet_runtime_prepare_retirement',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,decisionId:input.decisionId,requestId:input.requestId}}),
+  petRuntimeConfirmRetirement:(input:RuntimeRetirementConfirmInput)=>callOrThrow<RuntimeRetirementConfirmed>('pet_runtime_confirm_retirement',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,decisionId:input.decisionId,token:input.token,approve:input.approve}}),
+  petRuntimePrepareRecovery:(input:RuntimeRecoveryPrepareInput)=>callOrThrow<RuntimeRecoveryPrepared>('pet_runtime_prepare_recovery',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId}}),
+  petRuntimeConfirmRecovery:(input:RuntimeRecoveryConfirmInput)=>callOrThrow<RuntimeRecoveryConfirmed>('pet_runtime_confirm_recovery',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,token:input.token,approve:input.approve}}),
   petRuntimeRead:(petId:string,goalId:string)=>callOrThrow<RuntimeGoal>('pet_runtime_read',{petId,goalId}),
   petRuntimeMutate:(input:RuntimeMutationInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_mutate',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,action:runtimeDraftAction(input.action)}}),
   petRuntimeImportLegacy:(input:RuntimeImportInput)=>callOrThrow<RuntimeReceipt>('pet_runtime_import_legacy',{input:{petId:input.petId,goalId:input.goalId,revision:input.revision,requestId:input.requestId,taskId:input.taskId}}),
@@ -596,7 +636,7 @@ export type ShortcutStatus =
   | "active" | "off" | "inUse" | "duplicate" | "invalid"
   | "typesCharacter" | "unsupported" | "notPorted"
   /** Wayland: handed to the desktop's portal, no answer yet / left out by it. */
-  | "pending" | "refused";
+  | "pending" | "refused" | "preferencesUnconfirmed";
 
 export interface ShortcutsReport {
   /** `trigger`: on Wayland, the keys the desktop says run it, in its words. */
@@ -680,7 +720,7 @@ export interface PetCapability {
 }
 export interface PetCapabilityDescriptor {
  schemaVersion:1;petId:string;kind:'llm'|'service'|'observer';name:string;lifecycle:'active'|'inactive'|'retired';
- binding:{adapter:string|null;provider:string|null;model:string|null;profile:string|null};revision:string;observedAt:number|null;configurationAvailable:boolean;
+ binding:{engineBinding?:RuntimeEngineBinding;adapter:string|null;provider:string|null;model:string|null;profile:string|null};revision:string;observedAt:number|null;configurationAvailable:boolean;
  capabilities:PetCapability[];concurrency:{scope:'provider'|null;maxActive:number|null};
 }
 export interface PetCapabilitiesSnapshot {schemaVersion:1;revision:string;observedAt:number;configurationAvailable:boolean;pets:PetCapabilityDescriptor[]}
@@ -852,37 +892,39 @@ export interface RuntimeCreateInput {petId:string;requestId:string;intent:string
 export interface RuntimeMutationInput {petId:string;goalId:string;revision:string;requestId:string;action:RuntimeDraftAction}
 export interface RuntimeImportInput {petId:string;goalId:string;revision:string;requestId:string;taskId:string}
 export interface RuntimeGoal {
- schemaVersion:1|2|3|4|5|6|7;id:string;revision:string;sequence:number;createdAt:number;updatedAt:number;executionContext?:RuntimeContextBinding;admissions?:Array<{spec:RuntimeAdmissionSpec;phase:'queued'|'paused'|'cancelled'|'leased'|'stopRequested'|'recoveryRequired'|'completed';proof?:RuntimeConsentProof;lease?:RuntimeLease;stopReason?:'pause'|'cancel'|'expired'}>;
- spec:{requestId:string;owner:{petId:string;provider:string;adapter:string;modelHint:string|null};context:{kind:'unbound'}|{kind:'mochi';conversationId:string};intent:string;criteria:string[]};
+ schemaVersion:1|2|3|4|5|6|7|8|9|10|11|12|13;id:string;revision:string;sequence:number;createdAt:number;updatedAt:number;executionContext?:RuntimeContextBinding;admissions?:Array<{spec:RuntimeAdmissionSpec;phase:'queued'|'paused'|'cancelled'|'leased'|'stopRequested'|'recoveryRequired'|'completed';proof?:RuntimeConsentProof;lease?:RuntimeLease;stopReason?:'pause'|'cancel'|'expired'}>;
+ spec:{restoredFrom?:RuntimeRestoredFutureOrigin;requestId:string;owner:{petId:string;provider:string;adapter:string;modelHint:string|null};context:{kind:'unbound'}|{kind:'mochi';conversationId:string};intent:string;criteria:string[]};
  completion?:RuntimeCompletionRef;state:RuntimeState;tasks:Array<{id:string;description:string;state:RuntimeWorkState;planId:string|null}>;
  plans:Array<{id:string;taskId:string;steps:Array<RuntimeStepInput&{id:string;state:RuntimeWorkState}>}>;
- events:Array<{sequence:number;at:number;requestId:string;fingerprint:string;kind:'created'|'taskProposed'|'planProposed'|'paused'|'draftResumed'|'cancelled'|'cancelRequested'|'legacyImported'|'contextPrepared'|'admissionQueued'|'leaseClaimed'|'stopRequested'|'leaseDrained'|'claimAbandoned'|'goalCompleted'}>;
+ events:Array<{sequence:number;at:number;requestId:string;fingerprint:string;kind:'created'|'taskProposed'|'planProposed'|'paused'|'draftResumed'|'cancelled'|'cancelRequested'|'legacyImported'|'contextPrepared'|'admissionQueued'|'leaseClaimed'|'stopRequested'|'leaseDrained'|'claimAbandoned'|'goalCompleted'|'planGenerated'|'lostOwnerClosed'|'unclaimedOwnerClosed'}>;
  legacy:Array<{taskId:string;provider:string;backend:string;conversationId:string|null;phase:string;intentMayBeIncomplete:true;receipts:import('../mochi/tasks').LocalStepReceipt[]}>;
 }
 export interface RuntimeLease {schemaVersion:1;id:string;controllerId:string;requestId:string;decisionId:string;goalId:string;provider:string;conversationId:string;model:string;policyRevision:string;capabilityRevision:string;sourceRevision:string;claimedAt:number;deadlineAt:number}
 export interface RuntimeClaimInput {petId:string;goalId:string;revision:string;requestId:string}
 export interface RuntimeClaimResult {receipt:RuntimeReceipt;lease:RuntimeLease;owned:boolean;reservationOwned:boolean;executionAvailable:false}
-export interface RuntimeLeaseStatus {record:RuntimeGoal;lease:RuntimeLease|null;owned:boolean;reservationOwned:boolean;source:'liveController'|'storedLease'|'none';current:boolean;workers:number|null;executionAvailable:false}
-export interface RuntimeConsentProof {schemaVersion:1;keyId:string;operation:'conversationRespond';tag:string}
+export interface RuntimeOwnerObservation {state:'originalProcessLive'|'ownerAbsent'|'identityMismatch'|'unavailable'|'legacyUnknown'|'notClaimed'|'closed';reason:string|null;backendPid:number|null;capturedAt:number|null;source:'nativeGrant'|'authenticatedRuntimeOwner';executionAvailable:false;recoveryAvailable:false}
+export interface RuntimeLeaseStatus {record:RuntimeGoal;lease:RuntimeLease|null;owned:boolean;reservationOwned:boolean;source:'liveController'|'storedLease'|'none';current:boolean;workers:number|null;executionAvailable:false;nativeOwner?:RuntimeOwnerObservation}
+export interface RuntimeConsentProof {schemaVersion:1|2;keyId:string;operation:'conversationRespond'|'goalPlanning';tag:string}
 export interface RuntimeProvenanceStatus {verified:boolean;reason:'missing'|'unsafe'|'changed'|'invalid'|'wrongKey'|'revoked'|'expired'|'notQueued'|'capacity'|'unavailable'|'uncertain'|'busy'|'recoveryRequired'|null;executionAvailable:false}
 export interface RuntimeBudget {deadlineAt:number;maxModelCalls:number;maxToolCalls:number;maxOutputBytes:number;maxTokens?:number|null;maxCostMicros?:number|null;payment:'localOnly'|'existingAccount'}
 export interface RuntimeAdmissionInput {petId:string;goalId:string;revision:string;requestId:string;budget:RuntimeBudget}
-export interface RuntimeAdmissionConfirm {petId:string;goalId:string;revision:string;token:string;approve:boolean}
-export interface RuntimeAdmissionSpec {schemaVersion:1|2;proposalHash?:string|null;requestId:string;decisionId:string;goalId:string;sourceRevision:string;sourceSequence:number;owner:RuntimeGoal['spec']['owner'];context:RuntimeContextBinding;contextHash:string;intentHash:string;resolvedModel:string;descriptorRevision:string;policyRevision:string;evidenceHash:string;approvedAt:number;budget:RuntimeBudget}
-export interface RuntimeAdmissionProposal {proposals:RuntimeReviewedProposals;operation:'conversationRespond';toolExecutionAvailable:false;goalId:string;revision:string;requestId:string;owner:RuntimeGoal['spec']['owner'];context:RuntimeContextBinding;intent:string;criteria:string[];resolvedModel:string;policyRevision:string;descriptorRevision:string;budget:RuntimeBudget;preparedAt:number;expiresAt:number}
-export type RuntimeAdmissionDenial='invalid'|'ownerChanged'|'contextRequired'|'contextChanged'|'notDraft'|'inactive'|'unsupported'|'notReady'|'stale'|'modelUnresolved'|'policyChanged'|'budget'|'paymentPolicy'|'meteringUnavailable'|'expired'|'revisionChanged'|'inputLimit';
+export interface RuntimeAdmissionConfirm {memoryConsent?:PetMemoryGoalConsent;petId:string;goalId:string;revision:string;token:string;approve:boolean}
+export interface RuntimeEngineBinding {schemaVersion:1;endpoint:string;modelKey:string;instanceId:string|null;modelHash:string}
+export interface RuntimeAdmissionSpec {memoryData?:PetMemoryGoalGrant;engineBinding?:RuntimeEngineBinding;schemaVersion:1|2|3;continuation?:RuntimeContinuationReference;planningPolicy?:RuntimePlanningPolicy|null;proposalHash?:string|null;requestId:string;decisionId:string;goalId:string;sourceRevision:string;sourceSequence:number;owner:RuntimeGoal['spec']['owner'];context:RuntimeContextBinding;contextHash:string;intentHash:string;resolvedModel:string;descriptorRevision:string;policyRevision:string;evidenceHash:string;approvedAt:number;budget:RuntimeBudget}
+export interface RuntimeAdmissionProposal {restoredFrom?:RuntimeRestoredFutureOrigin;memoryData?:PetMemoryGoalPreview;engineBinding?:RuntimeEngineBinding;continuation?:RuntimeContinuationReference;proposals:RuntimeReviewedProposals;planningPolicy?:RuntimePlanningPolicy|null;operation:'conversationRespond'|'goalPlanning';toolExecutionAvailable:false;goalId:string;revision:string;requestId:string;owner:RuntimeGoal['spec']['owner'];context:RuntimeContextBinding;intent:string;criteria:string[];resolvedModel:string;policyRevision:string;descriptorRevision:string;budget:RuntimeBudget;preparedAt:number;expiresAt:number}
+export type RuntimeAdmissionDenial='invalid'|'ownerChanged'|'contextRequired'|'contextChanged'|'notDraft'|'inactive'|'unsupported'|'notReady'|'stale'|'modelUnresolved'|'policyChanged'|'budget'|'paymentPolicy'|'meteringUnavailable'|'expired'|'revisionChanged'|'inputLimit'|'recoveryNotClosed'|'historyIncomplete'|'unreconciledEffects'|'dataConsentRequired';
 export type RuntimeAdmissionReview={status:'review';ticket:{token:string;proposal:RuntimeAdmissionProposal}}|{status:'blocked';reason:RuntimeAdmissionDenial};
-export type RuntimeAdmissionResult={status:'queued';receipt:RuntimeReceipt}|{status:'declined'}|{status:'blocked';reason:RuntimeAdmissionDenial}|{status:'authorityBlocked';reason:NonNullable<RuntimeProvenanceStatus['reason']>};
+export type RuntimeAdmissionResult={status:'queued';receipt:RuntimeReceipt}|{status:'declined'}|{status:'blocked';reason:RuntimeAdmissionDenial;retryable?:boolean}|{status:'authorityBlocked';reason:NonNullable<RuntimeProvenanceStatus['reason']>;retryable?:boolean};
 export interface RuntimeReceipt {status:'durable'|'uncertain'|'unchanged';record:RuntimeGoal}
 export interface RuntimeRespondInput {petId:string;goalId:string;leaseId:string;revision:string;requestId:string}
 export interface RuntimeRespondResult {text:string;criteriaVerified:false;goalComplete:false}
 export interface RuntimeResultInput {petId:string;goalId:string;decisionId:string;requestId:string}
 export interface RuntimeModelResult {schemaVersion:1;goalId:string;petId:string;provider:string;decisionId:string;leaseId:string;requestId:string;attemptId:string;model:string;inputHash:string;intentHash:string;text:string;acceptedOutputBytes:number;completedAt:number;recordedAt:number}
 export type RuntimeResult=({status:'notStarted'}|{status:'recoveryRequired';phase:'reserved'|'started'|'uncertain'|'settledReceiptMissing'}|{status:'available';receipt:RuntimeModelResult})&{criteriaVerified:false;goalComplete:false};
-export interface RuntimeListing {schemaVersion:1;goals:Array<{id:string;revision:string;petId:string;state:RuntimeState;updatedAt:number;intentPreview:string;tasks:number;steps:number}>;unavailable:number;pendingArtifacts:number;complete:boolean}
+export interface RuntimeListing {schemaVersion:1;goals:Array<{id:string;revision:string;petId:string;historicalSource?:boolean;state:RuntimeState;updatedAt:number;intentPreview:string;tasks:number;steps:number}>;unavailable:number;pendingArtifacts:number;complete:boolean}
 
-export interface RuntimePrepareContextInput {petId:string;goalId:string;revision:string;requestId:string;mode:'dedicated'|'snapshot'}
-export interface RuntimeContextBinding {schemaVersion:1;goalId:string;petId:string;provider:string;conversationId:string;requestId:string;mode:'dedicated'|'snapshot';sourceConversationId:string|null;sourceMessages:number;copiedMessages:number;seedHash:string;preparedAt:number}
+export interface RuntimePrepareContextInput {petId:string;goalId:string;revision:string;requestId:string;mode:'dedicated'|'snapshot';selectedMemory?:PetMemorySelected[]}
+export interface RuntimeContextBinding {schemaVersion:1|2;memory?:{schemaVersion:1;references:PetMemoryReference[]};goalId:string;petId:string;provider:string;conversationId:string;requestId:string;mode:'dedicated'|'snapshot';sourceConversationId:string|null;sourceMessages:number;copiedMessages:number;seedHash:string;preparedAt:number}
 export interface RuntimeContextView {binding:RuntimeContextBinding;messages:Array<{role:'user'|'assistant';content:string}>;messageCount:number;truncated:boolean}
 
 /** Step receipts are observations, never reconstructible execution permits. */
@@ -891,19 +933,19 @@ export interface RuntimeStepConfirmInput {petId:string;goalId:string;leaseId:str
 export interface RuntimeStepRunInput {petId:string;goalId:string;leaseId:string;grantId:string;planId:string;stepId:string}
 export interface RuntimeStepReadInput {petId:string;goalId:string;decisionId:string;planId:string;stepId:string}
 export interface RuntimeStepRecoverInput extends RuntimeStepReadInput {revision:string;grantId:string}
-export interface RuntimeStepScope {schemaVersion:1;grantId:string;requestId:string;goalId:string;petId:string;provider:string;decisionId:string;leaseId:string;controllerId:string;mainSpecHash:string;contextHash:string;proposalHash:string;policyRevision:string;planId:string;stepId:string;operationId:'spotify.control';version:1;argumentsHash:string;resource:{schemaVersion:1;busId:string;owner:string;uid:number;pid:number;identity:string};approvedAt:number;deadlineAt:number;maxOutputBytes:number}
+export interface RuntimeStepScope {schemaVersion:1|2;grantId:string;requestId:string;goalId:string;petId:string;provider:string;decisionId:string;leaseId:string;controllerId:string;mainSpecHash:string;contextHash:string;proposalHash:string;policyRevision:string;planId:string;stepId:string;operationId:'spotify.control';version:1;argumentsHash:string;resource:{schemaVersion:1;busId:string;owner:string;uid:number;pid:number;identity:string};approvedAt:number;deadlineAt:number;maxOutputBytes:number}
 export interface RuntimeStepProposal {scope:RuntimeStepScope;goalRevision:string;intent:string;criteria:string[];arguments:unknown;postcondition:string;preparedAt:number;expiresAt:number;maxUses:1;goalCriteriaVerified:false}
 export interface RuntimeStepTicket {token:string;proposal:RuntimeStepProposal}
 export type RuntimeStepConfirmResult={status:'granted';scope:RuntimeStepScope}|{status:'declined'}|{status:'blocked';reason:NonNullable<RuntimeProvenanceStatus['reason']>};
 export interface RuntimeStepSnapshot {playbackStatus:'Playing'|'Paused'|'Stopped';volume:number;observedAt:number}
 export interface RuntimeStepReceipt {observation:{delivery:'notDispatched'|'accepted'|'uncertain';before:RuntimeStepSnapshot|null;after:RuntimeStepSnapshot|null;effectVerified:boolean;scopeCurrent:boolean;failure:'invalidAddress'|'unavailable'|'changed'|'invalidState'|'cancelled'|'deadline'|'invalidAction'|'notAuthorized'|'transport'|null};finishedAt:number;criteriaVerified:false;goalComplete:false}
-export interface RuntimeStepRecovery {status:'prepared'|'reserved'|'resultMissing'|'resultRecorded'|'finished';budgetPhase:'reserved'|'started'|'settled'|'uncertain'|null;recordedEffectVerified:boolean|null;reconciliationAvailable:boolean}
+export interface RuntimeStepRecovery {status:'prepared'|'reserved'|'resultMissing'|'resultRecorded'|'finished';budgetPhase:'reserved'|'started'|'settled'|'uncertain'|null;recordedEffectVerified:boolean|null;reconciliationAvailable:boolean;accountingFrozen?:boolean;recordedResult?:RuntimeStepReceipt}
 export interface RuntimeStepView {scope:RuntimeStepScope;phase:'approved'|'reserved'|'started'|'finished';result:RuntimeStepReceipt|null;recovery:RuntimeStepRecovery;executionAvailable:false}
 export interface RuntimeRecipePrepareInput {petId:string;goalId:string;leaseId:string;revision:string;planId:string;requestId:string;criteria?:RuntimeCriterionInput[]}
 export type RuntimeRecipeConfirmInput=RuntimeStepConfirmInput;
 export interface RuntimeRecipeRunInput {petId:string;goalId:string;leaseId:string;revision:string;recipeId:string}
 export interface RuntimeRecipeReadInput {petId:string;goalId:string;decisionId:string;planId:string}
-export interface RuntimeRecipeScope {schemaVersion:1|2;id:string;requestId:string;goalId:string;petId:string;provider:string;decisionId:string;leaseId:string;controllerId:string;planId:string;proposalHash:string;approvedAt:number;deadlineAt:number;steps:RuntimeStepScope[];verification?:RuntimeCriteriaBinding}
+export interface RuntimeRecipeScope {schemaVersion:1|2|3;id:string;requestId:string;goalId:string;petId:string;provider:string;decisionId:string;leaseId:string;controllerId:string;planId:string;proposalHash:string;approvedAt:number;deadlineAt:number;steps:RuntimeStepScope[];verification?:RuntimeCriteriaBinding}
 export interface RuntimeRecipeProposal {scope:RuntimeRecipeScope;goalRevision:string;intent:string;criteria:string[];steps:RuntimeStepProposal[];preparedAt:number;expiresAt:number;criteriaVerified:false;goalComplete:false}
 export interface RuntimeRecipeTicket {token:string;proposal:RuntimeRecipeProposal}
 export type RuntimeRecipeConfirmation={status:'granted';scope:RuntimeRecipeScope}|{status:'declined'}|{status:'ended'}|{status:'blocked';reason:NonNullable<RuntimeProvenanceStatus['reason']>};
@@ -916,3 +958,66 @@ export interface RuntimeCriteriaBinding {schemaVersion:1;specHash:string;criteri
 export interface RuntimeCompletionRef {schemaVersion:1;goalId:string;petId:string;recipeId:string;decisionId:string;leaseId:string;planId:string;sourceRevision:string;targetRevision:string;reportHash:string;observedAt:number}
 export interface RuntimeVerification {schemaVersion:1;reference:RuntimeCompletionRef;recipeHash:string;specHash:string;sourceSequence:number;sourceUpdatedAt:number;sourceRecordHash:string;snapshot:RuntimeStepSnapshot|null;scopeCurrent:boolean;recordedAt:number;results:Array<{criterionIndex:number;criterionHash:string;status:'met'|'unmet'|'unknown'}>;criteriaVerified:boolean}
 export interface RuntimeRecipeCompleteInput extends RuntimeRecipeReadInput {recipeId:string;revision:string}
+
+export interface RuntimePlanningLimits {maxRounds:number;maxSteps:number;maxOutputBytes:number;noProgressLimit:number}
+export interface RuntimePlanningPolicy {schemaVersion:1;catalog:'spotifyTransportV1';limits:RuntimePlanningLimits}
+export interface RuntimePlanningInput extends RuntimeAdmissionInput {limits:RuntimePlanningLimits}
+export interface RuntimeContinuationInput extends RuntimeAdmissionInput {limits?:RuntimePlanningLimits|null;reviewUncertainEffects?:boolean}
+export interface RuntimeRecoveryReference {schemaVersion:1;id:string;requestId:string;goalId:string;petId:string;decisionId:string;leaseId:string;sourceGoalRevision:string;sourceGoalHash:string;sourceSequence:number;targetGoalRevision:string;targetSequence:number;targetState:RuntimeState;sourceGrantRevision:string;sourceGrantHash:string;preparedAt:number;approvedAt:number;unclaimed:boolean}
+export interface RuntimeUncertainEffect {decisionId:string;attemptId:string;grantId:string;planId:string;stepId:string;scopeHash:string;operation:RuntimeOperationProposal;targetLabel:string}
+export interface RuntimeContinuationReference {schemaVersion:1|2;uncertainEffects?:RuntimeUncertainEffect[];sourceRevision:string;sourceSequence:number;sourceGoalHash:string;closure:RuntimeRecoveryReference;historyHash:string;evidenceFence:string;previous:Array<{decisionId:string;specHash:string;rowHash:string;grantHash:string;budget:RuntimeBudget;resolvedModel:string}>;unused:Array<{decisionId:string;grantHash:string}>;charge:{modelCalls:number;toolCalls:number;outputBytes:number;unknownModelResults:number;unknownToolResults:number};historyContinuityVerified:false;additionalAllowance:true;reviewedAt:number}
+export interface RuntimeDriverInput {petId:string;goalId:string;leaseId:string}
+export interface RuntimeDriverStatus extends RuntimeDriverInput {controllerId:string;phase:'idle'|'planning'|'publishing'|'awaitingApproval'|'waitingResource'|'closing'|'registering'|'executing'|'feedback'|'completed'|'declined'|'approvalEnded'|'stopped'|'limited'|'recoveryRequired';round:number;active:boolean;retainedApproval:boolean;retainedClosure?:boolean;reason:string|null}
+
+export interface RuntimeHistoryInput{petId:string;goalId:string;revision:string}
+export interface RuntimeHistoryCharge{modelCalls:number;toolCalls:number;outputBytes:number;unknownModelResults:number;unknownToolResults:number}
+export interface RuntimeRestoredHistorySource{schemaVersion:1;historyHash:string;sourceFingerprint:string;sourceGoalHash:string;historicalRelatedGrants:number;unattributedHistoricalGrants:number;ownerAbsenceProven:false;postSnapshotStateUnknown:true;executionAuthorityGranted:false}
+export interface RuntimeHistorySnapshot{schemaVersion:1|2;scope:'allRecordedAdmissions'|'restoredSnapshotOnly';restoredSource?:RuntimeRestoredHistorySource;goalId:string;petId:string;goalRevision:string;goalState:RuntimeState;sourceHash:string;historyContinuityVerified:false;historyCoverage:string;authenticatedSubtotal:RuntimeHistoryCharge;cumulativeCharge:RuntimeHistoryCharge|null;scanComplete:boolean;sourceConsistent:boolean;accountingComplete:boolean;pendingArtifacts:number;unlinkedGrants:Array<{decisionId:string;hash:string;phase:string;updatedAt:number;leaseId:string|null;revokedWithoutIo:boolean;retirement?:RuntimeRetirementReference}>;executionAvailable:false;continuationAvailable:false;tokenUsage:number|null;costMicros:number|null}
+export interface RuntimeRetirementReference{schemaVersion:1;id:string;requestId:string;goalId:string;petId:string;decisionId:string;sourceGoalRevision:string;sourceGoalHash:string;sourceSequence:number;sourceGrantRevision:string;sourceGrantHash:string;sourceGrantSchema:1|4;sourceGrantUpdatedAt:number;inventoryHash:string;artifactFence:string;profile:{directory:{device:number;inode:number};keyId:string};preparedAt:number;approvedAt:number;historyContinuityVerified:false}
+export interface RuntimeRetirementPrepareInput extends RuntimeHistoryInput{decisionId:string;requestId:string}
+export interface RuntimeRetirementConfirmInput extends RuntimeHistoryInput{decisionId:string;token:string;approve:boolean}
+export interface RuntimeRetirementProposal{goalId:string;petId:string;revision:string;requestId:string;decisionId:string;intent:string;criteria:string[];approvalScope:'retireUnlinkedAdmission'|'confirmOriginalRetirement';originalOperation:'conversationRespond'|'goalPlanning';originalSpecHash:string;originalApprovedAt:number;sourceGrantRevision:string;sourceGrantHash:string;authenticatedSubtotal:RuntimeHistoryCharge;linkedAccountingComplete:boolean;historyContinuityVerified:false;targetUsageKnownZero:true;sameGoalUnlinked:number;matchingStagedImages:number;preparedAt:number;expiresAt:number;executionAvailable:false}
+export interface RuntimeRetirementTicket{token:string;proposal:RuntimeRetirementProposal}
+export interface RuntimeRetirementReceipt{status:RuntimeReceipt['status'];record:RuntimeGoal;reference:RuntimeRetirementReference;executionAvailable:false;newAdmissionCreated:false}
+export type RuntimeRetirementPrepared={status:'review';ticket:RuntimeRetirementTicket}|{status:'retired';receipt:RuntimeRetirementReceipt}|{status:'blocked';reason:string;retryable:boolean};
+export type RuntimeRetirementConfirmed={status:'retired';receipt:RuntimeRetirementReceipt}|{status:'declined'}|{status:'blocked';reason:string;retryable:boolean;retained:boolean};
+export interface RuntimeRecoveryPrepareInput{petId:string;goalId:string;revision:string;requestId:string}
+export interface RuntimeRecoveryConfirmInput{petId:string;goalId:string;revision:string;token:string;approve:boolean}
+export interface RuntimeRecoveryProposal{goalId:string;petId:string;revision:string;requestId:string;intent:string;criteria:string[];provider:string;leaseId:string;approvalScope:'closeLostExecution'|'ackRecordedClosure';resultingState:RuntimeState;snapshot:{accounting:{modelCallsUsed:number;toolCallsUsed:number;outputBytesCharged:number;unknownAttempts:number}|null;budget:RuntimeBudget|null};preparedAt:number;expiresAt:number;executionAvailable:false}
+export interface RuntimeRecoveryTicket{token:string;proposal:RuntimeRecoveryProposal}
+export type RuntimeRecoveryPrepared={status:'review';ticket:RuntimeRecoveryTicket}|{status:'closed';receipt:RuntimeReceipt}|{status:'blocked';reason:string;retryable:boolean};
+export type RuntimeRecoveryConfirmed={status:'closed';receipt:RuntimeReceipt}|{status:'declined'}|{status:'blocked';reason:string;retryable:boolean;retained?:boolean};
+
+/** Explicit native-user records. None of these DTOs confers a model tool or
+ * execution authority; only the original native data review can grant use. */
+export interface PetMemoryOwner {petId:string;scope:{kind:'pet'}|{kind:'conversation';conversationId:string}}
+export interface PetMemorySelected {id:string;revision:number}
+export interface PetMemoryInput {kind:'note'|'preference';title:string;content:string;sensitivity:'normal'|'sensitive';expiresAt:number|null}
+export interface PetMemoryEntry extends PetMemoryInput {id:string;revision:number;owner:PetMemoryOwner;provenance:'explicitUser';retention:'untilDeleted';createdAt:number;updatedAt:number;observedAt:number}
+export interface PetMemoryReference {id:string;revision:number;owner:PetMemoryOwner;contentHash:string;expiresAt:number|null}
+export interface PetMemoryQuery {owner:PetMemoryOwner;query:string;limit:number;includeExpired:boolean;offset?:number;expectedRevision?:string|null}
+export interface PetMemoryPage {schemaVersion:1;owner:PetMemoryOwner;revision:string;items:Array<{entry:PetMemoryEntry;available:boolean}>;hasMore:boolean;nextOffset:number|null}
+export type PetMemoryMutation={operation:'create';input:PetMemoryInput}|{operation:'update';id:string;expectedItemRevision:number;input:PetMemoryInput}|{operation:'delete';id:string;expectedItemRevision:number};
+export interface PetMemoryReceipt {schemaVersion:1;owner:PetMemoryOwner;revision:string;id:string;item:PetMemoryEntry|null}
+export type PetMemoryDestination={kind:'server'|'api';provider:string;endpoint:string;model:string}|{kind:'nativeSession';provider:string;adapter:string;model:string;workspace:string;sessionId:string|null};
+export type PetMemoryGoalConsent='boundedGoalContext';
+export interface PetMemoryGoalGrant {schemaVersion:1;consent:PetMemoryGoalConsent;destination:PetMemoryDestination;maxInputBytes:number}
+export interface PetMemoryGoalPreview {schemaVersion:1;goalId:string;petId:string;sourceConversationId:string|null;destination:PetMemoryDestination;records:PetMemoryEntry[];requiredConsent:PetMemoryGoalConsent;maxInputBytes:number}
+
+export type PetMemoryManualConsent='thisRequest'|'nativeSessionContext';
+export interface PetMemoryDecision {token:string;consent:PetMemoryManualConsent}
+export interface PetMemoryPrepare {provider:string;conversationId:string;query:string;selectedModel?:string;selected:PetMemorySelected[];context:ChatContext|null;documentSequence?:number}
+export interface PetMemoryDispatchCoverage {schemaVersion:1;kind:'exactNativeEndpoint'|'knownApiEndpointSet'|'nativeSessionProtocol';endpoints:string[];providerInternalsObserved:false;modelSemantics:string;toolsContainmentObserved:false}
+export interface PetMemoryManualPreview {schemaVersion:1;petId:string;conversationId:string;destination:PetMemoryDestination;question:string;records:PetMemoryEntry[];preparedAt:number;expiresAt:number;requiredConsent:PetMemoryManualConsent;nativeAccountCoverage:string;dispatchCoverage:PetMemoryDispatchCoverage;requestContextHash:string}
+export interface PetMemoryTicket {token:string;proposal:PetMemoryManualPreview}
+
+export interface RuntimeRestoredFutureSource{petId:string;goalId:string;revision:string;goalHash:string;historyHash:string;sourceFingerprint:string;snapshotHash:string;historicalRelatedGrants:number;unattributedHistoricalGrants:number}
+export interface RuntimeRestoredFutureOrigin{body:{schemaVersion:1;purpose:'restoredFutureDraftDataOnly';keyId:string;reviewId:string;clientRequestId:string;preparedAt:number;approvedAt:number;expiresAt:number;source:RuntimeRestoredFutureSource;targetGoalId:string;baseSpecHash:string;unknownStateAccepted:true;executionAuthorityGranted:false;accountingKnown:false;ownerAbsenceProven:false};tag:string}
+export interface RuntimeFuturePrepareInput{petId:string;sourceGoalId:string;sourceRevision:string;requestId:string;intent:string;criteria:string[]}
+export interface RuntimeFutureConfirmInput{petId:string;sourceGoalId:string;sourceRevision:string;token:string;approve:boolean;acknowledgeUnknownState:boolean}
+export interface RuntimeFutureProposal{schemaVersion:1;purpose:'reviewRestoredFutureDraftDataOnly';reviewId:string;clientRequestId:string;source:RuntimeRestoredFutureSource;sourceOwner:RuntimeGoal['spec']['owner'];sourceIntent:string;sourceCriteria:string[];future:RuntimeGoal['spec'];targetGoalId:string;preparedAt:number;expiresAt:number;contextCopied:false;historicalBudgetReused:false;executionAuthorityGranted:false;postSnapshotStateUnknown:true;ownerAbsenceProven:false}
+export type RuntimeFuturePrepared={status:'review';ticket:{token:string;proposal:RuntimeFutureProposal};pendingCreation?:RuntimeReceipt}|{status:'existing';receipt:RuntimeReceipt;executionAuthorityGranted:false};
+export type RuntimeFutureConfirmed={status:'created';receipt:RuntimeReceipt;executionAuthorityGranted:false}|{status:'declined'};
+
+/** Confirms preference data and the executor response, not the next login. */
+export interface AutostartPreferenceReceipt{schemaVersion:1;enabled:boolean;change:'changed'|'unchanged';registration:'executorAccepted'|'unconfirmed'|'notAttempted';reason?:string}

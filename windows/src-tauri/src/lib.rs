@@ -13,6 +13,8 @@ mod pet_capabilities;
 mod pet_runtime;
 mod pet_operations;
 mod pet_resources;
+#[cfg(target_os="linux")] mod pet_process_group;
+#[cfg(target_os="linux")] mod pet_helper;
 mod pet_native_decisions;
 mod pet_codex_request_scope;
 mod pet_mcp_form;
@@ -26,6 +28,7 @@ mod pet_observability;
 mod pet_panel;
 mod pet_system;
 mod pet_autostart;
+mod pet_autostart_settings;
 mod pet_center_settings;
 mod pet_roster_settings;
 mod pet_audio;
@@ -62,6 +65,11 @@ mod document_text;
 mod document_folder;
 mod pet_files;
 mod pet_documents;
+#[cfg(target_os="linux")]mod private_registry;
+mod pet_memory;
+#[cfg(target_os="linux")]mod pet_drafts;
+#[tauri::command]
+fn pet_draft_mode()->&'static str{if cfg!(target_os="linux"){"nativeV1"}else{"indexedV1"}}
 mod pet_sources;
 mod pet_calendar;
 mod navigation;
@@ -115,7 +123,7 @@ use pipe::Pending;
 use settings::Settings;
 
 pub struct Shared {
-    pub settings: Mutex<Settings>,
+    pub settings: Arc<Mutex<Settings>>,
     pub gate: Arc<PollGate>,
 }
 
@@ -150,13 +158,18 @@ fn boot(app: AppHandle, shared: State<Shared>) -> BootInfo {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> Result<(),String> {
-    let (mut screen_changed,mut autostart_changed,mut shortcuts_changed)=(false,false,false);
-    let settings=settings::update_with(&shared.settings,|current|{
+    let (mut screen_changed,mut shortcuts_changed)=(false,false);
+    let settings=settings::update_checked_with(&shared.settings,|current|{
         screen_changed = current.screen != settings.screen || current.companion_mode != settings.companion_mode;
-        autostart_changed = current.autostart != settings.autostart;
-        shortcuts_changed = current.shortcuts != settings.shortcuts;
         // Where Mochi sits on the desktop is desktop.rs's to say, not a webview's.
         let mut settings = settings.clone();
+        // Autostart has a field-only native intention; an old general snapshot
+        // never owns this field or dispatches a host registration operation.
+        pet_autostart_settings::preserve_incoming(current,&mut settings);
+        // Desired shortcut data has a per-action CAS command. A stale general
+        // snapshot cannot undo it or request a native registration.
+        #[cfg(target_os="linux")] { settings.shortcuts=current.shortcuts.clone(); }
+        shortcuts_changed=current.shortcuts!=settings.shortcuts;
         settings.desktop_mochi = current.desktop_mochi.clone();
         // Same for the phone link: only its own commands turn it on or off.
         settings.phone_link = current.phone_link;
@@ -179,21 +192,15 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> R
         pet_center_settings::preserve_incoming(current, &mut settings);
         // Visibility/main-pet intentions have their own acknowledged command.
         pet_roster_settings::preserve_incoming(current, &mut settings);
-        *current = settings;
+        *current = settings;Ok(())
     },settings::save,|settings|{
         pet_native_binding::settings_committed(&app,settings.pet_system_center);
         let _=app.emit("settings-changed",settings);
         integrations::settings_saved(&app, &settings.active_integrations);
         spotify::sync(&app, &settings.active_integrations);
     })
-        .map_err(|err|{log::line(format!("could not save settings: {err}"));"Não foi possível guardar as definições. As preferências anteriores foram preservadas.".to_string()})?;
+        .map_err(|err|{log::line(format!("could not save settings: {err}"));settings::save_error("Não foi possível confirmar as definições",&err)})?;
     pet_native_binding::publish_current(&app);
-    if autostart_changed {
-        let result = pet_autostart::set(&app,settings.autostart);
-        if let Err(err) = result {
-            eprintln!("[coucou] autostart: {err}");
-        }
-    }
     if screen_changed {
         let collapsed = shared.gate.collapsed.load(Ordering::Relaxed);
         island::apply_geometry(&app, &settings.screen, collapsed);
@@ -207,6 +214,28 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> R
     // Keep the other window in step (island ⇄ settings window).
     voice::sync(&app);
     Ok(())
+}
+
+#[tauri::command]
+fn settings_io_status(window:tauri::WebviewWindow)->Result<settings::IoStatus,String>{
+    if ![HUB_LABEL,island::WINDOW_LABEL,"settings",companions::LABEL,pet_chat::LABEL,pet_control::LABEL,pet_panel::LABEL].contains(&window.label()){
+        return Err("Abre a gestão ou a conversa do pet para consultar este estado.".into());
+    }
+    Ok(settings::effect_status())
+}
+
+#[tauri::command]
+async fn pet_autostart_settings_patch(app:AppHandle,window:tauri::WebviewWindow,patch:pet_autostart_settings::Patch)->Result<pet_autostart_settings::Receipt,String>{
+    pet_center_settings::authorize_window(window.label(),HUB_LABEL).map_err(|_|"Esta janela não pode alterar o arranque automático.".to_string())?;
+    #[cfg(target_os="linux")]{let _=(app,patch);Err("Revê e aprova o plano de registo de autostart antes de alterar o recurso nativo.".into())}
+    #[cfg(not(target_os="linux"))]{
+    tauri::async_runtime::spawn_blocking(move||{
+        settings::optional::check(settings::optional::Operation::Autostart)?;
+        let shared=app.state::<Shared>();
+        pet_autostart_settings::controller().apply_with(&shared.settings,patch,||pet_autostart::admit().map_err(|e|std::io::Error::new(std::io::ErrorKind::PermissionDenied,e)),settings::save,|s|{let _=app.emit("settings-changed",s);},|enabled|pet_autostart::set(&app,enabled))
+            .map_err(|e|if e.kind()==std::io::ErrorKind::WouldBlock{"O registo de arranque está ocupado. Consulta o estado antes de voltar a pedir.".into()}else{e.to_string()})
+    }).await.map_err(|_|"Não foi possível confirmar a operação de arranque.".to_string())?
+    }
 }
 
 #[tauri::command]
@@ -224,7 +253,7 @@ async fn pet_roster_settings_patch(
         }).map_err(|err| {
             if err.kind() == std::io::ErrorKind::InvalidInput { return err.to_string(); }
             log::line(format!("could not save pet roster: {err}"));
-            "Não foi possível guardar os pets ativos. As preferências anteriores foram preservadas.".to_string()
+            settings::save_error("Não foi possível confirmar os pets ativos", &err)
         })
     }).await.map_err(|_| "Não foi possível concluir a atualização dos pets ativos.".to_string())?
 }
@@ -249,7 +278,7 @@ async fn pet_center_settings_patch(
             |fresh| { pet_native_binding::settings_committed(&app,fresh.pet_system_center);let _ = app.emit("settings-changed", fresh); },
         ).inspect(|_|pet_native_binding::publish_current(&app)).map_err(|err| {
             log::line(format!("could not save pet-center settings: {err}"));
-            "Não foi possível guardar estas preferências. Os valores anteriores foram preservados.".to_string()
+            settings::save_error("Não foi possível confirmar estas preferências", &err)
         })
     }).await.map_err(|_| "Não foi possível concluir a atualização destas preferências.".to_string())?
 }
@@ -491,15 +520,10 @@ fn hooks_apply(
     // The fingerprint comes from the preview the user actually looked at, so a
     // settings.json that changed in between is refused rather than overwritten.
     let backup = hooks::write(install, &fingerprint)?;
-    let updated = {
-        let mut current = shared.settings.lock().unwrap();
-        current.hooks_installed = install;
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        current.clone()
-    };
-    let _ = app.emit("settings-changed", updated);
+    settings::update_with(&shared.settings, |next| next.hooks_installed = install,
+        settings::save, |fresh| { let _ = app.emit("settings-changed", fresh); })
+        .map_err(|err| format!("{} Os hooks já foram alterados; não repitas a aplicação para resolver esta falha. Cópia anterior: {backup}",
+            settings::save_error("Não foi possível confirmar o estado guardado dos hooks", &err)))?;
     Ok(backup)
 }
 
@@ -544,19 +568,15 @@ fn status_line_apply(
     fingerprint: String,
 ) -> Result<String, String> {
     let backup = hooks::status_line_write(install, &fingerprint)?;
-    let updated = {
-        let mut current = shared.settings.lock().unwrap();
-        current.plan_relay_installed = install;
+    settings::update_with(&shared.settings, |next| {
+        next.plan_relay_installed = install;
         // As on the Mac: taking the relay out turns the pill off with it.
         if !install {
-            current.show_plan_in_notch = false;
+            next.show_plan_in_notch = false;
         }
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        current.clone()
-    };
-    let _ = app.emit("settings-changed", updated);
+    }, settings::save, |fresh| { let _ = app.emit("settings-changed", fresh); })
+        .map_err(|err| format!("{} O relay já foi alterado; não repitas a aplicação para resolver esta falha. Cópia anterior: {backup}",
+            settings::save_error("Não foi possível confirmar o estado guardado do relay", &err)))?;
     Ok(backup)
 }
 
@@ -616,6 +636,7 @@ fn approval_decline(app: AppHandle, request_id: String) {
 /// file bytes stay on the Rust side.
 #[tauri::command]
 async fn chat_send(
+    window:tauri::WebviewWindow,
     app: AppHandle,
     shared: State<'_, Shared>,
     chat: State<'_, Chat>,
@@ -625,7 +646,9 @@ async fn chat_send(
     conversation_id:Option<String>,
     selected_model:Option<String>,
     document_sequence:Option<u64>,
+    memory_decision:Option<pet_memory::context_model::Decision>,
 ) -> Result<ChatReply, String> {
+    settings::effect_allowed()?;
     let provider=provider.unwrap_or_else(||shared.settings.lock().unwrap().chat_provider.clone());
     let provider=if provider.is_empty(){"anthropic".to_string()}else{provider};
     if provider=="integration_spotify" {return Err("O Spoty controla música e som e não inicia conversas com modelos.".into());}
@@ -635,17 +658,22 @@ async fn chat_send(
     let _conversation=chat.reserve_conversation(&provider,conversation_id.as_deref())?;
     let mut settings=shared.settings.lock().unwrap().clone();settings.chat_provider=provider;
     if matches!(&context,Some(ChatContext::File{..}))&&document_sequence.is_none(){return Err("Volta a entregar este documento à conversa antes de o enviar.".into());}
+    #[cfg(target_os="linux")]let memory_context_hash=if memory_decision.is_some(){Some(pet_memory::context::request_context_hash(context.as_ref(),document_sequence).map_err(|_|"O contexto do pedido mudou ou excede o limite da revisão de memória.")?)}else{None};
     let context=context.map(|context|pet_documents::checked_context(&settings.chat_provider,&chat.conversation_id(&settings.chat_provider)?,context,document_sequence)).transpose()?;
     if let Some(model)=selected_model {
         chat::select_for_turn(&mut settings,model)?;
     }
-    chat::send(&app, &chat, &settings, query, context).await
+    #[cfg(target_os="linux")]let memory=memory_decision.map(|decision|pet_memory::manual::accept(window.label(),&chat,&settings,&query,memory_context_hash.as_deref().ok_or("Falta a revisão do contexto deste pedido.")?,decision)).transpose()?;
+    #[cfg(target_os="linux")]let channel=match memory{Some(memory)=>chat.with_selected_memory(memory),None=>chat.inner().clone()};
+    #[cfg(not(target_os="linux"))]let channel={let _=window;if memory_decision.is_some(){return Err("O contexto de memória ainda não está disponível nesta plataforma.".into());}chat.inner().clone()};
+    chat::send(&app, &channel, &settings, query, context).await
 }
 
 /// The models a provider offers, for the picker in the chat view. Only asked
 /// once the user picked that provider, and only with its key or address.
 #[tauri::command]
 async fn chat_models(shared: State<'_, Shared>, provider: String) -> Result<Vec<ModelInfo>, String> {
+    settings::effect_allowed()?;
     let settings = shared.settings.lock().unwrap().clone();
     let observation=pet_capabilities::begin_catalog(&settings,&provider);
     let result=chat::models(&settings, &provider).await;
@@ -661,8 +689,8 @@ async fn local_connect(provider: String, url: String) -> Result<local_chat::Conn
 /// Stores the custom server's key for the address typed next to it; it is only
 /// ever sent to that address.
 #[tauri::command]
-fn local_set_key(url: String, key: String) -> Result<(), String> {
-    local_chat::set_custom_key(&url, &key)
+fn local_set_key(url: String, key: String, provider:Option<String>) -> Result<(), String> {
+    match provider.as_deref(){None|Some("custom")=>local_chat::set_custom_key(&url,&key),Some(provider)=>local_chat::set_server_key(provider,&url,&key)}
 }
 
 #[tauri::command]
@@ -719,7 +747,7 @@ fn secret_present(key: String) -> bool {
 #[tauri::command]
 fn secret_set(app: AppHandle, key: String, value: String) -> Result<(), String> {
     // Bound to its server's address: only local_set_key may store it.
-    if key == local_chat::CUSTOM_KEY {
+    if matches!(key.as_str(),local_chat::CUSTOM_KEY|local_chat::LMSTUDIO_KEY) {
         return Err("use local_set_key".into());
     }
     let before = (key == "github-token").then(|| secrets::get(&key));
@@ -738,7 +766,7 @@ fn secret_set(app: AppHandle, key: String, value: String) -> Result<(), String> 
 #[tauri::command]
 fn secret_clear(app: AppHandle, key: String) -> Result<(), String> {
     let had = key == "github-token" && secrets::present(&key);
-    secrets::clear(&key)?;
+    if key==local_chat::LMSTUDIO_KEY{local_chat::clear_lmstudio_key()}else{secrets::clear(&key)}?;
     if key == claude::KEY {
         voice::sync(&app);
     }
@@ -786,13 +814,14 @@ fn shortcuts_status(app: AppHandle) -> shortcuts::Report {
 /// Settings is recording a new combination: let go of ours meanwhile, so the
 /// keys reach the recorder instead of running an action. `false` takes them back.
 #[tauri::command]
-fn shortcuts_suspend(app: AppHandle, shared: State<Shared>, suspended: bool) {
-    if suspended {
-        shortcuts::suspend(&app);
-    } else {
-        let stored = shared.settings.lock().unwrap().shortcuts.clone();
-        shortcuts::apply(&app, &stored);
-    }
+async fn shortcuts_suspend(app:AppHandle,suspended:bool)->Result<(),String>{
+    if suspended{shortcuts::revoke(&app);}
+    tauri::async_runtime::spawn_blocking(move||{
+        if suspended{shortcuts::finish_suspend(&app);}else{
+            let stored={let shared=app.state::<Shared>();let s=shared.settings.lock().unwrap();s.shortcuts.clone()};
+            shortcuts::apply(&app,&stored);
+        }
+    }).await.map_err(|_|"O executor dos atalhos terminou sem confirmação; consulta o estado antes de repetir.".to_string())
 }
 
 // ── Settings window ───────────────────────────────────────────────────────────
@@ -837,6 +866,7 @@ fn create_settings_window(app: &AppHandle) {
         .build()
     {
         Ok(win) => {
+            settings::review::register_window(&win);
             // Closing it must only hide it, or it could never be reopened.
             let hidden = win.clone();
             win.on_window_event(move |event| {
@@ -893,6 +923,11 @@ pub fn run() {
     if pet_calendar::helper::entry() {return;}
     if gravity_hook::maybe_run() {return;}
     if agents::gravity_config_cli() {return;}
+    let context=tauri::generate_context!();
+    #[cfg(target_os="linux")]
+    if pet_data::restore_cli::entry(&context.config().identifier){return;}
+    #[cfg(target_os="linux")]
+    if pet_data::backup_cli::entry(&context.config().identifier){return;}
     platform::prepare_environment();
     let gate = Arc::new(PollGate::new());
 
@@ -915,6 +950,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
+            settings_io_status,
+            settings::review::settings_review_prepare,
+            settings::review::settings_review_apply,
+            settings::review::settings_review_cancel,
+            pet_autostart_settings_patch,
+            pet_autostart_settings::native::pet_autostart_review_prepare,
+            pet_autostart_settings::native::pet_autostart_review_apply,
+            pet_autostart_settings::native::pet_autostart_review_cancel,
+            pet_autostart_settings::native::pet_autostart_review_status,
             pet_center_settings_patch,
             pet_roster_settings_patch,
             pet_model::pet_model_select,
@@ -984,11 +1028,23 @@ pub fn run() {
             pet_runtime::pet_runtime_create,
             pet_runtime::pet_runtime_list,
             pet_runtime::pet_runtime_read,
+            pet_runtime::pet_runtime_reconcile,
+            pet_runtime::pet_runtime_history,
+            pet_runtime::pet_runtime_prepare_restored_future,
+            pet_runtime::pet_runtime_confirm_restored_future,
+            pet_runtime::pet_runtime_prepare_retirement,
+            pet_runtime::pet_runtime_confirm_retirement,
+            pet_runtime::pet_runtime_prepare_recovery,
+            pet_runtime::pet_runtime_confirm_recovery,
             pet_runtime::pet_runtime_mutate,
             pet_runtime::pet_runtime_import_legacy,
             pet_runtime::pet_runtime_prepare_context,
             pet_runtime::pet_runtime_context_read,
             pet_runtime::pet_runtime_prepare_admission,
+            pet_runtime::pet_runtime_prepare_continuation,
+            pet_runtime::pet_runtime_prepare_planning,
+            pet_runtime::pet_runtime_start_driver,
+            pet_runtime::pet_runtime_driver_status,
             pet_runtime::pet_runtime_confirm_admission,
             pet_runtime::pet_runtime_admission_status,
             pet_runtime::pet_runtime_claim,
@@ -1014,6 +1070,20 @@ pub fn run() {
             pet_config::pet_configuration_save,
             pet_sources::pet_source_configuration,
             pet_sources::pet_source_configuration_save,
+            pet_memory::pet_memory_list,
+            pet_memory::pet_memory_mutate,
+            pet_draft_mode,
+            #[cfg(target_os="linux")]pet_drafts::pet_draft_read,
+            #[cfg(target_os="linux")]pet_drafts::pet_draft_write,
+            #[cfg(target_os="linux")]pet_drafts::pet_draft_import,
+            #[cfg(target_os="linux")]pet_drafts::pet_draft_list,
+            #[cfg(target_os="linux")]pet_drafts::pet_draft_recovery_review,
+            #[cfg(target_os="linux")]pet_drafts::pet_draft_recovery_copy,
+            #[cfg(target_os="linux")]pet_drafts::pet_draft_sources,
+            #[cfg(target_os="linux")]pet_drafts::pet_draft_reconcile_review,
+            #[cfg(target_os="linux")]pet_drafts::pet_draft_reconcile_commit,
+            #[cfg(target_os="linux")]pet_memory::manual::pet_memory_context_prepare,
+            #[cfg(target_os="linux")]pet_memory::manual::pet_memory_context_cancel,
             assistant_tasks::assistant_tasks,
             assistant_tasks::assistant_cancel_task,
             assistant_tasks::assistant_resume_task,
@@ -1043,6 +1113,15 @@ pub fn run() {
             open_settings_window,
             set_paused,
             shortcuts_status,
+            shortcuts::review::shortcuts_review_prepare,
+            shortcuts::review::shortcuts_review_prepare_current_scope,
+            shortcuts::review::shortcuts_review_inspect,
+            shortcuts::review::shortcuts_review_cancel,
+            shortcuts::review::shortcuts_review_apply,
+            shortcuts::review::reconciliation::shortcuts_reconcile_prepare,shortcuts::review::reconciliation::shortcuts_reconcile_inspect,shortcuts::review::reconciliation::shortcuts_reconcile_apply,
+            shortcuts::review::shortcuts_review_status,
+            #[cfg(target_os="linux")]
+            shortcuts::preferences::shortcuts_settings_patch,
             shortcuts_suspend,
             phone_link::phone_link_status,
             phone_link::phone_link_set_enabled,
@@ -1184,7 +1263,9 @@ pub fn run() {
             #[cfg(not(target_os="linux"))]
             let loaded=settings::load();
             i18n::set_picked(&loaded.language);
-            app.manage(Shared {settings:Mutex::new(loaded.clone()),gate:gate.clone()});
+            let current_settings=Arc::new(Mutex::new(loaded.clone()));
+            settings::install_effect_source(&current_settings)?;
+            app.manage(Shared {settings:current_settings,gate:gate.clone()});
             app.manage(Chat::persistent(platform::data_dir().join("assistant").join("conversations.json")));
             app.manage(recap::load());
             pet_native_binding::setup(&handle,loaded.pet_system_center);
@@ -1238,15 +1319,14 @@ pub fn run() {
             integrations::start(handle.clone());
             spotify::sync(&handle, &loaded.active_integrations);
             shortcuts::apply(&handle, &loaded.shortcuts);
-            // A Linux debug/QA launch must not replace the installed login
-            // entry with a build-tree executable. Explicit settings changes
-            // still manage autostart through their normal action.
-            let register_autostart = !cfg!(all(target_os="linux",debug_assertions));
-            if loaded.autostart && register_autostart {
-                // Login items written before 0.5 start Coucou without --autostart:
-                // writing it again adds it, so the window stays hidden at login.
-                let _ = pet_autostart::set(&handle,true);
+            // Registration is an explicit reviewed effect on Linux. Startup
+            // only observes; drift or a missing outcome never triggers replay.
+            #[cfg(target_os="linux")]if loaded.autostart{
+                if pet_autostart::native::native_plan(true).map(|p|p.already_matches()).unwrap_or(false)==false{
+                    log::line("O registo de arranque difere da preferência ou não pôde ser observado; requer revisão explícita, sem reescrita no arranque.");
+                }
             }
+            #[cfg(not(target_os="linux"))]if loaded.autostart{let _=pet_autostart::set(&handle,true);}
             let open_window = flow::get(&handle).map(|f| f.store.lock().unwrap().prefs.open_at_launch).unwrap_or(true);
             let arguments = std::env::args().collect::<Vec<_>>();
             let voice_requested = voice_request(&arguments);
@@ -1258,7 +1338,7 @@ pub fn run() {
             if let Some(action)=shortcuts::from_args(&arguments){shortcuts::dispatch(&handle,action);}
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building Coucou")
         .run(|app, event| {
             // Withdraw the phone link's announcement on the local network before the process ends.

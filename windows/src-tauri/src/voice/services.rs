@@ -42,7 +42,7 @@ fn uri(text:&str)->Option<String> {
 }
 pub fn spotify(app:&AppHandle,query:&str)->Option<Reply> {
  if let Err(text)=crate::pet_config::require("integration_spotify","music"){return Some(Reply{text,acted:false,language:Some("pt-PT".into())});}
- if let Some(result)=crate::pet_audio::spoken(&super::wake::normalize(query)){
+ if let Some(result)=crate::pet_audio::spoken(app,&super::wake::normalize(query)){
   return Some(match result{Ok((text,acted))=>Reply{text,acted,language:Some("pt-PT".into())},Err(text)=>Reply{text,acted:false,language:Some("pt-PT".into())}});
  }
  let action=parse(query)?;

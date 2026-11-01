@@ -5,7 +5,7 @@ const text=(v:unknown,max:number)=>typeof v==='string'&&v.length>0&&v.length<=ma
 const date=(v:unknown)=>v===null||typeof v==='number'&&Number.isSafeInteger(v)&&v>0&&v<=8.64e15;
 const number=(v:unknown)=>v===null||typeof v==='number'&&Number.isSafeInteger(v)&&v>=0;
 const oneOf=(v:unknown,values:readonly string[])=>typeof v==='string'&&values.includes(v);
-const reasons=['notImplemented','unsupportedPlatform','notConfigured','inactivePet','retiredPet','modelUnresolved','modelUnsupported','nativeApprovalUnavailable','nativeControlUnavailable','controlConflict','turnRequired','targetRequired','staleObservation','providerUnavailable','busy','permissionDenied','policyDenied','libraryUnavailable','authenticationRequired','ambiguousTarget','budgetUnavailable','unknown'];
+const reasons=['notImplemented','unsupportedPlatform','notConfigured','inactivePet','retiredPet','modelUnresolved','modelUnsupported','nativeApprovalUnavailable','nativeControlUnavailable','controlConflict','turnRequired','targetRequired','staleObservation','providerUnavailable','busy','permissionDenied','policyDenied','libraryUnavailable','settingsUnconfirmed','authenticationRequired','ambiguousTarget','budgetUnavailable','unknown'];
 const nullableText=(v:unknown,max:number)=>v===null||text(v,max);
 const list=(v:unknown,allowed:readonly string[])=>Array.isArray(v)&&v.length<=allowed.length&&new Set(v).size===v.length&&v.every(x=>oneOf(x,allowed));
 

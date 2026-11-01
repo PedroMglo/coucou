@@ -75,6 +75,19 @@ impl Fixture{
 }
 impl Drop for Fixture{fn drop(&mut self){let _=std::fs::remove_dir_all(&self.cwd);}}
 fn options()->TurnOptions<'static>{TurnOptions{model:"fixture-free",system:"Private synthetic fixture",history:&[],query:"Original request",tools:&[],session_id:None,full_access:false,effort:None,name:None}}
+#[cfg(target_os="linux")]
+#[test]fn final_dispatch_codex_rechecks_after_human_callback_and_sends_only_fixed_refusal_on_io_loss(){
+ for approve in [true,false]{let io=crate::settings::EffectFixture::new();let f=Fixture::new("normal");let mut client=Client::start(&f.exe,&f.cwd,Duration::from_secs(5),false).unwrap();client.io_probe=Some(io.probe.clone());
+  let reply=client.answer_native(options(),|_,_|panic!("no tool"),|_,_,_|{io.external();Some(json!({"decision":if approve{"accept"}else{"decline"}}))},|_|{},|_|{}).unwrap();assert_eq!(reply.text,"denied");drop(client);
+  let received=f.received();let answers=received.iter().filter(|v|v["id"]==77&&v.get("method").is_none()).collect::<Vec<_>>();assert_eq!(answers.len(),1);
+  if approve{assert!(answers[0].get("error").is_some());assert!(answers[0].get("result").is_none());}else{assert_eq!(answers[0]["result"],json!({"decision":"decline"}));}
+ }
+}
+#[cfg(target_os="linux")]
+#[test]fn final_dispatch_codex_benign_commit_after_human_callback_preserves_exact_decision(){
+ let io=crate::settings::EffectFixture::new();let f=Fixture::new("normal");let mut client=Client::start(&f.exe,&f.cwd,Duration::from_secs(5),false).unwrap();client.io_probe=Some(io.probe.clone());
+ client.answer_native(options(),|_,_|panic!("no tool"),|_,_,_|{io.save();Some(json!({"decision":"accept"}))},|_|{},|_|{}).unwrap();drop(client);assert_eq!(f.received().iter().filter(|v|v["id"]==77&&v["result"]==json!({"decision":"accept"})).count(),1);
+}
 #[test]
 fn actual_native_request_reaches_the_callback_with_original_identity_and_is_retired_after_one_reply(){
     let f=Fixture::new("normal");let mut client=Client::start(&f.exe,&f.cwd,Duration::from_secs(5),false).unwrap();let mut seen=vec![];

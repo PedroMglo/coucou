@@ -1,4 +1,17 @@
 use super::*;
+
+#[test]fn final_dispatch_false_decision_that_persists_policy_is_not_control(){
+ let method="item/commandExecution/requestApproval";let rule=json!({"applyNetworkPolicyAmendment":{"network_policy_amendment":{"host":"fixture.invalid","action":"deny"}}});let p=json!({"availableDecisions":[rule]});let result=json!({"decision":rule});
+ assert!(!pure_refusal("codex",method,&p,&result));assert!(!codex_fixed_refusal(method,&result));
+ for kind in ["reject_always","allow_once","allow_always"]{let p=json!({"options":[{"optionId":"opaque","kind":kind}]});assert!(!pure_refusal("copilot","session/request_permission",&p,&json!({"outcome":{"outcome":"selected","optionId":"opaque"}})));}
+ let p=json!({"options":[{"optionId":"once","kind":"reject_once"}]});assert!(pure_refusal("copilot","session/request_permission",&p,&json!({"outcome":{"outcome":"selected","optionId":"once"}})));assert!(!pure_refusal("copilot","session/request_permission",&p,&json!({"outcome":{"outcome":"selected","optionId":"foreign"}})));
+}
+#[test]fn final_dispatch_fixed_refusals_never_carry_tool_data_or_amended_policy(){
+ for(method,result)in [("execCommandApproval",json!({"decision":"abort"})),("item/fileChange/requestApproval",json!({"decision":"decline"})),("item/permissions/requestApproval",json!({"permissions":{},"scope":"turn"})),("mcpServer/elicitation/request",json!({"action":"decline","content":null,"_meta":null})),("item/tool/requestUserInput",json!({"answers":{"q":{"answers":[]}}}))]{
+  assert!(codex_fixed_refusal(method,&result));let mut added=result.clone();added["private"]=json!("must not leave");assert!(!codex_fixed_refusal(method,&added));
+ }
+ for result in [json!({"answers":{"q":{"answers":["data"]}}}),json!({"answers":{"q":{"answers":[],"extra":true}}}),json!({"action":"decline","content":"data","_meta":null}),json!({"success":false,"contentItems":[{"text":"data"}]})]{assert!(!codex_fixed_refusal("item/tool/requestUserInput",&result));assert!(!codex_fixed_refusal("mcpServer/elicitation/request",&result));}
+}
 use crate::{pet_config::Adapter,pet_native_decisions::{Endpoint,Transport,Capture,PolicyBinding}};
 fn native(adapter:Adapter,method:&str,params:&Value)->(Endpoint,Ticket){let e=Endpoint::new(adapter,Transport::ManagedPipe).unwrap();let t=e.capture(Capture{request_id:Some(&json!(77)),session_id:"native-session",turn_id:Some("native-turn"),prompt_id:None,method,arguments:params,policy:PolicyBinding::unknown(),cancel:None}).unwrap();(e,t)}
 const COMMAND:&str="item/commandExecution/requestApproval";

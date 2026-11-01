@@ -5,13 +5,13 @@ use tauri::{AppHandle,Manager};
 pub(super)fn allowed(label:&str)->bool{[crate::HUB_LABEL,crate::companions::LABEL,crate::pet_control::LABEL,crate::pet_panel::LABEL].contains(&label)}
 fn window_check(w:&tauri::WebviewWindow)->Result<()>{if allowed(w.label()){Ok(())}else{Err(Error::InvalidInput)}}
 fn pet(id:&str)->Result<()>{if crate::pet_config::defaults().pets.contains_key(id){Ok(())}else{Err(Error::InvalidInput)}}
-fn owner(app:&AppHandle,id:&str)->Result<Owner>{
+pub(super)fn owner(app:&AppHandle,id:&str)->Result<Owner>{
     let snapshot=crate::pet_capabilities::passive_snapshot(app).map_err(|_|Error::StorageUnavailable)?;
     let p=snapshot.pets.into_iter().find(|p|p.pet_id==id).ok_or(Error::InvalidInput)?;
     Owner::from_descriptor(&p)
 }
 fn root()->std::path::PathBuf{crate::settings::config_dir().join("pet-runtime-v1")}
-#[cfg(target_os="linux")]fn existing()->Result<impl Repository>{super::store::Store::existing_native(&root())?.ok_or(Error::NotFound)}
+#[cfg(target_os="linux")]fn existing()->Result<super::store::Store>{super::store::Store::existing_native(&root())?.ok_or(Error::NotFound)}
 
 #[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct CreateInput{pub pet_id:String,pub request_id:String,pub intent:String,pub criteria:Vec<String>,pub conversation_id:Option<String>}
@@ -33,7 +33,7 @@ pub async fn pet_runtime_create(app:AppHandle,window:tauri::WebviewWindow,input:
         let context=if let Some(id)=input.conversation_id{
             if !app.state::<crate::chat::Chat>().has_public_conversation(&owner.provider,&id){return Err(Error::Conflict);}Context::Mochi{conversation_id:id}
         }else{Context::Unbound};
-        let spec=Spec{owner,context,request_id:input.request_id,intent:input.intent,criteria:input.criteria};spec.validate()?;
+        let spec=Spec{restored_from:None,owner,context,request_id:input.request_id,intent:input.intent,criteria:input.criteria};spec.validate()?;
         Repository::create(&super::store::Store::ensure_native(&root())?,spec,crate::assistant_memory::now())
     }).await.map_err(|_|Error::StorageUnavailable)?
 }
@@ -64,7 +64,23 @@ pub async fn pet_runtime_mutate(app:AppHandle,window:tauri::WebviewWindow,input:
             let current=owner(&app,&input.pet_id)?;let record=store.read(&input.goal_id,&input.pet_id)?;
             if record.spec.owner.provider!=current.provider||record.spec.owner.adapter!=current.adapter{return Err(Error::Conflict);}
         }
-        super::authority_store::mutate_with_authority(&store,&super::admission_review::authority_root(),&input.goal_id,&input.pet_id,&input.revision,input.request_id,action,crate::assistant_memory::now())
+        let initial=store.read_control(&input.goal_id,&input.pet_id)?;
+        let replay=initial.replay(&input.request_id,&action)?;let path=super::admission_review::authority_root();let now=crate::assistant_memory::now();let mut revision=input.revision;
+        if !replay&&matches!(action,Action::ResumeDraft){
+            if initial.revision!=revision{return Err(Error::Conflict);}
+            if let Some(cleaned)=super::lease_api::cleanup_unstarted(&store,&path,&initial,now)?{
+                if cleaned.status==CommitStatus::Uncertain{return Err(Error::StorageUnavailable);}
+                // Rebase only the cleanup performed here from the exact input
+                // revision; any concurrent control/admission still fails CAS.
+                if cleaned.record.state!=initial.state{return Err(Error::Conflict);}revision=cleaned.record.revision;
+            }
+        }
+        let control=matches!(action,Action::Pause|Action::Cancel);
+        let receipt=super::authority_store::mutate_with_authority(&store,&path,&input.goal_id,&input.pet_id,&revision,input.request_id,action,now)?;
+        if control&&!replay{
+            if let Ok(Some(cleaned))=super::lease_api::cleanup_unstarted(&store,&path,&receipt.record,now){return Ok(cleaned);}
+        }
+        Ok(receipt)
     }).await.map_err(|_|Error::StorageUnavailable)?
 }
 #[tauri::command]
@@ -82,7 +98,7 @@ pub async fn pet_runtime_import_legacy(app:AppHandle,window:tauri::WebviewWindow
 }
 
 #[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct PrepareContextInput{pub pet_id:String,pub goal_id:String,pub revision:String,pub request_id:String,pub mode:PreparationMode}
+pub struct PrepareContextInput{pub pet_id:String,pub goal_id:String,pub revision:String,pub request_id:String,pub mode:PreparationMode,#[serde(default)]pub selected_memory:Option<Vec<crate::pet_memory::context_model::Selected>>}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct ContextView{pub binding:ContextBinding,pub messages:Vec<serde_json::Value>,pub message_count:usize,pub truncated:bool}
 fn context_root()->std::path::PathBuf{crate::settings::config_dir().join("pet-runtime-contexts-v1")}
@@ -92,14 +108,15 @@ pub async fn pet_runtime_prepare_context(app:AppHandle,window:tauri::WebviewWind
     #[cfg(not(target_os="linux"))]{let _=(app,input);Err(Error::UnsupportedPlatform)}
     #[cfg(target_os="linux")]
     tauri::async_runtime::spawn_blocking(move||{
-        let store=existing()?;let goal=store.read(&input.goal_id,&input.pet_id)?;
+        let store=existing()?;let goal=store.read_control(&input.goal_id,&input.pet_id)?;
         if let Some(binding)=&goal.execution_context{
-            if binding.request_id!=input.request_id||binding.mode!=input.mode{return Err(Error::Conflict);}
+            if binding.request_id!=input.request_id||binding.mode!=input.mode||!crate::pet_memory::context_model::same_selection(binding.memory.as_ref(),input.selected_memory.as_deref()){return Err(Error::Conflict);}
+            if binding.memory.is_some(){super::context::validate_memory(binding)?;}
             return store.mutate(&goal.id,&input.pet_id,&input.revision,input.request_id,Action::BindContext{binding:binding.clone()},crate::assistant_memory::now());
         }
         if goal.execution_context.is_none(){let current=owner(&app,&input.pet_id)?;if current.provider!=goal.spec.owner.provider||current.adapter!=goal.spec.owner.adapter{return Err(Error::Conflict);}}
         let main=app.state::<crate::chat::Chat>();
-        let(binding,_chat)=super::context::prepare(&context_root(),&goal,&main,input.mode,&input.request_id)?;
+        let(binding,_chat)=super::context::prepare_with_memory(&context_root(),&goal,&main,input.mode,&input.request_id,input.selected_memory.as_deref())?;
         store.mutate(&goal.id,&input.pet_id,&input.revision,input.request_id,Action::BindContext{binding},crate::assistant_memory::now())
     }).await.map_err(|_|Error::StorageUnavailable)?
 }
