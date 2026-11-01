@@ -1,9 +1,464 @@
 # Arquitetura dos pets autónomos de AI
 
-Revisão normativa: **24 de outubro de 2026**. Projeto: `coucou-codex`, branch
+## 01/11 — Fala nativa e candidata mochi.32 (C6C3)
+
+A fala nativa recebe apenas o ID da resposta; conteúdo, idioma, superfície GTK/WebKit, geração do documento e validade são conservados no backend. A execução reutiliza o supervisor de helpers e conserva o recurso até recolher a família própria. A origem capturada reutiliza as revisões e testemunhos de IO existentes, sem confundir leitores concorrentes com uma gravação nem conceder autoridade nova.
+
+[Composição, provas, entrega e limites](releases/0.5.1-mochi.32.md).
+
+A versão.32 está agora instalada e ativa: nome D-Bus, executável empacotado e admissão nativa verificados; três originais de preferências/conversas e cópias nativas byte-exatas. A.30 foi preservada. O ensaio284 do próprio RPM passou com helper sintético; isto não fecha áudio real nem os49 requisitos.
+
+## 31/10 — Seleção TTS e cancelamento por resposta (C6C2, fontes1000)
+
+Fontes1000 integradas: seleção TTS capturada na ocorrência de Voz e no preview, validade após esperas e cancelamento do renderer por resposta exata. Falha do motor escolhido conserva o texto; só a seleção explícita system pode usar síntese do sistema. [Provas e limites C6C2](../.build/pet-goal-execution-next-r1/VOICE-PLAYBACK-CHECKPOINT-C6C2A3.json).
+
+Reutiliza Plan/Input, Settings/Flow, epoch e processos TTS existentes. Edge/local conservam runtime/diretórios; ElevenLabs conserva serviço/modelo e limita descoberta, bytes/tempo/targets, sem redirects/retry e com verificação antes do POST. voice_say_native ainda precisa de associação exata à resposta/superfície/worker antes de concluir a ativação governada. Revogar não retira dados já entregues.
+
+## 31/10 — Entradas imutáveis da Voz (C6C1, fontes999)
+
+Fontes999 integradas: entradas de captura/ASR e seleção de inferência imutáveis por ocorrência de Voz, usando os runners e a fábrica existentes. Alterar pet, perfil, endpoint ou preferências durante a espera não redireciona o pedido; o contexto inválido é recusado. O snapshot não renova grants. [Provas e limites C6C1](../.build/pet-goal-execution-next-r1/VOICE-TURN-CHECKPOINT-C6C1A4.json).
+
+Manual/hotword conservam o provider inicial; a sessão contínua pode selecionar explicitamente um pet no enunciado, com os perfis dessa ocorrência. CLI conserva modelo/esforço/modo/pasta; Ollama conserva configuração/identidade/endpoint. A validade é reavaliada nos caminhos de efeitos existentes. TTS, alvo físico, anexos/conversa antes da captura e ativação após restauro continuam abertos.
+
+## 31/10 — Fontes997: seleção de áudio exata e posse dos workers de captura (C6A/B2)
+
+Integrado na árvore principal, sobre os executores de Voz, ditado e gravação existentes. Um microfone nomeado ausente/ambíguo não abre outro por omissão; monitors/aliases não substituem a seleção explícita. A captura do sistema procura o alvo de loopback por host/ID exatos. O inventário tem limite256. Preferências guardadas, modelos, endpoints e wire schema mantêm-se.
+
+Capture conserva Stop, JoinHandle e holds do Coordinator comum até recolher o worker. Timeout impede play tardio e não liberta um pedido ainda vivo. Os caminhos hotword/manual/sessão recebem o Stop externo; fechar a captura normalmente não cancela o turno de inferência que se segue. Donos tipados de Voz, Ditado, microfone da Gravação e áudio do sistema da Gravação impedem que trocar de alvo fabrique outro dono. As leases de leitura são independentes: Voz e gravação podem partilhar o mesmo endpoint quando o backend permite, sem uma revogar a outra. Não são grants de pet nem exclusividade sobre outras aplicações.
+
+A primeira versão B1 tinha exclusão global demasiado ampla; a auditoria dos callers identificou a quebra que causaria no ditado/gravação enquanto hotword conserva o stream. B2 corrige-a e acrescenta provas de leituras partilhadas e de recusa de retarget do mesmo dono. B1 e os respetivos resultados ficam conservados; não chegou à instalação.
+
+Provas B2:19 dirigidos passaram/2 ignorados;3153 gerais passaram/38 ignorados; build595 inputs/100 avisos existentes. Inventários e streams são sintéticos, exercitando os mesmos seletores/donos de produção. Não foram abertos dispositivos ou modelos reais. Os421 inputs não-Rust e71 outputs web da raiz continuam exatos;1329 testes web/TSC/Vite anteriores são reutilizados por identidade, sem nova execução.
+
+[Checkpoint C6A/B2](../.build/pet-goal-execution-next-r1/VOICE-AUDIO-PARTIAL-CHECKPOINT-R43F10B2C3D2C6B2.json) · [Integração997 B2](../.build/pet-goal-execution-next-r1/integration997-r43f10b2c3d2c6b2/CHECKPOINT.json) · [Contrato de ativação e dependências](../.build/pet-goal-execution-next-r1/VOICE-ACTIVATION-CONTRACT-R43F10B2C3D2C.md). Instalação, HEAD/índice Git e10 ficheiros externos gravity_managed preservados; sem commits/publicação.
+
+Pendente: Revisão de ativação Voz utilizável, com alvo nativo capturado e validado antes de esperar, estado/recibo de captura reais, autoridade distinta para captura/ASR/inferência/TTS/operação e bindings da fábrica; sem alterar modelos escolhidos. Defaults/aliases CPAL não são pinning físico. Depois Móvel/Hooks/Credenciais e restantes critérios integrais. Esta correção não demonstra pinning físico, áudio real/humano ou ativação governada completa. Todos os49 critérios integrais permanecem abertos.
+
+## 31/10 — Fontes995 integradas na árvore principal, instalação preservada
+
+A árvore `/home/pmglo/Projects/coucou-codex`, branch `feat/mochi-cli-accounts`, passa de834 para995 fontes comprovadas. Adoção ficheiro a ficheiro:291 alterações, incluindo161 ficheiros novos; checkpoint recuperável com originais anteriores. As10 fontes externas gravity_managed ficaram intactas, tal como HEAD/índice Git. Nenhum commit, push, merge ou substituição da instalação.
+
+Os593 inputs Rust coincidem byte a byte com a build e os testes privados C4. TypeScript e Vite foram executados na árvore principal; os42 outputs comuns coincidem com o SDK. O bundle principal conserva mais29 WAV existentes de NotchBuddy/Resources/sounds, iguais às fontes e ao bundle anterior. A primeira comparação estrita de bundles falhou por essa diferença real e foi reconciliada por inspeção, sem remover sons nem repetir a build. Isto não prova reprodução de áudio real. Não houve nova execução da suite Rust nem build nativa na árvore principal: a reutilização tem como prova os inputs exatos, não uma alegação de teste adicional.
+
+[Checkpoint de integração](../.build/pet-goal-execution-next-r1/integration995-r43f10b2c3d2b3c4a1/CHECKPOINT.json) · [Verificação reconciliada](../.build/pet-goal-execution-next-r1/ROOT995-CURRENT-SCOPE-VERIFICATION-RECONCILED-R43F10B2C3D2B3C4A1.json). Os checkpoints anteriores que dizem root834 descrevem o estado antes desta adoção; não executar os seus verificadores de root834 sobre a árvore995.
+
+C5 verificado em nativo privado: fechar a janela exata de Settings durante Bind pendente invalida o Frame, fecha a sessão própria e conserva Unconfirmed sem publicação. Uma preparação concorrente é recusada enquanto o worker detém o recurso; reabrir não renova a decisão antiga. Nativo277 passou com as mesmas fontes995/binário;276 não chegou ao fecho por navegação redundante da fixture, corrigida sem mudar produção ou remover asserções. Não se concedeu core:window:allow-close ao renderer: WM_DELETE_WINDOW foi dirigido ao PID/título/geometria observados no Xvfb privado, e hub-visible=false/diário/limpeza foram observados. [Prova e limites C5](../.build/pet-goal-execution-next-r1/SETTINGS-CLOSE-PARTIAL-CHECKPOINT-R43F10B2C3D2B3C5.json).
+
+Próxima unidade: controlo próprio de ativação da Voz, seguido de Móvel/Hooks/Credenciais. Preservar os ASR/TTS/modelos selecionados e usar fixtures, sem abrir áudio real na QA genérica. Objetivos autónomos e fecho de chat têm lifecycle próprio e não ficam validados por C5. Os49 critérios integrais continuam abertos, incluindo autonomia/TEAM/Sistema/Guardian e aceitação/entrega.
+
+## 31/10 — Novo pedido de atalhos no contexto atual, com histórico preservado (C3D2B3C4A1)
+
+A composição privada SDK995/593 inputs permite um novo pedido humano de atalhos no contexto atual quando o original não pode ser observado. A revisão3 retém a cadeia e as identidades originais, mostra o destino atual e exige quatro confirmações, versão exata e uso único. Reutiliza Controller, Frame, gates, executores e diário; não concede permissões a pets. Sucesso atual conserva recibos e incerteza de scope anteriores. O portal pode partilhar configurações por aplicação: não se afirma independência por novo token, cliente, PID ou nome.
+
+Formato8 impede leitores7 de ignorarem a incerteza histórica de Slots Verified/Reconciled. Controlos cumulativos, migração monotónica, reinício sem registo automático, backup e restauro nativo8 foram verificados.
+
+Provas: 68 dirigidos passaram/2 ignorados; 3138 gerais passaram/38 ignorados; 1329 web/0 omitidos, TypeScript, Vite e build. Nativos274/275 atravessam Tauri/WebKit, quatro confirmações, registo/callback, segunda revisão, leitor7, reinício e restauro8. Portal sintético e X11 virtual; não aceitação humana/hardware/instalação.270/271 e272/273 conservam falhas de fixture (bindings deliberadamente desligados no restauro; profundidade2 indicada por Admission3), corrigidas sem alterar fontes/binário nem remover asserções.
+
+[Checkpoint privado C4](../.build/pet-goal-execution-next-r1/SHORTCUTS-CURRENT-SCOPE-PARTIAL-CHECKPOINT-R43F10B2C3D2B3C4A1.json)
+
+Decisão C4: nova autoridade para o registrar/cliente atual, sem usar endereços históricos para limpeza. Histórico é uma dependência validada antes e durante IO. Não existe segundo runtime, ledger ou scheduler. A recuperação não altera os49 critérios integrais nem substitui a entrega.
+
+## R43F10B2C3D2B3C3A2 — comparação nativa original e atual
+
+30/10/2026: a revisão2 mostra projeções tipadas da identidade nativa original, obtida da intenção retida por hash, e da captura nativa atual. A mesma decisão/fingerprint/artefacto conserva ambas. O lado atual inclui apenas sessões Bound conhecidas, nunca tokens de sessões ainda não criadas. Listas vazias e comparação visual não provam libertação.
+
+A decisão exige a versão2 e as três confirmações; controlos antigos, alterações de origem/instância/transporte, argumentos desconhecidos e replay continuam recusados. Validadores de processo/ambiente são partilhados entre revisão e reconciliação. Não se cria nova autoridade, formato persistente ou infraestrutura.
+
+Privado: 992 fontes/591 entradas nativas. Passaram 55 testes dirigidos, 3134 gerais (38 ignorados), 1326 web/0 ignorados, TypeScript, Vite, build e nativos266/268/269. [Fontes, provas e limites](../.build/pet-goal-execution-next-r1/SHORTCUTS-ORIGINAL-OWNER-PARTIAL-CHECKPOINT-R43F10B2C3D2B3C3A2.json).
+
+## R43F10B2C3D2B3C2A1 — restauro 7 e suspensão de todas as componentes
+
+O ensaio de restauro264 encontrou uma omissão real: o diário copiado suspendia apenas componentes com recibos. `restored_record` passa a suspender as seis operações existentes nos formatos com diário por componente, mantendo versão/slots/fases/referências. Formatos 1/2 conservam o formato e exigem a revisão global existente; uma publicação global incerta continua byte-exata. Não há nova infraestrutura ou autoridade.
+
+Composição privada: 992 fontes/591 entradas nativas. Passaram 43 testes do módulo no A1. A execução geral C2 passou 3130 testes e teve duas expectativas antigas corrigidas no reteste dirigido; 38 ignorados. A1 altera apenas cfg(test), sem nova execução geral/build/nativa. Build e ensaio nativo 265 de C2, web1324/TSC/Vite B3 são reutilizados por identidade explícita dos respetivos inputs. [Fontes, provas e limites](../.build/pet-goal-execution-next-r1/SHORTCUTS-RESTORE-PARTIAL-CHECKPOINT-R43F10B2C3D2B3C2A1.json).
+
+## R43F10B2C3D2B3B8 — recuperação dos atalhos e leitores antigos
+
+27/10/2026: reconciliação humana própria reutiliza Controller/gates/Frame/TTL/cancel, Slot e arquivo; observa encarnação do processo, ambiente/transporte e bus/sessões originais. Portal aceita apenas ACKs exatos ou ausência autenticada do cliente no mesmo bus; plugin exige limpeza completa das teclas potencialmente afetadas ou processo original ausente em X11 local. Não usar Registry vazio/PID/lease como prova de libertação.
+
+A observação mantém intenção/outcome/hash anteriores, sem novo registo nem sucesso passado. Outra tentativa exige novo consentimento; restart e outro ecrã/transporte não herdam continuidade. Protocolo 7 antecede a nova intenção porque o leitor 6 reconhece a fase reconciliada, mas desconhece estas condições; o leitor antigo recusa sem modificar. Não há outro runtime/ledger/grant.
+
+Composição privada: 992 ficheiros de fonte e 591 entradas nativas; backend e binário B7, uma correção de fixture cfg(test) B8. 52 testes dirigidos B8 passaram; a execução geral B7 teve 3129 testes aprovados, uma falha de fixture e 38 testes ignorados; a falha foi conservada e corrigida com reteste dirigido.Os 1324 testes web, TypeScript e Vite de B3 e os 18 testes D-Bus de B5 reutilizados por identidade explícita; build B7 e ensaios nativos 261 (X11) e 262 (portal) passaram. Não houve nova execução dessas suites no B8. [Fontes, provas e limites](../.build/pet-goal-execution-next-r1/SHORTCUTS-RECONCILIATION-PARTIAL-CHECKPOINT-R43F10B2C3D2B3B8.json).
+
+## R43F10B2C3D2B3A1 — resultado pendente e publicação
+
+27/10/2026: o facto nativo verificado fica primeiro retido como Unconfirmed/publication=pending. O input só é publicado com esse witness; Verified final exige publicação observada, autoridade ainda válida e a referência exata ao pendente. Um handle local limpa os seus alvos se a finalização falhar; crash conserva a barreira sem depender de Drop. Mesmos diário6/Registry/atores. Falta observação/reconciliação independente B3B. [Provas e limites](../.build/pet-goal-execution-next-r1/SHORTCUTS-PUBLICATION-PARTIAL-CHECKPOINT-R43F10B2C3D2B3A1.json).
+
+
+## R43F10B2C3D2B2B3 — aprovação dos atalhos e suspensão X11
+
+27/10/2026: revisão2 inclui o estado nativo anterior, destino e impacto; três confirmações autorizam uma tentativa nativeUser. Reutiliza Settings6, Registry e o mesmo portal/plugin, com intenção antes do efeito, guards durante IO e publicação após observação durável. Nenhuma permissão de pet/modelo é criada. B3 permanece aberto para publicação/limpeza incerta e crash/reinício antes de nova admissão. [Checkpoint e limites](../.build/pet-goal-execution-next-r1/SHORTCUTS-APPROVAL-PARTIAL-CHECKPOINT-R43F10B2C3D2B2B3.json).
+
+
+## R43F10B2C3D2B2A2 — dados dos atalhos e barreira de novo registo
+
+27/10/2026: privado980/582inputs. O editor usa patch nativeUser por ação com valor anterior/CAS e ACK; snapshots gerais antigos deixam de sobrescrever shortcuts. O mesmo diário Settings6 pausa novos registos antes de publicar dados, preservando IDs desconhecidos, campos alheios e slots incertos. Uma publicação falhada conserva a barreira. Verified de shortcuts continua a ser facto de uma sessão, sem remover a barreira persistida. Recusa de admissão mantém teclas existentes e o callback de navegação; suspensão explícita deixa de mostrar Active obsoleto.
+
+Passaram37dirigidos,3104Rust/29ignorados/build582 e1312web/0skip/TSC/Vite A1 (A2 só converte o erro Rust; web reutilizado por identidade). Build101avisos, menos o novo aviso deprecação B1. Caso nativo247 passou: UI real, CAS/ACK, snapshot geral antigo, callback genuíno, suspensão e leitor976/reinício980 sem novos registos. O wrapper original terminou1 na auditoria posterior de uma fixture derivada; verificador de leitura reconstituiu a derivação exata e concluiu as verificações sem repetir efeitos. O retorno separado do contentor não ficou guardado. [Fontes, comandos e limites](../.build/pet-goal-execution-next-r1/SHORTCUTS-DATA-PARTIAL-CHECKPOINT-R43F10B2C3D2B2A2.json).
+
+A aprovação e o despacho duráveis continuam por implementar sobre a mesma captura B1; este incremento é de dados/revogação, não reativação ou paridade instalada. Seguem consumo da reserva, guards durante IO e resultado antes de Active, depois reconciliação/lifecycle/composição. Root834/.30 e os49critérios integrais permanecem abertos/intactos.
+
+
+## R43F10B2C3D2B1A2 — revisão do plano nativo dos atalhos
+
+27/10/2026: privado976/580inputs. A revisão reutiliza planner, Registry/worker, Context/Revision/Frame e Bridge/definições existentes. Captura preferências completas, ações/conflitos, perfil/revisões e instância nativa; o portal reserva peer/client/session/requests sem criar, registar ou fechar atalhos. Preparar/inspecionar/cancelar não concede ativação. Mudanças de janela, dados ou estado nativo invalidam a captura. O recurso identifica o registrar; mudar teclas ou caminhos reservados não cria independência. Geração u64 mantém decimal exato no TS; dados hostis e IDs legados são dados.
+
+Passaram29dirigidos,9D-Bus privados,3098Rust/29ignorados/build580,1308web/0skip/TSC/Vite A1 e nativos245/246. A2 só corrige duas fixtures Rust: web A1 reutilizado por identidade, sem nova execução.245 usa portal sintético;246 usa plugin X11 real em Xvfb.243/244 conservam falhas da instrumentação do teste, corrigida sem alterar produto/binário. Há um novo aviso de depreciação atómica, registado para B2. [Fontes, comandos e limites](../.build/pet-goal-execution-next-r1/SHORTCUTS-REVIEW-PARTIAL-CHECKPOINT-R43F10B2C3D2B1A2.json).
+
+Segue B2: consumir esta mesma captura na aprovação exata, intenção/despacho/resultado Settings6 e gravação só do campo de atalhos; depois reconciliação/lifecycle/composição. B1 não é reativação nem entrega. Root834/.30 intactos;49critérios integrais abertos.
+
+
+## R43F10B2C3D2A3A1 — perda do dono nativo dos atalhos
+
+27/10/2026: privado970/577inputs. A subscrição do peer único antecede a consulta de vida; só a transição exata emitida pelo daemon retira disponibilidade. Troca do nome do serviço com o peer antigo vivo conserva a sessão; morte do peer termina o worker e cancela Flow sem novo comando, sem seguir substituto ou afirmar rollback remoto. Passaram12portal/8ignorados,8D-Bus privados/0ignorados,3093Rust/28ignorados/build e nativo242. Este último usa Tauri/WebKit reais e broker sintético/Xvfb: não é compositor/áudio/humano/instalado. Web/TSC/Vite reutilizados por identidade exata, sem nova execução. [Fontes, comandos e limites](../.build/pet-goal-execution-next-r1/SHORTCUTS-OWNER-LOSS-PARTIAL-CHECKPOINT-R43F10B2C3D2A3A1.json).
+
+Segue revisão/controlo durável próprio de Atalhos pelo mesmo diário Settings6, depois Voz/Móvel/Hooks/Credenciais e composição/adoção. Root834/.30 intactos;49critérios integrais permanecem abertos.
+
+
+## R43F10B2C3D2A2C3 — origem dos atalhos e conflito CAS
+
+27/10/2026: privado970/577inputs. O portal autentica o peer único real, prende chamadas/sessão/geração e aceita apenas ações pedidas/aceites; release/rebind excluem callbacks antigos e Flow conserva release/cancel. A composição revelou um conflito real na leitura da memória: `load_for_update` partilhado distingue conflito anterior à publicação, recusa do guard, dados inválidos e commit incerto, sem retry/default ou renovação de autoridade. Passaram3092Rust/25ignorados com1024disputas,4provas CAS,11memória/build e nativo241 privado. Cinco testes D-Bus B1 são reutilizados por identidade dos três ficheiros; web/TSC/Vite E4 reutilizados por identidade não-Rust/bundle, sem nova execução. [Fontes, provas, falhas retidas e limites](../.build/pet-goal-execution-next-r1/SHORTCUTS-CALLBACK-PARTIAL-CHECKPOINT-R43F10B2C3D2A2C3.json).
+
+Falta detetar desaparecimento do dono nativo; depois revisão/controlo durável próprios de Atalhos, Voz/Móvel/Hooks/Credenciais e composição/adoção/entrega. O nativo241 usa broker sintético em Xvfb, não compositor/áudio/aceitação humana ou instalada. Root834/.30 intactos;49critérios integrais abertos.
+
+
+## R43F10B2C3D1B2E4 — identidade física, origem legada e protocolo6
+
+27/10/2026:970fontes privadas/577inputs. `Target` identifica o slot pelos dev/inode/birth-time da base retida e nomes relativos, com domínio2, sem fallback por caminho. Substituição da base muda a identidade; rename/alterações normais mantêm-na. O plano vivo continua a prender alvo/launcher/revisões. Origem legada1 é desconhecida: revisão específica/4ACK observa só o presente, conserva raw Unknown e não afirma equivalência física/sucesso passado nem reativa. Elegibilidade requer recurso físico, perfil e revisão de dados exatos. A intenção/diário e o controlo funcional reutilizam o percurso existente. Settings6 protege a nova semântica e é conservado em migração/backup/restauro.
+
+45dirigidos/3082Rust21ignorados/build577 passaram. E4 executou24web/TSC/Vite;1302testes web E3 são reutilizados (o TSC E3 falhou; não houve nova execução completa E4). Nativo239 passou140.45s: arquivo5 real sintético readonly, D5 anterior abre5 e recusa6 sem alterar roots, decisão legada própria, freshSet/reinício, troca física conservando caminho/perfil, nova revisão e efeito só na base nova, backup6 byte-exato e restauro/custody/config/admissão depth4 com6componentes suspensas e observações antigas inelegíveis. E1 confirmou a falha real; E2/E3 conservam falhas intermédias de guardas/fixture/tipagem corrigidas. [Prova, fontes e limites](../.build/pet-goal-execution-next-r1/SETTINGS-AUTOSTART-PHYSICAL-PARTIAL-CHECKPOINT-R43F10B2C3D1B2E4.json).
+
+Segue revisão própria dos atalhos sobre `plan/apply`/portal/registry e o mesmo diário; Voz/Móvel/Hooks/Credenciais continuam suspensos. Root834/instalação .30 intactos. Sem aceitação humana/login/hardware/powerloss, publicação ou fecho dos49requisitos.
+
+## R43F10B2C3D1B2D5 — observação histórica e arquivo só de leitura
+
+27/10/2026:970fontes privadas/577inputs. O novo controlo seleciona um EffectId incerto na cadeia local validada, apresenta o plano nativo e exige decisão própria; reutiliza diário, artefactos imutáveis, gate, Frame/TTL, cancelamento e cerca física. A observação mantém o Unknown antigo, preferência, registo e suspensão; não prova o resultado passado. Revisão de dados ou perfil diferentes retiram elegibilidade, conservando a evidência. A operação atual incerta no mesmo recurso é reconciliada primeiro. Outra alteração exige novo plano/decisão.
+
+3074Rust/21ignorados/build577 passaram;1299web/TSC/Vite D3 reutilizados por identidade exata (sem nova execução web D5). Nativos236/238 privados passaram: revisão histórica/3ACK, cancelamento/replay/seletores recusados, leitor5 anterior conservador antes/depois de freshSet, revisão de dados, reinício/backup5 e restauro real do arquivo montado read-only para novo perfil, onde observações anteriores ficam inelegíveis.237 recusou corretamente origem/destino no mesmo dispositivo através de mounts distintos;238 usa a mesma origem sintética byte-exata num tmpfs distinto e readonly, sem relaxar essa proteção.235 revelou uma falha real: lock_shared abria o ficheiro com O_RDWR; a correção usa O_RDONLY só na leitura, preservando exclusão e O_RDWR dos escritores. Fixtures dirigidas provam consulta0400, Busy com escritor e recusa de concessão.233 foi preparação incompleta dos pais legados sintéticos;234/236 preservam-nos offline, sem limpar dados. [Fontes, comandos, provas e limites](../.build/pet-goal-execution-next-r1/SETTINGS-AUTOSTART-HISTORICAL-PARTIAL-CHECKPOINT-R43F10B2C3D1B2D5.json).
+
+Limite por resolver antes da integração: o plano prende o destino físico durante IO, mas o identificador persistido D5 ainda deriva do caminho; falta distinguir a substituição da pasta-base pelo mesmo nome e definir tratamento dos registos legados. Segue esse caso concreto, depois composição/outras5componentes. Root834/instalação .30 intactos; sem modelos/quota, aceitação humana/login/hardware ou fecho dos49requisitos.
+
+## R43F10B2C3D1B2C3 — backup5 restaurado e admitido numa terceira geração
+
+27/10/2026: mesmas969fontes B2, novo nativo232 privado/0modelos. O backup5 real foi restaurado, revisto e admitido pelo percurso de época/custody existente; o caminho operacional é o payloadDepth=2 selado nesta cadeia. Novo scope suspende o recibo atual e conserva o ancestral incerto. Outra aprovação nativa altera só o novo recurso, mantém5 e só revalida autostart; reinício conserva ficheiro/inode/diário/autoridade/orçamentos. Root1/Root2 permanecem byte-exatos e o terceiro backup5 inclui os roots completos, controlos, originais e histórico.230/231 conservam erros de expectativa do harness (ordem custody→configuração e prefixo operacional);232 corrige essas expectativas, sem modificar produção.3066Rust/21ignorados,1294web/TSC/Vite/build B2 são reutilizados por identidade exata; não foram repetidos. [Prova e limites](../.build/pet-goal-execution-next-r1/SETTINGS-AUTOSTART-PORTABLE5-PARTIAL-CHECKPOINT-R43F10B2C3D1B2C3.json).
+
+Segue controlo explícito para observar o recurso de um efeito incerto arquivado quando voltar a ser o alvo nativo atual; permanece recusado até essa revisão. Depois composição/outras5componentes. Sem instalação/aceitação humana/login/hardware;49critérios integrais continuam abertos.
+
+## R43F10B2C3D1B2B2 — novo destino com incerteza antiga preservada
+
+27/10/2026, privado969/B2/Linux: setIndependentRegistration exige perfil **e** recurso nativos diferentes e quarto ACK próprio da incerteza externa, ligado ao mesmo plano/hash/Owner-epoch. Reutiliza Controller/gate, diário/Revision, preferência guardada e cerca física. O slot/artefactos anteriores conservam a fase incerta; nenhum caminho arquivado é seguido e não há falsa reconciliação. Status/UI mantêm visíveis os ancestrais incertos após novas operações; leitura local limitada/hash-bound recusa corrupção/ciclos e novo trabalho no recurso antigo até reconciliação própria. Primeira operação independente usa marker/Record5: o leitor4 anterior recusa; gravações comuns, revisão e backup preservam5, sem downgrade.
+
+13testes do controlador/22diário-protocolo,3066Rust/21ignorados,build576 e nativo229 passaram.1294web/0skip/TSC/Vite foram executados B1 e reutilizados B2 por inputs/bundle idênticos.229 prova backup4→restauro/admissão→UI4acks→novo efeito5 com incerteza antiga conservada/visível, cancel/wrongwindow/args/replay,reinício/revisão5,recusa do leitor4 e backup5,0modelos/quota. Unknown é fixture após registo privado real; não powerloss físico. [Fontes, provas e limites](../.build/pet-goal-execution-next-r1/SETTINGS-AUTOSTART-INDEPENDENT-PARTIAL-CHECKPOINT-R43F10B2C3D1B2B2.json).
+
+Seguem restauro do backup5 numa nova Root3 e controlo explícito de reconciliação histórica do recurso antigo, depois composição/outras5componentes. Sem instalação, aceitação humana/login/hardware;49critérios integrais continuam abertos.
+
+## R43F10B2C3D1B2A4 — restauro nativo e nova revisão de autostart
+
+27/10/2026: mesmas969fontes A6, novo ensaio nativo228 privado,38.56s/0modelos. Backup4→restauro→configuração/autoridade independente/admissão→nova revisão nativa no destino Root2 passou. O restauro mantém o recibo anterior como dado suspenso e desativa a preferência; nova aprovação afeta apenas o recurso atual e revalida só autostart, sem modificar pendingFeatures imutável. Reinício não repete efeitos. Nova revisão de dados conserva formato4 e recibos, mas volta a suspender as6componentes; exige outra aprovação. Leitores958/protocolo3 recusam e o segundo backup conserva os roots completos, controlos e originais. Rust/web/build A6 reutilizados por identidade exata, sem nova execução. [Prova e limites](../.build/pet-goal-execution-next-r1/SETTINGS-AUTOSTART-RESTORED-PARTIAL-CHECKPOINT-R43F10B2C3D1B2A4.json).
+
+Continua aberto o efeito antigo incerto num recurso diferente; não alegar reconciliação desse caso. Seguem esse percurso explícito, composição exata e outras5componentes. Sem aceitação humana/instalada/login/host;49critérios integrais continuam abertos.
+
+## R43F10B2C3D1B1A6 — controlo nativo de autostart e reconciliação
+
+27/10/2026, privado969/A6/Linux: percurso funcional de preview/3acks/decisão nativa de uso único e5min, ligada ao Owner/epoch da janela C3B. Reutiliza Controller/gate, diário/artefactos/WriterLock/Target/Witness existentes. Intenção precede preferência guardada com guard; Dispatched precede registo. IO ocorre fora de Shared, a validade usa Witness/Observation e epoch fraco da Revision real, cancelamento atómico não espera esse mutex e o gate dura até retorno do worker. Cerca física com flock prende o recurso entre instâncias. Scope/configuração/plano/recibo e referência da revisão dos dados são revalidados; observação recuperada mantém suspensão e exige outra aprovação para alterar. Não há novo grant/scheduler/ledger de objetivos.
+
+Linux recusa a API antiga de mutação e startup só observa drift. UI/Bridge tipados mostram efeito distinto de preferência e login, sem retry implícito; evento Settings atualiza disponibilidade após revisão de dados.3061Rust/21ignorados A6,1288web/0skip/TSC/Vite A3 reutilizados por bytes iguais e buildA6 passaram. Nativo224 prova UI Root1,6suspensões→sóautostart,wrongwindow/args/replay/close recusados,registo/remover/restart/drift,reconciliação sem repetição e novo consentimento,recusa958 e protocolo3 anterior, recibo3 sódados e backup4completo,0modelos/quota.219 encontrou estado visual desatualizado; corrigidoA3.220/221 identificaram settingsBusy por leitor passivo; A5corrigiu com guard da revisão real,10+2testes e nativo222. A6 cria barreira4 contra escritores legados3 e valida em224. Toda evidência anterior conservada. [Fontes, comandos e limites](../.build/pet-goal-execution-next-r1/SETTINGS-AUTOSTART-REVIEW-PARTIAL-CHECKPOINT-R43F10B2C3D1B1A6.json).
+
+Falta Root2/restauro/overlay/scope e composição conjunta antes de avançar às outras5componentes. Unknown em224 é fixture controlada, não powerloss físico; ficheiro verificado não prova login. Sem aceitação humana/instalada ou host real. Raiz834/.30 preservadas;49critérios integrais continuam abertos. Segue C3D1B2.
+
+## R43F10B2C3D1A4 — diário de efeitos e plano exato de autostart
+
+27/10/2026, privado963/A3/Linux: primeiro incremento de C3D, ainda sem percurso nativo de reativação. O plano congela launcher, alvo, bytes anteriores, diff e pós-condição; reutiliza Directory/Witness e o gerador existente. Record3 estende o mesmo diário com intenção, despacho e outcome por componente, artefactos imutáveis limitados e binding de perfil/configuração/recurso/plano. Preferências normais e revisão de dados preservam estados; restauro não reativa recibos. Observação recuperada não é autorização para replay. Marker3 exige1/2; compatibilidade e promoção de upgrade interrompido são verificadas por fixtures.
+
+3046Rust/21ignorados em A3, 21dirigidos/0ignorados e1ACKperdido/0ignorados em A4 e build573customprotocol A4 passaram. A4 altera apenas3fontes do plano/Target/testes; a regressão A3 é reutilizada com essa diferença explícita, sem alegar suite completa A4. Inclui9testes de plano e16do diário/perfil: efeito real apenas em ficheiros privados, ACK perdido após rename, recusa de replay/configuração trocada, revogação antes de despacho e persistência de suspensões. A1 passou7testes mas revelou hash semântico incorreto; SHA256 e known-answer test corrigidos antes destas provas. A4 conserva o Witness devolvido pelo escritor e recusa substituição do ficheiro/pai/raiz mesmo com bytes iguais antes da confirmação. [Fontes, comandos e limites](../.build/pet-goal-execution-next-r1/SETTINGS-AUTOSTART-JOURNAL-PARTIAL-CHECKPOINT-R43F10B2C3D1A4.json).
+
+Faltam ligar os handlers/UI nativos à aprovação exata/cancelamento/reconciliação e provar o percurso conjunto, backup/leitor antigo e restante reativação. Registo de ficheiro não prova login; fixtures não são aceitação nativa/humana/instalada. Sem novos grants/ledger/scheduler, efeitos reais de host/cofre/quota ou instalação. Raiz834/.30 e49critérios integrais abertos. Segue C3D1B; as outras5componentes continuam pendentes.
+
+## R43F10B2C3B1B4 — revisão exata dos dados, sem reativar componentes
+
+27/10/2026, privado958/B4/Linux: revisão nativa de uma janela,5min e uso único captura valores efetivos/propostos/defaults, origem/revisões, configuração/pets/modelos/destinos e referências de credenciais sem consultar o cofre. Recusa janela errada, argumentos adicionais, replay, alterações e revogação antes da publicação. Epoch nativo invalida após fechar/recriar a janela; os guards não fazem query GTK sob mutex Settings. O original e o outcome anterior ficam retidos antes da intenção nova; aprovar dados conserva6componentes suspensas e não aprova objetivos ou efeitos antigos. [Contrato e limites](../.build/pet-goal-execution-next-r1/SETTINGS-HUMAN-REVIEW-NEXT-CONTRACT-R43F10B2C3B.md).
+
+Marker2 precede Record2 e recusa leitores950/anteriores; gravações normais de v1 mantêm compatibilidade. Registo/backup/restauro conservam suspensões e history. Preferências incompletas persistem os valores revistos; Root1 conserva campos opacos, o restaurado retém originais e publica o formato canónico. Um perfil já admitido com preferências danificadas abre apenas dados protegidos para revisão; root/chave/manifesto/custódia desconhecidos continuam recusados antes do carregamento.
+
+3022Rust/21ignorados,build568 e nativos217/218 passaram.217 prova UI nos3percursos Root1/Root2/Root2danificado,stale recusado,7operações bloqueadas após aprovação,reinícios/runtime/backup e old950Root1+Root2 recusados;2HTTP2CLI sintéticos0quota.218 prova fecho normal do único hub/PID próprio em Xvfb e token recusado após reabrir,0modelos; ACL de fecho JS não foi alargada.1278web/TSC/Vite B2 reutilizados por bytes exatos da web/bundle. [Fontes, provas e diagnósticos](../.build/pet-goal-execution-next-r1/SETTINGS-HUMAN-REVIEW-PARTIAL-CHECKPOINT-R43F10B2C3B1B4.json).
+
+Seguem reativação por componente e intenções/recibos/reconciliação de listeners/chaves/hooks/registo (C3D), antes de integrar/adotar. Sem host/cofre/instalação/áudio reais, aceitação humana, sandbox sameUID ou powerloss físico. Raiz834/.30 preservadas;49critérios integrais abertos.
+
+## R43F10B2C3B0 — origem confirmada antes de componentes opcionais
+
+27/10/2026, privado950/B0A1: Voice/Mobile/Autostart/Shortcuts/Hooks/Credentials reutilizam a origem de IO do Shared atual antes de novos efeitos. Mantêm as barreiras de restauro e repetem a verificação após consulta ao perfil; microfone/listener repetem depois da espera pelo recurso/cofre. Stop e histórico conservam os seus caminhos. As preferências desejadas não são desligadas para contornar a revisão. O relatório de atalhos identifica suspensão por preferências não confirmadas; erro ao eliminar uma credencial vazia deixa de ser sucesso falso. [Contrato e limites](../.build/pet-goal-execution-next-r1/SETTINGS-OPTIONAL-EFFECTS-ADR-R43F10B2C3B0.md).
+
+7dirigidos/3000Rust21ignorados/1272web/TSC/Vite/build563/nativo215 passaram. Tauri real recusa7comandos antes do efeito em Changed e ReviewRequired; flags autostart/phoneLink true conservadas, listener bloqueado após dois reinícios/nova gravação, estado de atalhos visível. Providers/helpers sintéticos,0quota; áudio real, cofre real, aceitação humana e instalação não exercidos. [Fontes, comandos e provas](../.build/pet-goal-execution-next-r1/SETTINGS-OPTIONAL-PARTIAL-CHECKPOINT-R43F10B2C3B0A1.json).
+
+É uma pré-condição de C3B, não revisão humana nem revalidação operacional. Seguem captura/decisão humana exatas, suspensão persistente separada da aprovação de dados e intenções/recibos de listeners/chaves/hooks. Sem integração/instalação antes da prova conjunta. Raiz834/.30 preservadas;49critérios integrais abertos.
+
+## R43F10B2C3A4 — intenção de gravação e revisão duráveis
+
+27/10/2026, composição privada 948/C3A4/Linux: o writer comum persiste Prepared antes de publicar preferências e Committed depois de fsync/readback; uma falha anterior distingue NotPublished. A revisão de valores recuperados sobrevive a load/save/restart. O registo usa Document/Snapshot/WriterLock existentes e contém hashes/estado, sem conceder permissões. O marcador imutável na raiz impede leitores anteriores de carregar o novo perfil; o registo mutável acompanha o payload no backup e na inicialização revista de restauro. Prepared e revisão pendente não são convertidos em sucesso. A consulta de IO usa um descritor de formato capturado, sem tomar o mutex geral do perfil. [Contrato e limites](../.build/pet-goal-execution-next-r1/SETTINGS-DURABLE-IO-ADR-R43F10B2C3A.md).
+
+Passaram 13 casos dirigidos, 2 993 testes Rust (21 ignorados), build de 561 inputs e nativo212. O Tauri conserva o bloqueio após dados diferentes e reinício; num perfil sintético separado, mantém ReviewRequired por dois reinícios e outra gravação, com o estado visível na UI. Leitores945/915 recusam no arranque, antes de Settings/Chat; esta execução não chega ao RPC Spec13 antigo. Mantém a regressão de runtime/Stop/reinício/backup e pipe parcial de 4 096 bytes; 2HTTP/2CLI sintéticos, quota real zero. Web1272/TSC/Vite reutilizados por igualdade exata de fontes/bundle. [Fontes, comandos, falhas conservadas e alcance](../.build/pet-goal-execution-next-r1/SETTINGS-DURABLE-PARTIAL-CHECKPOINT-R43F10B2C3A4.json).
+
+C3 permanece aberto: seguem a revisão/reconciliação humana exata e as intenções/recibos de listeners e chaves. Não revalidar funcionalidades restauradas nem adotar/instalar antes da prova conjunta. Metadados/hashes não são sandbox, CAS contra sameUID ou prova de powerloss. Raiz834 e instalação.30 preservadas; os 43+6 critérios integrais continuam abertos.
+
+## R43F10A4 — recusa antes de guardar e preferências privadas
+
+26/10/2026,privado925/A4: nativo200 demonstrou autostart guardado como ativo e sucesso devolvido apesar da barreira de restauro, além de settings.json0644 incompatível com o leitor privado. O mesmo escritor comum passa a validar sob mutex antes de guardar/publicar; a verificação antes do efeito mantém-se. Erro de registo posterior indica preferência guardada/efeito não confirmado. Temporário exclusivo0600 conserva ficheiros alheios e a compatibilidade legacy. O controlo funcional consulta o valor nativo após erro, sem repetir a ação. [Decisão e limites](../.build/pet-goal-execution-next-r1/RESTORED-FEATURE-PRECOMMIT-ADR-R43F10A.md).
+
+81dirigidos/2892Rust21ignorados/1266web/TSC/Vite/build542/native201 passaram. Este prova recusa na UI/IPC sem mudar memória/bytes/eventos,erro real de registo num caminho sintético bloqueado,gravação normal0600/reinício/backup e regressão do runtime13/consentimento/decisões/Stop.2HTTP1CLI sintéticos/DBus privado; HOME vazio privado ligado só no container,nenhuma entrada/serviço de arranque criado,nem HOME autenticado copiado. [Fontes,prova negativa e checkpoint](../.build/pet-goal-execution-next-r1/RESTORED-FEATURE-PARTIAL-CHECKPOINT-R43F10A4.json).
+
+Voz,móvel e arranque continuam pendentes; não foi criada uma concessão de revalidação. Antes dela,fechar intenção por campo/concorrência e confirmação após publicação/fsync do diretório no escritor comum. Aceitação humana/instalada/áudio/hardware e49critérios integrais abertos. Raiz834/.30 preservadas,sem commits/publicação; seguir migrações/revalidações/adoção e dependências restantes.
+
+## R43F9B4A1 — limites conjuntos da retenção comprovados
+
+26/10/2026: três casos no RetentionReview/fixture existentes aceitam4096 entradas (diretórios incluídos) e64MiB repartidos por um original retido e a preparação atual; recusam4097,64MiB+1 e um ficheiro8MiB+1. As recusas preservam bytes/inodes e não publicam nova autoridade. A contagem não reinicia por pasta. [Fontes, comando e prova](../.build/pet-goal-execution-next-r1/RETENTION-BOUNDARY-CHECKPOINT-R43F9B4A1.json).
+
+Só mudou o ficheiro de testes; produção/web são byte idênticos à composição923/B3F2A7 comprovada. B4 tem3dirigidos/0ignorados; a suite2886Rust/21ignorados,web1262/build542/native199 pertencem exatamente aA7 e não foram repetidos como se fossem novos ensaios. Sem quota/host/instalação/commits. Seguem migrações/revalidações/adoção das fontes exatas e restantes dependências;49critérios integrais continuam abertos.
+
+
+## R43F9B3F2 — trabalho futuro com origem restaurada, validado em privado
+
+26/10/2026, composição923/A7: revisão nativa da origem/revisão e intenção/critérios futuros, destino capturado e aceitação explícita da incerteza cria outro GoalId do mesmo pet. Spec.restoredFrom13 sela apenas a criação de dados pelo HMAC/Authority/Store existentes; não concede execução, saldo, memória ou autoridade anterior. Contexto, consentimento, modelo, limites e decisões seguintes passam pelo runtime comum. Idempotência reconhece o original sem renovar escolhas; validade/origem são verificadas nas fronteiras da publicação. [Contrato e decisão](../.build/pet-goal-execution-next-r1/RESTORED-FUTURE-DRAFT-ADR-R43F9B3F2.md).
+
+Objetivos antigos concluídos são consultáveis como estado declarado no snapshot, sem exigir a Authority original para leitura. read_control/mutate/context/admissão recusam controlo antigo; UI identifica o histórico e só oferece consulta e revisão de trabalho futuro. Não se infere consumo zero, morte do dono ou desfazer de efeitos.
+
+32dirigidos,2886Rust/21ignorados,1262web/TSC/Vite e build542 passaram. Nativo199 atravessa cartão/revisão/checkbox/criação, contexto e consentimento próprios, driver/decisão/verificação/conclusão, Stop, reinício/ACK com arquivo offline e backup portátil. Leitor915 real recusa13 preservando os ficheiros. Época seguinte13 e cortes/tamper/expiração são fixtures. [Checkpoint com fontes, comandos, falhas retidas e limites](../.build/pet-goal-execution-next-r1/RESTORED-FUTURE-PARTIAL-CHECKPOINT-R43F9B3F2A7.json).
+
+Aplicação privada com HTTP2/CLI1 sintéticos e DBus privado,0quota/modelos reais; sem aceitação humana/instalada/áudio/hardware. Raiz834 e instalação.30 preservadas,sem publicação. A prova fecha este percurso privado, não os49 requisitos integrais. Seguem fronteiras conjuntas4096/64MiB, migrações/revalidações e adoção das fontes exatas; restantes dependências e entrega continuam abertas. Secções anteriores conservam as fotografias históricas datadas.
+
+## R43F9B3A — histórico restaurado com origem e consumo desconhecido
+
+Privado915/A2 fecha um falso zero demonstrado por prova negativa: o histórico comum ignorava corretamente grants históricos para execução, mas apresentava total zero a um objetivo sem admissões ligadas. A consulta nativa existente agora verifica GoalRef/hash/dono da boundary HMAC e os mesmos bytes/assinaturas/fences do leitor histórico. Resposta2/restoredSnapshotOnly liga a origem exata, mantém cumulativeCharge desconhecido e recusa autoridade, continuação ou retirada de grants históricos. Trabalho novo conserva resposta1; sem migração/escrita passiva, provider ou ledger novo.
+
+O controlo funcional de histórico mostra proveniência e incerteza, sem subtotal zero enganador. Passaram os dirigidos,2870Rust/21ignorados,1256web/TSC/Vite,build536 e nativo196. Este prova IPC real/todas as origens antigas/revisões/bytes só leitura antes de IO e resposta1 para trabalho novo, compondo retenção/admissão/consentimento/Stop/reinício/backup já comprovados. HTTP2/CLI1 sintéticos e DBus privado;0quota/modelos reais. [Fontes, comandos, prova negativa e limites](../.build/pet-goal-execution-next-r1/RESTORED-HISTORY-PARTIAL-CHECKPOINT-R43F9B3A.json).
+
+B3F2/continuação histórica ainda não está implementada: exige revisão própria da origem/dados/efeitos incertos e novo consentimento/contexto/destino/limites/causalidade no mesmo runtime. Três épocas/tamper são fixtures; UI testada em JS e IPC nativo,sem aceitação visual humana/áudio/hardware/instalação. Raiz834/.30 intactas,sem publicação;revalidações/adoção/restantes dependências e49critérios integrais abertos.
+
+## R43F9B2D4D2B — autoridade futura distinta após retenção
+
+Privado914/B1 compõe a retenção opaca913 com preparação nativa separada. Binding1 liga head/fingerprint semântico/count; Intent2/generation2 declaram propósito de nova chave futura, com intenção durável antes de RNG e outra aprovação exata. O hash da retenção não autoriza a chave. Dados retidos continuam não fiáveis, sem grants/saldo novos. Custody2 explicita a ligação; formatos1/receipt3 sem retenção conservam serialização.
+
+Configuração4 apenas inspeciona, num recibo por head; preserva recibos1/3/4 anteriores. Activation usa esse caminho exato e a mesma chave preparada em Admission4/Bound/runtime. Opened/reinício/ACK conservam trabalho novo sem recapturá-lo como histórico e dispensam o arquivo externo. Backup2 conserva a raiz e custódia completas; fixture de época seguinte mantém Custody2 e negações de IDs anteriores.
+
+7dirigidos novos,2864Rust/21ignorados/build535 e nativo195 passaram. Este ensaio usa CLI/Tauri reais: duas retenções, chaves distintas sob aprovações próprias, mesmos inodes/bytes originais, recibos preservados, recusa de leitor913, admissão4, sessão CLI sintética nova, objetivo com consentimento próprio, decisão/2efeitos no DBus privado, Stop, reinício/ACK offline e backup/inspeção portátil. São2pedidos HTTP e1turno CLI sintéticos,0quota/modelos reais. [Fontes, comandos, provas e limites](../.build/pet-goal-execution-next-r1/RETAINED-ADMISSION-PARTIAL-CHECKPOINT-R43F9B2D4D2B.json).
+
+Composição privada, não entregue nem instalada; raiz834/.30 intactas,sem commits/publicação. Época seguinte é fixture neste incremento; áudio/hardware/móvel/autostart/aceitação humana e fronteiras conjuntas4096/64MiB não foram fechados por este ensaio. Seguem migrações/revalidações/B3/adoção a partir de fontes exatas; restantes dependências e49critérios integrais mantêm-se abertos.
+
+## R43F9B2D4D2A — retenção nativa de preparação incompleta
+
+Privado913/A2 acrescenta o comando CLI de retenção, reutilizando Claim/Review/Dir/inventário. Exige Header2/archive1 não admitido, ausência original/operacional e payload exato. Cadeia privada versionada conserva JOB opaco e o seu inode após intenção durável; transferência entre pais fixados sem substituição, fsync e verificação precedem ready. Dados retidos nunca são políticas/grants; não há geração de chave. Leitores normais recusam todas as pendências. Nova preparação permanece bloqueada até a composição separada D4D2B.
+
+11dirigidos,2855Rust/21ignorados/build534 e nativo193 passaram. CLI real prova revisão sem escrita, recusa de hash/leitor antigo, retenção de chave perdida e pre-manifest hostil com bytes/inodes exatos, cadeia2, retoma só do recibo após falha sintética e bloqueio de preparação nova.0modelos/quota/CLIagents/efeitos físicos. A1 passou9/full2853 mas a revisão encontrou contentor apenas com protocolo aceite por leitor normal; A2 fecha essa fase e acrescenta regressões de pendência válida e conteúdo portátil versus identidade física. [Fontes, comandos, provas e limites](../.build/pet-goal-execution-next-r1/INDEPENDENT-RETENTION-PARTIAL-CHECKPOINT-R43F9B2D4D2A.json).
+
+Conteúdo portátil foi verificado em fixture, não backup/admissão operacional. D4D2B ainda deve ligar manifesto2/Custody2/configuração/Activation/Bound/backup/época sob outra revisão, sem renovar autoridade. Limites conjuntos4096entradas/64MiB implementados, fronteiras exatas ainda sem ensaio próprio. Migrações/revalidações/B3/adoção/TEAM/Guardian/entrega e49critérios integrais abertos; raiz834/instalação.30 intactas,sem publicação.
+
+## R43F9B2D4D1 — revisão correta de chave inválida
+
+Privado910/D4D1a reutiliza KeyFile::parse no runtime e na preparação, acrescentando inspeção só de leitura. Chave truncada/inválida é keyInvalid/manualReconciliationRequired, com geração indisponível; geração incerta mantém essa barreira. apply recusa ambos antes de qualquer escrita, mesmo com hash atual aprovado. Preparação válida retoma a mesma chave; ready com custódia alterada continua recusado. Sem formatos/grants/ledger novos, reparação ou regeneração.
+
+Passaram11dirigidos,2844Rust/21ignorados,build531 e nativo192. O CLI real compara o leitor anterior (keyPresent/manualfalse para chave truncada), prova8variantes inválidas com recusa aprovada sem escrita, retoma válida, chave ausente incerta e ready adulterado recusado. Source/payload conservados;0modelos/quota/CLI de agentes/efeitos físicos; web1255/TSC/Vite reutilizada por bytes iguais. [Fontes, comandos, provas e limites](../.build/pet-goal-execution-next-r1/INDEPENDENT-RECOVERY-REVIEW-PARTIAL-CHECKPOINT-R43F9B2D4D1.json).
+
+É pré-condição da recuperação explícita, que continua por implementar para jobs incertos/pre-manifest/staging anónimo: retenção durável e atos separados de abandono/futura autoridade, sem renovar saldo nem confiar em dados retidos. Migrações/revalidações/B3/adoção/TEAM/Guardian/entrega e49critérios integrais continuam abertos. Raiz834/instalação.30 intactas,sem publicação.
+
+## R43F9B2D4C — verificar destino dos resultados antes do modelo
+
+Privado910/C2 acrescenta preflight só de leitura no writer comum, antes de metadata/inferência e novamente antes de criar/reservar a tentativa com o corpo real. Reutiliza Authority/results/protocol_directory: recusa raiz/decisão incompatível sem reparar ou criar namespaces, conserva bytes/orçamento, admite ausência e rondas anteriores válidas. Não prevê falhas futuras; falha depois de dispatch mantém consumo/reconciliação e proíbe replay automático.
+
+18 testes dirigidos (1ignorado),2841Rust (21ignorados),build531 e nativo191 passaram. O nativo conserva o percurso operacional/Stop, introduz depois um catálogo inválido privado e prova recusa funcional sem novo envio/tentativa/alteração de ledger, reinício sem replay e backup portátil. Providers sintéticos,0quota/modelos reais; web1255/TSC/Vite reutilizada por bytes iguais. C1 reteve2erros de preparação dos novos testes LMStudio; C2 só corrige esses helpers/configuração.189 falhou antes de boot por omissão da opção de build custom-protocol;190 usa a composição correta com fontesC2 idênticas, perfil fresco e espera passiva pela página incorporada.190 provou a recusa mas falhou ao esperar validação de conclusão com recibos globais corrompidos;191 exige a recusa dessa conclusão e preservação exata dos bytes, sem alterar produção. [Fontes, comandos, provas e limites](../.build/pet-goal-execution-next-r1/MODEL-RESULT-SINK-PREFLIGHT-PARTIAL-CHECKPOINT-R43F9B2D4C.json).
+
+Próximo: recuperação explícita de geração incerta/seed inválido/pre-manifest/staging; depois migrações/revalidações/B3/adoção antes TEAM/Guardian. Raiz834/instalação.30 intactas;49critérios integrais abertos.
+
+## R43F9B2D4B — admissão independente com proveniência, 26/10/2026
+
+SDK909/B5 admite a MESMA chave preparada pela variante NoOriginalAuthority. Manifest/admission4 explícitos sob Header2 ligam custódia/HMAC/referências/proveniência; recibo3 inspectionOnly separado conserva o recibo1 anterior. Activation/Approved/Bound/Storage e o mesmo ledger permanecem. A adição da Authority é um pacote tipado não serializável: só prefixos exatos em staging e bytes completos no nome final, com originais preservados antes da cópia e publicação de diretório sem substituição. Sem RNG/ensure, novos grants, saldo renovado ou morte de dono inferida na admissão.
+
+Antes de opened valida originais sem Authority, referências/objetivos antigos e pacote/custódia exatos; depois usa metadados/Blobs locais sem recapturar novos objetivos/grants como históricos ou depender do arquivo externo. IDs antigos são negados antes de Chat/IO; objetivos novos têm consentimento e orçamento próprios. Backup2 reconhece4 e conserva trabalho novo, preparação e originais; fixture de nova época C3/D1/D2 mantém chave/proveniência e nega todas as gerações.
+
+Passaram2837Rust/21ignorados/7novos,focused7,build530 e nativo188: configuração3, mesma chave/admission4, leitor907/wronghash recusados sem escrita, novo SID sintético, objetivo/decisão próprios com2efeitos no leitor privado, Stop na segunda HTTP sintética, reinício/ACK com arquivo ausente sem replay e backup4 portátil com fonte offline. Providers sintéticos,0modelos/quota reais; web1255/TSC/Vite reutilizada por bytes iguais. B2 reteve erros de acesso a wrappers privados nos testes; B3 reteve ContextRequired num helper novo sem contexto; B4 corrige a preparação real do contexto no helper;186/187 conservaram recusa de um catálogo de resultados criado sem protocolo pela fixture. B5 move o dado opaco para inbox, produção B2/B3/B4/B5 idêntica. Falta antecipar a deteção de catálogo inválido antes do IO de modelo. [Checkpoint/fontes/provas/ignorados/limites](../.build/pet-goal-execution-next-r1/INDEPENDENT-ADMISSION-PARTIAL-CHECKPOINT-R43F9B2D4B.json).
+
+Continuam por resolver explicitamente geração incerta/seed inválido/pre-manifest/staging anónimo, migrações/revalidações voz/mobile/autostart/B3/adoção e aceitação integral. Nova época Admission4 tem prova de fixtures, não nativa. Raiz834/instalação.30 intactas,sem publicação;49critérios integrais abertos.
+
+## R43F9B2D4A — preparação sem autoridade original, 26/10/2026
+
+SDK907/A5 liga o comando nativo existente a uma variante só para ausência real da Authority na origem e no destino Header2. O job tipado .restore-authority persiste manifest, referências e intenção de geração antes do RNG; o mesmo índice/HMAC nega objetivos/decisões antigos, sem grants nem alteração do payload. Modelos/configuração e revisões exatas fazem parte da revisão. A chave preparada permanece fora do caminho operacional.
+
+A3 reproduziu uma falha da primeira implementação: remover a chave única fazia o seed vazio parecer não iniciado. A4/A5 consome a oportunidade de geração na chamada que persiste generation.json; chave ausente depois disso significa keyGenerationUncertain/manualReconciliationRequired, sem regeneração. Cortes duráveis com chave válida retomam o mesmo manifest/chave/índice; seed parcial ilegível ou desconhecido é conservado/recusado. A4 reteve uma falha de observação imediata da morte de um descendente num teste existente de helper; A5 usa a mesma espera limitada1s do teste vizinho, mantendo timeout400ms e produção idênticos. Passaram2830Rust/21ignorados/8novos,build528 e nativo185 sem inferência/quota: app cria perfil privado, catálogo sintético é inserido offline sem Authority, CLI prepara e reconhece o mesmo recibo/chave sem escrever no payload; leitor904 recusa sem escrita. Web1255/TSC/Vite reutilizada por bytes iguais. [Checkpoint, prova negativa, fontes e limites](../.build/pet-goal-execution-next-r1/INDEPENDENT-AUTHORITY-PREPARATION-PARTIAL-CHECKPOINT-R43F9B2D4A.json).
+
+**NoAuthority ainda não tem admissão operacional.** D4B tem de publicar/admitir a mesma chave sob revisão, preservar proveniência na admissão/backup e resolver a recuperação explícita de geração incerta. Não é autoridade recuperada da origem ou consentimento autónomo. Restantes migrações/revalidações/B3/adoção e49critérios integrais abertos; raiz834/instalação.30 intactas,sem publicação.
+
+## R43F9B2D3 — backup e continuidade Header3, 26/10/2026
+
+SDK904/D3A5 conserva o contentor2 para os roots completos de um admitido Header3, incluindo trabalho atual/desconhecido, originais, history2 e custody C3. A verificação portátil permanece pura. O novo destino usa o mesmo Header3; paths literais derivam da admissão verificada, limitados a9 e coerentes com HMAC e lineage. Em9 preserva backup/inspeção mas recusa outro restauro antes dos efeitos. C3/D1/D2/Storage e a mesma Authority executam a nova revisão, sem renovar permissões ou consumo históricos.
+
+A cópia de originais C3 valida as revisões imutáveis por descritores/Stamp, bindings, controlos e Claim em cada entrada, conservando hashes integrais antes de ready e efeitos. Não usa TTL ou ausência de eventos como integridade; se o orçamento de FDs não permitir retenção, percorre as mesmas revisões. Native183 reteve timeout120s provocado por validação integral repetida por entrada;184 passa o mesmo cenário/limite com seed sintético182 fresco. A3 reteve dois erros de chamada nos testes; A4 corrige o acesso à variante Next. A4 full reteve uma expectativa errada de hash após interrupção; A5 exige nova revisão da fase e recusa o hash antigo, conservando o mesmo manifest/custody.
+
+Passaram2822Rust/21ignorados/11novos desdeD2,build525 e nativo184: backup3 atual completo, origem offline, leitor902 recusa sem escrita, restauro Header3/depth3, nova autoridade/configuração/admissão, quarto SID distinto e objetivo com consentimento próprio, efeitos verificados no leitor privado, reinício/ACK com arquivo ausente sem replay e grants anteriores intactos. Providers sintéticos; web1255/TSC/Vite reutilizada por bytes iguais. [Checkpoint, fontes, ignorados, falhas e limites](../.build/pet-goal-execution-next-r1/RECURSIVE-BACKUP-PARTIAL-CHECKPOINT-R43F9B2D3.json).
+
+Seguem NoAuthority/revalidações voz/mobile/autostart/B3/adoção, migrações e aceitação integral. A unidade privada não está integrada na raiz834 nem entregue na instalação.30. Todos os49critérios integrais continuam abertos; sem commits/publicação/modelos ou quota reais.
+
+## R43F9B2D2 — admissão operacional Header3, 26/10/2026
+
+SDK902/D2A4 reutiliza Activation/Projection/Approved/Bound/Storage/Chat para manifest/admission3 com extensão tipada (payloadDepth2 e Scope D1 exato). O job .restore-admission não substitui a custody .restore-activation nem duplica os originais. O mesmo inicializador admite só os deltas canónicos/staging previstos, sob escolhas/revisão nativa nova. Índice2 entra antes de Chat; IDs anteriores e atuais ficam históricos. HMAC/chave/protocolo/antepassados/custody são ligados por Blobs e dados operacionais usam os caminhos aninhados corretos. Arranque e ACK após admissão dependem dos dados locais, não da localização do arquivo externo. Manifest1/admission2 mantêm bytes; leitores antigos recusam3.
+
+Passaram2 811Rust/21ignorados/7novos,build523 e nativo182 com Tauri/CLI reais e providers sintéticos. O percurso cria terceira sessão CLI distinta e objetivo/decisão novos, executa duas operações no leitor privado, interrompe inferência por Stop, reinicia e reconhece ACK sem repetir efeitos ou reescrever trabalho posterior; arquivo externo ausente não impede reabertura/ACK. Grants/consumo anteriores e custody/originais ficam intactos. A2 reteve falhas da preparação create_new; A3 reteve Busy de duas posses na mesma fixture; A4 corrige só esses testes, produção idêntica.181 parou no peer de teste com path antigo;182/A5 declara depth2 e verifica Admission3, sem alterar produção ou repetir suites sem necessidade. [Checkpoint, fontes, ignorados e limites](../.build/pet-goal-execution-next-r1/EPOCH-ADMISSION-PARTIAL-CHECKPOINT-R43F9B2D2.json). Web1255/TSC/Vite reutilizada por igualdade exata.
+
+**Backup do admitido3 ainda recusa sem escrita** e é a próxima dependência antes de adoção/entrega. NoAuthority/revalidações voz/mobile/autostart/B3/adoção e aceitação integral permanecem abertos.902 privados não foram integrados na raiz834 nem substituíram a instalação.30;49critérios integrais abertos,sem commits/publicação ou modelos/quota reais.
+
+## Contexto anterior a D3 — planeamento conservado (superado pelo checkpoint acima)
+
+O backup do perfil admitido3 recusa por agora. A próxima unidade tem de preservar os roots completos, metadados, trabalho novo e autoridade histórica, com leitura portátil e percurso de restauro coerente. Avaliar a extensão explícita do contentor2/Headerv3 com profundidade validada, sem criar uma versão de header por cada cópia nem flexibilizar leitores antigos. [Contrato, limites e provas necessárias](../.build/pet-goal-execution-next-r1/HEADER3-BACKUP-CONTINUITY-CONTRACT-R43F9B2D3.md). Não é suporte já disponível ou entrega.
+
+## R43F9B2D1 — revisão da configuração e referências Header3, 26/10/2026
+
+SDK901/D1A1 liga o comando nativo existente à configuração do payload operacional de Header3, após C3 inteiramente publicado e originais verificados. Recibo2 continua configurationInspectionOnly: liga manifest/ready/histórico C3, modelo/endpoint e índice2 de referências. Esse índice une CID/SID/tarefa atuais aos anteriores selados, conserva proveniência limitada e não copia mensagens nem concede controlo. Índice1/recibo1 conservam bytes; Admission2 continua a exigir índice1.
+
+Passaram2 804Rust/21ignorados/9novos,build522 e nativo180 com CLI/Tauri reais e providers sintéticos. O ensaio compõe independentemente o índice a partir dos bytes anteriores/atuais e confirma o mesmo hash e os dois conjuntos de CID/SID; verifica revisão sem escrita, só recibo2 acrescentado, hash errado/replay/ACK, modelos/destinos e recusa pelo binário901 anterior. Web1255/TSC/Vite reutilizada com fontes não Rust idênticas. [Checkpoint, fontes exatas, ignorados e limites](../.build/pet-goal-execution-next-r1/EPOCH-CONFIGURATION-PARTIAL-CHECKPOINT-R43F9B2D1.json).
+
+**Header3 continua inativo.** Segue D2: seleção/inicialização/admissão operacional com os mesmos originais e referências, sem substituir o manifest C3 nem reativar sessões/aprovações antigas. NoAuthority/revalidações/B3/adoção/entrega permanecem abertos;49critérios integrais abertos,raiz834/instalação.30 preservadas,sem commits/publicação ou quota/modelos reais.
+
+
+## R43F9B2C3 — histórico de autoridade de várias épocas, 26/10/2026
+
+SDK901/C3A6 conserva, na mesma Authority/chave/locks/ledger, a cadeia limitada de índices HMAC anteriores e a união de decisões/objetivos históricos negados. Corpo1/protocolo2 mantém os bytes compatíveis; corpo2/domínio2/protocolo3 liga o antepassado exato e recusa leitores antigos/downgrade/cadeias adulteradas. Grants, consumo e incerteza mantêm os seus bytes; não se renova saldo ou prova de morte do dono. O comando nativo Header3 retém os dois roots originais completos antes de alterar os três metadados previstos, sob o mesmo Claim.
+
+Passaram 2 795 Rust/21 ignorados,19 casos novos desdeC2, build/522 inputs e nativo179 com CLI/Tauri reais e providers sintéticos. Provas de duas/três épocas, recusa de IDs antigos/atuais, consentimento novo independente, consumo incerto com dono original ainda vivo, cortes de publicação, instância em cache, originais, ACK/replay e adulteração. A4/178 também passou e fica conservado. A5/A6 acrescentam recuperação revista de temporários: só prefixos exatos do antepassado autenticado são removidos por Stamp depois de guardar o antepassado inteiro; identidade da transação mantém-se e consentimento inclui a fase. Em179 o resíduo de prefixo é sintético, não uma morte nativa a meio dessa escrita. Web1255/TSC/Vite reutilizada por fontes não Rust idênticas. [Contrato](../.build/pet-goal-execution-next-r1/MULTI-EPOCH-AUTHORITY-CONTRACT-R43F9B2C3.md) e [checkpoint/provas/limites](../.build/pet-goal-execution-next-r1/MULTI-EPOCH-AUTHORITY-PARTIAL-CHECKPOINT-R43F9B2C3.json).
+
+**Header3 continua inativo:** falta inicialização/configuração e admissão CID/SID/tarefa sob revisão nova. Temporários desconhecidos/fora do prefixo ou staging anterior ao manifest não são reparados automaticamente. Seguem NoAuthority/revalidações voz/mobile/autostart/B3/adoção e aceitação integral. Raiz834/instalação.30 intactas;49critérios integrais abertos,0quota/modelos reais, sem commits/publicação.
+
+## R43F9B2D — admissão por fases
+
+D1/revisão nativa e união de referências estão comprovadas acima. D2/seleção, inicialização e admissão operacional3 continuam pendentes: conservar o job/originais C3 e o índice anterior selado, reaproveitando Projection/History/Activation/Storage/Chat. Active3 permanece bloqueado. [Contrato e aceitação](../.build/pet-goal-execution-next-r1/HEADER3-ADMISSION-CONTRACT-R43F9B2D.md).
+
+## R43F9B2C2 — restauro dos dados da época seguinte, 26/10/2026
+
+SDK898/C2A4 restaura arquivos2 completos por revisão/cópia/retoma comuns num Header3 inativo. Preserva ambos os roots antigos integrais sob payload, incluindo trabalho posterior, consumo/efeitos incertos, chaves/índices/originais e a admissão anterior como dados. Arquivos1 mantêm Header2; open()1 continua separado do leitor explícito de restauro1/2. Active/bootstrap e autoridade/configuração/ativação2 recusam3. O backend distingue dataRestorationAvailable de runtimeActivationAvailable e exige revisão; o campo antigo restorationAvailable continua false por compatibilidade de ativação executável.
+
+Passaram 2 776 Rust/21 ignorados, seis casos novos e build/519 inputs. Nativo177 usa CLI/Tauri reais e providers sintéticos: recibo1 criado pelo binário898 anterior é reconhecido com bytes/hash/par inalterados; uma cópia2 própria foi interrompida/recolhida e retomada sob nova revisão no mesmo par; todos os bytes ficaram preservados, ACK não repete cópia e os leitores/ativadores anteriores recusam3. Zero inferência/efeitos adicionais para restaurar; não é aceitação humana/instalada ou de providers reais. Web1255/TSC/Vite reutilizada por igualdade das fontes não Rust. [Checkpoint, falhas e âmbito](../.build/pet-goal-execution-next-r1/NEXT-EPOCH-DATA-RESTORE-PARTIAL-CHECKPOINT-R43F9B2C2.json).
+
+Na retoma, ficheiros já completos e diretórios também são sincronizados antes de completion: digest igual não demonstra que o writer interrompido terminou o fsync. A3 expôs quatro recusas SourceChanged por usar confirmação de ficheiro num diretório; A4 corrige com binding de Node/Dir e passa. O ensaio de kill/recolha não testa alimentação/disco físicos. **Header3 permanece inativo:** seguem reconciliação de autoridade/consumo de todas as épocas e inicialização/admissão próprias, depois NoAuthority/revalidações/B3/adoção. Raiz834/instalação.30 preservadas,49critérios integrais abertos, sem commits/publicação.
+
+## R43F9B2C1 — backup portátil do perfil restaurado, 26/10/2026
+
+SDK898/C1A1 permite rever/criar/inspecionar backup nativo Root2: formato2 conserva ambos os roots completos, incluindo trabalho posterior ao restauro, admissão/planos/índices/selos e originais retidos. Root1 mantém o formato1 de payloads. Reutiliza Claim/Active, inventário/cópia e limites existentes; os metadados não entram na configuração operacional. A inspeção verifica vínculos e HMAC históricos e não concede execução. Os limites de ficheiros/nós/caminhos/profundidade/bytes contam payload e recuperação em conjunto; excesso recusa, sem omissões silenciosas.
+
+Passaram 2 770 Rust/21 ignorados, seis casos novos, build/519 inputs e nativo174: perfil restaurado com novo objetivo/CLI/Stop/reinício, aprovação exata de backup, todos os bytes dos roots conservados, inspeção com origem indisponível, adulteração recusada sem reparação e leitor897/restauro1 recusam2 sem publicar payload. IPC/CLI são reais; HTTP/CLI de inferência são sintéticos e MPRIS privado, sem quota/modelos reais. Web1255/TSC/Vite reutilizada com fontes não Rust idênticas. [Checkpoint e provas](../.build/pet-goal-execution-next-r1/PORTABLE-RESTORED-BACKUP-PARTIAL-CHECKPOINT-R43F9B2C.json).
+
+A unidade fecha a recusa de backup Root2 da revisão897 para os dados dentro dos limites. **Restauro/ativação da época seguinte continuam pendentes:** o restauro1 recusa2 antes de escrever payloads. Não se transfere autorização pela admissão arquivada. NoAuthority, revalidações voz/mobile/autostart, B3/adoção e aceitação integral continuam abertos; raiz834/instalação.30 preservadas,49critérios integrais abertos, sem commits/publicação.
+
+## R43F9B2B2 — primeira ativação operacional privada, 26/10/2026
+
+SDK897/B2B2C1 acrescenta plano nativo tipado ligado ao recibo B2A e configuração efetiva, cópia integral dos originais antes de transformar Settings/pets/fontes/Flow e Admission2 selada. Reutiliza Claim/Active/Storage/Authority e os escritores existentes. O índice CID/SID/tarefa é agora capturado dos dados reais e carregado antes de Chat; o índice HMAC B1 continua a negar objetivos/decisões antigos. Modelo/endpoint permanecem os revistos e a rota lógica vem da fábrica. Autorização de trabalho novo continua própria; a admissão não renova grants históricos.
+
+Passaram 2 764 Rust/21ignorados,10casos novos,build/518inputs e nativo173 com IPC Tauri real em perfil isolado. HTTP/CLI são sintéticos e MPRIS privado: novo SID, objetivo com decisão exata, Stop durante inferência, reinício e ACK sem repetir inicialização; IDs antigos recusados e fonte/arquivo/grant preservados. Não é aceitação de providers reais/humana/instalada. Web1255/TSC/Vite reutilizada por igualdade das fontes não Rust. [Checkpoint e provas exatas](../.build/pet-goal-execution-next-r1/RESTORED-ACTIVATION-PARTIAL-CHECKPOINT-R43F9B2B2.json). A prova anterior893 limitava-se às guardas/fixtures e regressão Root1.
+
+**Limites abertos:** primeira via exige Authority original genuíno já quarentenado. Backup Root2 recusa até incluir metadados/originais; épocas seguintes, NoAuthority operacional, staging anterior ao manifest, migrações e B3/adoção permanecem por concluir. Voz/mobile/autostart ficam suspensos e bloqueados até revalidação própria. Raiz834 e instalação.30 intactas; todos os 49 critérios integrais abertos, sem commits/publicação. Segue backup/restauro completo e restantes dependências R43 antes de TEAM/Guardian.
+
+## R43F9B2A — revisão tipada da configuração, 26/10/2026
+
+SDK890/F9B2A5 acrescenta `--pets-profile-restore-configuration WORKSPACE ID [--approve FINGERPRINT]` sob o mesmo Claim offline. Settings/pets são lidos de forma limitada/privada/nofollow, sem salvage, criação ou reparação de preferências. Campos desconhecidos e tipos inválidos são recusados. A resolução pura de pets é a mesma do leitor normal; diferenças/defaults/upgrades são apresentados, com modelos/destinos, execução CLI, voz, telefone, integrações e permissões por pet separados na revisão.
+
+A revisão liga arquivo, destino/par/estado, hash histórico, bytes e proposta. O recibo imutável `.configuration-review.json` significa **`configurationInspectionOnly`**: não aprova ativação, não renova grants e não admite o perfil. Perfis sem Authority podem rever estes dados sem criar chave/autoridade. Revalidação antes/depois da publicação recusa alterações e perda do dono; ACK perdido reconhece o mesmo recibo sem mudar payloads. Header2 continua bloqueado.
+
+Passaram12testes novos incluídos nos2737Rust/21ignorados/build511 e nativo168 real/CLI/IPC/HMAC,0inferência/quota. O ensaio prova grupos/modelo/endpoint exatos, revisão sem escrita, hash errado, recibo único/ACK, payloads intactos e recusa pelo leitor anterior. Web1255/TSC/Vite reutilizada com bytes não Rust idênticos. B2B (seleção de ativações, concessões/sessões e Admission2), B3 (continuação histórica), épocas/semAuthority operacional e adoção/entrega permanecem abertos. [Checkpoint e limites](../.build/pet-goal-execution-next-r1/RESTORED-CONFIGURATION-PARTIAL-CHECKPOINT-R43F9B2A.json). Sem alterações à raiz834/instalação.30, commits, anfitrião ou aceitação humana;49critérios integrais abertos.
+
+
+
+## R43F9B1C — autoridade histórica em quarentena, 26/10/2026
+
+SDK888/F9B1C acrescenta revisão nativa offline `--pets-profile-restore-authority WORKSPACE ID [--approve FINGERPRINT]` sobre o restauro inativo. Reutiliza Authority/HMAC/lock/grants: índice autenticado de origem/negação e protocolo2 preservam os bytes antigos e bloqueiam decisões **e objetivos** históricos em load/publish. Leitura histórica verifica assinaturas sem criar permit, saldo, recuperação ou prova de morte do dono. Objetivo novo independente usa consentimento, lease e orçamento próprios no mesmo Authority. O índice é metadado autenticado, não outro grant ou ledger.
+
+Passaram12testes novos dirigidos,2725Rust/21ignorados e build509inputs. Web1255/TSC/Vite reutilizada com fontes não Rust byte idênticas. Nativo165 usa consentimento/claim HMAC reais, CLI/IPC e perfis privados: revisão/hash errado, apenas protocolo+índice alterados, assinatura histórica válida, originais intactos, ACK idempotente, tamper recusado e leitores operacionais anterior/atual recusam o perfil. Zero inferência/quota. O consumo incerto e a admissão/claim de trabalho novo têm prova Rust; não foram executados num runtime restaurado ativo.
+
+**Header2 continua inativo**, sem `.admitted.json` ou configuração sensível ativada. F9B2 (admissão/configuração) e F9B3 (continuação histórica com consentimento/saldo próprios) permanecem abertos. Arquivos sem Authority, múltiplas épocas e staging interrompido antes da publicação do índice precisam de percurso próprio; não há reparação automática. Não se prova ausência de dono nem estado posterior ao snapshot. [Checkpoint, falhas retidas e limites](../.build/pet-goal-execution-next-r1/RESTORED-AUTHORITY-PARTIAL-CHECKPOINT-R43F9B1.json). Raiz834/instalação.30 intactas;49critérios integrais abertos, sem commits/publicação.
+
+
+
+## R43F9A — publicação revista dos dados de restauro, 26/10/2026
+
+SDK885/F9A implementa `--pets-profile-restore WORKSPACE ID` e `--pets-profile-restore-resume WORKSPACE ID`, com revisão antes da escrita e `--approve FINGERPRINT`. O arquivo atual tem protocolo/manifesto/ready/origem/inventário verificados e descritores físicos retidos. A revisão liga arquivo, origem/conteúdo, paths/layout, inodes dos pais, estado parcial e modo. Destinos fresh têm de ser roots privados vazios; dados/perfis operacionais ou desconhecidos são recusados. Os mesmos Claim nativo, locks, Dir/NoFollow, inventário e staging são reutilizados.
+
+Cada root recebe atomicamente cabeçalho2, intenção vinculada à origem e proveniência portátil completa antes dos payloads. A cópia preserva os dois payloads byte a byte. Retoma exige revisão explícita do mesmo arquivo e valida todo o subset/prefixo antes de acrescentar bytes; não trunca/substitui. Se existir alguma completion, dados desaparecidos ou alterados não são reconstruídos. Recibo perdido regressa ao mesmo par/recibo sem repetir a cópia. Originais e trabalho parcial são conservados.
+
+O resultado é **`dataRestoredInactive`**: não se cria `.admitted.json`, não se ativa configuração/serviços/hooks/modelos e não se recupera autoridade executável. O bootstrap atual e os leitores operacionais anteriores recusam estes roots. Esta é a primeira parte da transação de restauro; F9B tem de implementar admissão revista e reconciliação/quarentena histórica antes de permitir arranque e novos trabalhos. Não equivale a uma aplicação restaurada operacionalmente. [Checkpoint e limites](../.build/pet-goal-execution-next-r1/CURRENT-PROFILE-RESTORE-PARTIAL-CHECKPOINT-R43F9.json).
+
+Passaram2713Rust/21ignorados/check/build506inputs. As fontes não Rust são byte idênticas às1255JS/TSC/Vite já validadas, cuja prova foi reutilizada. Nativo163 usa CLI/IPC reais em perfil privado: origem normalv1, rascunho/arquivo original, backup, revisão antes dos roots, hash errado recusado, par/origem preservados, recusa por leitores novo/anterior, recibo idempotente, interrupção/recolha do processo próprio e retoma do mesmo par; subset divergente recusado antes de mais cópia. Removeu-se apenas o ficheiro de corrupção que o próprio teste tinha inserido. Fonte/arquivo/instalação/anfitrião intactos; zero modelos/quota.
+
+Ainda faltam a validação semântica de assinaturas/história/contabilidade/efeitos incertos e a admissão executável F9B. Os testes de dados conservam esses ficheiros como bytes opacos, sem provar autoridade. Seguem adoção das fontes exatas e restantes dependências. Raiz834 e instalação .30 preservadas;43+6 critérios integrais abertos. Sem novos commits/publicação.
+
+
+## R43F8B2 — reconciliação de origens divergentes, 26/10/2026
+
+SDK882/F8B2 acrescenta revisão humana de ambas as origens, política explícita, sourceId/fingerprint, revisão nativa e prazo5min ligados ao hash. `retainOnly` conserva o original; `mergeCompatible` junta apenas tuplos ausentes. Mantém os valores nativos atuais e os registos IndexedDB. Original completo privado/imutável sob o payload precede o catálogo3/CAS/recibo, com até8 artefactos incluindo pendentes e64MiB cada. Arquivos pendentes são visíveis e recuperáveis. O ACK normal continua estrito; substituir recibo após reconciliação relê transacionalmente todos os registos/counters/sourceId. ACK perdido não reimporta sobre edições posteriores. Nenhum envio, modelo ou grant é concedido.
+
+Controlos comuns inline/flutuante permitem rever origens, escolher política e recuperar texto conservado para conversa existente do mesmo dono. Fonte/bytes/revisões/destino/prazo são revalidados. Catálogo3 lê1/2 sem mutação passiva; reconciliação válida migra e escritas posteriores conservam3. Leitor2 congelado e backend anterior real recusam3 sem destruir. Os mesmos private_registry, dono dos dados, retenção, fábrica e backup são reutilizados.
+
+Passaram2700Rust/21ignorados e compilação503inputs. JS/TSC/Vite passaram1255 emB1;B2 só atualiza uma fixture Rust de versão futura3 para4. Produção Rust/JS/testesJS e binários B1/B2 são idênticos. Nativo162 correu nessa produção com IndexedDB e IPC reais, escolhas scriptadas: ambas as origens, fusão conservadora, RAM em conflito conservada, original arquivado, mesma origem alterada, ACK deliberadamente omitido/reinício sem replay, reconhecimento posterior sem nova fusão, cópia do arquivo pela UI, alteração após revisão recusada, leitor anterior e backup byte a byte das três origens. Zero modelos/quota/anfitrião. [Checkpoint e limites](../.build/pet-goal-execution-next-r1/DIVERGENT-DRAFT-RECONCILIATION-PARTIAL-CHECKPOINT-R43F8B.json).
+
+Falhas iniciais preservadas: a fixture Rust antiga tratava3 como desconhecido; agora4 continua a ser recusado. Nativo161 procurava PetId numa mensagem que é substituída pelo erro de migração;162 observa o provider no aria-label real. Não se alterou navegação/IPC para contornar guardas. Mutação da origem durante IO nativo não tem prova temporal nativa; alteração após revisão e releitura transacional têm provas próprias. A ilha compacta usa scroll existente; não houve aceitação humana de legibilidade.
+
+O backup inclui o payload e origens aceites/pendentes conservadas; não copia perfis WebKit nem mutações posteriores ainda não revistas. Restauro/admissão/autoridade histórica sem renovação, adoção e aceitação humana/instalada continuam abertos. Raiz834 e instalação .30 preservadas; os43+6 critérios integrais continuam abertos. Sem novos commits/publicação.
+
+
+## R43F8A — recuperação explícita de rascunhos nativos, 26/10/2026
+
+SDK874/F8A implementa listagem nativa limitada por dono/provider e revisão, classificação observada de destinos e revisão/cópia explícita para conversa existente do mesmo pet/provider. O backend liga fonte/revisões/bytes UTF16/destino/prazo de5min ao hash, recompõe a revisão e aplica CAS; recusa replay, seleção alterada, falta de confirmação e destino não vazio diferente. Conserva o registo original, usa os mesmos controlos inline/flutuante e publica apenas hints de identidade. Não envia mensagens, invoca motores, concede dados/permissões ou assume controlo de CLI. Reutiliza catálogo2, private_registry, dono, retenção e backup existentes.
+
+Passaram2684Rust/21ignorados,check499inputs,1240JS/TSC/Vite/build. Nativo160 usa a entrada pet-cards e IPC reais num perfil privado: consulta passiva, original órfão, confirmação pelos controlos, ação antiga após trocar de pet recusada, texto hostil como texto, original conservado, sincronização inline/flutuante, replay/conflito recusados, reinício, leitor anterior869 do mesmo formato e backup byte a byte. Escolhas automatizadas, zero modelos/quota/anfitrião; não é aceitação humana/instalada. [Checkpoint, fontes e limites](../.build/pet-goal-execution-next-r1/ORPHAN-DRAFT-RECOVERY-PARTIAL-CHECKPOINT-R43F8.json).
+
+A reconciliação entre IndexedDB e nativo divergentes continua por implementar: a migração normal recusa-a e conserva os dados. Próxima unidade F8B deve preservar a origem perdedora em artefacto imutável incluído no backup e rever as fontes exatas antes do ACK. Depois restauro/adoção e restantes dependências. Raiz834 e instalação .30 preservadas; todos os43+6 critérios integrais continuam abertos. Sem novos commits/publicação.
+
+
+## R43F7A — rascunhos inline e sem conversa, 26/10/2026
+
+SDK869/F7A: 2674 testes Rust passaram, 21 ignorados, check/compilação nativa e 1230 JS/TSC/Vite. O inline usa agora o mesmo repositório nativo/CAS e controlos de estado/conflito/retry da janela flutuante. A fábrica resolve o dono pelo canal de chat completo. O texto anterior à identificação do CID fica num slot `unbound` por pet/provider, separado de `SessionTarget`, memória, envio e autoridade. Cópia/abertura da conversa exige escolha explícita e conserva a origem. Trocas de pet/CID/modelo e decisões antigas não redirecionam texto; sucesso de envio limpa apenas a captura original ainda inalterada, enquanto falha ou nova edição conservam o rascunho. [Checkpoint e limites](../.build/pet-goal-execution-next-r1/INLINE-DRAFTS-PARTIAL-CHECKPOINT-R43F7.json).
+
+O catálogo nativo2 lê1 sem o alterar; uma mutação válida migra atomicamente. O parser antigo congelado e o backend privado anterior recusam2 sem sobrescrever. Importações concorrentes do mesmo original esperam até1s apenas por contenção anterior à publicação, com dono revalidado e recibo idempotente; incerteza/revogação não se repetem. Os limites UTF16/u64 mantêm-se.
+
+Nativo158, nos cartões autorizados `pet-cards`, prova migração, dados separados Ollama/Codex/Gravity, revisão/edição/cópia explícita de origem sem conversa, ação antiga recusada após mudar de pet, registo comum inline/flutuante, reinício, leitor anterior e backup byte a byte. Zero modelos/quota. A origem `unbound` foi criada antes da primeira consulta Gravity; não se provou digitação nativa inicial antes da resposta de CID, nem se alterou o `invoke` protegido. As corridas de digitação/hidratação foram testadas separadamente em Node.155 respeitou a recusa de navegação legacy;156/157 eram pressupostos do harness sobre roster/invoke e foram conservados.
+
+Compatibilidade não nativa: os rascunhos associados mantêm IndexedDB v1; texto sem CID é explicitamente indisponível/RAM até cópia deliberada para conversa suportada, sem escrita de origem nova no formato antigo. Faltam recuperação funcional de órfãos/importação divergente, restauro/adoção e aceitação humana/instalada. A raiz834, instalação .30 e os43 IDs originais+6 Guardian continuam preservados e abertos integralmente. Sem novos commits/publicação.
+
+
+## R43F7A em implementação — produtor inline (26/10/2026)
+
+O produtor inline passa a partilhar o repositório nativo/CAS e a identidade completa da conversa. Texto anterior à resolução de CID fica num slot de rascunho `unbound`, separado de sessões/autorização, e só uma escolha explícita o copia para a conversa identificada; a origem conserva-se. Formato nativo2 lê1, migra em mutação válida e deve ser recusado pelo leitor anterior. Controlos funcionais de estado/retry/conflito são comuns às duas superfícies. [Contrato da unidade](../.build/pet-goal-execution-next-r1/INLINE-DRAFTS-CONTRACT-R43F7A.md). Provas em execução futura; inline/reconciliação/restauro continuam abertos até validação própria.
+
+
+## R43F6D — rascunhos nativos privados, 26/10/2026
+
+SDK865/F6D: 2669 testes Rust passaram, 21 ignorados, compilação nativa e1219 JS/TSC/Vite (fontes web idênticas aA). A janela de conversa usa agora `SessionDrafts` com armazenamento nativo, dono/CAS existentes, revisões u64 e UTF16 exatos. A migração lê todos os registos conhecidos pela API IndexedDB, cerca v1 com versão2, conserva a origem após ACK e não repete importação sobre edições posteriores. Novo rascunho Mochi retém o CID existente antes de publicar, sem mensagem/modelo/consentimento; o arquivo conserva referências após reinício. O teste de capacidade máxima mantém os limites lógicos anteriores. [Checkpoint e limites](../.build/pet-goal-execution-next-r1/NATIVE-DRAFTS-PARTIAL-CHECKPOINT-R43F6.json).
+
+Nativo154 usa IPC e janela reais em perfil privado: origem858/F5D com três rascunhos sintéticos (incluindo Gravity/Copilot inativos e tombstone), importação/edição/conflito/ação explícita/reinício e uma nova conversa vazia retida só pelo rascunho; o catálogo nativo entra byte a byte no backup dos payloads. Zero chamadas de modelo/quota.154 foi executado na produçãoC;D altera só uma fixture de teste e o binário foi comparado byte a byte, preservando o alcance exato da prova.152 é falha do setup de origem;153 revelou CID vazio perdido, corrigido porC; ambos preservados. Não se provou callback de escritor v1 vivo: o backend de origem foi recolhido antes da atualização, e a nova abertura v1 é recusada.
+
+Ainda faltam o produtor inline, resolução funcional de importação divergente e recuperação dos destinos legados órfãos; estes dados não são apagados nem redirecionados. Faltam restauro/adoção e aceitação humana/instalada. A raiz834 e instalação .30 continuam preservadas;43 IDs originais+6 Guardian permanecem abertos integralmente. O objetivo completo continua ativo, sem novos commits ou publicação.
+
+
+## Em desenvolvimento — R43F6A, rascunhos nativos (26/10/2026)
+
+A dependência de preservação registada em F5 passa pelo repositório nativo de rascunhos, sob o mesmo dono dos dados e `private_registry`, e pelo adaptador partilhado de `SessionDrafts`. A migração lê apenas os registos conhecidos de `coucou.sessionDrafts.v1` pela API IndexedDB, cerca escritores v1 através de versão2 e retém os registos antigos após ACK nativo. Tuplo exato de destino, revisões u64 decimais, texto UTF16 e tombstones são dados; não são pedidos de envio nem autoridade. Importação atómica, fingerprint e replay idempotente impedem substituir edições nativas após ACK perdido. Divergência conserva ambas as origens e recusa a importação. Sem fallback por erro, sem cópia de perfis WebKit. [Contrato privado da unidade](../.build/pet-goal-execution-next-r1/NATIVE-DRAFTS-CONTRACT-R43F6A.md).
+
+A primeira integração funcional é a janela de conversa existente, com recuperação/conflito/retry já presentes. A integração inline e a reconciliação humana de origens divergentes ficam explicitamente pendentes até terem implementação/prova própria. F6A em desenvolvimento não fecha R43, DATA-01 ou REL-01, nem altera a instalação.
+
+
+**R43F5D validado em privado — 26/10:** SDK858 acrescenta revisão/confirmação/inspeção de backup dos dois payloads nativos admitidos e corrige a conclusão sob locks transitórios, conservando prova/aprovação e prioridade de Stop. Passaram2655 Rust/21 ignorados,23 dirigidos/1 ignorado,check-tests/build e composição nativa151;149 cobre as recusas e integridade do arquivo. São perfis, motores e escolhas sintéticos. **Rascunhos IndexedDB/inline ainda ficam fora desta cobertura**: segue persistência nativa/migração dos rascunhos, depois restauro/adoção. Raiz834 e instalação .30 preservadas; os49 critérios integrais continuam abertos. [Provas e limites](PETS-VALIDATION.md#backup-payload-conclusao-r43f5) · [Uso e cobertura](PETS-DATA-BACKUP.md).
+
+**R43F3/F4 validado em privado — 25/10:** a composição854/F4 conserva a memória selecionada ao continuar objetivos com novo consentimento e orçamento adicional explícitos. Tauri146/147 provam duas rondas, aprovações separadas, revogação durante IO e preservação por reinício/leitor antigo, com motores sintéticos. A importação legada passa a recusar proveniência nova escondida em formato antigo e catálogos de runtime que seriam omitidos. Passaram2641 Rust/21 ignorados,check/build e a composição nativa147. O timeout145 permanece sem causa exata confirmada; não é uma regressão dada como corrigida. [Provas e limites](PETS-VALIDATION.md#retoma-memoria-importacao-r43f4). Seguem backup/restauro coerente do perfil atual e adoção; raiz834 e instalação .30 preservadas. Sem novos commits ou aceitação integral dos49 requisitos.
+
+**R43F2E2 validado em privado — 25/10:** SDK854 liga a seleção/revisão de memória aos chats manuais, vincula anexos/contexto ao token e apresenta destinos API conhecidos sem prometer contenção do fornecedor. Passaram2638 Rust/21 ignorados,1212 JS/TSC/Vite/check/build e Tauri143/144. A janela de conversa passou nos dois motores locais, três CLI e Notion/Codex; o inline tem provas de controller/unidade, com aceitação nativa pendente após falha de ativação em Xvfb. São escolhas automatizadas e providers sintéticos. [Alcance e limites](PETS-VALIDATION.md#memoria-chat-contexto-r43f2e2). Raiz834/instalação .30 preservadas; seguem retoma com memória e migração/adoção.
+
+**Histórico R43F2E1 — 25/10:** SDK850 acrescenta catálogo/seleção por revisão e revisão completa com consentimento próprio nos controlos reais de objetivos Ollama/LMStudio, além da projeção de memória por caller. Reutiliza CRUD/CAS, admissão, concessão e writer existentes. Passaram2634 Rust/21 ignorados (487 inputs nativos iguais entre E1a/E1b),1200 JS/TSC/Vite/check/build e Tauri139. Os cliques/consentimentos foram automatizados e os motores sintéticos: não é aceitação humana ou instalada. Seguem revisão manual de chat, retoma com memória e adoção/migração/entrega; os49 requisitos continuam abertos nos critérios integrais. [Provas e limites](PETS-VALIDATION.md#memoria-controlos-objetivos-r43f2e1). Raiz834 e instalação .30 preservadas.
+
+Revisão normativa: **25 de outubro de 2026**. Projeto: `coucou-codex`, branch
 `feat/mochi-cli-accounts`. Este documento define o sistema a construir e os
 contratos que orientam o desenvolvimento. Um contrato definido aqui pode ainda
 não estar implementado; a prova de implementação tem localização própria.
+
+**Revisão posterior de 25/10 — Guardian e execução integral:** os 43 requisitos originais conservam os seus critérios; acrescentam-se GUA-01..06 no [contrato System Guardian](SYSTEM-GUARDIAN-ARCHITECTURE.md) e na [auditoria rastreável](PETS-REQUIREMENTS-AUDIT-2026-10-25.md). Pet, runtime comum, motor de inferência e papel funcional são entidades distintas. `ai_ollama` continua coordenador preferencial configurável, sem ser router obrigatório ou concedente de permissões. Guardian é especialista da mesma fábrica, sem autoridade própria adicional. Não há um pet Guardian operacional por esta atualização documental.
+
+**Estado verificado nesta continuação:** raiz integrada834 e instalação .30 preservadas. SDK843/R43F2A passou 21 testes dirigidos de contexto, 2617 Rust/21 ignorados e cargo check em 483 inputs nativos imutáveis. O novo contrato de revisão mostra dados completos e destino nativo, separa consentimento de objetivo e verifica âmbito/credencial/revogação. É fundação privada: ainda falta a ligação à admissão, concessão assinada e corpo real anterior ao hash/reserva. Não foi acrescentada prova Tauri ou build instalada por este incremento. A barreira F1 permanece fechada; não declarar R43 concluído.
+
+**Restrições vigentes:** um único agente, sem novos commits/pushes/merges de qualquer pasta; a publicação anterior do dossier foi uma exceção histórica já executada. Sem alteração da instalação/autostart/serviços, Wi-Fi/VPN/firewall/dispositivos ou dados pessoais. Sem quota real Copilot/GitHub, segredos em modelos/logs/Git ou bases de outros projetos. Alterações persistentes do anfitrião seguem sysworkspace e autorização específica; o desenvolvimento atual fica no projeto. Estados/estimativas antigos são históricos e não medem conclusão.
+
+Correção em curso R43F6C: os rascunhos Mochi novos retêm o CID existente pelo mecanismo de `Chat`, depois de validar fábrica/destino/CAS e antes de publicar. O arquivo posterior consulta referências de rascunhos sem obter locks de escrita; desconhecido conserva. Não cria conversa, mensagem ou consentimento. Rascunhos legados órfãos permanecem dados e exigem recuperação explícita ainda pendente. O limite físico é64MiB para representar os limites lógicos anteriores, sem aumentar estes últimos. Provas finais em execução.
 
 ## 1. Prioridade, objetivo e documentos de referência
 
@@ -50,9 +505,9 @@ sozinhos a conclusão de uma unidade ou do objetivo completo.
 
 - Um responsável de desenvolvimento, sem novos agentes. As unidades organizam
   o trabalho e a integração; a cooperação entre pets pertence ao produto.
-- Desde 24/10, commits assinados e atualização do remoto estão autorizados
-  assim que a composição estiver validada e coerente. Preservar hooks e assinatura
-  YubiKey. Merge continua a exigir pedido explícito.
+- Por nova instrução de 24/10, commits, pushes e merges ficam suspensos até
+  nova ordem. Continuar o desenvolvimento e a integração local sem publicar.
+  Quando forem novamente autorizados, preservar hooks e assinatura YubiKey.
 - Não consumir quota real de GitHub CLI/Copilot em ensaios. Usar fixtures e
   simulação nesses percursos; a aceitação real fica identificada como pendente.
   Ensaios necessários com modelos usam primeiro uma opção gratuita, depois a
@@ -128,6 +583,39 @@ flowchart TD
 
 As janelas, widgets e voz são clientes destes contratos. O trabalho é propriedade
 do backend; mudar de vista não altera o destinatário de uma resposta ou ação.
+
+### 3.1 Pets de primeira classe, runtime e motores de IA
+
+O objetivo revisto pelo utilizador em 24/10, conservado integralmente em
+[PETS-GOAL.md](PETS-GOAL.md), mantém os 43 requisitos e distingue quatro elementos:
+
+| Camada | Identidade e disponibilidade |
+| --- | --- |
+| Pet e superfícies | Identidade persistente, nome, contexto, sessões, memória e objetivos próprios; acesso direto por chat, voz ou outra superfície autorizada |
+| Runtime persistente | Receção de eventos/mensagens, filas, tarefas, regras, decisões e operações determinísticas; pertence ao pet e ao backend, com continuidade enquanto a infraestrutura permitir |
+| Motor/adaptador de IA | Ollama, Codex, Copilot, Gravity ou outro motor configurado, invocado apenas quando necessário e suportado; a respetiva indisponibilidade afeta as capacidades que dele dependem |
+| Papel funcional | Coordenador, especialista, serviço ou observador; configuração independente do provider e dos privilégios, sem criar outro runtime |
+
+Todos os pets existentes e futuros são entidades de primeira classe no produto.
+Um serviço pode oferecer operações determinísticas sem modelo; assistência por
+IA é uma capacidade adicional. Um modelo local descarregado ou provider offline
+não apaga o pet nem impede receber trabalho, observar estado, tratar decisões ou
+executar operações independentes desse motor. A admissão de inferência continua
+a exigir prontidão, permissões e orçamento frescos. Disponibilidade do runtime,
+do motor e de cada operação deve ser observada separadamente.
+
+Ollama pode ser o coordenador global preferencial, por configuração e concessão
+próprias. Coordenação é uma capacidade do pet, separada do processo de inferência
+e da infraestrutura de controlo. Chamadas diretas entre utilizador/pets e entre
+pets não passam obrigatoriamente por esse coordenador. Perder o coordenador ou
+um fornecedor preserva os trabalhos independentes; não escolhe outro motor,
+transfere autoridade ou repete efeitos implicitamente.
+
+Reutilizar a fábrica, registo de capacidades, runtime, broker de decisões e
+executores existentes. A necessidade de uma mudança estrutural deve ser
+demonstrada por incompatibilidade concreta e manter migração/continuidade. Estas
+garantias são requisitos: o executor autónomo aceite continua limitado às rotas
+efetivamente implementadas, não a uma ativação automática de todos os providers.
 
 ## 4. Identidades, capacidades e paridade entre pets
 
@@ -394,6 +882,489 @@ Uma ferramenta idempotente pode repetir dentro da política. Para efeitos extern
 sem idempotência garantida, um ACK perdido exige consulta do estado ou decisão
 humana. O sistema não promete execução exatamente uma vez num serviço externo.
 
+**Identificação do dono nativo — integrada local787:** novos claims
+registam uma identidade autenticada do processo do backend: PID/incarnação,
+arranque do sistema, namespace, UID, perfil/chave e bloqueio nativo por lease.
+O handle do bloqueio acompanha o dono e todos os workers até desaparecer a última
+referência. A observação distingue processo original vivo, ausência verificada,
+identidade divergente, fonte indisponível e registo antigo sem proveniência.
+Uma consulta de estado não escreve nem concede execução ou recuperação.
+
+O PID do backend não substitui a identidade da sessão CLI do provider. Mudança
+de PID/incarnação, boot, namespace, perfil, chave ou inode não prova continuidade.
+Os registos antigos conservam leitura sem ganhar retroativamente uma identidade
+nativa nova. Captura/classificação e apresentação funcional passaram dois
+crashes/reinícios na app privada real; a consulta preservou os ficheiros e recusou
+a aprovação e o controlador antigos. É observação, sem autorizar retoma;
+reconciliação de efeitos e revisão/admissão após perda do dono continuam exigidas.
+Esse percurso deve validar a posse atual do perfil, conservar o histórico e não
+recriar o controlador, a aprovação ou o `Ready` a partir de JSON.
+
+**Lacuna observada e corrigida local790:** a confirmação retirava o token antes
+de certificar/publicar, e um `Busy` podia consumir a revisão sem enfileirar.
+A confirmação retém agora o mesmo objeto nativo e a mesma aprovação, com limites
+originais e revalidação fresca, sem novo consentimento perante publicação incerta.
+A prova inclui locks reais e a app Tauri privada; a recuperação do dono continua.
+
+**Confirmação de admissão — integrada local790:** cada
+token mantém um objeto nativo por janela/pet/objetivo/revisão, protegido por um
+mutex próprio. A cache global serve apenas a descoberta e nunca acompanha IO.
+A primeira aprovação fixa spec, instante, evidência, prazo e a autoridade nativa
+aberta; `Busy`/indisponibilidade/incerteza conservam esse mesmo objeto, sem
+reconstrução a partir da proposta nem abertura de uma chave substituta. Novas
+publicações revalidam política/capacidades/contexto; ACK de uma admissão já
+gravada apenas estabiliza o grant e o objetivo originais, mesmo após expirar a
+revisão, sem conceder nova execução. Recusar antes da publicação revoga apenas
+o grant original ainda sem lease; se a admissão já foi publicada, devolver o
+recibo real e exigir o controlo Stop/Cancelar existente para a interromper.
+O frontend conserva o mesmo token quando o backend indica repetição disponível
+ou quando se perdeu a resposta; não repete automaticamente a escrita.
+O objeto aprovado respeita o limite mais restrito da revisão e da observação
+nativa que o criou; a revalidação não o prolonga. Recibos duravelmente confirmados
+permitem uma revisão independente após Pausar/ResumeDraft; o token antigo só
+confirma o seu próprio evento. A cache por janela é efémera, limitada a 64 entradas
+e à validade original da revisão, preservando transações em curso. Depois de um
+reinício, consultar o estado durável; dados guardados não recriam estes objetos.
+
+
+**Falha observada R29B e corrigida no percurso privado local793:** durante Stop
+com HTTP sintético,
+o driver terminou em `recoveryRequired/StorageUnavailable`, com objetivo
+`stopping`, grant `draining` e tentativa do modelo ainda `started`. O worker
+terminado não transforma esse resultado em sucesso. O fecho anterior tentava uma
+vez e perdia a prova opaca de drain se a publicação falhasse. O driver793
+conserva a mesma prova/transação e repete apenas fecho/ACK perante
+contenção ou armazenamento indisponível, sem repetir modelo/ferramenta, renovar
+limites ou libertar a reserva antes do ACK durável. Essa aceitação de Stop, antes
+reprovada, passou sob bloqueios e projeção atrasada na app privada793; os restantes
+limites de controlo precedem a recuperação após perder o processo original.
+
+O ensaio concorrente R29C recusara com `Conflict` o claim de outro objetivo já
+admitido. A verificação da fila793 usa lock partilhado, conserva Busy perante
+escritor exclusivo e mantém revogação como conflito real. Três testes com locks
+reais e o mesmo ciclo Tauri com segundo claim passaram; não se repetem conflitos
+genericamente. A falha anterior continua documentada para rastreabilidade.
+
+**Fecho nativo retido — integrado local793:** depois de provar zero
+workers no dono original, guardar uma única prova opaca de drain e o resultado
+terminal pretendido. O estado `closing` repete só gravação/ACK, libertação do
+handle original e retirada do serviço, com backoff e janela automática de cinco
+segundos; não renova o prazo de execução. Se continuar indisponível, conservar a
+prova no mesmo driver para repetição explícita de fecho, sem inferência ou ações.
+Resultados iniciados/incertos permanecem desconhecidos e cobrados. Uma mudança
+de dono/perfil/chave/lease/origem é recusada; a prova guardada não é serializável.
+A verificação só de leitura da fila coexiste com leitores, e contenção
+conserva `Busy`, sem ser convertida num conflito semântico.
+
+**Controlo antes da ativação — integrado local796:** uma preparação
+nativa pode reservar o provider e falhar antes de publicar a lease no objetivo,
+incluindo quando o grant já recebeu o claim. Pausar/Cancelar deve revogar essa
+tentativa e permitir que o objeto original prove zero workers e publique apenas
+auditoria terminal. A revisão de controlo posterior não invalida essa limpeza;
+continuam obrigatórias a mesma admissão, intenção, contexto, perfil e prova opaca.
+Nunca publicar uma ativação artificial para concluir a limpeza. O prazo original
+também deve retirar preparações abandonadas sem exigir outra ação do utilizador.
+
+A manutenção determinística limita-se a preparações sem dono ativado conservadas
+no processo original. Roda por um máximo de oito das 64 entradas, sem inferência,
+novas aprovações ou criação de diretórios/chaves. Só retira a entrada e a reserva
+depois do ACK durável; contenção/incerteza conservam os objetos originais. A
+consulta de estado permanece só de leitura. ResumeDraft pode confirmar primeiro
+a limpeza dessa preparação; só pode avançar a revisão da própria limpeza
+realizada a partir da revisão exata recebida, mantendo CAS perante concorrência.
+Repetir um pedido histórico de Pause/Cancel continua limitado ao seu recibo.
+
+Cancel durante o fecho parcial deve prevalecer de forma terminal, conservando a
+data de fecho, identidade nativa, uso/efeitos desconhecidos e o orçamento original.
+Se a revogação assinada chegou antes da projeção correspondente no objetivo,
+esperar por essa projeção; não repetir conflitos genéricos nem inventar sucesso.
+Fechar um dono que cedeu o recurso não o pode readquirir, cancelar ou libertar a
+reserva de outro dono, mesmo quando ambos usam o mesmo provider.
+
+O incremento796 confirmou estas transações em testes nativos, incluindo outro
+dono nativo ativo durante o fecho cedido. Na app isolada, Pausar/Cancelar e a
+expiração automática retiraram a preparação sem ativar workers ou inferência;
+um claim independente seguinte passou. Cancel durante fecho parcial tem prova
+unitária com falhas de publicação, sem aceitação específica desse intervalo na
+app gráfica. A sequência seguinte é recuperar o dono perdido, conservando uso
+desconhecido e a impossibilidade de criar objetos nativos a partir de metadados.
+
+A recuperação deve conservar revisão/hash do objetivo e do grant, orçamento
+já usado, referências/recibos e a classificação de efeitos desconhecidos. Uma
+prova opaca de ausência mantém o bloqueio nativo e revalida perfil/incarnação na
+transação; a observação JSON não a substitui. Fecho do grant antigo e nova
+admissão são passos explícitos, sem renovar permissões/orçamento ou repetir IO.
+O limite de 4096 entradas do diretório de bloqueios exige um ciclo de retenção
+revisto antes da prontidão de produção; não remover bloqueios de processos vivos.
+
+**Reconciliação de leitura e prova de ausência — integrado local801:** a consulta
+explícita vincula pet, objetivo e revisão, conserva o lock de leitura do objetivo
+e o lock partilhado da autoridade durante a leitura dos recibos existentes.
+Reutiliza respostas assinadas, saídas de planeamento, passos/observações,
+receitas, verificações e conclusão. Regista hashes, ausência/corrupção/
+indisponibilidade e consumo reservado/desconhecido sem reparar, confirmar
+durabilidade, consultar alvos físicos ou criar outro journal. Consumo settled
+sem recibo não prova sucesso; a observação assinada de uma ferramenta continua
+distinta de critérios do objetivo verificados e da conclusão publicada.
+
+A consulta distingue identidade da lease e atualização da projeção de controlo,
+para representar claim ou Stop parcialmente publicados. O saldo apresentado
+tem âmbito explícito `latestAdmission`; a revisão de continuação terá de vincular
+e conservar também uso/história anteriores, sem repor limites implicitamente.
+Os DTOs de consulta não são objetos de aprovação nem dão execução/recuperação.
+O contador de tentativas desconhecidas refere-se ao resultado/efeito: uma
+observação nativa válida pode confirmá-lo antes do recibo final, mantendo a fase
+e a reserva integral de consumo enquanto o ledger não for confirmado.
+
+Uma origem nativa de ausência só pode ser construída após autenticar o grant.
+Conserva a sua revisão/hash e mantém aberto o flock exato da lease antiga,
+revalidando processo, UID, boot, namespace, perfil, diretório e inode. Processo
+original ainda vivo, PID reutilizado, ficheiro substituído ou perfil divergente
+recusam a prova. Na consulta, esse handle dura apenas durante a leitura; uma
+aprovação de recuperação futura deverá conservar o seu próprio objeto nativo
+e revalidar a origem antes de cada publicação. Metadados serializados nunca o
+substituem. Fecho aprovado, ACK incerto e continuação com nova admissão mantêm
+aceitação própria ainda pendente.
+
+O incremento801 passou oito testes novos, o runtime completo e dois crashes/
+reinícios da app privada: resposta com recibo reconhecida, streaming interrompido
+mantido desconhecido e consumo original conservado, sem escritas ou efeitos.
+A consulta também reconheceu uma conclusão nativa e um Stop com efeito incerto.
+Seguem a revisão nativa explícita, fecho aprovado/ACK e continuação com nova
+admissão. A consulta e a prova de ausência, por si, não concluem RUN-04.
+
+**Revisão e fecho após falha — integrado local808:** a revisão pertence ao
+backend e conserva autoridade, origem, prova nativa de ausência, hashes do
+objetivo/grant/recibos e prazo. A escolha explícita só fecha a execução antiga;
+não executa planos, renova orçamento ou liberta reservas de outro dono. Entradas
+do cliente limitam-se a referências e escolha; propostas ou indicações de ausência
+enviadas pelo cliente não criam aprovação.
+
+O recibo do fecho fica no grant assinado, com origem, imagem terminal, consumo e
+hash do objetivo projetado. O schema7 do grant conserva dono/lease, ledgers e
+data anterior de fecho; o schema9 do objetivo acrescenta o evento de fecho perdido
+ou de preparação sem claim publicado. A imagem terminal usada para o hash exclui
+o próprio recibo, evitando referência circular. Os schemas anteriores continuam
+legíveis e não recebem novos campos enquanto não houver este fecho.
+
+A transação bloqueia primeiro o objetivo e depois a autoridade. Antes da primeira
+publicação, confirma origem e bytes dos recibos que sustentaram a revisão.
+Alterações recusam a escolha; contenção e ACK incerto conservam a operação
+aprovada. Depois de gravado o fecho assinado, a repetição confirma apenas esse
+recibo e a projeção exata. Após reinício, essa escolha autenticada permite o ACK
+pendente sem reconstruir uma prova de execução ou pedir nova aprovação. Perfil,
+chave e origem assinada continuam obrigatórios.
+
+Enquanto a projeção aprovada estiver pendente, outras mutações do objetivo
+recebem Busy. Tokens históricos só confirmam o seu recibo e não substituem
+controlos/admissões posteriores. O estado preserva cancelamento/conclusão
+genuínos ou fica RecoveryRequired. A continuação por nova admissão, preservando
+uso anterior e efeitos desconhecidos, mantém uma unidade e aceitação próprias.
+
+A aceitação local808 passou 2496 Rust/21 ignorados,486 ensaios privados no
+anfitrião,1164 JS/check/TSC/Vite e quatro crashes/reinícios de processos da app
+privada. Um fecho assinado com a projeção impedida foi confirmado após reinício;
+uma conclusão anterior manteve objetivo/certificado exatos. Nenhuma destas
+confirmações repetiu inferência/ações. A app instalada .30 permanece intacta;
+retoma com nova admissão, paridade/voz/migração e entrega continuam abertas.
+[Provas e limites](PETS-VALIDATION.md#fecho-recuperacao-local808).
+
+**Continuação após fecho — critérios concretizados no incremento815 abaixo:** a continuação
+pertence ao mesmo objetivo e conserva identidade, intenção, critérios, contexto,
+eventos e todas as admissões anteriores. Exige fecho anterior confirmado e uma
+nova revisão nativa, com política/capacidades/contexto atuais. Nem o fecho, nem
+um ResumeDraft genérico, nem referências JSON autorizam execução nova.
+
+A revisão apresenta separadamente o consumo acumulado autenticado, incluindo
+reservas e resultados desconhecidos, os limites anteriores e o que a nova escolha
+autoriza. Uma nova admissão não apaga nem reembolsa os ledgers antigos. Qualquer
+aumento de limite ou extensão de prazo exige escolha explícita; não nasce da
+mudança de processo/modelo, da criação de outro grant ou do saldo da última
+admissão. Evidência ausente/corrompida ou contagem não verificável impede concluir
+que existe saldo disponível. A contagem acumulada tem limites e overflow
+verificados, sem converter medição indisponível em zero.
+
+**Leitura cumulativa — integrada local811:** a leitura percorre as admissões
+originais e o inventário de grants assinados, sem fabricar versões truncadas do
+objetivo. Um grant sem referência no objetivo pode ser uma preparação não
+publicada ou histórico omitido; nenhuma das hipóteses autoriza ignorá-lo no
+saldo. Publicações temporárias permanecem pendentes. Ledger legado ausente é
+consumo não verificável, distinto de uma admissão autenticada nunca reclamada.
+Tokens/custos sem medição continuam indisponíveis, mesmo quando chamadas e bytes
+estão contabilizados.
+
+As assinaturas dos formatos anteriores autenticam cada admissão, mas não um
+head que vincule todas as anteriores. A leitura declara esse âmbito e não
+certifica continuidade integral quando uma linha antiga e o respetivo ficheiro
+podem ter sido removidos. Um hash calculado agora sobre JSON não corrige essa
+ausência. A futura admissão de continuação deve vincular nativamente o histórico
+revisto e o consumo anterior, conservando limitações de cobertura e exigindo
+aprovação explícita de qualquer verba adicional; dados não verificáveis não
+podem ser apresentados como saldo livre. Esta leitura não concede retoma.
+
+A leitura inicial trata conservadoramente também o claim moderno sem ledger
+antes da primeira reserva como consumo não verificável. A distinção dessa
+proveniência nativa sem IO face ao legado não medido fica como pré-requisito da
+continuação; não escrever um ledger vazio para simular essa prova.
+
+A aceitação local811 passou2511 Rust/21 ignorados,501 ensaios privados/check e
+o percurso Tauri com duas admissões/consumo anterior conservado. Os quatro pets,
+32 admissões, omissões, origem incompleta, overflow e leitores concorrentes têm testes nativos. O ciclo
+anterior e quatro crashes/reinícios passaram; web exato à prova1164 JS/TSC/Vite.
+A nova revisão/admissão de continuação mantém implementação e aceitação próprias.
+[Provas e limites](PETS-VALIDATION.md#historico-cumulativo-local811).
+
+Planos, receitas e aprovações antigos permanecem históricos. A continuação não
+os reproduz nem lhes atribui um controlador novo. Efeitos desconhecidos exigem
+reconciliação adequada antes de qualquer repetição; uma resposta de modelo
+interrompida também conserva o consumo reservado. A nova revisão/decisão deve
+reter a mesma operação perante contenção/ACK incerto, e uma repetição histórica
+não pode modificar uma admissão posterior. Estes critérios terão prova própria
+por adaptador; o suporte de um pet não anuncia suporte dos restantes.
+
+**Admissão de continuação — incremento815 integrado localmente:** reutilizar a revisão/cache,
+assinatura de consentimento e transação de admissão existentes. Acrescentar uma
+referência opcional de continuação, com schema próprio, à admissão; quando ausente,
+os bytes anteriores mantêm-se. A operação continua resposta ou planeamento,
+conforme o suporte nativo. O objetivo que contém esta referência usa schema10,
+para impedir que leitores antigos ignorem a nova proveniência. Todas as transições
+posteriores, incluindo publicar planos e concluir trabalho, calculam a versão
+necessária a partir do registo completo; não podem repor uma versão fixa antiga.
+
+A referência vincula a imagem exata após o fecho confirmado, a revisão/sequência,
+o recibo antigo e o histórico revisto. Conserva hashes das admissões e grants
+anteriores, os respetivos limites/modelos e o consumo conhecido/incerto. O novo
+orçamento é adicional e só nasce de escolha explícita; não é saldo recuperado.
+As leituras posteriores validam a cadeia nativa, incluindo os registos anteriores,
+sem reconstruir um objetivo truncado. A cobertura histórica não comprovada dos
+formatos anteriores continua declarada, mesmo depois de assinar a continuação.
+
+O objeto nativo retém a autoridade capturada na revisão. A confirmação revalida
+fonte, política, capacidades e contexto; publicar ou confirmar o recibo conserva
+a mesma escolha perante Busy/indisponibilidade/ACK incerto. A contenção de leitura
+na publicação de dados deve conservar a classificação Busy, o dono, o pedido e o
+resultado assinado originais; uma espera limitada por esse bloqueio não repete a
+inferência nem converte um ACK incerto numa publicação nova. Só os temporários
+assinados da própria admissão, comprovadamente sem lease/IO, podem ser tratados
+como parte dessa transação e retirados após confirmação durável. Outros pendentes
+continuam a bloquear a revisão. Uma preparação revogada sem claim tem zero IO
+comprovado e permanece auditável; não deve ser confundida com uma execução cujo
+ledger foi perdido. O claim moderno assinado, anterior à primeira reserva,
+também exige classificação própria, sem escrever um ledger artificial.
+
+Resultados incertos de modelo conservam o consumo anterior e podem coexistir com
+uma nova tentativa explicitamente autorizada. Efeitos de ferramenta desconhecidos
+exigem reconciliação nativa antes de permitir a continuação correspondente. Não
+reutilizar leases, controladores, receitas ou aprovações antigos. A aceitação de
+RUN-04 continua a incluir esses casos e os restantes adaptadores, mesmo quando o
+percurso de retoma após modelo interrompido passar primeiro.
+
+**Fronteiras de recuperação ainda obrigatórias:** uma queda entre a publicação
+assinada de uma nova autorização e a gravação da admissão pode deixar um grant
+emitido sem linha no objetivo. Depois de reiniciar, a perda da cache de revisão
+não autoriza reconstruir consentimento a partir do JSON nem apagar esse grant.
+É necessário um percurso nativo de inspeção/revisão que distinga publicação
+pendente de omissão de histórico e prove a ausência de claim/IO antes de retirar
+uma preparação. O registo revogado permanece na auditoria; não nasce orçamento.
+O tratamento da transação enquanto o objeto original está vivo não fecha esta
+pendência de RUN-04.
+
+Para ferramentas cujo resultado ficou desconhecido, recuperar um recibo nativo
+já gravado é diferente de voltar a observar o recurso. Uma observação atual não
+prova, por si, que uma ação antiga não aconteceu. A reconciliação deve conservar
+o alvo, a identidade, o efeito e a incerteza originais, e distinguir operações
+repetíveis de efeitos que exigem resolução explícita. Não desbloquear a repetição
+por descartar o estado desconhecido. A execução dos restantes adaptadores, a
+migração/rollback e a entrega mantêm critérios próprios de aceitação.
+
+O primeiro percurso de continuação após modelo interrompido passou em Tauri
+privado, até conclusão nativa do mesmo objetivo, conservando consumo e histórico.
+A revisão de proveniência é comum aos quatro adaptadores; execução limitada
+verificada em Ollama local/Spotify, com receitas aprovadas individualmente.
+[Provas, falhas originais e pendências](PETS-VALIDATION.md#continuacao-local815).
+Não está instalado. A inspeção/retirada nativa após perda do processo entre
+publicações está concretizada no incremento822 abaixo.
+
+**Retirada de autorização sem admissão — incremento822 integrado localmente:** a operação
+reduz autoridade e conserva o objetivo. Reutiliza o catálogo, chave, locks e
+recibos nativos, com revisão explícita por pet/objetivo/decisão. O grant recebe
+uma referência opcional de retirada, schema próprio1; o novo grant revogado sem
+lease usa schema8. A ausência desta referência conserva os formatos anteriores.
+Não se reconstrói a revisão perdida, orçamento ou controlador a partir do hash.
+
+A revisão captura o perfil atual da operação e a imagem assinada presente; um
+grant antigo nunca reclamado não contém um processo original que se possa
+inventar. A cobertura histórica anterior mantém-se não verificada. Exigir
+canónico assinado sem lease, reservas ou rondas e sem admissão associada, e
+recusar provas contraditórias de resultados/planeamento/ferramentas. Um temporário
+isolado não prova ausência de IO. Só imagens assinadas compatíveis com o canónico
+podem pertencer à mesma retirada; retirar temporários próprios exige primeiro
+revogação canónica durável e confirmação do inode exato.
+
+A assinatura de retirada conserva identidade/hash/instante do consentimento
+antigo e fixa fonte, perfil e decisão de retirada. Depois de reiniciar, o recibo
+autêntico permite só confirmar a operação já registada. Não reautoriza, não cria
+admissão nem altera Cancel ou trabalho posterior. Limites adicionais continuam
+a exigir outra revisão. A consulta explícita e os controlos funcionais enviam
+referências/decisão, conservam a escolha perante bloqueios e não anunciam ACK
+incerto como confirmado. A certificação de evidência imutável de conclusão usa
+lock partilhado para coexistir com leitores; a publicação conserva exclusividade.
+A aquisição exclusiva usa um orçamento de espera de 100 ms no mesmo descritor, com
+fences de perfil/chave/inode após aquisição; não repete publicação nem efeitos.
+No registo de receita só Busy admite espera limitada de um segundo, com a mesma
+aprovação/Ready e política/Stop/prazo revalidados. A consulta de claim usa leitura
+autenticada de controlo, mantendo a validade nativa e executionAvailable:false.
+
+A aceitação local822 passou 2546 Rust/21 ignorados, 536 ensaios privados/check,
+1177 JS/TSC/Vite e o percurso Tauri privado com cinco crashes/reinícios,
+retirada/ACK e continuação separadamente autorizada até conclusão. O consumo
+anterior desconhecido e os bytes assinados mantiveram-se. [Provas, falhas preservadas e limites](PETS-VALIDATION.md#retirada-local822).
+A app instalada .30 está intacta. Segue a reconciliação de ferramentas sem recibo
+recuperável: estado atual não prova autoria passada, nem autoriza repetição.
+RUN-04, paridade por provider, migração/entrega e o objetivo completo continuam
+abertos.
+
+**Recuperação de recibos e prefixos já assinados — incremento823 integrado localmente:** o mecanismo
+existente já recupera evidência nativa depois de pausa/reinício sem repetir a
+ferramenta. A auditoria privada confirmou uma lacuna: uma observação assinada pode
+ser conhecida enquanto o ledger continua Started; uma continuação sela o hash do
+grant antigo, e a reconciliação posterior altera esse grant, invalidando a leitura
+do objetivo. Não é um resultado presumido a partir do estado atual do leitor.
+
+A recuperação deve ser serializada com as admissões, na ordem objetivo→autoridade.
+Depois de um prefixo ficar vinculado a outra admissão, conservar os seus grants e
+encargos exatos. Evidência autêntica pode acrescentar conhecimento, mas não pode
+ser usada para reescrever um prefixo selado ou apresentar contabilização congelada
+como liquidada. A decisão é projetar a informação
+posterior em leitura quando a contabilização estiver congelada, conservando fase
+canónica, reserva histórica e hashes anteriores. Expor accountingFrozen e a
+observação autenticada; não inventar Finished nem liquidar silenciosamente o ledger.
+Antes de existir prefixo selado, manter a normalização nativa já implementada. A
+recuperação de produção mantém o lock partilhado do objetivo até terminar a
+transação exclusiva da autoridade; novas admissões exigem exclusividade no objetivo.
+Leituras de passo/receita usam a mesma classificação. Não é necessário outro
+journal ou schema persistente. A consulta expõe `accountingFrozen:true`,
+`reconciliationAvailable:false` e `recordedResult` apenas quando o resultado
+autêntico ainda não consta do registo canónico. A classificação autentica a
+admissão posterior e os hashes exatos sob o lock da autoridade, sem confiar num
+booleano enviado pelo cliente. Fase Finished/Settled genuína permanece como tal.
+Recibos ausentes continuam desconhecidos e não autorizam repetição/reembolso;
+tarefas independentes conservam os seus próprios controlos. Não recriar donos ou
+permissões antigos. A normalização de um prefixo já corrompido exige recuperação
+ou migração própria; esta correção não reconstrói bytes de JSON.
+
+A aceitação823 conserva o grant antigo e o objetivo legível no erro original,
+mantém Cancel posterior, recusa evidência adulterada e mantém desconhecida a
+evidência ausente. A consulta de Finished/Settled sobrevive à ausência do sidecar
+opcional porque o recibo canónico já está autenticado. Uma continuação com novo
+dono/decisão concluiu depois da consulta; não atribuiu essa conclusão à receita
+histórica. Passaram os ciclos nativos anteriores e 2549 Rust/21 ignorados,
+539 ensaios privados/check e 1180 JS/TSC/Vite. [Provas e falhas preservadas](PETS-VALIDATION.md#recuperacao-local823).
+RUN-04, restantes adaptadores, migração/entrega e o objetivo completo permanecem
+abertos; a instalação .30 mantém-se intacta.
+
+**Resolução explícita de operações de estado desconhecidas — incremento825 integrado localmente:**
+a continuação normal mantém a recusa quando existe um efeito sem resultado
+autêntico. Um pedido separado pode preparar uma revisão nativa que conserve
+essa incerteza e autorize trabalho novo, limitado às operações de estado já
+implementadas: pausar, reproduzir e definir volume absoluto do leitor. Estas
+operações convergem para um estado sob uma nova aprovação; não se promete que
+o efeito histórico não ocorreu ou que o recurso permaneceu igual entretanto.
+
+O backend associa cada tentativa desconhecida ao passo/âmbito assinado e aos
+argumentos originais. Operações sem essa classificação, origem ausente ou
+ambígua, corrupção ou passos estrangeiros continuam bloqueados. A referência
+de continuação schema2 conserva o manifesto exato revisto; schema1 sem o campo
+opcional mantém os bytes antigos. Os grants, passos, consumo reservado e
+resultado desconhecido anteriores não são reescritos ou reembolsados.
+
+A revisão apresenta as ações/alvos antigos, a incerteza, o consumo e os limites
+adicionais. A sua aprovação apenas admite planeamento Ollama local com o
+catálogo SpotifyTransportV1: cada nova receita exige ainda a aprovação exata
+do alvo/ações atuais e outra lease. Não reutiliza a tentativa, controlador ou
+aprovação antigos. Novas ferramentas/providers não herdam esta exceção. Sem
+essa revisão explícita, mantém-se `unreconciledEffects`.
+
+Reutilizar a transação/consentimento nativos e a ordem objetivo→autoridade.
+Conservar a mesma escolha perante Busy/publicação parcial/ACK incerto; o ACK
+posterior confirma apenas o que já foi assinado. Recusa, Cancel, revisão stale,
+mudança de política ou evidência invalidam a nova escolha antes dos efeitos.
+Uma observação atual e uma decisão de assumir incerteza são factos diferentes
+de uma confirmação histórica. A recuperação posterior do recibo antigo continua
+em leitura quando o prefixo está selado. O manifesto também chega ao planeador
+como contexto histórico autenticado, com a incerteza e consumo originais; esse
+contexto não é uma concessão para agir. O pedido normal não opta pela exceção.
+Uma proposta sem o catálogo de planeamento limitado é recusada mesmo com a opção.
+
+A app privada passou a nova revisão, recusa sem escrita, Busy, publicação parcial
+com a mesma aprovação, ACK, lease nova e receita separadamente aprovada até
+conclusão. Outro reinício conservou o objetivo legível, a ferramenta antiga
+desconhecida e a mesma contabilização; Cancel antes da escolha recusou a admissão.
+Os cinco percursos nativos anteriores passaram. [Provas e limites](PETS-VALIDATION.md#incerteza-local825).
+Schema1 sem o campo opcional mantém os bytes antigos; schema2 exige um leitor
+compatível, e migração/rollback/entrega conservam aceitação própria. Esta decisão
+não torna envios, lançamentos, comandos relativos ou operações sem proveniência
+repetíveis; nem concede execução equivalente aos outros providers. RUN-04,
+paridade dos pets e o objetivo completo permanecem abertos.
+
+**Paridade dos adaptadores — auditoria que orientou R40:** na composição825, o
+transporte HTTP local reconhecia LM Studio, mas a fábrica conservava esse pet sem
+adaptador/provider resolvidos. Um URL/modelo global não constitui ligação nativa
+do pet. Preservar configurações antigas com provider vazio e a classificação
+NotConfigured até existir associação explícita; não alterar preferências ou
+permissões por acrescentar uma variante ao enum da fábrica.
+
+O próximo desenvolvimento deve reutilizar o emissor limitado, contexto,
+cancelamento, contabilização e recibos comuns. Decidir primeiro a identidade
+estável do pet, endpoint/modelo/instância, autenticação, prontidão e política de
+carregamento/recursos. A [listagem nativa de modelos LM Studio](https://lmstudio.ai/docs/developer/rest/list)
+distingue tipo, chave e instâncias carregadas; a [inferência compatível](https://lmstudio.ai/docs/developer/openai-compat/chat-completions)
+permite avaliar reutilização do transporte atual. Estas fontes foram revistas
+em25/10/2026; não comprovam uma integração Coucou já implementada. Não consultar
+metadados em listagens passivas, iniciar inferência/carregamento para descobrir
+capacidades ou contornar autenticação. Uma falha não muda silenciosamente o modelo.
+
+Codex, Gravity e Copilot conservam os respetivos transportes/identidades e
+requisitos de decisões/limites nativos. O writer autónomo continua limitado ao
+adaptador atual até provar outro; streaming de conversa não prova controlo das
+chamadas/ferramentas internas das CLI. A próxima unidade não retira estes pets,
+os motores API ou os restantes requisitos do âmbito. Usar fixtures privadas e
+gratuitas, sem quota real Copilot/GitHub ou alterações ao anfitrião/instalação.
+
+**Integração nativa LM Studio — decisão R40 adotada localmente em828:** acrescentar
+adaptador tipado sem promover o provider vazio antigo. A associação explícita
+no perfil escolhe `lmstudio`; desassociar conserva identidade/histórico e retira
+prontidão. O chat manual antigo sem associação mantém o comportamento atual.
+Reutilizar perfis, transporte HTTP, contexto, orçamento, aprovações, Stop,
+recibos e recuperação comuns. Não inferir voz, shell ou ferramentas internas.
+
+A descoberta nativa usa GET/api/v1/models, com limites e seleção inequívoca de
+LLM/chave/instância carregada. Não faz inferência nem gestão de modelos ou
+fallback por lista de nomes. Uma chave de modelo pode usar o carregamento JIT
+do servidor apenas na inferência explicitamente autorizada; uma instância
+escolhida tem de corresponder à mesma chave. A ligação opcional `engineBinding`
+autenticada na admissão vincula endpoint, chave, instância e impressão nativa
+do modelo/âmbito de credenciais. Ausente, conserva os bytes antigos. Validar
+na revisão/confirmação/claim e antes do HTTP; mudar alias não muda o modelo
+autorizado. A cache de revisão compara também a ligação nativa exata e conserva
+a escolha original; uma época de descritor igual não permite apresentar uma
+ligação diferente sob o mesmo token. A expiração dos metadados não revoga uma
+receita independente.
+
+Uma credencial opcional tem entrada própria no cofre existente, vinculada ao
+URL, sem token em preferências, descritores ou logs. Mudá-la/desligá-la invalida
+a autoridade em memória; o próximo pedido preparado também deteta alteração
+externa de credenciais. Nunca usar chave de outro servidor nem contornar 401/403.
+Só loopback é elegível para o runtime local limitado; os metadados são uma
+afirmação do fornecedor configurado, não atestação criptográfica dos pesos ou
+do comportamento interno do motor. Stop confirma o fim do IO do cliente, não
+o fim de trabalho interno que o servidor não permite observar; conservar consumo
+incerto. A compatibilidade de leitores/entrega e os demais43 requisitos continuam
+com aceitação própria. A composição828 integra este âmbito limitado, com dez
+percursos nativos privados e regressões comuns. Motor/cofre reais, voz, restantes
+providers e entrega não são comprovados por estes ensaios.
+[Âmbito e evidência](PETS-VALIDATION.md#paridade-local828).
+
 ### 6.4 Primeiro repositório do runtime — decisão de implementação
 
 RUN-01 começa com um registo privado por objetivo, independente do journal das
@@ -598,12 +1569,93 @@ canónico exige prova nativa de ausência e encerramento/drain já registado; n�
 elimina uma publicação confirmada nem renova orçamento. Os formatos anteriores
 conservam os campos omitidos e os seus domínios de assinatura.
 
-Isto ainda não ativa o planeador na app. Os âmbitos de passo/receita para planos
-gerados, a ligação à aprovação humana exata e o dispatcher com feedback nativo
-são o trabalho seguinte. A guarda do executor mantém os planos gerados sem
-acesso a efeitos até esses âmbitos estarem implementados. A aplicação .30
-permanece intacta; [a validação e os limites](PETS-VALIDATION.md#planeamento-integrado769)
-não concluem RUN/EXE, a entrega ou os 43 requisitos.
+**Incremento local770 — âmbitos gerados e execução nativa, sem commit:** os
+âmbitos Step2/Recipe3 referenciam o plano confirmado e o snapshot canónico exato,
+com domínios de assinatura próprios. A revisão conserva o mapeamento de critérios
+da proposta assinada. A aprovação humana ainda exige publicação e ACK do
+manifesto antes de ativar a receita; uma proposta ou um JSON de âmbito não bastam.
+
+Ferramentas reservam o saldo original apenas através de um passo aprovado,
+assinado e reservado, associado ao plano confirmado. Os ensaios com bus/leitor
+privados cobrem a sequência completa até à prova final e conclusão nativa, bem
+como Stop, perda de evidência, versões antigas de âmbito e repetição sem novos
+comandos ou medições. Os formatos anteriores mantêm os campos omitidos e os seus
+domínios de assinatura.
+
+No checkpoint770, isto ainda não ativava o planeador na app. O dispatcher com o controlador original,
+feedback autenticado para replaneamento, equidade durante espera de aprovação e
+ativação por uma única projeção nativa continuavam pendentes. Era também necessário
+validar o tamanho/clareza da revisão com intenções grandes, incluindo o contexto
+de consentimento de planeamento já existente. A aplicação .30 permanece intacta;
+[a validação e os limites](PETS-VALIDATION.md#execucao-gerada-local770) não concluem
+RUN/EXE, a entrega ou os 43 requisitos. Commits e pushes estão suspensos por
+instrução do utilizador; o último remoto continua em `bbe12e2`.
+
+**Incremento local778 — ciclo nativo e ativação funcional, sem commit:** o
+executor conserva o `Owned` original numa thread independente da vista e admite
+um único dispatcher por lease. O percurso usa proposta limitada, publicação
+canónica confirmada, decisão humana do broker comum, ACK do manifesto, execução
+nativa e observação final. O planeamento tem admissão própria, com configuração,
+modelo, política e catálogo capturados na mesma projeção nativa. Os controlos
+mínimos na área de objetivos permitem rever essa autorização, iniciar e consultar
+o executor; não assumem o ciclo nem recriam autoridade a partir do estado.
+
+O feedback de cada ronda referencia a verificação original assinada. A próxima
+proposta recebe o saldo original e as observações históricas identificadas; elas
+não são apresentadas como uma nova medição. Só o aumento do número de critérios
+originais comprovados reinicia o contador de falta de progresso. Rondas, chamadas,
+saída, ferramentas e prazo permanecem limitados pelo mesmo consentimento. Um
+resultado desconhecido exige recuperação, e uma recusa não é renovada
+automaticamente. Falhas no ACK conservam a aprovação nativa e o `Ready` originais.
+
+A revisão apresenta intenção/critérios completos uma vez, com o âmbito e os
+argumentos de cada passo. O limite próprio de receitas não amplia o domínio de
+permissões dos terminais. A decisão opaca consumida pertence à revisão exata e
+explica o consentimento de planeamento já existente, sem conceder planeamento
+adicional. Após encerramento confirmado e zero workers, a prova nativa retira só
+a reserva física original; referências de auditoria não bloqueiam o trabalho
+seguinte e provas antigas não libertam a reserva de outro dono.
+
+Uma decisão pendente distingue **válida, alterada e temporariamente
+indeterminada**. Disputar um bloqueio do registo de provas não equivale a
+revogação nem a registo corrompido. No estado indeterminado conserva-se o mesmo
+pedido, dono, revisão, receita, prazo e orçamento; a leitura da lista não o
+encerra. Aceitar uma resposta e produzir a decisão opaca continuam a exigir
+validação atual. Se a prova ficar indisponível depois de receber a resposta,
+revalidar essa mesma resposta dentro do prazo original, sem emitir novo pedido
+ou executar. Stop, revogação, mudança do objetivo/política e expiração continuam
+a invalidar o pedido; nenhum resultado incerto autoriza efeitos. A verificação
+deve incluir consultas concorrentes, disputa real do bloqueio e recarga da vista.
+As observações de provas podem partilhar o bloqueio de leitura; alterações ao
+consentimento, orçamento e recibos continuam exclusivas. Os dois modos verificam
+a mesma chave, diretório e inode do bloqueio. A concorrência não dispensa a
+verificação autenticada nem transforma uma leitura num direito de escrita.
+
+A fábrica declara separadamente planeamento limitado, execução de receita e
+verificação de critérios. O suporte atual restringe-se ao Ollama local e a
+reproduzir/pausar/definir volume absoluto no leitor Spotify capturado, mediante
+permissão de música e aprovação exata. Os restantes pets não herdam suporte de
+execução ainda inexistente nem ganham acesso geral ao Sistema.
+
+Passaram 2426 Rust/20 ignorados, 1155 JS, check/TypeScript/Vite e 336 ensaios
+privados no anfitrião. Isto é integração local do código; ainda faltam aceitação
+real de app/Tauri/eventos/voz/providers, cedência e retoma durante aprovação,
+recuperação após perder o dono e expansão dos adaptadores/operadores. Migração,
+backup, rollback, entrega e todos os restantes requisitos continuam exigidos.
+[A prova e os limites](PETS-VALIDATION.md#ciclo-nativo-local778) não concluem
+RUN/EXE nem o sistema completo. A instalação .30 continua intacta; não houve
+modelos/quota reais, novos agentes, commits ou pushes.
+
+**Prova posterior local779 — correção e percurso Tauri aceites no âmbito
+privado:** a consulta concorrente de aprovações passou a respeitar a distinção
+entre indisponibilidade e alteração real descrita acima. O percurso da aplicação
+custom-protocol com Tauri real, leitor/modelo privados completou duas receitas,
+feedback/replaneamento, conclusão assinada, recarga da vista e Stop durante HTTP,
+com eventos nativos. Passaram 2434 Rust/20 ignorados, check e 424 ensaios no
+anfitrião; web sem alterações. Isto não comprova providers/leitores reais,
+botões/formulários completos, janela fechada, voz ou entrega. Segue a cedência e
+retoma autenticada enquanto espera decisão; o objetivo e os 43 requisitos
+permanecem abertos. [Aceitação e limites atuais](PETS-VALIDATION.md#aprovacoes-concorrentes-local779).
 
 ## 7. Fila, regras, limites e recursos
 
@@ -621,6 +1673,58 @@ expiração invalida novas operações mas não liberta um slot ainda detido pel
 worker. Metadados de turno e revisão não constituem prova de posse. A validação
 de admissão conserva o prazo original, incluindo preparação/espera; o dispatcher
 terá de cancelar e recolher workers no prazo, sem roubar a sua reserva.
+
+O encerramento normal distingue a vida das referências de auditoria da posse
+física. Depois de todos os workers terminarem, a prova opaca de drain do dono
+original e o ACK durável de encerramento permitem retirar só o seu slot do
+coordenador. Cancelamento, JSON e um contador apresentado pela UI não constituem
+essa prova. Handles históricos podem continuar a existir; uma prova antiga
+nunca pode libertar a reserva de um dono posterior. Uma recusa, limite ou Stop
+não se transforma em conclusão do objetivo nem renova o consentimento.
+
+Durante uma aprovação pendente, ceder e retomar o recurso exige uma transição
+autenticada do mesmo dono/saldo; remover o hold sem esse protocolo continua
+proibido.
+
+O protocolo mantém o `Owned`, controlador, lease, consentimento,
+contexto e prazo originais. Antes de ceder, o dono prova zero workers e nenhuma
+IO por recolher, confirma a transição autenticada de espera e só depois liberta
+a reserva física exata. Uma publicação incerta conserva a reserva e reconcilia
+a mesma transição. A admissão deve reconhecer a espera autenticada para permitir
+trabalho manual ou de outro objetivo nesse provider; não basta retirar a entrada
+do coordenador em memória.
+
+Retomar exige adquirir uma nova reserva física para o mesmo dono, com geração
+própria e confirmação durável antes de armar efeitos. Aprovação e saldo não são
+renovados. A validade do pedido pendente durante a cedência é distinta da guarda
+de IO; um dono cedido não pode criar workers de modelo ou ferramenta. Stop tem
+sinal próprio e não cancela a reserva entretanto detida por outro dono. JSON de
+uma espera não permite reconstruir o controlador após reinício. Este protocolo
+foi implementado e verificado no incremento local783 para espera de receitas do
+executor limitado. Prioridades gerais da fila, perda do dono e recuperação após
+reinício continuam requisitos separados.
+
+**Implementação local783:** as transições de espera ficam no registo
+autenticado do consentimento, com a revisão/hash do objetivo, receita, prazo,
+geração física e instantes de cedência/retoma. Confirmar a publicação e ler a
+mesma transição desse registo constitui o ACK; a revisão canónica do objetivo
+fica estável, para conservar o pedido exato de aprovação. A fase de espera não
+conta como uma sessão fisicamente ativa na admissão de outro objetivo.
+
+O handle nativo de gestão do recurso pertence ao dono original; cada reaquisição
+cria uma geração física nova. Uma prova antiga não pode libertar essa geração
+nem a reserva de outro dono. O controlador conserva a revisão e, quando já
+recebida, a decisão opaca durante uma falha de ACK; retomar esse mesmo controlador
+reconcilia a mesma transição. A validação de uma decisão pendente tem modo próprio
+e nunca permite criar workers enquanto o recurso está cedido. Este desenho está
+integrado localmente e tem aceitação Tauri privada com outro objetivo a reservar
+o mesmo provider, espera com aprovação retida, retoma e conclusão verificada.
+Passaram 2440 Rust/20 ignorados, 1155 JS, check/TypeScript/Vite e 430 ensaios no
+anfitrião. O grant schema5 acrescenta o histórico assinado de recursos; os schemas
+anteriores continuam legíveis. Migração/backup/rollback de entrega e providers
+reais não foram aceites por este ensaio. A fábrica conserva o suporte limitado
+existente; não há novas permissões de Sistema. A .30 continua instalada, sem
+commits/pushes. [Provas e limites](PETS-VALIDATION.md#cedencia-e-retoma-local783).
 
 Cada objetivo prepara uma biblioteca privada com CID próprio, identificada pelo
 objetivo/pet/provider, sem modificar a conversa ou rascunho visível. Quando o
@@ -1307,15 +2411,79 @@ identificada como pendente/incerta.
 
 ### 9.1 Paridade de permissões com os agentes originais
 
+**Esclarecimento do utilizador — 24/10:** os pets Codex e Copilot devem poder
+usar as capacidades do respetivo agente original, incluindo trabalhar em
+projetos, editar ficheiros, executar comandos e usar ferramentas/MCP, quando
+essas capacidades estiverem disponíveis e autorizadas na sessão nativa. O pet
+é uma superfície de interação e continuidade do agente; o primeiro catálogo
+limitado Ollama/Spotify não define o teto funcional dos agentes CLI.
+
+Distinguir dois percursos. A interação/continuação de uma sessão nativa mantém
+a capacidade e política do agente original. Já o dispatcher autónomo de
+objetivos exige também limites efetivamente controláveis, recibos e verificação.
+Se o adaptador ainda não consegue impor um limite interno de chamadas/custo,
+esse modo autónomo fica indisponível com motivo explícito; não se retira por
+isso uma capacidade já suportada da sessão nativa nem se anuncia suporte falso.
+Um provider apenas de API de modelo não é equivalente a um agente CLI com as
+suas ferramentas instaladas.
+
+A matriz do plugin Sistema controla as operações expostas pela aplicação.
+Ela não constitui, por si só, uma sandbox do processo CLI. Comandos e ferramentas
+nativas continuam sujeitos à política efetiva do agente/ambiente; uma garantia
+de restrição global exige imposição e verificação nesse nível. Não apresentar
+uma recusa do plugin como prova de que todas as outras vias nativas foram
+bloqueadas, nem aumentar a política do agente para contornar a matriz.
+
 O chat do pet e o canal de voz conservam a política efetiva do agente nativo
 configurado: conta/perfil, sessão, sandbox, política de aprovação e concessões
 nativas aplicáveis. Ao abrir uma sessão própria, usar o perfil/política nativos
 selecionados; ao ligar uma sessão existente, conservar a sua política real.
+Uma opção explícita de acesso total da aplicação aplica-se à criação autorizada
+de uma sessão própria. Retomar uma sessão existente não volta a enviar flags de
+sandbox/aprovação mais permissivas: uma alteração feita entretanto no agente
+original tem de continuar efetiva. Conservar também o nome/identidade nativos e
+as ferramentas/MCP originais; aprovar uma ferramenta local da aplicação não
+altera o perfil da sessão.
 Não substituir essa política por flags mais permissivas, uma sandbox fictícia
 ou uma aprovação local que o agente não recebeu. Permissões desconhecidas ou
 não observáveis ficam identificadas como tal. Limites adicionais explícitos por
 pet/objetivo/subplugin de Sistema continuam aplicáveis; não alargam a política
 nativa nem transportam concessões entre pets ou sessões distintas.
+
+**Correção integrada de retoma Codex:** o RPC comum aplica a opção de acesso
+total apenas em `thread/start`. Em `thread/resume`, a política atual é herdada,
+sem reenviar sandbox/aprovação mais amplas, e o nome original é preservado.
+Quatro cenários de protocolo sintético verificam criação/retoma com a opção
+ligada/desligada, aprovação e stream; 80 testes RPC, biblioteca completa e
+416 ensaios privados no anfitrião passaram. Esta prova local não fecha PET-03,
+a paridade real com os terminais ou a entrega.
+[Validação e limites](PETS-VALIDATION.md#retoma-nativa-codex-local778).
+
+**Decisão R41 integrada localmente em 830 fontes — continuidade exata dos três agentes CLI:** o
+resolvedor comum não transforma uma sessão guardada incompatível em ausência de
+sessão. Se mudou a pasta, conservar a associação/histórico e recusar antes de
+criar outra conversa nativa ou enviar o prompt. A ação existente Nova conversa
+é a escolha explícita para criar outra associação. Uma alteração da preferência
+de acesso total em Codex/Gravity também não altera a política da sessão nem
+autoriza uma substituição silenciosa: recusar essa continuação até o utilizador
+escolher uma conversa nova ou repor a preferência de criação. Copilot conserva
+a política ACP e não passa a interpretar essa opção global.
+
+O campo histórico `full_access` apenas permite detetar essa mudança de intenção;
+não prova permissões nativas atuais. Retoma Codex/Gravity não volta a enviar
+flags de bypass. Criação realmente nova conserva a opção explícita existente.
+Não mudar schemas, preferências guardadas ou o broker de decisões. Chat, voz e
+serviços com assistência opcional usam o mesmo resolvedor. O protótipo
+`gravity_managed` ainda não registado conserva o seu âmbito separado, sem ser
+promovido a prova de aprovações prontas. Esta decisão precede a alteração do
+código e mantém abertos PET-02/03, EXE-02 e os restantes43 requisitos.
+
+A comparação na app Tauri privada confirmou o comportamento anterior e a
+correção para Codex, Gravity, Copilot e uma integração assistida por Codex.
+Retoma exata, recusa sem enviar prompt e Nova conversa com arquivo preservado
+passaram com processos de protocolo sintéticos. Não comprova adoção de um
+terminal externo, política operacional real ou execução autónoma limitada de
+ferramentas internas das CLI. [Provas](PETS-VALIDATION.md#continuidade-local830).
 
 Um pedido de aprovação tem uma identidade canónica: adaptador/endpoint, perfil,
 sessão, turno e ID nativo do pedido, mais operação/argumentos/alvo e validade.
@@ -1642,6 +2810,179 @@ opcionais quando demonstrarem melhoria; a geração externa exige autorização 
 saída de dados. Revogar/apagar uma fonte invalida os derivados e índices segundo
 uma política explícita. Não conservar segredos através de resumos ou embeddings.
 
+**Unidade R42 integrada localmente em 834 fontes — memória estruturada individual:**
+o arquivo `assistant_memory` é histórico de diálogo e sessões; não é o catálogo
+de recordações acima. Não reinterpretar mensagens antigas como preferências
+confirmadas nem migrar silenciosamente o arquivo para outro schema. A primeira
+composição de memória deve permitir criação explícita, consulta/pesquisa,
+correção e exclusão por um controlador nativo revisto, com revisão otimista e
+persistência limitada no perfil admitido. Identidade do pet vem da fábrica;
+provider/modelo ou pasta observada não substituem esse dono.
+
+Separar âmbito do pet, conversa e projeto. Só aceitar os âmbitos cujo vínculo
+nativo já seja verificável; um caminho não cria automaticamente um projeto.
+Partilha, extração/resumos automáticos e escrita por modelos exigem decisões
+próprias. Um pedido sem memória explícita conserva o comportamento atual. Uma
+recordação não autoriza ações, ferramentas, fontes ou outro pet; conteúdo
+recuperado entra como dados com origem, revisão, validade e cobertura.
+
+Reutilizar as garantias de armazenamento/posse/CAS existentes antes de introduzir
+infraestrutura. PostgreSQL continua opcional e não é dependência desta unidade.
+Leituras ausentes não criam ficheiros; corrupção, conflito e publicação incerta
+preservam os dados anteriores. Expiração/exclusão invalidam seleções e derivados;
+não conservar uma cópia oculta nos resumos ou no contexto de trabalho.
+
+A auditoria identificou preparação de contexto distinta nos transportes CLI,
+local, Claude e OpenAI compatível. Uma API de seleção/validação comum deve servir
+os pets aplicáveis sem depender do Codex. A integração futura em objetivos exige
+captura/revisão nativa vinculada à admissão: não acrescentar memória oculta a um
+pedido já autorizado. Memória disponível em disco não prova inclusão no contexto
+nem permissão de envio a um provider remoto. MEM-01/02 continuam abertos;
+a composição 834 implementa a gestão explícita descrita abaixo; a adoção do
+contexto dos modelos e a aceitação integral MEM-01/02 continuam pendentes.
+
+**Decisão de armazenamento R42, antes da implementação:** extrair o mecanismo
+privado de revisão/CAS/publicação das fontes para um componente comum tipado.
+O adaptador de fontes conserva schema, erros, limites, nomes de lock/temporários
+e testes. A memória usa esse mesmo componente com um documento próprio no
+payload admitido, sem alterar a biblioteca de diálogo. A publicação admite uma
+revalidação nativa final; o comportamento das fontes permanece equivalente.
+
+O primeiro percurso de gestão trata preferências e notas fornecidas
+explicitamente pelo utilizador, por pet ou conversa nativa existente, com
+sensibilidade, validade e retenção até exclusão explícita. Expirar suprime a
+disponibilidade, sem eliminar silenciosamente o registo. Pesquisa/edição/exclusão
+não abrem fontes nem enviam conteúdo a modelos. Projetos, episódios verificados,
+derivados/resumos, partilha e adoção do contexto conservam os contratos e a
+implementação pendentes; este percurso inicial não fecha MEM-01/02.
+
+**Decisão R42D — conversa vazia com memória:** o ensaio nativo reproduziu perda
+de acesso a uma recordação porque o CID existia apenas em RAM. Criar memória
+explicitamente deve conservar a identidade da conversa pelo escritor existente,
+sem inventar mensagens. Nova conversa conserva no arquivo um CID vazio que
+tenha recordações; catálogo ausente mantém o comportamento anterior e catálogo
+inválido exige preservação conservadora. A leitura deste vínculo não toma o lock
+de escrita da memória nem chama o chat, evitando inversão de locks.
+
+Validar primeiro a mutação e a revisão esperada. Conservar o CID durante a revisão
+nativa e revalidar o dono antes de publicar a recordação. Uma mudança concorrente
+de conversa pode recusar a publicação; nunca associa a recordação a outro CID.
+Uma identidade conservada antes de uma publicação recusada não concede execução
+nem cria texto de histórico. Os formatos de diálogo existentes mantêm-se.
+
+A composição passou 2582 Rust/21 ignorados, check/build, 751 ensaios privados no
+anfitrião e 13 percursos Tauri privados. O novo percurso cobre os 24 pets não
+retirados do catálogo, preservação da conversa vazia através de reinícios e
+Nova conversa, CRUD/pesquisa/CAS e o adaptador existente de fontes. O pin de
+retenção só existe em RAM; a persistência usa o escritor/arquivo anteriores e o
+catálogo de memória restaura a referência após reinício. Não se serializa um
+novo campo de conversa nem se inventa uma mensagem. Os12 percursos anteriores
+passaram; três precisaram de corrigir apenas a ativação LM Studio nas fixtures.
+[Provas e limites](PETS-VALIDATION.md#memoria-local834).
+
+**Unidade seguinte R43 — seleção e contexto comuns:** definir captura explícita
+das recordações, origem/revisão/validade e destino autorizado antes de acrescentar
+conteúdo a um pedido. Usar o mesmo contrato nos transportes CLI, local, Claude e
+OpenAI compatível; integrar a captura na revisão/admissão dos objetivos. Memória
+guardada não significa memória incluída. Revogação/exclusão deve impedir nova
+reutilização pela app; dados já entregues a uma sessão nativa/fornecedor exigem
+tratamento explícito das limitações reais de contexto e retenção. Não prometer
+apagar conhecimento remoto só por remover um registo local. As capacidades do
+descritor devem distinguir gestão humana disponível e uso por modelos ainda
+pendente, sem ampliar permissões.
+
+**Decisão R43 antes do código — revisão comum e proveniência entregue:** a
+seleção humana vincula revisões exatas, dono/CID, pergunta e destino efetivo,
+incluindo o modelo escolhido. Credenciais ficam apenas no objeto nativo; a
+revisão pública não as expõe nem deriva a sua identidade a partir delas. O token
+de revisão é limitado à janela e não é uma permissão do agente original, uma
+ferramenta de modelo ou uma admissão autónoma. Não fabricar um ticket CLI para
+representar esta decisão de dados nem reutilizar uma concessão de objetivo.
+
+Nos transportes sem sessão remota, as recordações entram numa mensagem de dados
+temporária, separada da pergunta pública e do histórico gravado. Respostas já
+entregues ao utilizador continuam dados da conversa; eliminar uma recordação
+não apaga silenciosamente esse histórico. Nas CLI, conservar referências e
+destino do contexto entregue, incluindo incerteza antes de IO. Revogação,
+expiração ou alteração bloqueiam nova reutilização pela app na sessão afetada,
+até uma transição explícita de contexto suportada. Não prometer apagar os logs
+ou o conhecimento do fornecedor.
+
+Metadados persistentes de contexto nativo exigem biblioteca versão7. Campos
+ausentes conservam os bytes/versões4/5/6; leitores antigos têm de recusar versão7
+antes de escrever, em vez de perder a proveniência. A captura comum limita
+quantidade/bytes e verifica os itens escolhidos; uma edição de outro pet não
+seleciona dados diferentes. Identidades de rotas genéricas ainda não associadas
+não são substituídas por outro pet. Primeiro implementar e provar captura,
+revisão e codec; depois ligar os transportes manuais, a admissão dos objetivos e
+o descritor. R43 permanece aberto até esses percursos estarem integrados.
+
+**Incremento R43C sem sessão remota:** a decisão humana de dados só pode iniciar
+um turno, mesmo que o canal nativo seja clonado internamente. Cada transporte
+confirma os seus parâmetros reais antes de acrescentar a mensagem temporária;
+registos selecionados são revalidados durante IO cancelável e antes de publicar
+uma conclusão. O destino OpenAI/Google identifica a base nativa da API: os
+endpoints irmãos Chat/Responses já conhecidos não constituem uma mudança de
+conta ou autorização para URLs arbitrários. Anthropic e servidores locais
+conservam o endpoint efetivo. A credencial aprovada é comparada no consumo e no
+transporte, sem sair do objeto nativo; o pedido em curso usa esse destino e
+credencial exatos. O pedido seguinte exige nova revisão. Uma preparação/API sem
+superfície humana funcional não fecha a aceitação do produto.
+
+**Decisão R43D — revogação durante decisões e ferramentas:** verificar apenas o
+IO do modelo não cobre o tempo de espera pela decisão humana ou a execução de
+um comando. A mesma reserva de turno supervisiona a validade do contexto e
+sinaliza o cancelamento original; o supervisor não possui outro recurso físico.
+A admissão do passo e a classificação terminal verificam a fronteira diretamente.
+Cancelar não liberta o recurso antes de terminar a limpeza/recolha do processo
+próprio, nem apaga os recibos ou repete o efeito para tentar confirmar o estado.
+
+**Auditoria para contexto CLI:** os três adaptadores têm tempos diferentes de
+confirmação do ID nativo. A proveniência de possível entrega tem de ser durável
+antes do prompt bruto. Um ID desconhecido após possível entrega não autoriza
+criar outra sessão; a adoção posterior de um ID deve ser exata e persistida.
+Conservar esse contexto mesmo sem mensagem pública inicial. Chat, voz e retoma
+usam a mesma fronteira, mantendo as permissões e decisões do agente original.
+A pergunta/histórico públicos não recebem o prefixo temporário de memória.
+
+**Decisão R43E — contexto entregue às CLI:** todos os pontos de entrada passam
+pela fronteira comum de execução nativa, incluindo voz e retoma. Contexto antigo
+é validado por referências/destino, sem voltar a enviar registos brutos só porque
+existem metadados. Novos dados exigem a revisão humana `NativeSessionContext`.
+A união conserva todas as referências anteriores; conflito ou limite acumulado
+exige transição explícita, sem truncar conhecimento já entregue. Gravar possível
+entrega antes do prompt e adotar o ID nativo numa escrita verificada conjunta com
+a sessão/tarefa. ID ainda desconhecido ou destino diferente não autoriza outra
+sessão. A deteção de revogação marca o contexto como revogado; falha de gravação
+mantém uma barreira visível. Estas decisões não alteram as permissões nativas.
+
+**Unidade seguinte R43F — memória no objetivo antes da admissão:** reutilizar o
+contexto isolado, a revisão de dados, o hash de admissão e a fronteira canónica
+do writer. Referências selecionadas mantêm pet/CID de origem; o CID privado do
+objetivo não concede acesso a notas de outra conversa. Contexto dedicado só pode
+usar notas de âmbito autorizado sem inventar uma origem. O utilizador revê dados,
+destino/modelo e o âmbito do objetivo antes da concessão; um ticket de mensagem
+ou sessão manual não autoriza rondas autónomas. O corpo real com memória tem de
+estar construído antes do hash/reserva da tentativa. O contexto comum deve também
+invalidar efeitos e decisões, sem novo dono de recursos. A decisão de versão,
+leitores antigos, recuperação/retoma e limites completos precede a implementação.
+
+**Decisão R43F1 antes do código:** uma seleção de referências tipadas acrescenta
+`ContextBinding` versão2 e registo de objetivo versão11, apenas quando existe
+memória selecionada. Sem seleção, os formatos1..10 e os bytes ausentes mantêm-se.
+O contexto dedicado só aceita notas do próprio pet; o snapshot pode aceitar notas
+da conversa pública exata declarada. Repetir a preparação não troca nem esquece
+a seleção. O `ContextFence` existente valida as referências e invalida IO,
+decisões e efeitos, mantendo os recursos até à limpeza. As recordações brutas
+não entram no diálogo inicial. Durante a implementação, a admissão com memória
+fica recusada até ligar a revisão humana dos dados/destino e a mensagem anterior
+ao hash/reserva canónicos; esta recusa é temporária e não fecha a unidade R43.
+
+**Atualização de estado R43F1A — 25/10/2026:** no SDK privado841 passou a preparação durável de memória selecionada para objetivos: referências exatas por pet/conversa de origem, contexto versão2 e objetivo versão11 apenas quando há seleção, sem copiar os dados brutos para o diálogo inicial. Passaram 2612 testes Rust/21 ignorados, check/build e o percurso Tauri privado130, incluindo reinício, revogação e recusa do leitor840 sem alterar os ficheiros. Não houve chamadas a modelos ou quota. A admissão autónoma com memória permanece deliberadamente recusada até R43F2 ligar revisão humana dos dados/destino, consentimento próprio do objetivo e mensagem anterior ao hash/reserva canónicos. A raiz aceite permanece834; a app instalada permanece .30. R43 e os 43 requisitos continuam abertos.
+
+
+**Histórico R43F2D — 25/10:** SDK846 prova os envios de memória de Anthropic/OpenAI/Google através da implementação nativa comum, com HTTP loopback sintético, dados separados da pergunta e recusa de destino/modelo/credencial/pergunta alterados. Foi retirado o opt-in de fallback automático Anthropic; APIs e percursos locais usam o destino exato sem seguir redirecionamentos. Passaram2632 Rust/21 ignorados, check/build e Tauri136:13 pedidos HTTP e17 prompts CLI sintéticos, incluindo memória/decisões/recolha/retoma dos três CLI e serviço separado, objetivos locais e dois redirecionamentos recusados sem pedidos ao destino alternativo. Não certifica contas reais, routing interno do fornecedor, UI humana ou instalação. Raiz834 e instalação .30 preservadas. Seguem interface humana/callers, retoma de objetivos com memória e adoção/migração/entrega; R43 e os49 requisitos continuam abertos.
+
 ## 11. Fontes pessoais, proatividade e voz
 
 Entregar um anexo é diferente de inscrever uma fonte persistente. A inscrição
@@ -1711,7 +3052,33 @@ PT/EN/misto, microfone e TTS reais, sem confundir fixtures/transcrição escrita
 com aceitação de áudio. Estes critérios ampliam VOICE-01/02; a implementação
 existente é parcial e não fecha o controlo integral por voz.
 
+<a id="12-cooperacao-entre-pets"></a>
+
 ## 12. Cooperação entre pets
+
+### 12.1 Comunicação direta e protocolo comum
+
+Cada pet pode ser chamado diretamente pelo utilizador e trocar mensagens com
+outro pet dentro da política aplicável. Uma relação de coordenação não transforma
+Ollama ou qualquer outro pet em passagem obrigatória. A infraestrutura de controlo
+é partilhada, mas conserva os donos e não obriga a carregar um motor para entregar
+um evento, consultar uma tarefa ou executar uma operação determinística.
+
+O protocolo comum deve consolidar descoberta de capacidades, mensagens, pedidos,
+respostas, delegação, eventos, resultados e acompanhamento. Uma entrega durável
+regista versão, ID de mensagem, remetente/destinatário, origem autenticada,
+correlação/causa, objetivo/tarefa, referências de artefactos autorizados, prazo,
+chave de idempotência e orçamento/limites de encaminhamento. IDs ou referências
+de concessões na mensagem são dados; o backend verifica a autoridade efetiva.
+
+Reutilizar revisões/CAS, eventos e recibos do runtime, o registo de capacidades e
+o broker existente. Antes de criar outra fila, mailbox ou serviço, demonstrar que
+esses mecanismos não satisfazem o contrato. Uma tarefa direta e uma delegada
+usam a mesma admissão, controlo, cancelamento, verificação e auditoria. Entrega,
+aceitação, execução e conclusão são fases distintas; perder um ACK não repete o
+efeito.
+
+### 12.2 Delegação paralela, limites e coordenação resiliente
 
 Um objetivo tem um pet responsável e pode ter trabalhos delegados quando a
 política permitir. Uma delegação guarda origem, destino, subconjunto do objetivo,
@@ -1729,6 +3096,28 @@ passo depois de verificado. Falhas de um pet preservam trabalhos independentes.
 Trocar um resumo/artefacto autorizado não copia toda a biblioteca de conversas.
 Uma delegação não abre contas, ativa pets retirados ou escolhe um provider pago.
 A cooperação vem depois de identidade, tarefas, política e recuperação individuais.
+
+As entregas podem ser paralelas e assíncronas; dependências e recursos continuam
+sob controlo nativo. Limitar profundidade, número de delegações, tentativas,
+concorrência, prazo, custo e saída por cadeia. Guardar a cadeia causal para
+recusar ciclos e duplicações; conflitos não geram dois donos do mesmo efeito.
+Cancelar ou perder um ramo conserva o estado e os resultados dos outros ramos,
+sem promover conteúdo recebido a instrução ou permissão do destinatário.
+
+O coordenador configurado pode observar objetivos, prioridades, estados e
+capacidades apenas no âmbito concedido, propor divisão de trabalho e acompanhar
+resultados. Ollama é a preferência expressa pelo utilizador para esse papel;
+outros pets permanecem utilizáveis sem ele, com delegação direta autorizada e
+resultados consultáveis. Reeleição, substituição ou transferência de coordenação
+exigem política explícita e não mudam conta/modelo/permissões silenciosamente.
+
+**Estado inspecionado em 24/10:** `windows/src/mochi/delegation.ts` prepara pedidos
+de texto editáveis e não inicia tarefas de IA/Sistema. Esse caminho, os moldes da
+fábrica e os contextos separados não comprovam, por si só, o protocolo durável
+entre pets ou a coordenação resiliente. A adoção dessas capacidades e os ensaios
+de chamadas diretas, ramos concorrentes, ciclos, falhas do coordenador e ausência
+de motores continuam pendentes em TEAM-01/02; não reconstruir os componentes
+funcionais existentes para simular uma implementação dessas garantias.
 
 ## 13. Sistema como plugin e matriz de permissões
 
@@ -2102,6 +3491,26 @@ houver referências ou possibilidade de rollback. Validar arranque GUI, pedidos
 precoces, anexos, vozes/sons e permissões na composição final. Nenhuma destas
 etapas fica satisfeita apenas pela suite privada de migração.
 
+**Decisão R41B integrada localmente em 830 fontes — diretórios vivos e snapshots:** a observação
+de identidade de um diretório de destino não usa o seu carimbo de conteúdo como
+prova de posse. Criar/remover entradas legítimas no payload altera tamanho,
+datas e número de ligações; isso não constitui substituição do perfil. Validar
+os descritores, nome/inode/dispositivo/mount, dono e modo, mantendo recusa de
+substituição, links, permissões divergentes e perda real do lock/posse. Marcadores
+e ficheiros continuam a exigir conteúdo/identidade exatos. A inspeção de fontes
+legadas conserva os snapshots estritos e a deteção de alterações; a exceção de
+binding pertence apenas aos diretórios de destino/vivos. Uma prova nativa
+privada reproduziu a falsa perda de perfil com marcadores e identidades intactos,
+antes da correção. A fixture de dono privado também deve publicar o sinal JSON
+de pronto atomicamente, sem reduzir a validação ou aumentar o prazo.
+
+Após a correção, a app privada manteve 200 consultas bem-sucedidas durante
+583260 criações/remoções legítimas; marcadores e identidade do perfil ficaram
+intactos. A suite de dados conservou a recusa de substituições, links, perda de
+posse e mudanças de modo, bem como a inspeção estrita das fontes. Não repara
+automaticamente perfis anteriormente inválidos nem fecha a migração/entrega.
+[Provas e falhas conservadas](PETS-VALIDATION.md#continuidade-local830).
+
 ### 16.7 Histórico de donos indisponíveis
 
 Um fornecedor fora do catálogo pode continuar a ter dados no perfil. O leitor
@@ -2201,3 +3610,35 @@ comparar contratos e limitações; o sistema antigo continua descontinuado.
 Alterar esta arquitetura quando surgir um requisito, uma incompatibilidade ou
 uma decisão concreta. Manter o histórico e a evidência nos documentos próprios,
 com IDs estáveis do roadmap, evitando transformar a arquitetura num diário de builds.
+
+## 18. System Guardian e clarificações de 25/10
+
+O [contrato completo do Guardian](SYSTEM-GUARDIAN-ARCHITECTURE.md) acrescenta GUA-01..06 sem eliminar os 43 requisitos. Reserva `agent_system_guardian` como especialista da fábrica comum, com binding inicial de inferência Ollama explicitamente configurado para esse dono; nenhuma ativação, modelo, endpoint ou grant é herdado do coordenador. Inventário e verificações determinísticas não exigem modelo residente.
+
+O runtime é infraestrutura determinística partilhada e mantém autoridade, dados, ferramentas, recursos, mensagens e recuperação. Papéis não concedem privilégios. A mesh permite comunicação direta pelo broker comum e não requer ligações all-to-all físicas, outro scheduler ou microserviços. A ausência do coordenador preserva trabalhos independentes; a ausência do backend comum tem limites de disponibilidade e recuperação explícitos.
+
+O Guardian cobre inventário/evidência, vulnerabilidades, saúde/desempenho, integração com os gestores reais do sysworkspace, remediação governada e proatividade/cooperacão. Começa por observação/recomendação e inclui o percurso completo de remediação autorizada. Não há shell/root geral, autoaprovação ou alteração de política pelo modelo. Respeitar exclusões Coucou/Mochi e outras fronteiras de projetos. Fixtures de VPN/Tailscale/firewall, dock Thunderbolt e consumo de serviço não autorizam mutações na estação.
+
+Isolamento lógico num processo partilhado não é sandbox para plugins/código não fiáveis. A contenção efetiva precede a sua execução; helpers privilegiados, se necessários, são mínimos/tipados e mantêm autorização nativa. Findings/conteúdo externo são dados não fiáveis, sem promover texto a autoridade. Os [49 requisitos auditados](PETS-REQUIREMENTS-AUDIT-2026-10-25.md) conservam prova, limites e próximo critério por ID.
+
+Fechar R43 antes de deslocar o foco para mesh ou especializações. Depois seguem autonomia/preservação, cooperação, memória/fontes/rotinas, Sistema/voz e Guardian conforme as dependências reais. Não anunciar um catálogo, API privada ou testes como produto completo e entregue.
+
+### Continuação selecionada e importação de dados — decisão R43F3/F4
+
+Uma continuação conserva o GoalId, dono, intenção, critérios, contexto e revisões de memória originais. Exige encerramento autenticado do dono anterior e nova revisão/decisão do objetivo; o orçamento é adicional ao consumo histórico, sem o renovar. Os percursos146/147 verificam esta composição em privado, incluindo planeamento de duas rondas com aprovações próprias de receita. Não demonstram autonomia limitada dos CLI ou entrega instalada.
+
+A importação de um perfil .30 é exclusivamente legada. Deve recusar `native_memory_context`/`nativeMemoryContext` em qualquer conversa ativa/arquivada sob um marcador antigo e qualquer catálogo de configuração `pet-runtime-*`, incluindo resultados, planeamento, decisões de passos e donos físicos. Uma cópia parcial desses dados não é migração/restauro do perfil atual. O restauro coerente é a próxima dependência: preserva dados, histórico de autoridade/consumo e efeitos incertos, mas não copia posse viva, locks ou provas de inode como autoridade nova. [Estado e provas](PETS-VALIDATION.md#retoma-memoria-importacao-r43f4).
+
+### Backup do perfil atual e restauro — decisão R43F5
+
+O backup do perfil atual reutiliza o inventário limitado e a cópia com verificação existentes, mas tem protocolo/namespace próprio, distinto da importação .30. Captura integralmente os dois payloads admitidos, incluindo memória, anexos, objetivos, concessões, contextos, resultados e recibos incertos. Executa em manutenção offline, antes de iniciar Chat/workers, sob o mesmo nome D-Bus e lock físico de startup; uma aplicação ativa causa recusa, sem tomada de posse. A revisão nativa mostra origem/destino/resumo e exige confirmação do fingerprint exato antes da cópia. Os ficheiros da aplicação podem conter informação e chaves privadas: o arquivo é local/privado e não se publica em Git ou em modelos.
+
+Um arquivo verificado contém dados, não execução autorizada. Não transfere locks, identidade física do dono ou saldo renovado, nem é prova de autenticidade contra código do mesmo UID. O restauro completo continua obrigatório e exige transação própria pelo gate de publicação/admissão, com recuperação explícita da autoridade histórica e efeitos incertos; não fica concluído por este incremento de backup. Não alterar a instalação ou executar este modo sobre o perfil pessoal sem a autorização específica aplicável.
+
+### Publicação de conclusão sob concorrência — decisão R43F5D
+
+O ensaio nativo150 expôs `Busy` na conclusão após a prova final: leitores concorrentes podem ocupar o catálogo antes da transação de escrita. A correção conserva a mesma receita/aprovação e prova assinada; repete apenas autenticação/publicação de controlo anterior a qualquer escrita, com limite monotónico de1s e sem bloquear Stop entre tentativas. Atualidade desconhecida devolve Busy, alteração/revogação devolve recusa. Resultado incerto após publicação nunca é tratado como Busy nem repete inferência, observação física ou operações. Não altera schemas ou autoridade; os percursos manual/driver conservam a mesma transação nativa.
+
+### Cobertura dos rascunhos antes do restauro — descoberta R43F6
+
+A inspeção do produtor real confirmou `IndexedDraftStorage`/`coucou.sessionDrafts.v1` na janela e Map em memória no prompt inline. O IndexedDB observado no próprio QA143 fica em `data/fr.louisraille.coucou/databases/indexeddb`, fora do payload nativo. Portanto, backup F5 significa cópia íntegra dos dois payloads admitidos; não fecha a preservação integral de rascunhos. Antes de restauro/adoção, mover estes produtores para armazenamento nativo revisto, reutilizando dono/CAS e a API de drafts existente, com migração dos registos conhecidos, conflitos, revisões, reinício e ACK incerto. Preservar a base antiga até à confirmação; não copiar perfis WebKit/autenticados nem enviar o rascunho automaticamente. Esta dependência foi descoberta no código e não elimina DATA-01/REL-01 ou critérios originais.
