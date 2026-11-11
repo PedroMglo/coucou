@@ -14,10 +14,10 @@ pub struct Reference{
 impl Reference{
     pub(super)fn basic(&self)->bool{
         let hash=|s:&str|super::authority::decode(s).is_some();
-        self.schema_version==1&&model::token(&self.id)&&model::key(&self.request_id)&&model::goal_id(&self.goal_id)&&model::key(&self.pet_id)&&model::token(&self.decision_id)
+        self.schema_version==(if self.source_grant_schema==48{3}else if matches!(self.source_grant_schema,10|19){2}else{1})&&model::token(&self.id)&&model::key(&self.request_id)&&model::goal_id(&self.goal_id)&&model::key(&self.pet_id)&&model::token(&self.decision_id)
             &&[&self.source_goal_revision,&self.source_grant_revision,&self.profile.key_id].iter().all(|s|model::token(s))
             &&[&self.source_goal_hash,&self.source_grant_hash,&self.inventory_hash,&self.artifact_fence].iter().all(|s|hash(s))
-            &&self.source_sequence>0&&self.source_sequence<=model::MAX_EVENTS as u64&&matches!(self.source_grant_schema,1|4)&&self.profile.directory.inode>0
+            &&self.source_sequence>0&&self.source_sequence<=model::MAX_EVENTS as u64&&matches!(self.source_grant_schema,1|4|10|19|48)&&self.profile.directory.inode>0
             &&self.source_grant_updated_at>0&&self.source_grant_updated_at<=self.prepared_at&&self.prepared_at<=self.approved_at&&self.approved_at<=8_640_000_000_000_000
             &&self.approved_at-self.prepared_at<30_000&&!self.history_continuity_verified
     }
@@ -26,10 +26,10 @@ impl Reference{
             &&model::fingerprint(goal).ok().as_ref()==Some(&self.source_goal_hash)&&!goal.admissions.iter().any(|row|row.spec.decision_id==self.decision_id)
     }
     pub(super)fn valid_for(&self,body:&Grant)->bool{
-        if !self.basic()||body.schema_version!=8||body.phase!=GrantPhase::Revoked||!body.never_claimed_zero()||body.recovery.is_some()
+        if !self.basic()||body.schema_version!=(if body.operation==Operation::GoalDeterministic{body.native_schema()}else{8})||body.phase!=GrantPhase::Revoked||!body.never_claimed_zero()||body.recovery.is_some()
             ||body.goal_id!=self.goal_id||body.decision_id!=self.decision_id||body.revision!=self.id||body.updated_at!=self.approved_at||body.approved_at>self.source_grant_updated_at{return false;}
         let mut before=body.clone();before.retirement=None;before.schema_version=self.source_grant_schema;before.phase=GrantPhase::Issued;before.revision=self.source_grant_revision.clone();before.updated_at=self.source_grant_updated_at;
-        before.valid()&&before.schema_version==(if before.operation==Operation::GoalPlanning{4}else{1})
+        before.valid()&&before.schema_version==(if before.operation==Operation::GoalDeterministic{before.native_schema()}else if before.operation==Operation::GoalPlanning{4}else{1})
             &&model::fingerprint(&before).ok().as_ref()==Some(&self.source_grant_hash)
     }
 }

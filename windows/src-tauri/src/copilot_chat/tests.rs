@@ -154,7 +154,20 @@ for line in sys.stdin:
             let nonce=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
             let dir=std::env::temp_dir().join(format!("mochi-acp-test-{}-{nonce}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed)));
             fs::create_dir_all(&dir).unwrap();fs::set_permissions(&dir,fs::Permissions::from_mode(0o700)).unwrap();
-            let exe=dir.join("peer.py");fs::write(&exe,PEER).unwrap();fs::set_permissions(&exe,fs::Permissions::from_mode(0o700)).unwrap();fs::write(dir.join("behavior"),behavior).unwrap();Self{dir,exe}
+            let exe=dir.join("peer.py");
+            // Publish the executable from a separate, stable interpreter.
+            // A writer fd opened here can be inherited by unrelated parallel
+            // forks until exec, making shebang launch fail with ETXTBSY.
+            let mut publisher=Command::new("/usr/bin/python3").args(["-I","-c","import pathlib,sys\nn=int(sys.argv[2]);data=sys.stdin.buffer.read(n)\nassert len(data)==n\npathlib.Path(sys.argv[1]).write_bytes(data)"]).arg(&exe).arg(PEER.len().to_string())
+                .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+            let published=(||->std::io::Result<()>{
+                publisher.stdin.take().ok_or_else(||std::io::Error::from(std::io::ErrorKind::BrokenPipe))?.write_all(PEER.as_bytes())?;
+                let end=Instant::now()+Duration::from_secs(5);
+                loop{if let Some(status)=publisher.try_wait()?{return if status.success(){Ok(())}else{Err(std::io::Error::from(std::io::ErrorKind::Other))};}
+                    if Instant::now()>=end{return Err(std::io::Error::from(std::io::ErrorKind::TimedOut));}std::thread::sleep(Duration::from_millis(2));}
+            })();
+            if published.is_err(){let _=publisher.kill();}let _=publisher.wait();published.unwrap();
+            assert_eq!(fs::read(&exe).unwrap(),PEER.as_bytes());fs::set_permissions(&exe,fs::Permissions::from_mode(0o700)).unwrap();fs::write(dir.join("behavior"),behavior).unwrap();Self{dir,exe}
         }
         fn client(&self)->Client {let _spawn=SPAWN.lock().unwrap();Client::start(&self.exe,&self.dir,Duration::from_secs(5)).unwrap()}
         fn wire(&self)->Vec<Value>{fs::read_to_string(self.dir.join("wire.jsonl")).unwrap().lines().map(|s|serde_json::from_str(s).unwrap()).collect()}

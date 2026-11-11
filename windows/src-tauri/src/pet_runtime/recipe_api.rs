@@ -20,9 +20,29 @@ pub struct RecipeTicket{pub token:String,pub proposal:Proposal}
 pub enum RecipeConfirmation{Granted{scope:recipes::Scope},Declined,Ended,Blocked{reason:Failure}}
 #[cfg(target_os="linux")]struct Pending{window:String,request:String,review:Review}
 #[cfg(target_os="linux")]struct Retained{window:String,revision:String,token:String,approved:Approved,ready:Ready}
-#[cfg(target_os="linux")]#[derive(Default)]struct Cache{pending:BTreeMap<String,Pending>,ready:BTreeMap<String,Arc<Retained>>}
+#[cfg(target_os="linux")]#[derive(Default)]struct Cache{pending:BTreeMap<String,Pending>,ready:BTreeMap<String,Arc<Retained>>,retired_pending:Vec<Pending>,retired_ready:Vec<Arc<Retained>>}
 #[cfg(target_os="linux")]impl Cache{
-    fn sweep(&mut self,now:u64){self.pending.retain(|_,p|now<p.review.proposal().expires_at);self.ready.retain(|_,r|now<r.ready.scope().deadline_at);}
+    fn sweep(&mut self,now:u64){
+        let expired=self.pending.iter().filter_map(|(key,p)|(now>=p.review.proposal().expires_at).then(||key.clone())).collect::<Vec<_>>();
+        for key in expired{if let Some(p)=self.pending.remove(&key){self.retired_pending.push(p);}}
+        let expired=self.ready.iter().filter_map(|(key,r)|(now>=r.ready.scope().deadline_at).then(||key.clone())).collect::<Vec<_>>();
+        for key in expired{if let Some(r)=self.ready.remove(&key){self.retired_ready.push(r);}}
+    }
+    fn release(&mut self,lease:&str){
+        let pending=self.pending.iter().filter_map(|(key,p)|(p.review.proposal().scope.lease_id==lease).then(||key.clone())).collect::<Vec<_>>();
+        for key in pending{if let Some(p)=self.pending.remove(&key){self.retired_pending.push(p);}}
+        let ready=self.ready.iter().filter_map(|(key,r)|(r.ready.scope().lease_id==lease).then(||key.clone())).collect::<Vec<_>>();
+        for key in ready{if let Some(r)=self.ready.remove(&key){self.retired_ready.push(r);}}
+    }
+    fn take_retired(&mut self)->(Vec<Pending>,Vec<Arc<Retained>>){(std::mem::take(&mut self.retired_pending),std::mem::take(&mut self.retired_ready))}
+    fn insert_pending(&mut self,token:String,window:String,request:String,review:Review,now:u64)->model::Result<()>{
+        self.sweep(now);self.retired_pending.push(Pending{window,request,review});
+        if self.pending.len()>=128||self.ready.len()>=64||self.pending.contains_key(&token){return Err(model::Error::LimitReached);}
+        self.pending.insert(token,self.retired_pending.pop().ok_or(model::Error::Conflict)?);Ok(())
+    }
+    fn remember(&mut self,r:Arc<Retained>)->model::Result<()>{
+        self.retired_ready.push(r.clone());if self.ready.len()>=64||self.ready.contains_key(&r.ready.scope().id){return Err(model::Error::LimitReached);}self.ready.insert(r.ready.scope().id.clone(),r);Ok(())
+    }
     fn confirmed(&self,window:&str,input:&RecipeConfirmInput)->model::Result<Option<Arc<Retained>>>{
         let Some(r)=self.ready.values().find(|r|r.token==input.token)else{return Ok(None);};let s=r.ready.scope();
         if !input.approve||r.window!=window||r.revision!=input.revision||s.goal_id!=input.goal_id||s.pet_id!=input.pet_id||s.lease_id!=input.lease_id{return Err(model::Error::Conflict);}Ok(Some(r.clone()))
@@ -36,7 +56,11 @@ pub enum RecipeConfirmation{Granted{scope:recipes::Scope},Declined,Ended,Blocked
 #[cfg(target_os="linux")]fn cache()->&'static Mutex<Cache>{static CACHE:OnceLock<Mutex<Cache>>=OnceLock::new();CACHE.get_or_init(||Mutex::new(Cache::default()))}
 #[cfg(target_os="linux")]fn root()->std::path::PathBuf{crate::settings::config_dir().join("pet-runtime-v1")}
 fn check(window:&tauri::WebviewWindow)->model::Result<()>{if super::adapter::allowed(window.label()){Ok(())}else{Err(model::Error::InvalidInput)}}
-#[cfg(target_os="linux")]pub(super)fn release(lease:&str){if let Ok(mut c)=cache().lock(){c.ready.retain(|_,r|r.ready.scope().lease_id!=lease);c.pending.retain(|_,p|p.review.proposal().scope.lease_id!=lease);}}
+#[cfg(target_os="linux")]fn with_cache_at<T>(lock:&Mutex<Cache>,operation:impl FnOnce(&mut Cache)->model::Result<T>)->model::Result<T>{
+    let(result,retired)={let mut c=lock.lock().map_err(|_|model::Error::StorageUnavailable)?;let result=operation(&mut c);(result,c.take_retired())};drop(retired);result
+}
+#[cfg(target_os="linux")]fn with_cache<T>(operation:impl FnOnce(&mut Cache)->model::Result<T>)->model::Result<T>{with_cache_at(cache(),operation)}
+#[cfg(target_os="linux")]pub(super)fn release(lease:&str){let _=with_cache(|c|{c.release(lease);Ok(())});}
 
 #[cfg(target_os="linux")]#[tauri::command]
 pub async fn pet_runtime_prepare_recipe(window:tauri::WebviewWindow,input:RecipePrepareInput)->model::Result<RecipeTicket>{
@@ -45,31 +69,30 @@ pub async fn pet_runtime_prepare_recipe(window:tauri::WebviewWindow,input:Recipe
         let goal=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?.read(&input.goal_id,&input.pet_id)?;
         if goal.revision!=input.revision{return Err(model::Error::Conflict);}let owner=super::lease_api::step_owner(&goal,&input.lease_id)?;
         let binding=owner.recipe_input_binding(&goal,&input.plan_id,&input.criteria)?;
-        {let mut c=cache().lock().map_err(|_|model::Error::StorageUnavailable)?;c.sweep(crate::assistant_memory::now());
-            if let Some((token,p))=c.pending.iter().find(|(_,p)|{let v=p.review.proposal();p.window==label&&p.request==input.request_id&&v.goal_revision==input.revision&&v.scope.goal_id==input.goal_id&&v.scope.pet_id==input.pet_id&&v.scope.lease_id==input.lease_id&&v.scope.plan_id==input.plan_id}){if p.review.proposal().scope.verification!=binding{return Err(model::Error::Conflict);}return Ok(RecipeTicket{token:token.clone(),proposal:p.review.proposal()});}
-            if c.pending.len()>=128||c.ready.len()>=64{return Err(model::Error::LimitReached);}}
+        let existing=with_cache(|c|{c.sweep(crate::assistant_memory::now());
+            if let Some((token,p))=c.pending.iter().find(|(_,p)|{let v=p.review.proposal();p.window==label&&p.request==input.request_id&&v.goal_revision==input.revision&&v.scope.goal_id==input.goal_id&&v.scope.pet_id==input.pet_id&&v.scope.lease_id==input.lease_id&&v.scope.plan_id==input.plan_id}){if p.review.proposal().scope.verification!=binding{return Err(model::Error::Conflict);}return Ok(Some(RecipeTicket{token:token.clone(),proposal:p.review.proposal()}));}
+            if c.pending.len()>=128||c.ready.len()>=64{return Err(model::Error::LimitReached);}Ok(None)})?;if let Some(ticket)=existing{return Ok(ticket);}
         let config=crate::pet_config::read_existing().map_err(|_|model::Error::StorageUnavailable)?;
-        let target=Arc::new(crate::spotify::goal::Target::capture().map_err(|_|model::Error::Conflict)?);
+        let worker=owner.readiness_worker(crate::assistant_memory::now())?;
+        let target=super::physical_target::Target::capture(super::physical_target::step_operation(&goal,&input.plan_id,None)?,&goal.spec.owner.pet_id,&config,||worker.in_flight_current(crate::assistant_memory::now()))?;
         let review=owner.review_recipe_with_criteria(&goal,&input.plan_id,&input.request_id,target,&config,&input.criteria,crate::assistant_memory::now())?;
-        let ticket=RecipeTicket{token:nonce()?,proposal:review.proposal()};let mut c=cache().lock().map_err(|_|model::Error::StorageUnavailable)?;c.sweep(crate::assistant_memory::now());
-        if c.pending.len()>=128||c.ready.len()>=64{return Err(model::Error::LimitReached);}c.pending.insert(ticket.token.clone(),Pending{window:label,request:input.request_id,review});Ok(ticket)
+        let ticket=RecipeTicket{token:nonce()?,proposal:review.proposal()};with_cache(|c|c.insert_pending(ticket.token.clone(),label,input.request_id,review,crate::assistant_memory::now()))?;Ok(ticket)
     }).await.map_err(|_|model::Error::StorageUnavailable)?
 }
 #[cfg(target_os="linux")]#[tauri::command]
 pub async fn pet_runtime_confirm_recipe(window:tauri::WebviewWindow,input:RecipeConfirmInput)->model::Result<RecipeConfirmation>{
     check(&window)?;let label=window.label().to_string();tauri::async_runtime::spawn_blocking(move||{
-        let retained={let mut c=cache().lock().map_err(|_|model::Error::StorageUnavailable)?;c.sweep(crate::assistant_memory::now());
-            if let Some(r)=c.confirmed(&label,&input)?{Some(r)}else{None}};
-        if retained.is_none()&&!input.approve{cache().lock().map_err(|_|model::Error::StorageUnavailable)?.take(&label,&input)?;return Ok(RecipeConfirmation::Declined);}
+        let retained=with_cache(|c|{c.sweep(crate::assistant_memory::now());c.confirmed(&label,&input)})?;
+        if retained.is_none()&&!input.approve{with_cache(|c|c.take(&label,&input))?;return Ok(RecipeConfirmation::Declined);}
         let store=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?;let goal=store.read(&input.goal_id,&input.pet_id)?;
         if goal.revision!=input.revision{return Err(model::Error::Conflict);}let owner=super::lease_api::step_owner(&goal,&input.lease_id)?;
         let config=crate::pet_config::read_existing().map_err(|_|model::Error::StorageUnavailable)?;owner.step_goal(&goal,&config,crate::assistant_memory::now())?;
         let retained=if let Some(r)=retained{r}else{
-            let review=cache().lock().map_err(|_|model::Error::StorageUnavailable)?.take(&label,&input)?;
+            let review=with_cache(|c|c.take(&label,&input))?;
             if !input.approve{return Ok(RecipeConfirmation::Declined);}
             let(approved,ready)=review.approve(&owner,&goal,&config,crate::assistant_memory::now())?;
             let r=Arc::new(Retained{window:label,revision:input.revision,token:input.token,approved,ready});
-            let mut c=cache().lock().map_err(|_|model::Error::StorageUnavailable)?;if c.ready.len()>=64||c.ready.contains_key(&r.ready.scope().id){return Err(model::Error::LimitReached);}c.ready.insert(r.ready.scope().id.clone(),r.clone());r
+            with_cache(|c|c.remember(r.clone()))?;r
         };
         let authority=Authority::existing(&super::admission_review::authority_root()).map_err(|_|model::Error::StorageUnavailable)?;let row=goal.admissions.last().ok_or(model::Error::Conflict)?;
         match authority.issue_recipe(&row.spec,row.proof.as_ref().ok_or(model::Error::Conflict)?,row.lease.as_ref().ok_or(model::Error::Conflict)?,&retained.approved,crate::assistant_memory::now()){
@@ -82,7 +105,7 @@ pub async fn pet_runtime_run_recipe(app:tauri::AppHandle,window:tauri::WebviewWi
     use tauri::Emitter;check(&window)?;tauri::async_runtime::spawn_blocking(move||{
         let store=Store::existing_native(&root())?.ok_or(model::Error::NotFound)?;let goal=store.read(&input.goal_id,&input.pet_id)?;
         if goal.revision!=input.revision{return Err(model::Error::Conflict);}let owner=super::lease_api::step_owner(&goal,&input.lease_id)?;
-        let retained=cache().lock().map_err(|_|model::Error::StorageUnavailable)?.ready.get(&input.recipe_id).cloned().ok_or(model::Error::Conflict)?;let s=retained.ready.scope();
+        let retained=with_cache(|c|c.ready.get(&input.recipe_id).cloned().ok_or(model::Error::Conflict))?;let s=retained.ready.scope();
         if s.pet_id!=input.pet_id||s.goal_id!=input.goal_id||s.lease_id!=input.lease_id||retained.revision!=input.revision{return Err(model::Error::Conflict);}
         let result=owner.run_recipe_for_store(&store,&goal,&retained.ready,||crate::pet_config::read_existing().map_err(|_|model::Error::StorageUnavailable),|p|{let _=app.emit("pet-runtime-progress",serde_json::json!({"petId":p.scope.pet_id,"goalId":p.scope.goal_id,"planId":p.scope.plan_id,"recipeId":p.scope.id,"phase":p.phase,"verifiedSteps":p.verified_steps,"totalSteps":p.total_steps}));})?;
         if result.progress.goal_complete{let _=super::lease_api::close_completed(&store,&input.goal_id,&input.pet_id,&input.lease_id);}
@@ -149,9 +172,9 @@ impl SharedRequest{
 impl Drop for SharedRequest{fn drop(&mut self){if let Ok(mut active)=shared_requests().lock(){active.remove(&self.0);}}}
 #[cfg(target_os="linux")]
 fn shared_retained(input:&RecipePrepareInput,binding:&Option<super::criteria::Binding>)->model::Result<Option<Arc<Retained>>>{
-    let mut c=cache().lock().map_err(|_|model::Error::StorageUnavailable)?;c.sweep(crate::assistant_memory::now());
+    with_cache(|c|{c.sweep(crate::assistant_memory::now());
     let found=c.ready.values().find(|r|{let s=r.ready.scope();r.window=="goal-request"&&s.pet_id==input.pet_id&&s.goal_id==input.goal_id&&s.lease_id==input.lease_id&&s.plan_id==input.plan_id&&s.request_id==input.request_id});
-    if let Some(r)=found{if r.revision!=input.revision||r.ready.scope().verification!=*binding{return Err(model::Error::Conflict);}}Ok(found.cloned())
+    if let Some(r)=found{if r.revision!=input.revision||r.ready.scope().verification!=*binding{return Err(model::Error::Conflict);}}Ok(found.cloned())})
 }
 #[cfg(target_os="linux")]
 fn register_shared(goal:&model::Record,retained:&Retained)->model::Result<RecipeConfirmation>{
@@ -169,8 +192,9 @@ pub async fn pet_runtime_request_recipe(app:tauri::AppHandle,window:tauri::Webvi
         let config=crate::pet_config::read_existing().map_err(|_|model::Error::StorageUnavailable)?;owner.step_goal(&goal,&config,crate::assistant_memory::now())?;
         let binding=owner.recipe_input_binding(&goal,&input.plan_id,&input.criteria)?;
         if let Some(r)=shared_retained(&input,&binding)?{return register_shared(&goal,&r);}
-        {let mut c=cache().lock().map_err(|_|model::Error::StorageUnavailable)?;c.sweep(crate::assistant_memory::now());if c.ready.len()>=64{return Err(model::Error::LimitReached);}}
-        let target=Arc::new(crate::spotify::goal::Target::capture().map_err(|_|model::Error::Conflict)?);
+        with_cache(|c|{c.sweep(crate::assistant_memory::now());if c.ready.len()>=64{return Err(model::Error::LimitReached);}Ok(())})?;
+        let worker=owner.readiness_worker(crate::assistant_memory::now())?;
+        let target=super::physical_target::Target::capture(super::physical_target::step_operation(&goal,&input.plan_id,None)?,&goal.spec.owner.pet_id,&config,||worker.in_flight_current(crate::assistant_memory::now()))?;
         let review=owner.review_recipe_with_criteria(&goal,&input.plan_id,&input.request_id,target,&config,&input.criteria,crate::assistant_memory::now())?;
         let source=super::recipe_decisions::Source::capture(owner.clone(),&goal,&review,store.clone(),Arc::new(||crate::pet_config::read_existing().map_err(|_|model::Error::StorageUnavailable)))?;
         match crate::cli_chat::ask_goal_recipe(&app,source){Some(false)=>return Ok(RecipeConfirmation::Declined),None=>return Ok(RecipeConfirmation::Ended),Some(true)=>{}}
@@ -178,7 +202,7 @@ pub async fn pet_runtime_request_recipe(app:tauri::AppHandle,window:tauri::Webvi
         let config=crate::pet_config::read_existing().map_err(|_|model::Error::StorageUnavailable)?;
         let(approved,ready)=review.approve(&owner,&current,&config,crate::assistant_memory::now())?;
         let retained=Arc::new(Retained{window:"goal-request".into(),revision:input.revision,token:nonce()?,approved,ready});
-        {let mut c=cache().lock().map_err(|_|model::Error::StorageUnavailable)?;if c.ready.len()>=64||c.ready.contains_key(&retained.ready.scope().id){return Err(model::Error::LimitReached);}c.ready.insert(retained.ready.scope().id.clone(),retained.clone());}
+        with_cache(|c|c.remember(retained.clone()))?;
         register_shared(&current,&retained)
     }).await.map_err(|_|model::Error::StorageUnavailable)?
 }
@@ -199,3 +223,5 @@ pub async fn pet_runtime_goal_answer(app:tauri::AppHandle,window:tauri::WebviewW
     #[cfg(target_os="linux")]{tauri::async_runtime::spawn_blocking(move||{use tauri::Manager;crate::cli_chat::goal_answer(&app.state::<crate::chat::Chat>(),&input.id,input.approve,input.target)}).await.map_err(|_|"Os pedidos estão indisponíveis.".to_string())?}
     #[cfg(not(target_os="linux"))]{let _=(app,input);Err("UnsupportedPlatform".into())}
 }
+
+#[cfg(all(test,target_os="linux"))]#[path="system_recipe_cache_tests.rs"]mod native_cache_tests;

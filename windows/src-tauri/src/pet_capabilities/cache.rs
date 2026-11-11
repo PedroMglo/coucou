@@ -7,7 +7,7 @@ pub(super) const MAX_DATE:u64=8_640_000_000_000_000;
 pub(super) struct Key{pub provider:String,pub endpoint:String,pub model:Option<String>}
 pub(crate) struct Ticket{pub(super) key:Key,sequence:u64,started:u64}
 #[derive(Clone)]
-pub(super) enum Evidence{Catalog,LmStudio(crate::local_chat::lmstudio::Catalog),Model{completion:Option<bool>,tools:Option<bool>,thinking:Option<bool>,remote:bool},Unavailable}
+pub(super) enum Evidence{Catalog,LmStudio(crate::local_chat::lmstudio::Catalog),Model{completion:Option<bool>,tools:Option<bool>,thinking:Option<bool>,remote:bool,installed:bool},Unavailable}
 struct Slot{sequence:u64,started:u64,observed:Option<(u64,Evidence)>}
 #[derive(Default)]
 pub(super) struct Cache{next:u64,slots:BTreeMap<Key,Slot>}
@@ -26,6 +26,11 @@ impl Cache{
         if now<t.started||now>MAX_DATE||now-t.started>30_000{slot.observed=None;return false;}
         slot.observed=Some((now,evidence));true
     }
+    pub fn fresh_installed_local_model(&self,key:&Key,now:u64)->bool{
+        if key.provider!="ollama"||key.model.is_none(){return false;}
+        let observed=self.get(key,now);
+        observed.at.is_some_and(|at|now>=at&&now-at<15_000)&&matches!(observed.evidence,Some(Evidence::Model{installed:true,completion:Some(true),remote:false,..}))
+    }
     pub fn engine_binding(&self,key:&Key,now:u64)->Option<crate::local_chat::lmstudio::Binding>{
         if key.provider!="lmstudio"{return None;}let requested=key.model.as_ref()?;let mut catalog=key.clone();catalog.model=None;
         match self.get(&catalog,now).evidence{Some(Evidence::LmStudio(c))=>c.binding(requested).ok(),_=>None}
@@ -33,7 +38,7 @@ impl Cache{
     pub fn get(&self,key:&Key,now:u64)->Observation{
         if key.provider=="lmstudio"{if let Some(model)=&key.model{
             let mut catalog=key.clone();catalog.model=None;let mut observation=self.get(&catalog,now);
-            if let Some(Evidence::LmStudio(c))=&observation.evidence{observation.evidence=Some(Evidence::Model{completion:Some(c.binding(model).is_ok()),tools:None,thinking:None,remote:false});}
+            if let Some(Evidence::LmStudio(c))=&observation.evidence{observation.evidence=Some(Evidence::Model{completion:Some(c.binding(model).is_ok()),tools:None,thinking:None,remote:false,installed:false});}
             return observation;
         }}
         let Some(s)=self.slots.get(key)else{return Observation{at:None,expires:None,stale:false,evidence:None};};
@@ -42,10 +47,8 @@ impl Cache{
         Observation{at:Some(*at),expires,stale,evidence:(!stale).then(||evidence.clone())}
     }
 }
-pub(super) fn model_id(value:&str)->bool{
-    !value.is_empty()&&value.len()<=256&&!value.starts_with(['@','/','\\','~'])&&!value.contains(['?','#','\\'])&&!value.contains("://")&&!value.chars().any(|c|c.is_control()||c.is_whitespace())
-        &&!std::path::Path::new(value).components().any(|c|matches!(c,std::path::Component::ParentDir))
-}
+pub(super) fn model_id(value:&str)->bool{crate::pet_inference::model_key(value)}
+
 pub(super) fn endpoint(raw:&str)->Option<String>{
     let url=crate::net::normalise_server_url(raw).ok()?;let key=url.as_str().trim_end_matches('/');(key.len()<=4096).then(||key.to_owned())
 }
@@ -55,5 +58,5 @@ pub(super) fn model_evidence(value:&Value)->Evidence{
     // Older Ollama metadata can advertise exact named/bool controls without a
     // "thinking" capability label. Share the real request parser's semantics.
     let thinking=crate::local_tasks::protocol::ModelCapabilities::from_show(value).reported_thinking();
-    Evidence::Model{completion:caps.map(|c|c.iter().any(|v|v=="completion")),tools:caps.map(|c|c.iter().any(|v|v=="tools")),thinking,remote}
+    Evidence::Model{completion:caps.map(|c|c.iter().any(|v|v=="completion")),tools:caps.map(|c|c.iter().any(|v|v=="tools")),thinking,remote,installed:crate::local_tasks::protocol::verify_local_model(value).is_ok()}
 }

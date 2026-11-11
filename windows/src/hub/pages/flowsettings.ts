@@ -73,6 +73,35 @@ export function modelsControl(ctx: HubContext, onReady?: () => void): HTMLElemen
   return el;
 }
 
+/** A new manual request: the backend captures its current last-text revision. */
+export function lastTextCopyControl(ctx:HubContext):HTMLElement{
+  const feedback=h('div',{class:'hub-note'});
+  let pending=false,disposed=false;
+  const supported=typeof ctx.status.lastTextAvailable==='boolean';
+  const copy=button('Copiar último texto',()=>{
+    if(pending||!supported||disposed)return;pending=true;
+    copy.disabled=true;feedback.textContent='A copiar…';
+    void FlowBridge.copyLast().then(ok=>{
+      pending=false;if(disposed||!el.isConnected)return;
+      feedback.textContent=ok===true?'Último texto copiado.':'A cópia não foi confirmada. O texto pode ter mudado, não estar disponível ou o pedido anterior ainda estar a terminar.';
+      copy.disabled=false;
+    });
+  },'',true);
+  copy.disabled=!supported||ctx.status.lastTextAvailable!==true;
+  feedback.textContent=!supported?'Esta versão do backend ainda não suporta a cópia do último texto.':ctx.status.prefs.keepDays===0?'O último texto fica apenas em memória nesta sessão; não se cria histórico.':'Usa a retenção escolhida. Limpar o histórico retira também o último texto disponível.';
+  const el=h('div',{},row('Copiar o texto mais recente disponível','Também quando a colagem automática foi impedida para preservar o clipboard.',copy),feedback);
+  // The shell builds pages off-DOM before attaching them. Leaving the page,
+  // rather than temporary disconnection during construction, owns cleanup.
+  let stopListening:(()=>void)|undefined;
+  const previous=ctx.onLeave;
+  ctx.onLeave=()=>{disposed=true;stopListening?.();stopListening=undefined;previous?.();};
+  void onEvent('flow-history',()=>{if(!disposed&&el.isConnected&&supported&&!pending)copy.disabled=false;}).then(unlisten=>{
+    if(disposed){unlisten();return;}
+    stopListening=unlisten;
+  });
+  return el;
+}
+
 export async function flowSettingsPage(page: HTMLElement, ctx: HubContext) {
   const status = await ctx.refresh();
   const prefs = status.prefs;
@@ -100,6 +129,8 @@ export async function flowSettingsPage(page: HTMLElement, ctx: HubContext) {
     row(t("Hands-free"), t("Tap twice, speak as long as you like, tap once to paste."), keyKeycap(status.keys === "wayland" ? "wayland" : prefs.key, status.platform, true)),
     divider(),
     row(t("Paste the last dictation again"), t("When the words went to the wrong place."), button(t("Paste again"), () => void FlowBridge.pasteAgain(), "", true)),
+    divider(),
+    lastTextCopyControl(ctx),
     divider(),
     row(t("Cancel a dictation"), null, keycap(t("Esc"))),
   );

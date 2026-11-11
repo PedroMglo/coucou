@@ -11,7 +11,7 @@ impl Authority{
             if found.is_some()||!matches!(record.phase,crate::pet_runtime::steps::Phase::Started|crate::pet_runtime::steps::Phase::Finished){return Err(Failure::RecoveryRequired);}
             let operation=step.operation.clone().ok_or(Failure::RecoveryRequired)?;let scope=&record.scope;
             if operation.operation_id!=scope.operation_id||operation.version!=scope.version||model::fingerprint(&operation.arguments).ok().as_ref()!=Some(&scope.arguments_hash){return Err(Failure::RecoveryRequired);}
-            let effect=Effect{decision_id:row.spec.decision_id.clone(),attempt_id:attempt.into(),grant_id:scope.grant_id.clone(),plan_id:plan.id.clone(),step_id:step.id.clone(),scope_hash:model::fingerprint(scope).map_err(|_|Failure::Invalid)?,operation,target_label:format!("{} · {}",scope.resource.identity,scope.resource.owner)};
+            let effect=Effect{decision_id:row.spec.decision_id.clone(),attempt_id:attempt.into(),grant_id:scope.grant_id.clone(),plan_id:plan.id.clone(),step_id:step.id.clone(),scope_hash:model::fingerprint(scope).map_err(|_|Failure::Invalid)?,operation,target_label:scope.resource.label()};
             if !effect.valid(){return Err(Failure::RecoveryRequired);}found=Some(effect);
         }}
         found.ok_or(Failure::RecoveryRequired)

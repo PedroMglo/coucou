@@ -45,8 +45,13 @@ def parse_request(line):
     if not line or len(line) > MAX_HEADER_BYTES or not line.endswith(b"\n"):
         raise ValueError("Invalid request")
     request = json.loads(line.decode("utf-8", errors="strict"), object_pairs_hook=unique_object)
-    if type(request) is not dict or not set(request).issubset({"samples", "vocabulary"}):
+    if type(request) is not dict or not set(request).issubset({"samples", "vocabulary", "protocolVersion", "requestId"}):
         raise ValueError("Invalid request")
+    if type(request.get("protocolVersion")) is not int or request["protocolVersion"] != 1:
+        raise ValueError("Unsupported protocol")
+    request_id = request.get("requestId")
+    if type(request_id) is not int or not 1 <= request_id < 2**64:
+        raise ValueError("Invalid request identity")
     count = request.get("samples")
     if type(count) is not int or not 0 <= count <= 16000 * 60:
         raise ValueError("Invalid audio length")
@@ -69,7 +74,7 @@ def parse_request(line):
         if total > MAX_VOCABULARY_BYTES:
             raise ValueError("Invalid vocabulary")
         vocabulary.append(term)
-    return count, vocabulary
+    return count, vocabulary, request_id
 
 
 def recognize(audio, vocabulary=()):
@@ -94,7 +99,7 @@ while select.select([sys.stdin.buffer], [], [], 120)[0]:
     line = sys.stdin.buffer.readline(MAX_HEADER_BYTES + 1)
     if not line:
         break
-    count, vocabulary = parse_request(line)
+    count, vocabulary, request_id = parse_request(line)
     audio = np.frombuffer(exact(count * 4), dtype="<f4").copy()
     began = time.monotonic()
     text = ""
@@ -110,4 +115,4 @@ while select.select([sys.stdin.buffer], [], [], 120)[0]:
             device = "cpu"
             model = load(device)
             text = recognize(audio, vocabulary)
-    print(json.dumps({"text": text, "seconds": time.monotonic() - began, "device": device}, ensure_ascii=False), flush=True)
+    print(json.dumps({"protocolVersion": 1, "requestId": request_id, "text": text, "seconds": time.monotonic() - began, "device": device}, ensure_ascii=False), flush=True)

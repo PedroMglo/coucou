@@ -16,7 +16,7 @@ pub(crate)fn configured_route(pet:&str,p:&crate::pet_config::Pet)->Option<&'stat
  let b=crate::pet_config::blueprint(pet)?;if b.retired{return None;}
  let provider=b.routing.chat.as_deref()?;if crate::pet_config::integration_pet(provider)!=Some(pet){return None;}
  if ["anthropic","openai","google"].contains(&provider){return Some(provider);}
- if ["ollama","lmstudio"].contains(&provider){return(p.provider==provider).then_some(provider);}
+ if ["ollama","lmstudio"].contains(&provider){return(p.provider==provider||p.inference.as_ref().is_some_and(|c|c.validate(b).is_ok())).then_some(provider);}
  let adapter=b.configured_adapter(&p.provider)?.key();["codex","copilot","antigravity"].contains(&adapter).then_some(provider)
 }
 fn owner(config:&Configuration,provider:&str)->Result<&'static str,String>{
@@ -33,6 +33,9 @@ fn resolve(chat:&Chat,settings:&Settings,config:&Configuration,query:&str)->Resu
   if !crate::cli_chat::model_matches(provider,&model){return Err(failure("model"));}
   let cwd=crate::cli_chat::workspace_for(settings,provider)?;let(_,session,_)=chat.native_memory_info(provider)?;
   Resolved{destination:super::native::destination(provider,adapter,&model,&cwd,session.as_ref().map(|s|s.id.as_str())).map_err(failure)?,credential:None}
+ }else if let Some(target)=crate::pet_inference::Target::for_provider(config,provider)?{
+  let server=crate::local_chat::server_for_target(&target)?;let base=crate::local_chat::base_url(&server)?;
+  Resolved{destination:Destination::Server{provider:server.id.into(),endpoint:crate::net::join(&base,"v1/chat/completions"),model:target.choice.model},credential:server.key}
  }else if let Some(server)=crate::local_chat::server(settings,provider){
   let model=config.select(provider,&requested,query)?.model;
   let base=crate::local_chat::base_url(&server)?;
@@ -60,7 +63,7 @@ pub(crate)async fn pet_memory_context_prepare(window:tauri::WebviewWindow,shared
  // selection. All preparation is local; no model request or file mutation.
  let _reservation=chat.reserve_conversation(&provider,Some(&conversation_id))?;
  let mut settings=shared.settings.lock().map_err(failure)?.clone();settings.chat_provider=provider.clone();
- if let Some(model)=selected_model{crate::chat::select_for_turn(&mut settings,model)?;}
+ if let Some(model)=selected_model{chat.select_reserved_model(&mut settings,model)?;}
  let chat=chat.inner().clone();let label=window.label().to_string();
  tauri::async_runtime::spawn_blocking(move||{
   let config=crate::pet_config::read_existing()?;let pet=current_owner(&chat,&config,&provider,&conversation_id)?;

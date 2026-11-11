@@ -1,4 +1,6 @@
 use super::*;
+#[path="peer_round_review_tests.rs"]mod peer_round_review_tests;
+#[path="peer_round_writer_tests.rs"]mod peer_round_writer_tests;
 use crate::pet_runtime::{admission_tests::{Fixture,evidence,budget},admission::Review,authority_tests::root,model::*};
 use std::{io::{Read,Write},net::TcpListener,thread};
 use serde_json::{json,Value};
@@ -10,7 +12,9 @@ fn setup_with_fence(provider:&str,fence:Fence)->(Fixture,Authority,Record,Pendin
 }
 fn body()->Value{json!({"model":"fixture-free","messages":[{"role":"user","content":"Original complete intent"}],"stream":true})}
 pub(in crate::pet_runtime)fn ledger(f:&Fixture,g:&Record)->Value{serde_json::from_slice::<Value>(&std::fs::read(root(f).join(format!("{}.json",g.admissions[0].spec.decision_id))).unwrap()).unwrap()["body"]["budgetUsage"].clone()}
-pub(in crate::pet_runtime)fn run<T>(future:impl std::future::Future<Output=T>)->T{tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(future)}
+// Keep large driver futures on the heap before entering Tokio; otherwise this
+// test-only forwarding frame retains an extra inline copy on its 2 MiB stack.
+pub(in crate::pet_runtime)fn run<T>(future:impl std::future::Future<Output=T>)->T{tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(Box::pin(future))}
 pub(in crate::pet_runtime)fn local_metadata()->Value{json!({"model_info":{"general.architecture":"synthetic"},"capabilities":["completion"]})}
 fn fixture(responses:Vec<(&'static str,String)>)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){fixture_with_hook(responses,|_|{})}
 pub(in crate::pet_runtime)fn fixture_with_hook(responses:Vec<(&'static str,String)>,hook:impl FnMut(&str)+Send+'static)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){
@@ -19,7 +23,10 @@ pub(in crate::pet_runtime)fn fixture_with_hook(responses:Vec<(&'static str,Strin
 fn fixture_armed(responses:Vec<(&'static str,String)>)->(crate::local_chat::Server,std::sync::mpsc::Sender<()>,thread::JoinHandle<Vec<(String,Value)>>){
  let(start,wait)=std::sync::mpsc::channel();let(server,worker)=fixture_with_start(responses,|_|{},Some(wait));(server,start,worker)
 }
-fn fixture_with_start(responses:Vec<(&'static str,String)>,mut hook:impl FnMut(&str)+Send+'static,start:Option<std::sync::mpsc::Receiver<()>>)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){
+fn fixture_with_start(responses:Vec<(&'static str,String)>,hook:impl FnMut(&str)+Send+'static,start:Option<std::sync::mpsc::Receiver<()>>)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){fixture_with_deadline(responses,hook,start,None,false)}
+pub(in crate::pet_runtime)fn fixture_with_hook_idle(responses:Vec<(&'static str,String)>,hook:impl FnMut(&str)+Send+'static)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){fixture_with_deadline(responses,hook,None,Some(Duration::from_secs(20)),false)}
+pub(in crate::pet_runtime)fn fixture_with_hook_disconnect(responses:Vec<(&'static str,String)>,hook:impl FnMut(&str)+Send+'static)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){fixture_with_deadline(responses,hook,None,None,true)}
+fn fixture_with_deadline(responses:Vec<(&'static str,String)>,mut hook:impl FnMut(&str)+Send+'static,start:Option<std::sync::mpsc::Receiver<()>>,phase_timeout:Option<Duration>,allow_disconnect:bool)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){
  let listener=TcpListener::bind("127.0.0.1:0").unwrap();listener.set_nonblocking(true).unwrap();let port=listener.local_addr().unwrap().port();
  let worker=thread::spawn(move||{let mut requests=vec![];
   // Native preparation/decisions/effects do not consume a synthetic server's
@@ -27,6 +34,7 @@ fn fixture_with_start(responses:Vec<(&'static str,String)>,mut hook:impl FnMut(&
   if start.is_some_and(|s|s.recv().is_err()){return requests;}
   let until=Instant::now()+Duration::from_secs(4);
   for(typ,response)in responses{
+   let until=phase_timeout.map(|d|Instant::now()+d).unwrap_or(until);
    let mut socket=loop{match listener.accept(){Ok((s,_))=>break s,Err(e)if e.kind()==std::io::ErrorKind::WouldBlock=>{if Instant::now()>=until{return requests;}thread::sleep(Duration::from_millis(2));},Err(e)=>panic!("fixture accept: {e}")}};
    socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();let mut data=vec![];let mut chunk=[0u8;4096];let header;
    loop{let n=socket.read(&mut chunk).unwrap();assert!(n>0);data.extend_from_slice(&chunk[..n]);assert!(data.len()<512*1024);if let Some(end)=data.windows(4).position(|w|w==b"\r\n\r\n"){header=end+4;break;}}
@@ -34,7 +42,11 @@ fn fixture_with_start(responses:Vec<(&'static str,String)>,mut hook:impl FnMut(&
    while data.len()-header<len{let n=socket.read(&mut chunk).unwrap();assert!(n>0);data.extend_from_slice(&chunk[..n]);}
    hook(&path);requests.push((path,if len==0{Value::Null}else{serde_json::from_slice(&data[header..header+len]).unwrap()}));
    if typ=="redirect"{write!(socket,"HTTP/1.1 302 Found\r\nLocation: {response}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();continue;}
-   write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: {typ}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
+   if let Err(error)=write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: {typ}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()){
+    // Only callers explicitly testing cancellation may accept a peer that
+    // disconnected after its complete request and the revocation hook.
+    assert!(allow_disconnect&&typ=="text/event-stream"&&matches!(error.kind(),std::io::ErrorKind::BrokenPipe|std::io::ErrorKind::ConnectionReset|std::io::ErrorKind::ConnectionAborted),"fixture response: {error}");
+   }
   }requests
  });
  (crate::local_chat::Server{id:"ollama",name:"Synthetic fixture",url:format!("http://127.0.0.1:{port}"),key:None},worker)
@@ -89,9 +101,9 @@ fn setup_lmstudio_mode(server:&crate::local_chat::Server,metadata:&Value,plannin
 #[test]fn lmstudio_review_cache_never_reuses_an_old_engine_quote_even_with_the_same_descriptor_revision(){
  let f=Fixture::new();let goal=f.goal("lmstudio");let source=lmstudio_metadata();let server=crate::local_chat::Server{id:"lmstudio",name:"Private quote fixture",url:"http://127.0.0.1:1234".into(),key:None};let mut limits=budget();limits.payment=crate::pet_runtime::admission::Payment::LocalOnly;
  let review=|metadata:&Value,at|Review::prepare(&goal,lmstudio_evidence(&goal,&server,metadata,at),limits.clone(),"same-original-quote".into(),nonce().unwrap(),at).unwrap();
- let mut cache=crate::pet_runtime::admission_review::Reviews::default();let ticket=cache.insert("native-window",review(&source,100_002),nonce().unwrap(),100_002).unwrap();
- let mut changed=source.clone();changed["models"][0]["size_bytes"]=json!(2);assert!(matches!(cache.insert("native-window",review(&changed,100_003),nonce().unwrap(),100_003),Err(model::Error::Conflict)));
- let same=cache.insert("native-window",review(&source,100_004),nonce().unwrap(),100_004).unwrap();assert_eq!(same.token,ticket.token);assert_eq!(same.proposal.engine_binding,ticket.proposal.engine_binding);assert_eq!(same.proposal.expires_at,ticket.proposal.expires_at);assert!(f.store().read(&goal.id,"ai_lmstudio").unwrap().admissions.is_empty());
+ let mut cache=crate::pet_runtime::admission_review::Reviews::default();let ticket=cache.insert(&cache.origin_for_test("native-window"),review(&source,100_002),nonce().unwrap(),100_002).unwrap();
+ let mut changed=source.clone();changed["models"][0]["size_bytes"]=json!(2);assert!(matches!(cache.insert(&cache.origin_for_test("native-window"),review(&changed,100_003),nonce().unwrap(),100_003),Err(model::Error::Conflict)));
+ let same=cache.insert(&cache.origin_for_test("native-window"),review(&source,100_004),nonce().unwrap(),100_004).unwrap();assert_eq!(same.token,ticket.token);assert_eq!(same.proposal.engine_binding,ticket.proposal.engine_binding);assert_eq!(same.proposal.expires_at,ticket.proposal.expires_at);assert!(f.store().read(&goal.id,"ai_lmstudio").unwrap().admissions.is_empty());
 }
 
 #[test]fn a_real_shared_reader_before_model_send_keeps_one_native_attempt_and_one_inference_request(){
@@ -210,3 +222,48 @@ pub(in crate::pet_runtime)fn setup_planning()->(Fixture,Authority,Record,Pending
 #[cfg(target_os="linux")]#[path="step_tests.rs"]mod step_tests;
 
 #[path="dispatcher_tests.rs"]mod dispatcher_tests;
+
+#[test]fn catalogue_contention_during_existing_io_waits_for_current_without_authorizing_another_worker(){
+ let target=Arc::new(OnceLock::<(std::path::PathBuf,String,String)>::new());let captured=target.clone();let fence=Arc::new(move|_:&Lease,_:&Hold,_:Validation|{let Some((path,id,pet))=captured.get()else{return Validity::Current;};let store=Store::ensure(path).unwrap();match crate::pet_runtime::native_validity::read_goal(&store,id,pet){Ok(_)=>Validity::Current,Err(v)=>v}});
+ let(f,_a,g,_p,o,_main)=setup_with_fence("ollama",fence);target.set((f.path.join("goals"),g.id.clone(),g.spec.owner.pet_id.clone())).unwrap();let worker=o.worker(crate::assistant_memory::now()).unwrap();let path=f.path.join("goals");let(tx,rx)=std::sync::mpsc::channel();let locker=thread::spawn(move||{let store=Store::ensure(&path).unwrap();let lock=store.test_lock(true).unwrap();tx.send(()).unwrap();thread::sleep(Duration::from_millis(80));drop(lock);});rx.recv().unwrap();
+ assert!(!o.current(crate::assistant_memory::now()));assert!(o.worker(crate::assistant_memory::now()).is_err());assert!(worker.in_flight_current(crate::assistant_memory::now()));locker.join().unwrap();assert_eq!(o.workers(),1);assert!(ledger(&f,&g).is_null());assert_eq!(f.store().read(&g.id,"ai_ollama").unwrap().revision,g.revision);
+}
+#[test]fn in_flight_observation_retries_only_typed_busy_with_a_bound_and_stop_remains_immediate(){
+ use std::sync::atomic::AtomicU8;
+ let mode=Arc::new(AtomicU8::new(0));let captured=mode.clone();let(f,_a,g,_p,o,_main)=setup_with_fence("ollama",Arc::new(move|_,_,_|match captured.load(Ordering::Acquire){0=>Validity::Current,1=>Validity::Busy,_=>Validity::Unknown}));let worker=o.worker(crate::assistant_memory::now()).unwrap();
+ mode.store(2,Ordering::Release);let at=Instant::now();assert!(!worker.in_flight_current(crate::assistant_memory::now()));assert!(at.elapsed()<Duration::from_millis(100));
+ mode.store(1,Ordering::Release);let at=Instant::now();assert!(!worker.in_flight_current(crate::assistant_memory::now()));assert!(at.elapsed()>=Duration::from_millis(950)&&at.elapsed()<Duration::from_secs(2));assert!(o.live.hold.occupies_slot());
+ let lease=o.lease().clone();let stop=thread::spawn(move||{thread::sleep(Duration::from_millis(20));signal_stop(&lease);});let at=Instant::now();assert!(!worker.in_flight_current(crate::assistant_memory::now()));assert!(at.elapsed()<Duration::from_millis(500));stop.join().unwrap();assert!(o.live.hold.occupies_slot());assert!(ledger(&f,&g).is_null());drop(worker);assert_eq!(o.workers(),0);
+}
+
+
+#[test]fn actual_runtime_body_can_be_reviewed_before_any_worker_budget_or_transport(){
+ let(f,_a,g,_p,o,_main)=setup("ollama");let reservation=o.live.chat.reserve_for_goal(&o.live.lease.provider,&o.live.lease.conversation_id,&o.live.lease.goal_id,o.live.hold.clone()).unwrap();let channel=reservation.channel();let server=crate::local_chat::Server{id:"ollama",name:"No IO preview",url:"http://127.0.0.1:1".into(),key:None};let prepared=crate::local_chat::prepare_runtime_request(&channel,&server,&o.lease().model,g.spec.intent.clone(),"Exact native untrusted metadata input".into(),&o.lease().provider,None,&crate::pet_config::defaults()).unwrap();assert_eq!(o.workers(),0);assert!(ledger(&f,&g).is_null());assert_eq!(prepared.body()["model"],"fixture-free");assert_eq!(prepared.body()["messages"].as_array().unwrap().last().unwrap()["content"],"Exact native untrusted metadata input");assert_eq!(prepared.server().url,server.url);assert!(prepared.body().get("tools").is_none());drop(prepared);drop(reservation);assert!(o.current(crate::assistant_memory::now()));assert!(ledger(&f,&g).is_null());
+}
+#[test]fn prepared_actual_body_is_the_only_body_sent_and_hashed_at_runtime_reservation(){
+ let(f,_a,g,_p,o,_main)=setup("ollama");let call=o.prepare_model("reviewed-exact-body",&g,4096,crate::assistant_memory::now()).unwrap();let channel=call.reservation.channel();let text="Actual bytes from a synthetic model";let(server,http)=fixture(vec![("text/event-stream",crate::pet_runtime::lease_controller::memory_test_stream(text,true))]);let prepared=crate::local_chat::prepare_runtime_request(&channel,&server,&o.lease().model,g.spec.intent.clone(),"Exact reviewed metadata".into(),call.provider(),call.memory_message().unwrap(),&crate::pet_config::defaults()).unwrap();let reviewed=prepared.body().clone();assert!(ledger(&f,&g).is_null());let result=run(crate::local_chat::send_runtime_prepared(None,&channel,prepared,&call)).unwrap();call.finish(Some(result.accepted_output_bytes)).unwrap();call.record_result(&result.reply.text,result.accepted_output_bytes).unwrap();let requests=http.join().unwrap();assert_eq!(requests.len(),1);assert_eq!(requests[0].1,reviewed);assert_eq!(ledger(&f,&g)["attempts"][0]["inputHash"],crate::pet_runtime::model::fingerprint(&(&o.lease().id,"fixture-free",&reviewed)).unwrap());assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),1);
+}
+
+#[test]fn production_request_handoff_prepares_without_worker_then_sends_exact_body_with_one_original_admission(){
+ let(f,_a,g,_p,o,_main)=setup("ollama");let(server,http)=fixture(vec![("text/event-stream",stream("Prepared original body",true))]);
+ let prepared=o.prepare_actual_call(&g,&server,"Exact model input before worker".into(),None,&crate::pet_config::defaults()).unwrap();
+ let reviewed=prepared.request.body().clone();assert_eq!(o.workers(),0);assert!(ledger(&f,&g).is_null());
+ assert!(o.prepare_actual_call(&g,&server,"Cannot replace the pending turn".into(),None,&crate::pet_config::defaults()).is_err());assert_eq!(o.workers(),0);
+ let(call,prepared)=o.consume_actual_call(&g,"one-retained-prepared-request",prepared,crate::assistant_memory::now()).unwrap();assert_eq!(o.workers(),1);assert!(ledger(&f,&g).is_null());
+ let channel=call.reservation.channel();let result=run(crate::local_chat::send_runtime_prepared(None,&channel,prepared,&call)).unwrap();call.finish(Some(result.accepted_output_bytes)).unwrap();call.record_result(&result.reply.text,result.accepted_output_bytes).unwrap();
+ let requests=http.join().unwrap();assert_eq!(requests.len(),1);assert_eq!(requests[0].1,reviewed);assert_eq!(ledger(&f,&g)["attempts"][0]["inputHash"],crate::pet_runtime::model::fingerprint(&(&o.lease().id,"fixture-free",&reviewed)).unwrap());drop(call);assert_eq!(o.workers(),0);assert!(o.current(crate::assistant_memory::now()));
+}
+#[test]fn stop_after_production_preparation_creates_neither_writer_attempt_nor_transport(){
+ let(f,_a,g,_p,o,_main)=setup("ollama");let server=crate::local_chat::Server{id:"ollama",name:"Unreachable; must never contact",url:"http://127.0.0.1:1".into(),key:None};
+ let prepared=o.prepare_actual_call(&g,&server,"Prepared before Stop".into(),None,&crate::pet_config::defaults()).unwrap();assert_eq!(o.workers(),0);o.live.hold.cancel();
+ assert!(o.consume_actual_call(&g,"stopped-prepared-request",prepared,crate::assistant_memory::now()).is_err());assert!(ledger(&f,&g).is_null());assert_eq!(o.workers(),0);
+}
+
+#[test]fn prepared_production_body_cannot_be_rebound_to_another_goal_or_revision_before_writer(){
+ let(f,_a,g,_p,o,_main)=setup("ollama");let server=crate::local_chat::Server{id:"ollama",name:"No IO in wrong-goal fixture",url:"http://127.0.0.1:1".into(),key:None};
+ let mut changed=g.clone();changed.spec.intent="A different goal after a window switch".into();assert!(o.prepare_actual_call(&changed,&server,"Wrong goal".into(),None,&crate::pet_config::defaults()).is_err());assert!(ledger(&f,&g).is_null());
+ let prepared=o.prepare_actual_call(&g,&server,"Original exact goal body".into(),None,&crate::pet_config::defaults()).unwrap();let mut revised=g.clone();revised.revision=nonce().unwrap();assert!(o.consume_actual_call(&revised,"must-not-rebind-prepared-body",prepared,crate::assistant_memory::now()).is_err());assert_eq!(o.workers(),0);assert!(ledger(&f,&g).is_null());assert!(o.current(crate::assistant_memory::now()));
+}
+
+#[cfg(target_os="linux")]#[path="system_sound_step_tests.rs"]mod system_sound_step_tests;
+#[cfg(target_os="linux")]#[path="native_system_sound_task_tests.rs"]pub(in crate::pet_runtime)mod native_system_sound_task_tests;

@@ -100,6 +100,10 @@ impl Selections {
         let generation = self.generation.lock().unwrap();
         if *generation != choice.generation { return Err(SUPERSEDED.into()); }
         validate_model(&choice.model, models, profiles)?;
+        let reservation = chat.reserve_conversation(PROVIDER, None)?;
+        if reservation.channel().captured_inference(PROVIDER)?.is_some_and(|c|c.explicit.is_some()){
+            return Err("Este pet tem um binding explícito. Altera o modelo na gestão desse binding.".into());
+        }
         let mut current = settings.lock().unwrap();
         if current.ollama_url != choice.url {
             return Err("A ligação ao Ollama mudou durante a seleção. Atualiza a lista antes de escolher.".into());
@@ -107,7 +111,6 @@ impl Selections {
         // The reservation excludes text, voice and maintenance during the
         // actual commit. Metadata lookup does not hold a pet busy. Keep this
         // guard in the worker until publication, even if its caller goes away.
-        let reservation = chat.reserve_conversation(PROVIDER, None)?;
         reservation.channel().check_admission(PROVIDER)?;
         let mut next = current.clone();
         next.chat_models.insert(PROVIDER.into(), choice.model.clone());

@@ -3,8 +3,12 @@ import {PetFactory,petForTaskProvider,factoryProfileProvider} from '../core/pet-
 export interface ModelProfile {model:string;effort:string}
 export interface PetPermissions {documents:boolean;emailDrafts:boolean;music:boolean;openApps:boolean}
 export interface LocalExecutionPolicy {mode:'ask'|'disabled';taskTimeoutMs?:number;approvalTimeoutMs?:number;commandTimeoutMs?:number;maxCalls?:number;maxOutputBytes?:number;allowedPrograms?:string[]}
-export interface PetPreference {name:string;aliases:string[];provider:string;mode:'auto'|'fast'|'reasoning';fast:ModelProfile;reasoning:ModelProfile;permissions?:PetPermissions;localExecution?:LocalExecutionPolicy}
-export interface PetConfiguration {version:number;reasoningTerms:string[];reasoningLength:number;pets:Record<string,PetPreference>}
+export interface InferenceChoice {schemaVersion:1;backend:'ollama'|'lmstudio';endpoint:string;model:string;credential:'none'|'configuredLmstudioEndpoint'}
+export type SystemGrant = {subplugin:'sound';operation:'observe'|'volume'|'mute';resource:{kind:'audioOutputs'}|{kind:'audioOutput';key:string}}|{subplugin:'health';operation:'observe';resource:{kind:'hostHealth'}}|{subplugin:'inventory';operation:'observe';resource:{kind:'hostComponents'}};
+export interface SystemAccessPolicy {schemaVersion:1;enabled:boolean;revision:string;grants:SystemGrant[]}
+export interface PetPreference {name:string;aliases:string[];provider:string;mode:'auto'|'fast'|'reasoning';fast:ModelProfile;reasoning:ModelProfile;permissions?:PetPermissions;localExecution?:LocalExecutionPolicy;inference?:InferenceChoice;inferenceRevision?:string;systemAccess?:SystemAccessPolicy}
+export type InferenceUpdate={kind:'set';choice:InferenceChoice}|{kind:'clear'};
+export interface PetConfiguration {version:number;catalogRevision?:number;reasoningTerms:string[];reasoningLength:number;pets:Record<string,PetPreference>}
 export interface PetDocument {config:PetConfiguration;path:string;revision:string}
 export type ServiceProvider='integration_resend'|'integration_n8n'|'integration_vercel'|'integration_github'|'integration_notion'|'integration_calcom'|'integration_stripe'|'integration_spotify';
 export const SERVICE_PETS=PetFactory.services as readonly ServiceProvider[];
@@ -30,9 +34,10 @@ export const PetPreferences={
 
 /** Show the actual profile models/effort, including when automatic selection is enabled. */
 export function profileSummary(provider:string,selected:string){
- if(!selected.startsWith('@'))return selected;
  const id=petForTaskProvider(provider)??provider;
  const p=config?.pets[id];if(!p)return profileLabel(selected);
+ if(p.inference)return `${p.inference.backend==='ollama'?'Ollama':'LM Studio'} · ${p.inference.model}`;
+ if(!selected.startsWith('@'))return selected;
  const mode=selected==='@default'?p.mode:selected.slice(1);
  const describe=(profile:ModelProfile)=>[profile.model,profile.effort].filter(Boolean).join(' · ');
  return mode==='fast'?`Rápido · ${describe(p.fast)}`:mode==='reasoning'?`Raciocínio · ${describe(p.reasoning)}`:`Automático · ${describe(p.fast)} / ${describe(p.reasoning)}`;

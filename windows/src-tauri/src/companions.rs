@@ -196,6 +196,7 @@ mod native {
             .focusable(false).focused(false).visible(false)
             .maximizable(false).minimizable(false).closable(false).build() {
             Ok(win) => {
+                crate::settings::review::register_window(&win);
                 crate::voice::native_surface::register(&win);
                 if !platform::prepare_companions_window(&win, mode) { crate::log::line("companions window: platform preparation failed");let _ = win.destroy(); }
                 #[cfg(target_os="linux")]if let Err(error)=crate::linux_documents::install(&win){crate::log::line(error);}

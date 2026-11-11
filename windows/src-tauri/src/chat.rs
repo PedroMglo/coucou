@@ -301,6 +301,10 @@ pub struct Turn {
     pub session: Option<CliSession>,
     pub cancel: Arc<AtomicBool>,
 }
+impl Turn{
+    pub(crate)fn captured_inference(&self)->Option<Arc<crate::pet_inference::Captured>>{self.resource.upgrade().and_then(|h|h.captured())}
+    pub(crate)fn check_inference(&self)->Result<(),String>{self.captured_inference().map(|c|c.check()).unwrap_or(Ok(()))}
+}
 /// Ephemeral, read-only binding to the exact local turn that owns a native
 /// hook. Weak state and resource references cannot keep a worker/process alive.
 fn hook_session_matches(c:&Conversation,backend:&str,session:&str)->bool{c.active.is_some()&&c.tasks.last().is_some_and(|t|!t.terminal()&&t.backend==backend&&t.session_id.as_deref()==Some(session))}
@@ -499,7 +503,7 @@ impl Chat {
         let all=self.inner.lock().map_err(|_|"A biblioteca de conversas está indisponível.")?;
         Ok(all.pets.get(provider).is_some_and(|c|c.id==cid)||all.archives.get(provider).is_some_and(|rows|rows.iter().any(|c|c.id==cid)))
     }
-    /// Native memory/draft creation calls this after validating its input and
+    /// Native memory/draft/source creation calls this after validating its input and
     /// original catalog revision. No user/model text is manufactured.
     pub(crate)fn retain_public_conversation(&self,provider:&str,cid:&str)->Result<(),String>{
         if self.disk_error||self.disk.is_none()||!crate::assistant_memory::supported(provider)||!crate::assistant_memory::valid_id(cid){return Err("A conversa não tem armazenamento durável disponível.".into());}
@@ -515,6 +519,9 @@ impl Chat {
         if self.disk_error||!crate::assistant_memory::valid_id(cid){return Err("O histórico de origem não está disponível.".into());}
         let all=self.inner.lock().unwrap();
         let messages=if let Some(c)=all.pets.get(provider).filter(|c|c.id==cid){if c.busy(){return Err(BUSY_ERROR.into());}&c.plain}else{&all.archives.get(provider).and_then(|a|a.iter().find(|c|c.id==cid)).ok_or("A conversa de origem não pertence ao pet.")?.messages};
+        Self::public_snapshot(messages)
+    }
+    pub(crate) fn public_snapshot(messages:&[Value])->Result<PublicSnapshot,String>{
         let bounded=crate::assistant_memory::context(messages);
         let mut public=Vec::with_capacity(bounded.len());
         for message in bounded{let role=message["role"].as_str().filter(|r|matches!(*r,"user"|"assistant")).ok_or("Histórico público inválido.")?;let content=message["content"].as_str().ok_or("Histórico público inválido.")?;public.push(json!({"role":role,"content":content}));}
@@ -614,7 +621,21 @@ impl Chat {
     }
 
     pub fn reserve_conversation(&self,provider:&str,expected:Option<&str>)->Result<ConversationReservation,String> {self.reserve_until(provider,expected,None)}
+    pub(crate)fn with_resource_settings(mut self,settings:Arc<Mutex<Settings>>)->Self{self.resources=Arc::new(crate::pet_resources::Coordinator::with_settings(settings));self}
+    pub(crate)fn with_runtime_resources(mut self,resources:Arc<crate::pet_resources::Coordinator>)->Self{self.resources=resources;self}
     pub(crate)fn runtime_resources(&self)->Arc<crate::pet_resources::Coordinator>{self.resources.clone()}
+    pub(crate)fn captured_inference(&self,provider:&str)->Result<Option<Arc<crate::pet_inference::Captured>>,String>{
+        let all=self.inner.lock().map_err(|_|BUSY_ERROR)?;
+        let resource=if let Some(ticket)=&self.admission{if ticket.provider!=provider{return Err("O dono do turno mudou.".into());}ticket.resource.upgrade()}else{all.pets.get(provider).and_then(|c|c.resource.clone())};
+        Ok(resource.and_then(|r|r.captured()))
+    }
+    pub(crate)fn select_reserved_model(&self,settings:&mut Settings,model:String)->Result<(),String>{
+        if let Some(captured)=self.captured_inference(&settings.chat_provider)?{if let Some(target)=&captured.explicit{
+            if model!="@default"&&model!=target.choice.model{return Err("O modelo pedido não corresponde ao binding explícito deste pet.".into());}
+            settings.chat_models.insert(settings.chat_provider.clone(),target.choice.model.clone());return Ok(());
+        }}
+        select_for_turn(settings,model)
+    }
     pub(crate)fn goal_context_current(&self,goal_id:&str)->bool{!self.disk_error&&self._context_guard.as_ref().is_some_and(|f|f.goal_id()==goal_id&&f.current())}
     pub(crate)fn goal_memory_message(&self,goal_id:&str)->Result<Option<Value>,String>{
         let guard=self._context_guard.as_ref().filter(|g|!self.disk_error&&g.goal_id()==goal_id&&g.current()).ok_or("O contexto ou as recordações do objetivo mudaram.")?;
@@ -744,7 +765,7 @@ impl Chat {
 
     fn archive(&self,all:&mut Conversations,provider:&str)->Result<(),String> {
         if let Some(c)=all.pets.get(provider).filter(|c|c.has_retained_history()||c.memory_retained||self.disk.as_ref().is_some_and(|path|crate::pet_memory::retains_conversation(path,provider,&c.id)||{
-            #[cfg(target_os="linux")]{crate::pet_drafts::retains_conversation(path,provider,&c.id)}
+            #[cfg(target_os="linux")]{crate::pet_drafts::retains_conversation(path,provider,&c.id)||crate::pet_sources::retains_conversation(provider,&c.id)}
             #[cfg(not(target_os="linux"))]{false}
         })) {
             let mut saved=c.saved();saved.tasks.clear();
@@ -1072,7 +1093,7 @@ impl Chat {
         let pet_id = crate::pet_config::pet_id(&turn.provider).ok_or_else(unavailable)?;
         if pet_id != expected_pet { return Err(unavailable()); }
         let pet = config.pets.get(pet_id).filter(|pet|
-            pet.provider == turn.provider && !pet.name.trim().is_empty()
+            (pet.provider == turn.provider || crate::pet_inference::Target::configured(config,pet_id).ok().flatten().is_some_and(|t|t.provider==turn.provider)) && !pet.name.trim().is_empty()
             && pet.name.chars().count() <= 40 && !pet.name.chars().any(char::is_control)
         ).ok_or_else(unavailable)?;
         Ok(LocalIdentity {
@@ -1453,6 +1474,9 @@ pub async fn send(
     let context=context.map(|context|crate::pet_documents::checked_context(provider,&chat.conversation_id(provider)?,context,None)).transpose()?;
     let context = context.map(checked_context).transpose()?;
     let model = model_for(settings, provider);
+    if let Some(captured)=chat.captured_inference(provider)?{
+        return local_chat::send_captured(app,chat,settings,&captured,query,context).await;
+    }
     if crate::cli_chat::backend(provider).is_some() {
         return crate::cli_chat::send(app, chat, settings, provider, &model, query, context).await;
     }
@@ -1500,6 +1524,17 @@ pub async fn send_for_phone(
 pub async fn models(settings: &Settings, provider: &str) -> Result<Vec<ModelInfo>, String> {
     crate::settings::effect_allowed()?;
     crate::pet_config::require_active_provider(provider)?;
+    let config=match crate::pet_config::read_existing(){Ok(c)=>Some(c),Err(error)if crate::pet_inference::managed_provider(provider)&&provider!="custom"=>return Err(error),Err(_)=>None};
+    let observation=config.as_ref().and_then(|c|crate::pet_capabilities::begin_catalog_configured(settings,provider,c));
+    let result=models_resolved(settings,provider,config.as_ref()).await;
+    crate::pet_capabilities::finish_catalog(observation,result.is_ok());result
+}
+async fn models_resolved(settings:&Settings,provider:&str,config:Option<&crate::pet_config::Configuration>)->Result<Vec<ModelInfo>,String>{
+    if let Some(target)=config.map(|c|crate::pet_inference::Target::for_provider(c,provider)).transpose()?.flatten(){
+        let auth=local_chat::lmstudio::target_auth(&target);let server=local_chat::server_for_target(&target)?;
+        if server.id=="lmstudio"{return Ok(local_chat::lmstudio::catalog_scoped(&server,auth,||true).await?.models());}
+        return local_chat::models(&server).await;
+    }
     if provider=="copilot" {return crate::copilot_adapter::models().await;}
     if crate::cli_chat::backend(provider)==Some("codex") { return crate::codex_chat::models().await; }
     if matches!(provider,"antigravity"|"gemini-cli"|"claude-cli") {
@@ -2739,7 +2774,7 @@ impl Chat {
     ) -> Option<crate::pet_observability::capture::Origin> {
         // This slice measures the Ollama routes only. Other providers remain
         // explicitly unavailable, rather than being assigned a misleading zero.
-        if turn.provider != "ollama" || self.disk_error { return None; }
+        if turn.provider != "ollama" || self.disk_error || turn.captured_inference().is_some_and(|c|c.adapter!="ollama") { return None; }
         let all = match self.inner.try_lock() {
             Ok(all) => all,
             Err(_) => {

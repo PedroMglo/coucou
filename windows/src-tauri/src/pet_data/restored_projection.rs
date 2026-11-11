@@ -33,6 +33,8 @@ pub(crate)fn project(report:&Value,choice:&Choices,sources:Option<&[u8]>,flow:Op
  let grants:BTreeMap<_,_>=choice.grants.iter().map(|g|(g.pet_id.as_str(),g.operations.iter().copied().collect::<BTreeSet<_>>())).collect();
  for(id,p)in &mut pets.pets{
   let permission=|op|grants.get(id.as_str()).is_some_and(|ops|ops.contains(&op));p.permissions=Some(crate::pet_config::Permissions{documents:permission(Operation::Documents),email_drafts:permission(Operation::EmailDrafts),music:permission(Operation::Music),open_apps:permission(Operation::OpenApps)});
+  // Keep the reviewed grant data and revision, but copied policy never reactivates System access.
+  if let Some(policy)=&mut p.system_access{policy.enabled=false;}
   // Shell policy needs its own command review. Never inherit an Ask/full-access
   // mode or executable allowlist from a copied preference.
   if p.local_execution.is_some(){p.local_execution=Some(crate::pet_config::LocalExecution::default());}
@@ -49,6 +51,7 @@ pub(crate)fn project(report:&Value,choice:&Choices,sources:Option<&[u8]>,flow:Op
  let sources=sources.map(crate::pet_sources::suspend_for_restoration).transpose().map_err(|_|Error::UnsupportedProfile)?;
  let flow=flow.map(crate::flow::suspend_for_restoration).transpose().map_err(|_|Error::UnsupportedProfile)?;
  let new_settings=value(&settings)?;let mut changed=vec![];for(k,v)in new_settings.as_object().ok_or(Error::UnsupportedProfile)?{if setting.get(k)!=Some(v){changed.push(json!({"field":k,"before":setting.get(k),"after":v}));}}
- let differences=json!({"settings":changed,"petGrants":choice.grants,"localCommandsEnabled":false,"persistentSourcesSuspended":sources.is_some(),"flowAndVoiceSuspended":flow.is_some(),"pendingFeatureRevalidation":["voice","mobile","autostart"],"inferenceFallbackAllowed":false});
+ let mut differences=json!({"settings":changed,"petGrants":choice.grants,"localCommandsEnabled":false,"persistentSourcesSuspended":sources.is_some(),"flowAndVoiceSuspended":flow.is_some(),"pendingFeatureRevalidation":["voice","mobile","autostart"],"inferenceFallbackAllowed":false});
+ if pets.pets.values().any(|p|p.system_access.is_some()){differences["systemGrantsSuspended"]=json!(true);differences["systemGrantsRequireFreshNativeReview"]=json!(true);}
  Ok(Projection{settings:bytes(settings)?,pets:bytes(pets)?,sources,flow,settings_io:None,differences})
 }

@@ -65,12 +65,14 @@ pub enum RecoveryPhase { Reserved, Started, Uncertain, SettledReceiptMissing }
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct View {
+    #[serde(skip_serializing_if="Option::is_none")]pub historical_source:Option<super::messages::HistoricalSource>,
+    #[serde(skip_serializing_if="Option::is_none")]pub receipt_hash:Option<String>,
     #[serde(flatten)] pub result: Lookup,
     pub criteria_verified: bool,
     pub goal_complete: bool,
 }
 impl From<Lookup> for View {
-    fn from(result: Lookup) -> Self { Self { result, criteria_verified: false, goal_complete: false } }
+    fn from(result: Lookup) -> Self { let receipt_hash=match &result{Lookup::Available{receipt}=>model::fingerprint(receipt).ok(),_=>None};Self { historical_source:None,result, receipt_hash, criteria_verified: false, goal_complete: false } }
 }
 
 fn directory(path: PathBuf, decision: &str, create: bool) -> super::authority::Result<Option<Dir>> {
@@ -89,27 +91,34 @@ pub(super) fn preflight(authority: &Authority, decision: &str) -> super::authori
     Ok(())
 }
 pub(super) fn lookup(authority: &Authority, spec: &AdmissionSpec, proof: &ConsentProof, request: &str) -> super::authority::Result<Lookup> {
-    let (_, attempt) = authority.result_attempt(spec, proof, request)?;
-    let Some(attempt) = attempt else { return Ok(Lookup::NotStarted); };
+    lookup_inner(authority,spec,proof,request,Reader::Current).map(|v|v.0)
+}
+/// Caller already holds the exact Authority reader/writer.
+pub(super)fn lookup_unlocked(authority:&Authority,spec:&AdmissionSpec,proof:&ConsentProof,request:&str)->super::authority::Result<Lookup>{lookup_inner(authority,spec,proof,request,Reader::AlreadyLocked).map(|v|v.0)}
+#[derive(Clone,Copy)]enum Reader{Current,AlreadyLocked,NativeUser}
+pub(super)fn lookup_for_user(authority:&Authority,spec:&AdmissionSpec,proof:&ConsentProof,request:&str)->super::authority::Result<View>{let(result,historical)=lookup_inner(authority,spec,proof,request,Reader::NativeUser)?;let mut view=View::from(result);view.historical_source=historical;Ok(view)}
+fn lookup_inner(authority:&Authority,spec:&AdmissionSpec,proof:&ConsentProof,request:&str,reader:Reader)->super::authority::Result<(Lookup,Option<super::messages::HistoricalSource>)>{
+    let(_,attempt,historical)=match reader{Reader::Current=>{let(l,a)=authority.result_attempt(spec,proof,request)?;(l,a,None)},Reader::AlreadyLocked=>{let(l,a)=authority.result_attempt_unlocked(spec,proof,request)?;(l,a,None)},Reader::NativeUser=>authority.result_attempt_for_user(spec,proof,request)?};
+    let Some(attempt) = attempt else { return Ok((Lookup::NotStarted,historical)); };
     if attempt.phase != Phase::Settled {
-        return Ok(Lookup::RecoveryRequired { phase: match attempt.phase {
+        return Ok((Lookup::RecoveryRequired { phase: match attempt.phase {
             Phase::Reserved => RecoveryPhase::Reserved,
             Phase::Started => RecoveryPhase::Started,
             Phase::Uncertain => RecoveryPhase::Uncertain,
             Phase::Settled => unreachable!(),
-        }});
+        }},historical));
     }
     let Some(dir) = directory(authority.result_root()?, &spec.decision_id, false)? else {
-        return Ok(Lookup::RecoveryRequired { phase: RecoveryPhase::SettledReceiptMissing });
+        return Ok((Lookup::RecoveryRequired { phase: RecoveryPhase::SettledReceiptMissing },historical));
     };
     let Some((raw, _)) = dir.bytes(&format!("{}.json", attempt.id), MAX_RECEIPT).map_err(|_| Failure::Unsafe)? else {
-        return Ok(Lookup::RecoveryRequired { phase: RecoveryPhase::SettledReceiptMissing });
+        return Ok((Lookup::RecoveryRequired { phase: RecoveryPhase::SettledReceiptMissing },historical));
     };
     let envelope: Envelope = serde_json::from_slice(&raw).map_err(|_| Failure::Invalid)?;
     if envelope.body.attempt_id != attempt.id || envelope.body.request_id != request { return Err(Failure::Invalid); }
-    authority.verify_result(spec, proof, &envelope)?;
+    match reader{Reader::AlreadyLocked=>authority.verify_result_unlocked(spec,proof,&envelope)?,Reader::Current=>authority.verify_result(spec,proof,&envelope)?,Reader::NativeUser=>authority.verify_result_for_user(spec,proof,&envelope)?,}
     dir.check().map_err(|_| Failure::Changed)?;
-    Ok(Lookup::Available { receipt: envelope.body })
+    Ok((Lookup::Available { receipt: envelope.body },historical))
 }
 /// Exact canonical bytes observed under the native authority lock. Missing
 /// receipts remain missing; this fence never initializes or repairs a store.

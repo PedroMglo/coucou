@@ -1,0 +1,31 @@
+//! Generated peer verification uses the same Report and canonical grant.
+//! Receipt persistence proves local delivery only; free criteria stay unknown.
+use super::*;
+impl Report{
+ pub(super)fn planned_matches(&self,s:&AdmissionSpec)->bool{
+  s.peer_planning()&&self.schema_version==3&&self.reference.goal_id==s.goal_id&&self.reference.pet_id==s.owner.pet_id&&self.reference.decision_id==s.decision_id&&self.admission_hash==model::fingerprint(s).unwrap_or_default()&&self.spec_hash==s.intent_hash&&self.binding.schema_version==3&&self.binding.spec_hash==s.intent_hash&&self.binding.valid()&&self.generated_plan.as_ref().is_some_and(|r|r.valid()&&r.decision_id==s.decision_id&&r.proposal_hash==self.proposal_hash)
+ }
+ pub(super)fn planned_valid(&self,b:&Grant)->bool{
+  let Some(l)=b.lease.as_ref()else{return false;};let Some(r)=self.generated_plan.as_ref()else{return false;};let c=&self.reference;
+  if !b.peer_planning||b.operation!=Operation::GoalPlanning||!r.valid()||r.proposal_hash!=self.proposal_hash||!b.planning_usage.as_ref().is_some_and(|j|j.rounds.iter().any(|round|round.publication.as_ref().is_some_and(|p|p.phase==crate::pet_runtime::generated_plans::Phase::Acknowledged&&p.reference==*r)))
+   ||!c.valid()||!matches!(c.source,Some(CompletionSource::NativeMessages{..}))||c.goal_id!=b.goal_id||c.decision_id!=b.decision_id||c.lease_id!=l.id||self.admission_hash!=b.spec_hash||self.binding.schema_version!=3||!self.binding.valid()||self.binding.spec_hash!=self.spec_hash||!self.criteria_verified||self.results.len()!=self.binding.criteria_count as usize||self.binding.conditions.len()!=self.results.len()
+   ||self.source_sequence==0||self.source_updated_at==0||self.source_updated_at>self.recorded_at||self.recorded_at!=c.observed_at||self.recorded_at<l.claimed_at||self.recorded_at>=l.deadline_at||self.recorded_at>b.updated_at||!model::token(&self.source_grant_revision)||[&self.source_record_hash,&self.source_grant_hash,&self.budget_hash,&self.proposal_hash].iter().any(|h|crate::pet_runtime::authority::decode(h).is_none())||self.budget_hash!=model::fingerprint(&b.budget_usage).unwrap_or_default()||self.content_hash().ok().as_ref()!=Some(&c.report_hash){return false;}
+  let entries=b.messages.as_ref().map(|m|m.entries.as_slice()).unwrap_or(&[]);let mut seen=std::collections::BTreeSet::new();
+  self.expected_messages>0&&self.expected_messages as usize<=MAX_MESSAGES&&self.receipts.len()==self.expected_messages as usize&&entries.len()==self.receipts.len()&&self.receipts.iter().all(|r|r.source_decision_id.is_none()&&r.valid()&&seen.insert((&r.plan_id,&r.step_id))&&entries.iter().any(|e|r.matches(e)))&&self.results.iter().enumerate().all(|(i,r)|r.criterion_index as usize==i&&r.status==Status::Met&&self.binding.conditions.iter().any(|c|c.criterion_index==r.criterion_index&&c.criterion_hash==r.criterion_hash))
+ }
+ pub(super)fn planned_source(&self,g:&Record)->model::Result<()>{
+  crate::pet_runtime::criteria::verify_source(g,&self.reference,self.source_sequence,self.source_updated_at,&self.source_record_hash,&self.spec_hash,&self.results)?;
+  let s=&g.admissions.last().ok_or(model::Error::Conflict)?.spec;let r=crate::pet_runtime::planned_peer::reference(g,s)?;
+  if self.generated_plan.as_ref()!=Some(r)||self.binding!=Binding::peer_for(g)?{return Err(model::Error::Conflict);}let p=g.plans.iter().find(|p|p.id==r.plan_id).ok_or(model::Error::Conflict)?;
+  if self.expected_messages as usize!=p.steps.len()||self.receipts.len()!=p.steps.len()||p.steps.iter().any(|s|!self.receipts.iter().any(|x|x.plan_id==p.id&&x.step_id==s.id&&s.operation.as_ref().is_some_and(|op|crate::pet_runtime::messages::Input::parse(op).is_ok_and(|i|i.to_pet()==x.recipient_pet_id)))){return Err(model::Error::Conflict);}Ok(())
+ }
+ pub(super)fn observe_planned(g:&Record,s:&AdmissionSpec,b:&Grant,id:String,target:String,now:u64)->model::Result<Self>{
+  let r=crate::pet_runtime::planned_peer::reference(g,s)?;if !super::super::plans::matches(g,s){return Err(model::Error::Conflict);}crate::pet_runtime::authority::Authority::generated_acknowledged(b,s,r).map_err(crate::pet_runtime::authority::Failure::control_error)?;
+  let p=g.plans.iter().find(|p|p.id==r.plan_id).ok_or(model::Error::Conflict)?;if p.steps.is_empty()||p.steps.len()>MAX_MESSAGES{return Err(model::Error::InvalidInput);}let binding=Binding::peer_for(g)?;let mut receipts=vec![];
+  for step in &p.steps{if let Some(receipt)=b.messages.as_ref().and_then(|m|m.entries.iter().find(|e|e.envelope().cause.plan_id==p.id&&e.envelope().cause.step_id==step.id)){
+   if !crate::pet_runtime::owner_resumption::receipt_scope_matches(g,b,&receipt.scope)||!receipt.scope.belongs(s,b.lease.as_ref().ok_or(model::Error::Conflict)?)||receipt.scope.generated_plan.as_ref()!=Some(r){return Err(model::Error::Conflict);}receipts.push(ReceiptRef::from(receipt)?);
+  }}
+  let met=receipts.len()==p.steps.len();let results=g.spec.criteria.iter().enumerate().map(|(i,t)|Ok(CriterionResult{criterion_index:i as u32,criterion_hash:model::fingerprint(t)?,status:if binding.conditions.iter().any(|c|c.criterion_index as usize==i){if met{Status::Met}else{Status::Unmet}}else{Status::Unknown}})).collect::<model::Result<Vec<_>>>()?;let complete=results.iter().all(|r|r.status==Status::Met);let l=b.lease.as_ref().ok_or(model::Error::Conflict)?;
+  let mut report=Self{generated_plan:Some(r.clone()),schema_version:3,reference:CompletionRef{source:Some(CompletionSource::NativeMessages{verification_id:id}),schema_version:2,goal_id:g.id.clone(),pet_id:g.spec.owner.pet_id.clone(),recipe_id:String::new(),plan_id:String::new(),decision_id:s.decision_id.clone(),lease_id:l.id.clone(),source_revision:g.revision.clone(),target_revision:target,report_hash:String::new(),observed_at:now},binding,admission_hash:model::fingerprint(s)?,spec_hash:s.intent_hash.clone(),proposal_hash:r.proposal_hash.clone(),source_sequence:g.sequence,source_updated_at:g.updated_at,source_record_hash:model::fingerprint(g)?,source_grant_revision:b.revision.clone(),source_grant_hash:model::fingerprint(b)?,receipts,expected_messages:p.steps.len()as u32,budget_hash:model::fingerprint(&b.budget_usage)?,results,criteria_verified:complete,recorded_at:now};report.reference.report_hash=report.content_hash()?;Ok(report)
+ }
+}

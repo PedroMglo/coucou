@@ -1,0 +1,328 @@
+{
+  "dataUtc": "2026-11-09T23:29:29.811879+00:00",
+  "baseIntegrada": "Fontes próprias Source3 e objetivo unbound65/11/10: UI/F2/corpo/hash/reinício sintéticos e preservação/leitores nativos verificados em perfil gerado; regras e entrega integral pendentes",
+  "sourceMap": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/pet-source-scopes/SOURCE7.json",
+  "installed": "0.5.1-mochi.43",
+  "installedSources": 1268,
+  "original43Preservados": 43,
+  "guardianAdicionaisPreservados": 6,
+  "grupoAtual": "G9",
+  "percentagemSistemaIntegral": null,
+  "percentagemGrupoG2Integral": null,
+  "grupos": [
+    {
+      "id": "G1",
+      "nome": "Arquitetura, fábrica e identidade dos pets",
+      "requisitos": [
+        "ARC-01",
+        "ARC-02",
+        "ARC-03",
+        "PET-01",
+        "PET-03",
+        "PET-04",
+        "PET-05"
+      ],
+      "estado": "Arquitetura e implementação parciais",
+      "entrega": "Identidade independente, fábrica única e adaptadores/capacidades reais de todos os pets; motores e papéis configuráveis, sem fallback silencioso.",
+      "aceitacao": "Contratos e adoção coerentes em todos os pets/superfícies; disponibilidade e falhas verificadas nos protocolos suportados."
+    },
+    {
+      "id": "G2",
+      "nome": "Autonomia individual, execução e autoridade",
+      "requisitos": [
+        "PET-02",
+        "RUN-01",
+        "RUN-02",
+        "RUN-03",
+        "RUN-04",
+        "RUN-05",
+        "EXE-01",
+        "EXE-02",
+        "EXE-03",
+        "EXE-04"
+      ],
+      "estado": "Implementação parcial integrada; autonomia individual integral e aceitação continuam abertas",
+      "entrega": "Objetivos, planos, filas, orçamentos, recursos, decisões, ferramentas, verificação, Stop, recuperação e lifecycle no mesmo runtime.",
+      "aceitacao": "Objetivo mantém dono/contexto/limites, continua com conversa fechada e recupera crash/efeitos incertos sem duplicar; decisões nativas e cancelamento verificados."
+    },
+    {
+      "id": "G3",
+      "nome": "Cooperação, delegação e coordenação",
+      "requisitos": [
+        "TEAM-01",
+        "TEAM-02"
+      ],
+      "estado": "Raiz1226/instalada37: iteração com memória própria, delegação/destinatário determinístico, segunda DATA e destinatário56 com F2/motor/saldo próprios comprovados nativamente com protocolos sintéticos; TEAM integral aberto.",
+      "entrega": "Mensagens duráveis diretas, delegação paralela limitada, orçamentos repartidos, ciclos/backpressure, cancelamento por ramo e coordenador opcional.",
+      "aceitacao": "Especialistas trabalham sem coordenador; ACK perdido não repete efeitos; delegação não amplia privilégios e falhas de um ramo não perdem os restantes."
+    },
+    {
+      "id": "G4",
+      "nome": "Contexto, memória, persistência e recuperação",
+      "requisitos": [
+        "CTX-01",
+        "CTX-02",
+        "MEM-01",
+        "MEM-02",
+        "DATA-01",
+        "DATA-02"
+      ],
+      "estado": "Parcial; aceitação integral aberta",
+      "entrega": "Anexos cumulativos e imutáveis por turno, memória seletiva com origem/revisão/revogação, migração, backup/restauro e leitores anteriores; PostgreSQL opcional por benefício medido.",
+      "aceitacao": "Dados, rascunhos, autoridade histórica e incerteza preservados; revogação bloqueia novos usos e leitor incompatível recusa sem destruir."
+    },
+    {
+      "id": "G5",
+      "nome": "Fontes pessoais e integrações de serviço",
+      "requisitos": [
+        "CTX-03",
+        "CTX-04",
+        "CTX-05",
+        "INT-01"
+      ],
+      "estado": "Base parcial; várias integrações pendentes",
+      "entrega": "Coleções multicalendário, fontes por conversa/objetivo/regra, ICS, RSS/IMAP limitados e operações de serviço explicitamente autorizadas.",
+      "aceitacao": "Origem/frescura/falha parcial/concessões verificadas; leitura não concede escrita/envio/eliminação e destinos/bytes/tempo são limitados."
+    },
+    {
+      "id": "G6",
+      "nome": "Proatividade e rotinas do dia a dia",
+      "requisitos": [
+        "AUTO-01",
+        "AUTO-02",
+        "AUTO-03",
+        "AUTO-04",
+        "AUTO-05"
+      ],
+      "estado": "Pendente; componentes de base existentes",
+      "entrega": "Regras autorizadas, eventos/horários, fuso/DST, suspensão/offline, rotina diária, acompanhamento de projeto, silêncio e notificações deduplicadas.",
+      "aceitacao": "Ocorrência única com políticas skip/coalesce/decisão; falha parcial, DST e suspensão sem avalanche de trabalho ou alertas."
+    },
+    {
+      "id": "G7",
+      "nome": "Plugin Sistema e controlo de componentes",
+      "requisitos": [
+        "SYS-01",
+        "SYS-02",
+        "SYS-03"
+      ],
+      "estado": "Parcial; implementação e aceitação pendentes",
+      "entrega": "Integração das definições/widgets e serviços existentes; matriz pet×subplugin×operação×recurso; Rede/Bluetooth, Som/Multimédia e Ecrã/Energia/Sessão; sem segunda UI de definições ou substituição de controlCenterButton.",
+      "aceitacao": "Alvos físicos exatos e pós-condições; grants independentes por pet, revogação isolada e autorizações sensíveis nativas. Fixtures não substituem hardware. Ações dos pets refletidas na UI existente, alterações manuais observadas, controlo humano independente e posse operacional temporária.",
+      "decisaoArquitetural20261107": "docs/PET-SYSTEM-INTEGRATION.md"
+    },
+    {
+      "id": "G8",
+      "nome": "Voz como canal integral",
+      "requisitos": [
+        "VOICE-01",
+        "VOICE-02"
+      ],
+      "estado": "Parcial; C3 entregue32, incrementos seguintes locais",
+      "entrega": "Ditado/comando/confirmação para pets, sessões, contexto, memória, objetivos, regras, decisões, modelos e Sistema; ASR/TTS, Stop e prevenção de autoaprovação por TTS.",
+      "aceitacao": "Mesmas decisões/autoridades que chat e terminal, confirmação inequívoca, áudio real PT/EN/misto e Bluetooth aceites no ambiente autorizado."
+    },
+    {
+      "id": "G9",
+      "nome": "System Guardian",
+      "requisitos": [
+        "GUA-01",
+        "GUA-02",
+        "GUA-03",
+        "GUA-04",
+        "GUA-05",
+        "GUA-06"
+      ],
+      "estado": "Desenhado e reservado; ainda não operacional",
+      "entrega": "Inventário/evidência, findings de segurança, saúde/desempenho, integração sysworkspace, remediação governada e proatividade/cooperação sobre a mesma fábrica/runtime.",
+      "aceitacao": "Finding verificável sem LLM, remediação autorizada completa e outra recusada; conflitos VPN/rede, dock e consumo anómalo diagnosticados em fixtures sem agir no anfitrião."
+    },
+    {
+      "id": "G10",
+      "nome": "Observabilidade, composição e entrega integral",
+      "requisitos": [
+        "OBS-01",
+        "OBS-02",
+        "REL-01",
+        "REL-02"
+      ],
+      "estado": "Parcial;36 instalada/verificada; assinatura do registo host pendente, aceitação integral aberta.",
+      "entrega": "Estado/decisões/consumo por tarefa, composição de fontes exatas, preservação funcional, migração/recuperação, empacotamento e aceitação instalada.",
+      "aceitacao": "Critérios aplicáveis integrados, verificados e entregues; limitações e exceções resolvidas. Sem transformar build privada, testes ou catálogo em conclusão funcional."
+    }
+  ],
+  "ordemPorDependencias": [
+    "G1 contratos/fábrica vigentes → G2 autonomia individual e bloqueadores de preservação",
+    "G3 sobre o mesmo runtime; G4/G5 incrementais conforme dependências reais já implementadas",
+    "G6 sobre runtime/fontes; G7/G8 segundo autoridade, preservação e ambiente de aceitação",
+    "G9 sobre as capacidades comuns; G10 é transversal e fecha a composição/entrega"
+  ],
+  "semAgentesCommitsPushMergesInstalacaoOuHostNovos": false,
+  "ultimoIncrementoIntegrado": {
+    "atUtc": "2026-11-09T23:29:29.811879+00:00",
+    "state": "Own-pet source3/Goal65/Context11/Grant10 preserved through native backup/inactive restore/quarantine/grant-free activation; current dev44 reads immutable historical data, prior dev40 refuses new formats non-destructively; installed acceptance pending",
+    "verification": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/pet-source-preservation/VERIFIED.json",
+    "sourceMap": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/pet-source-preservation/SOURCE1.json",
+    "sourceFiles": 1280,
+    "nativeBuild": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/host-native-development-20261107/build44/BUILD-RESULT.json",
+    "nativeCommandReceipts": 13,
+    "newFormatPreservationVerified": true,
+    "realModelCalls": 0,
+    "installed": false,
+    "humanAcceptance": false,
+    "goalComplete": false,
+    "next": "AUTO-01/02: implementar regras e ocorrências autorizadas sobre o runtime/Authority/dispatcher/recursos/contabilidade comuns, sem segundo scheduler ou ledger. Fixar contrato de concessão própria, dono/revisão, orçamento total, idempotência, IANA/DST e política de atrasos antes de ativar recorrência. O consentimento finito de GoalGrant10 não autoriza rondas futuras. Manter a preparação diária multicalendário AUTO-03 como entrega dependente, com dados/frescura/cobertura e notificação deduplicada; não fechar a autonomia só com CRUD de regras. Entrega/aceitação instalada e limites de providers/voz/Guardian continuam no objetivo integral."
+  },
+  "proximaUnidade": "AUTO-01/02: implementar regras e ocorrências autorizadas sobre o runtime/Authority/dispatcher/recursos/contabilidade comuns, sem segundo scheduler ou ledger. Fixar contrato de concessão própria, dono/revisão, orçamento total, idempotência, IANA/DST e política de atrasos antes de ativar recorrência. O consentimento finito de GoalGrant10 não autoriza rondas futuras. Manter a preparação diária multicalendário AUTO-03 como entrega dependente, com dados/frescura/cobertura e notificação deduplicada; não fechar a autonomia só com CRUD de regras. Entrega/aceitação instalada e limites de providers/voz/Guardian continuam no objetivo integral.",
+  "lifecycleComprovado": {
+    "id": "R4A1",
+    "sourceFiles": 1020,
+    "prova": ".build/pet-goal-execution-next-r1/RUNTIME-LIFECYCLE-PARTIAL-CHECKPOINT-R4A1.json",
+    "producaoAlterada": false,
+    "naoFechaTodosOsLifecycle": true
+  },
+  "arbitragemComprovada": {
+    "id": "R5A5",
+    "prova": ".build/pet-goal-execution-next-r1/RUNTIME-ARBITRATION-PARTIAL-CHECKPOINT-R5A5.json",
+    "naoFechaDispatchOuG2": true,
+    "instalada": false
+  },
+  "pedidoDuravelComprovado": {
+    "id": "R5B1A2",
+    "prova": ".build/pet-goal-execution-next-r1/REQUESTED-DISPATCH-PARTIAL-CHECKPOINT-R5B1A2.json",
+    "scope": "pedido explícito/fila inicial/reinício/restauro no percurso limitado; não fecha G2 ou todos providers",
+    "instalada": false
+  },
+  "naoInterferenciaDevComprovada": {
+    "id": "R5D1A3",
+    "prova": ".build/pet-goal-execution-next-r1/EXTERNAL-APPROVAL-PARTIAL-CHECKPOINT-R5D1A3.json",
+    "scope": "hooks externos/processOnly; não é bypass de permissões ou aceitação instalada",
+    "instalada": false
+  },
+  "limpezaEsperasComprovada": {
+    "id": "R5C1A4",
+    "proof": ".build/pet-goal-execution-next-r1/QUEUE-HOUSEKEEPING-CHECKPOINT-R5C1A4.json",
+    "installed": false
+  },
+  "percentagemGrupoG3Integral": null,
+  "metricaHistoricaContextoRevisoesNativas": {
+    "ambito": "Subfase G2: contexto nativo das revisões humanas; não representa todo G2 nem o sistema integral",
+    "regra": "unidades com implementação, provas no âmbito e integração local / três unidades delimitadas; peso igual, sem estimativa de esforço",
+    "numerador": 3,
+    "denominador": 3,
+    "percentagemArredondada": 100,
+    "instalada": false,
+    "unidades": [
+      {
+        "id": "R1",
+        "nome": "Recuperação de execução perdida",
+        "estado": "implementado/validado no âmbito/integrado1018",
+        "prova": ".build/pet-goal-execution-next-r1/RUNTIME-RECOVERY-REVIEW-PARTIAL-CHECKPOINT-R1A1-N296.json"
+      },
+      {
+        "id": "R2",
+        "nome": "Admissão, planeamento e continuação",
+        "estado": "implementado/validado no âmbito/integrado1019",
+        "prova": ".build/pet-goal-execution-next-r1/RUNTIME-ADMISSION-REVIEW-PARTIAL-CHECKPOINT-R2A3.json"
+      },
+      {
+        "id": "R3",
+        "nome": "Retirada de autorização não utilizada",
+        "estado": "implementado/validado no âmbito/integrado1020; aceitação instalada pendente",
+        "prova": ".build/pet-goal-execution-next-r1/RUNTIME-RETIREMENT-REVIEW-PARTIAL-CHECKPOINT-R3A1.json"
+      }
+    ],
+    "limites": [
+      "100% mede apenas implementação/prova automatizada/integração local destas três unidades de peso igual; não mede esforço, qualidade, G2 integral ou entrega instalada.",
+      "A percentagem de G2 inteiro e do sistema permanece indisponível: faltam marcos integrais desagregados/pesados e aceitação final; os49 critérios integrais continuam abertos.",
+      "R1/R2 têm os limites explícitos das suas provas; finalidade/painel, outros protocolos/lifecycle/aceitação instalada não são implicitamente fechados."
+    ],
+    "fotografiaOriginalUtc": "2026-11-02T23:04:14.066864+00:00"
+  },
+  "unidadePrivadaAtual": {
+    "atUtc": "2026-11-09T23:29:29.811879+00:00",
+    "state": "Own-pet source3/Goal65/Context11/Grant10 preserved through native backup/inactive restore/quarantine/grant-free activation; current dev44 reads immutable historical data, prior dev40 refuses new formats non-destructively; installed acceptance pending",
+    "verification": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/pet-source-preservation/VERIFIED.json",
+    "sourceMap": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/pet-source-preservation/SOURCE1.json",
+    "sourceFiles": 1280,
+    "nativeBuild": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/host-native-development-20261107/build44/BUILD-RESULT.json",
+    "nativeCommandReceipts": 13,
+    "newFormatPreservationVerified": true,
+    "realModelCalls": 0,
+    "installed": false,
+    "humanAcceptance": false,
+    "goalComplete": false,
+    "next": "AUTO-01/02: implementar regras e ocorrências autorizadas sobre o runtime/Authority/dispatcher/recursos/contabilidade comuns, sem segundo scheduler ou ledger. Fixar contrato de concessão própria, dono/revisão, orçamento total, idempotência, IANA/DST e política de atrasos antes de ativar recorrência. O consentimento finito de GoalGrant10 não autoriza rondas futuras. Manter a preparação diária multicalendário AUTO-03 como entrega dependente, com dados/frescura/cobertura e notificação deduplicada; não fechar a autonomia só com CRUD de regras. Entrega/aceitação instalada e limites de providers/voz/Guardian continuam no objetivo integral."
+  },
+  "nextPrivateIncrement": "AUTO-01/02: implementar regras e ocorrências autorizadas sobre o runtime/Authority/dispatcher/recursos/contabilidade comuns, sem segundo scheduler ou ledger. Fixar contrato de concessão própria, dono/revisão, orçamento total, idempotência, IANA/DST e política de atrasos antes de ativar recorrência. O consentimento finito de GoalGrant10 não autoriza rondas futuras. Manter a preparação diária multicalendário AUTO-03 como entrega dependente, com dados/frescura/cobertura e notificação deduplicada; não fechar a autonomia só com CRUD de regras. Entrega/aceitação instalada e limites de providers/voz/Guardian continuam no objetivo integral.",
+  "revisaoSistema20261107": {
+    "estado": "contrato revisto; implementação/migração pendentes",
+    "uiExistente": "DMS/Quickshell observado",
+    "preservarControlCenterButton": true,
+    "construirDefinicoesProprias": false,
+    "instalacaoAlterada": false
+  },
+  "fotografiaAnterior20261105": {
+    "dataUtc": "2026-11-05T02:13:48.778838+00:00",
+    "baseIntegrada": "1170 / H3D1 F1",
+    "sourceMap": ".build/pet-goal-execution-next-r1/source-peer-feedback1170-h3d1-f1.json",
+    "installed": "0.5.1-mochi.32",
+    "installedSources": 1003,
+    "ultimoIncrementoIntegrado": {
+      "sourceMap": ".build/pet-goal-execution-next-r1/source-peer-feedback1170-h3d1-f1.json",
+      "verification": ".build/pet-goal-execution-next-r1/PEER-FEEDBACK-H3D1-FINAL-VERIFICATION-F1.json",
+      "rootIntegration": ".build/pet-goal-execution-next-r1/integration1170-peer-feedback-h3d1-f1/FINAL-CHECKPOINT.json",
+      "rootIntegrated": true,
+      "notInstalled": true,
+      "native": "707: consulta funcional de evidência correlacionada, dois filhos, zero inferência/model metadata ou escritas",
+      "limits": [
+        "Não fecha TEAM, autonomia de todos os providers, rotinas, Sistema/voz/Guardian ou entrega integral.",
+        "49 requisitos integrais abertos; instalação32 preservada."
+      ]
+    },
+    "unidadePrivadaAtual": {
+      "id": "H3D2 B3F4",
+      "estado": "private ACK-only reconciliation and fresh pending-effect review after lost Driver lineage validated; public iteration closed",
+      "checkpoint": ".build/pet-goal-execution-next-r1/peer-iteration-h3d2-b3f4/PARTIAL-CHECKPOINT.json",
+      "raizIntegrada": 1170,
+      "instalada": false,
+      "politicaPublicaDisponivel": false
+    },
+    "proximaUnidade": "H3D2: completar preservação/recuperação quando se perde o próprio Owned (processo), leitores/restauro dos novos formatos e composição nativa com controlo humano funcional; depois integrar as fontes exatas antes de abrir o catálogo público. Não inferir morte por TTL, reconstruir Approved/Owned de DTO ou repetir efeitos. Instalação32 preservada."
+  },
+  "restricoesVigentes": {
+    "umAgente": true,
+    "commitsPushMergesCoucouSuspensos": true,
+    "desenvolvimentoNativoEAtualizacaoLocalAutorizados": true,
+    "hostSegueSysworkspace": true,
+    "semQuotaRealCopilot": true
+  },
+  "hostRegistrationPending": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/release43-native/HOST-REGISTRATION-PENDING.json",
+  "previousComposition37": {
+    "dataUtc": "2026-11-08T22:52:05.411165+00:00",
+    "baseIntegrada": "1226 / memória própria em cooperação e retoma governada na raiz",
+    "sourceMap": ".build/pet-goal-execution-next-r1/release37-native/SOURCE.json",
+    "installed": "0.5.1-mochi.37",
+    "installedSources": 1226,
+    "ultimoIncrementoIntegrado": {
+      "sourceMap": ".build/pet-goal-execution-next-r1/release36-native/SOURCE.json",
+      "verification": ".build/pet-goal-execution-next-r1/iterative-native-admission/CHECKPOINT.json",
+      "rootIntegrated": true,
+      "notInstalled": false,
+      "native": "build13/run3: revisão inicial, delegação, filho determinístico, segunda DATA/corpo HTTP exatos e pai pausado/fechado; fornecedor sintético",
+      "limits": [
+        "Fornecedores sintéticos/automação nativa não são aceitação humana, modelos reais ou produção49.",
+        "Registo host com fontes/manifestos revistos; assinatura do commit pendente de chave desbloqueada."
+      ],
+      "installedProof": ".build/pet-goal-execution-next-r1/release36-native/INSTALLED36-VERIFIED.json"
+    },
+    "unidadePrivadaAtual": {
+      "unit": "Memória própria selecionada em cooperação/iteração governada",
+      "state": "Integrada/entregue localmente na37; aceitação sintética/nativa nos âmbitos declarados, global49 aberto",
+      "checkpoint": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/iterative-selected-memory/CHECKPOINT.json",
+      "installation": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/release37-native/INSTALLED37-VERIFIED.json"
+    },
+    "proximaUnidade": "Escolher próxima dependência do contexto recebido/copiado/transitivo no planeamento, sem contornar R43/linhagem/F2; manter um único runtime.",
+    "hostRegistrationPending": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/release37-native/HOST-REGISTRATION-PENDING.json"
+  }
+}

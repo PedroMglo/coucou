@@ -19,6 +19,7 @@ pub fn create(app:&AppHandle){
   .inner_size(760.0,650.0).min_inner_size(320.0,280.0).decorations(false).transparent(true).shadow(false)
   .always_on_top(true).skip_taskbar(true).visible_on_all_workspaces(true).focused(false).visible(false).build(){
   Ok(win)=>{
+   crate::settings::review::register_window(&win);
    let app=app.clone();
    win.on_window_event(move|event|match event{
     tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();hide(&app);},

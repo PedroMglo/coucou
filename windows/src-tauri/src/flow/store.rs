@@ -167,6 +167,8 @@ pub struct Store {
     /// When the history is not kept, the last dictation still waits here
     /// (memory only) for "paste again".
     last_unkept: Option<String>,
+    last_output_revision:u64,
+    last_output_epoch:String,
     folder: PathBuf,
 }
 
@@ -205,6 +207,8 @@ impl Store {
             app_styles: load(&folder, "styles.json").unwrap_or_else(default_app_styles),
             prefs: load(&folder, "prefs.json").unwrap_or_default(),
             last_unkept: None,
+            last_output_revision:0,
+            last_output_epoch:new_id(),
             folder,
         };
         store.prune(now_ms());
@@ -281,15 +285,19 @@ impl Store {
     }
 
     /// The last thing dictated, for "paste again".
-    pub fn last_text(&self) -> Option<String> {
-        self.history.first().map(|e| e.text.clone()).or_else(|| self.last_unkept.clone())
-    }
+    pub fn last_text_ref(&self)->Option<&str>{self.history.first().map(|e|e.text.as_str()).or(self.last_unkept.as_deref())}
+    pub fn has_last_text(&self)->bool{self.last_output_revision!=u64::MAX&&self.last_text_ref().is_some_and(|text|text.len()<=8*1024*1024)}
+    pub(super)fn last_output_revision(&self)->u64{self.last_output_revision}
+    pub(super)fn last_output_epoch(&self)->&str{&self.last_output_epoch}
+    fn advance_output(&mut self){self.last_output_revision=self.last_output_revision.saturating_add(1);}
+    pub fn last_text(&self)->Option<String>{self.last_text_ref().map(str::to_owned)}
 
     pub fn record(&mut self, text: &str, app: Option<&str>, seconds: f64, day: Day, now: u64) -> Option<Entry> {
         let count = text::word_count(text) as u64;
         if count == 0 {
             return None;
         }
+        self.advance_output();
         let d = self.stats.days.entry(day.key()).or_default();
         d.words += count;
         d.seconds += seconds;
@@ -302,6 +310,7 @@ impl Store {
             self.last_unkept = Some(text.to_string());
             return None;
         }
+        self.last_unkept=None;
         let entry = Entry { id: new_id(), date: now, text: text.to_string(), app: app.map(String::from), words: count, seconds };
         self.history.insert(0, entry.clone());
         self.prune(now);
@@ -310,12 +319,15 @@ impl Store {
     }
 
     pub fn delete(&mut self, id: &str) {
+        let before=self.history.len();
         self.history.retain(|e| e.id != id);
+        if before!=self.history.len(){self.advance_output();}
         self.save_history();
     }
 
     /// Empties the history; the numbers stay.
     pub fn clear_history(&mut self) {
+        self.advance_output();
         self.history.clear();
         self.last_unkept = None;
         self.save_history();
@@ -337,6 +349,7 @@ impl Store {
             self.history.retain(|e| e.date >= limit);
         }
         if self.history.len() != before {
+            self.advance_output();
             self.save_history();
         }
     }
@@ -616,4 +629,12 @@ mod setter_io_tests {
         assert_eq!(store.last_text().as_deref(), Some("última frase não guardada 🐾"));
         assert_no_temporaries(&store.folder);
     }
+}
+
+#[cfg(test)]mod last_output_tests{
+ use super::*;
+ #[test]fn a_new_kept_entry_does_not_revive_an_older_unkept_text_after_deletion(){
+  let folder=std::env::temp_dir().join(format!("coucou-last-output-{}",new_id()));let mut store=Store::load_from(folder.clone());store.prefs.keep_days=0;store.record("old unkept",None,1.0,today(),now_ms());store.prefs.keep_days=-1;let entry=store.record("new kept",None,1.0,today(),now_ms()).unwrap();assert_eq!(store.last_text_ref(),Some("new kept"));store.delete(&entry.id);assert!(!store.has_last_text());let _=std::fs::remove_dir_all(folder);
+ }
+ #[test]fn a_reloaded_store_has_a_distinct_ephemeral_source_epoch(){let folder=std::env::temp_dir().join(format!("coucou-output-epoch-{}",new_id()));let a=Store::load_from(folder.clone());let b=Store::load_from(folder.clone());assert_ne!(a.last_output_epoch(),b.last_output_epoch());let _=std::fs::remove_dir_all(folder);}
 }

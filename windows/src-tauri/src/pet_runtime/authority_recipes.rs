@@ -7,7 +7,7 @@ pub(in crate::pet_runtime)use completion::Certified as CompletionCertified;
 const MAX_RECIPE:usize=256*1024;
 #[derive(Serialize,Deserialize)]#[serde(deny_unknown_fields)]
 struct Envelope{body:RecipeScope,tag:String}
-fn message(scope:&RecipeScope)->Result<Vec<u8>>{let mut bytes=match scope.schema_version{1=>b"coucou-native-goal-recipe-v1\0".to_vec(),2=>b"coucou-native-goal-recipe-v2\0".to_vec(),3=>b"coucou-native-generated-recipe-v1\0".to_vec(),_=>return Err(Failure::Invalid)};bytes.extend(serde_json::to_vec(scope).map_err(|_|Failure::Invalid)?);Ok(bytes)}
+fn message(scope:&RecipeScope)->Result<Vec<u8>>{let mut bytes=match scope.schema_version{1=>b"coucou-native-goal-recipe-v1\0".to_vec(),2=>b"coucou-native-goal-recipe-v2\0".to_vec(),3=>b"coucou-native-generated-recipe-v1\0".to_vec(),4=>b"coucou-native-system-sound-recipe-v1\0".to_vec(),5=>b"coucou-native-deterministic-system-recipe-v1\0".to_vec(),6=>b"coucou-native-system-health-recipe-v1\0".to_vec(),_=>return Err(Failure::Invalid)};bytes.extend(serde_json::to_vec(scope).map_err(|_|Failure::Invalid)?);Ok(bytes)}
 impl Authority{
     pub(in crate::pet_runtime)fn recipe_load(&self,spec:&AdmissionSpec,proof:&ConsentProof,plan:&str)->Result<Option<RecipeScope>>{
         let main=self.load(spec,proof)?;let lease=main.lease.as_ref().ok_or(Failure::Missing)?;

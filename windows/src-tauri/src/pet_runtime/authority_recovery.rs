@@ -8,6 +8,7 @@ impl Authority{
     }
     pub(in crate::pet_runtime)fn recovery_seed(&self,goal:&Record,now:u64)->Result<(Grant,Option<AbsentLease>,Snapshot,String)>{
         let _guard=self.lock_shared()?;let row=goal.admissions.last().ok_or(Failure::Missing)?;let proof=row.proof.as_ref().ok_or(Failure::Missing)?;let body=self.load(&row.spec,proof)?;
+        if self.unretired_message_intents(&body)?{return Err(Failure::RecoveryRequired);}
         let gate=if body.recovery.is_some(){self.recovery_profile(&body)?;None}else{Some(self.retained_recovery_absence(&row.spec,proof)?)};let snapshot=self.reconciliation_with_gate(goal,now,gate.as_ref())?;let fence=self.recovery_receipt_fence(goal,&body)?;
         Ok((body,gate,snapshot,fence))
     }
@@ -50,7 +51,7 @@ impl Authority{
         if body.recovery.is_some(){return Ok(false);}let gate=approved.gate.as_ref().ok_or(Failure::Changed)?;gate.current(self).map_err(|_|Failure::Changed)?;
         if body.lease.as_ref().is_none_or(|l|l.id!=approved.closure.reference.lease_id)||model::fingerprint(body.runtime_owner.as_ref().ok_or(Failure::Missing)?).map_err(|_|Failure::Invalid)?!=approved.closure.owner_hash{return Err(Failure::Changed);}Ok(true)
     }
-    fn recovery_event_present(goal:&Record,closure:&Closure)->Result<bool>{
+    pub(in crate::pet_runtime::authority_store)fn recovery_event_present(goal:&Record,closure:&Closure)->Result<bool>{
         let r=&closure.reference;
         if r.target_state==State::Completed{return Ok(goal.state==State::Completed&&goal.revision==r.target_goal_revision&&model::fingerprint(goal).map_err(|_|Failure::Invalid)?==closure.target_goal_hash);}
         let Some(event)=goal.events.get((r.target_sequence-1)as usize)else{return Ok(false);};
@@ -61,17 +62,30 @@ impl Authority{
     /// Native closure history cannot be deleted or promoted by editing goal
     /// JSON. The exact old source may remain while an approved ACK is pending.
     pub(in crate::pet_runtime)fn verify_recovered_goal(&self,goal:&Record)->Result<bool>{
-        let _guard=self.lock_shared()?;let mut references=vec![];let mut pending=false;
+        let _guard=self.lock_shared()?;let mut references=vec![];let mut drains=vec![];let mut revisions=vec![];let mut resumptions=vec![];let mut pending=false;
         for name in self.dir.names().map_err(|_|Failure::Unavailable)?{
             if self.historical_file(&name){continue;}
             if !name.strip_suffix(".json").is_some_and(model::token){continue;}
-            let(raw,_)=self.dir.bytes(&name,MAX_GRANT_BYTES).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Changed)?;let envelope:GrantEnvelope=serde_json::from_slice(&raw).map_err(|_|Failure::Invalid)?;
+            if self.rule_record_data(&name)?.is_some(){continue;}let(raw,_)=self.dir.bytes(&name,MAX_GRANT_BYTES).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Changed)?;let envelope:GrantEnvelope=serde_json::from_slice(&raw).map_err(|_|Failure::Invalid)?;
             if !envelope.body.valid(){return Err(Failure::Invalid);}hmac::verify(&self.key,&grant_message(&envelope.body)?,&decode(&envelope.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;
             if envelope.body.goal_id!=goal.id{continue;}
+            for resumption in &envelope.body.owner_resumptions{
+                if !Self::recovery_event_present(goal,&resumption.closure)?{return Err(Failure::Changed);}
+                references.push(resumption.closure.reference.clone());
+                let r=&resumption.reference;
+                if !r.present(goal){if !r.source_matches(goal){return Err(Failure::Changed);}pending=true;}
+                else if goal.sequence==r.target_sequence&&(goal.revision!=r.target_revision||model::fingerprint(goal).ok().as_ref()!=Some(&resumption.target_goal_hash)){return Err(Failure::Changed);}
+                resumptions.push(r.clone());
+            }
             if let Some(retirement)=&envelope.body.retirement{
                 self.retirement_profile(retirement)?;
                 if retirement.pet_id!=goal.spec.owner.pet_id||goal.admissions.iter().any(|r|r.spec.decision_id==retirement.decision_id)||goal.sequence<retirement.source_sequence
                     ||goal.sequence==retirement.source_sequence&&(goal.revision!=retirement.source_goal_revision||model::fingerprint(goal).ok().as_ref()!=Some(&retirement.source_goal_hash)){return Err(Failure::Changed);}
+            }
+            for seal in &envelope.body.native_plan_revisions{pending|=self.verify_native_plan_fact(goal,&envelope.body,seal)?;if seal.abandoned.is_none(){revisions.push(seal.reference.clone());}}
+            if let Some(seal)=&envelope.body.native_drain{
+                let row=goal.admissions.iter().find(|r|r.spec.decision_id==envelope.body.decision_id).ok_or(Failure::Invalid)?;let body=self.load(&row.spec,row.proof.as_ref().ok_or(Failure::Missing)?)?;let seal=body.native_drain.as_ref().ok_or(Failure::Missing)?;
+                if !seal.target_present(goal){if !seal.reference.source_matches(goal){return Err(Failure::Changed);}pending=true;}drains.push(seal.reference.clone());
             }
             if envelope.body.recovery.is_none(){continue;}
             let row=goal.admissions.iter().find(|r|r.spec.decision_id==envelope.body.decision_id).ok_or(Failure::Invalid)?;let body=self.load(&row.spec,row.proof.as_ref().ok_or(Failure::Missing)?)?;let closure=body.recovery.as_ref().ok_or(Failure::Missing)?;
@@ -80,6 +94,9 @@ impl Authority{
         for e in goal.events.iter().filter(|e|matches!(e.kind,model::EventKind::LostOwnerClosed|model::EventKind::UnclaimedOwnerClosed)){
             if !references.iter().any(|r|r.target_sequence==e.sequence&&r.request_id==e.request_id&&r.approved_at==e.at&&model::fingerprint(r).ok().as_ref()==Some(&e.fingerprint)){return Err(Failure::Invalid);}
         }
+        if goal.native_plan_revisions.iter().any(|r|!revisions.contains(r)){return Err(Failure::Invalid);}
+        if goal.events.iter().any(|e|matches!(e.kind,model::EventKind::OwnerResumed)&&!resumptions.iter().any(|r|r.target_sequence==e.sequence&&r.present(goal))){return Err(Failure::Invalid);}
+        if goal.native_drains.iter().any(|r|!drains.contains(r)){return Err(Failure::Invalid);}
         self.fence()?;Ok(pending)
     }
 }

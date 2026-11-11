@@ -1,6 +1,6 @@
 //! Native review and dispatch. No stored grant reconstructs Ready/Target/Owned.
 use super::*;
-use crate::{pet_runtime::{steps::{self,Scope,Phase,Receipt,StepRecord},effect_budget::{Attempt,Kind,Phase as APhase}},spotify::goal::{Target,Action,Failure as TargetFailure}};
+use crate::{pet_runtime::{steps::{self,Scope,Phase,Receipt,StepRecord},effect_budget::{Attempt,Kind,Phase as APhase}},pet_runtime::physical_target::{Target,Action,Failure as TargetFailure}};
 use serde::Serialize;
 use serde_json::Value;
 #[derive(Clone,Serialize)]#[serde(rename_all="camelCase")]
@@ -9,24 +9,25 @@ pub struct Proposal {
     pub arguments:Value,pub postcondition:String,pub prepared_at:u64,pub expires_at:u64,
     pub max_uses:u8,pub goal_criteria_verified:bool,
 }
-pub(in crate::pet_runtime)struct Review{proposal:Proposal,target:Arc<Target>,action:Action}
-#[derive(Clone)]pub(in crate::pet_runtime)struct Ready{pub(in crate::pet_runtime)scope:Scope,target:Arc<Target>,action:Action}
+pub(in crate::pet_runtime)struct Review{proposal:Proposal,target:Target,action:Action}
+#[derive(Clone)]pub(in crate::pet_runtime)struct Ready{pub(in crate::pet_runtime)scope:Scope,target:Target,action:Action}
 fn error()->model::Error{model::Error::Conflict}
-pub(in crate::pet_runtime)fn resource_key(binding:&crate::spotify::goal::Binding)->model::Result<String>{Ok(format!("mpris_{}",model::fingerprint(&(&binding.bus_id,&binding.owner))?))}
+pub(in crate::pet_runtime)fn resource_key(binding:&super::super::physical_target::Binding)->model::Result<String>{binding.resource_key()}
 fn selected<'a>(goal:&'a Record,plan:&str,step:&str)->model::Result<(&'a model::Plan,&'a model::Step)>{
     let p=goal.plans.iter().find(|p|p.id==plan).ok_or(model::Error::NotFound)?;
     if !goal.tasks.iter().any(|t|t.id==p.task_id&&t.plan_id.as_ref()==Some(&p.id)&&t.state==model::WorkState::Proposed){return Err(error());}
     let s=p.steps.iter().find(|s|s.id==step&&s.state==model::WorkState::Proposed).ok_or(error())?;Ok((p,s))
 }
-fn action(step:&model::Step)->model::Result<Action>{
-    let op=step.operation.as_ref().ok_or(model::Error::InvalidInput)?;
-    if op.operation_id!="spotify.control"||op.version!=1||!op.valid(){return Err(model::Error::UnsupportedPlatform);}
-    use crate::pet_operations::Music;
-    match serde_json::from_value::<Music>(op.arguments.clone()).map_err(|_|model::Error::InvalidInput)?{
-        Music::Play=>Ok(Action::Play),Music::Pause=>Ok(Action::Pause),Music::SetVolume{volume}=>Ok(Action::SetVolume{volume}),
-        _=>Err(model::Error::UnsupportedPlatform),
-    }
+fn action(step:&model::Step)->model::Result<Action>{Action::parse(step.operation.as_ref().ok_or(model::Error::InvalidInput)?)}
+fn permission(goal:&Record,config:&crate::pet_config::Configuration)->bool{
+ goal.plans.iter().flat_map(|p|&p.steps).filter_map(|s|s.operation.as_ref().and_then(|op|Action::parse(op).ok())).all(|action|match action{
+  Action::Spotify(_)=>config.permissions(&goal.spec.owner.pet_id).is_ok_and(|p|p.music),
+  Action::Inventory=>config.pets.get(&goal.spec.owner.pet_id).and_then(|p|p.system_access.as_ref()).is_some_and(|p|p.permits_inventory()),
+  Action::Health|Action::HealthBaseline=>config.pets.get(&goal.spec.owner.pet_id).and_then(|p|p.system_access.as_ref()).is_some_and(|p|p.permits_health()),
+  Action::Sound(a)=>config.pets.get(&goal.spec.owner.pet_id).and_then(|p|p.system_access.as_ref()).is_some_and(|p|p.permits(crate::pet_config::system_access::Operation::Observe,Some(a.key()))&&p.permits(a.operation(),Some(a.key()))),
+ })
 }
+
 impl Owned{
     pub(in crate::pet_runtime)fn step_goal(&self,goal:&Record,config:&crate::pet_config::Configuration,now:u64)->model::Result<()>{
         if self.step_validity(goal,config,now)==Validity::Current{Ok(())}else{Err(error())}
@@ -39,10 +40,10 @@ impl Owned{
     }
     fn step_validity_mode(&self,goal:&Record,config:&crate::pet_config::Configuration,now:u64,pending:bool)->Validity{
         if goal.validate().is_err()||goal.state!=model::State::Leased||goal.id!=self.live.lease.goal_id||goal.spec.owner!=self.live.spec.owner||goal.execution_context.as_ref()!=Some(&self.live.spec.context)
-            ||model::fingerprint(&goal.spec).ok().as_ref()!=Some(&self.live.spec.intent_hash)||goal.admissions.last().is_none_or(|a|model::fingerprint(&a.spec).ok()!=model::fingerprint(&self.live.spec).ok())||goal.admissions.last().and_then(|a|a.lease.as_ref())!=Some(&self.live.lease)||!matches!(self.live.spec.schema_version,2|3)
-            ||!crate::pet_runtime::plans::matches(goal,&self.live.spec)||!config.permissions(&goal.spec.owner.pet_id).is_ok_and(|p|p.music){return Validity::Changed;}
+            ||model::fingerprint(&goal.spec).ok().as_ref()!=Some(&self.live.spec.intent_hash)||goal.admissions.last().is_none_or(|a|model::fingerprint(&a.spec).ok()!=model::fingerprint(&self.live.spec).ok())||goal.admissions.last().and_then(|a|a.lease.as_ref())!=Some(&self.live.lease)||!matches!(self.live.spec.schema_version,2|3|27|28)
+            ||!crate::pet_runtime::plans::matches(goal,&self.live.spec)||!permission(goal,config)||self.live.spec.native_system_plan.as_ref().is_some_and(|p|!p.matches(goal,&self.live.spec)||!p.targets_current(config)){return Validity::Changed;}
         let validity=if pending{self.pending_validity(now)}else{self.policy_validity(now)};if validity!=Validity::Current{return validity;}
-        if self.live.spec.schema_version==3{
+        if self.live.spec.planning(){
             match Authority::existing(&self.live.authority_path).and_then(|a|a.verify_generated_goal(goal,false)){
                 Ok(())=>{},Err(crate::pet_runtime::authority::Failure::Busy|crate::pet_runtime::authority::Failure::Unavailable)=>return Validity::Unknown,
                 Err(_)=>return Validity::Changed,
@@ -57,24 +58,26 @@ impl Owned{
             if saved.phase!=Phase::Finished||saved.result.as_ref().is_none_or(|r|!r.observation.effect_verified||!r.observation.scope_current){return Err(error());}
         }Ok(())
     }
-    pub(in crate::pet_runtime)fn review_step(&self,goal:&Record,plan:&str,step:&str,target:Arc<Target>,config:&crate::pet_config::Configuration,now:u64)->model::Result<Review>{
-        self.prepare_step_review(goal,plan,step,target,config,now,true)
+    pub(in crate::pet_runtime)fn review_step(&self,goal:&Record,plan:&str,step:&str,target:impl Into<Target>,config:&crate::pet_config::Configuration,now:u64)->model::Result<Review>{
+        self.prepare_step_review(goal,plan,step,target.into(),config,now,true)
     }
-    pub(in crate::pet_runtime)fn review_recipe_step(&self,goal:&Record,plan:&str,step:&str,target:Arc<Target>,config:&crate::pet_config::Configuration,now:u64)->model::Result<Review>{
-        self.prepare_step_review(goal,plan,step,target,config,now,false)
+    pub(in crate::pet_runtime)fn review_recipe_step(&self,goal:&Record,plan:&str,step:&str,target:impl Into<Target>,config:&crate::pet_config::Configuration,now:u64)->model::Result<Review>{
+        self.prepare_step_review(goal,plan,step,target.into(),config,now,false)
     }
-    fn prepare_step_review(&self,goal:&Record,plan:&str,step:&str,target:Arc<Target>,config:&crate::pet_config::Configuration,now:u64,predecessors:bool)->model::Result<Review>{
+    fn prepare_step_review(&self,goal:&Record,plan:&str,step:&str,target:Target,config:&crate::pet_config::Configuration,now:u64,predecessors:bool)->model::Result<Review>{
         self.step_goal(goal,config,now)?;let(_,s)=selected(goal,plan,step)?;let action=action(s)?;
+        if self.live.spec.native_system_plan.as_ref().is_some_and(|p|!p.target_matches(&target)){return Err(error());}
+        if !target.permits(&action)||matches!(action,Action::Sound(_)|Action::Health|Action::HealthBaseline|Action::Inventory)&&self.live.spec.planning(){return Err(model::Error::UnsupportedPlatform);}
         let authority=Authority::existing(&self.live.authority_path).map_err(|_|error())?;if predecessors{self.predecessors(goal,plan,step,&authority)?;}
         if authority.read_step(&self.live.spec,&self.live.proof,plan,step).map_err(|_|error())?.is_some(){return Err(error());}
         if self.live.spec.budget.max_tool_calls==0{return Err(model::Error::LimitReached);}
         let output=authority.output_remaining(&self.live.spec,&self.live.proof,&self.live.lease,now).map_err(|_|error())?.min(steps::MAX_OUTPUT);
         if output<2048{return Err(model::Error::LimitReached);}
-        let _worker=self.readiness_worker(now)?;target.read().map_err(|_|error())?;
+        let worker=self.readiness_worker(now)?;if matches!(action,Action::HealthBaseline|Action::Inventory){if !target.identity_current(&||worker.in_flight_current(crate::assistant_memory::now())){return Err(error());}}else{target.read_with(&||worker.in_flight_current(crate::assistant_memory::now())).map_err(|_|error())?;}
         let op=s.operation.as_ref().ok_or(error())?;let grant_id=nonce()?;
-        let generated_plan=if self.live.spec.schema_version==3{Some(goal.generated_plans.iter().find(|r|r.decision_id==self.live.spec.decision_id&&r.plan_id==plan).ok_or(error())?.clone())}else{None};
+        let generated_plan=if self.live.spec.planning(){Some(goal.generated_plans.iter().find(|r|r.decision_id==self.live.spec.decision_id&&r.plan_id==plan).ok_or(error())?.clone())}else{None};
         let proposal_hash=if generated_plan.is_some(){crate::pet_runtime::plans::fingerprint(goal)?}else{self.live.spec.proposal_hash.clone().ok_or(error())?};
-        let scope=Scope{schema_version:if generated_plan.is_some(){2}else{1},generated_plan,request_id:format!("tool-{grant_id}"),grant_id,goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),provider:goal.spec.owner.provider.clone(),decision_id:self.live.spec.decision_id.clone(),lease_id:self.live.lease.id.clone(),controller_id:self.live.lease.controller_id.clone(),main_spec_hash:model::fingerprint(&self.live.spec)?,context_hash:self.live.spec.context_hash.clone(),proposal_hash,policy_revision:self.live.spec.policy_revision.clone(),plan_id:plan.into(),step_id:step.into(),operation_id:op.operation_id.clone(),version:op.version,arguments_hash:model::fingerprint(&op.arguments)?,resource:target.binding().clone(),approved_at:now,deadline_at:self.live.lease.deadline_at,max_output_bytes:output};
+        let scope=Scope{schema_version:if self.live.spec.schema_version==28{5}else if self.live.spec.system(){4}else if generated_plan.is_some(){2}else if target.binding().sound().is_some(){3}else{1},generated_plan,request_id:format!("tool-{grant_id}"),grant_id,goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),provider:goal.spec.owner.provider.clone(),decision_id:self.live.spec.decision_id.clone(),lease_id:self.live.lease.id.clone(),controller_id:self.live.lease.controller_id.clone(),main_spec_hash:model::fingerprint(&self.live.spec)?,context_hash:self.live.spec.context_hash.clone(),proposal_hash,policy_revision:self.live.spec.policy_revision.clone(),plan_id:plan.into(),step_id:step.into(),operation_id:op.operation_id.clone(),version:op.version,arguments_hash:model::fingerprint(&op.arguments)?,resource:target.binding().clone(),approved_at:now,deadline_at:self.live.lease.deadline_at,max_output_bytes:output};
         if !scope.valid()||!scope.matches(goal){return Err(error());}
         let proposal=Proposal{scope,goal_revision:goal.revision.clone(),intent:goal.spec.intent.clone(),criteria:goal.spec.criteria.clone(),arguments:op.arguments.clone(),postcondition:s.postcondition.clone(),prepared_at:now,expires_at:now.saturating_add(120_000).min(self.live.lease.deadline_at),max_uses:1,goal_criteria_verified:false};
         Ok(Review{proposal,target,action})
@@ -95,7 +98,7 @@ impl Owned{
         }
         if stored.phase!=Phase::Approved{return Err(error());}
         self.step_goal(goal,config,crate::assistant_memory::now())?;
-        if !ready.scope.belongs(&self.live.spec,&self.live.lease)||!ready.scope.matches(goal)||ready.target.binding()!=&ready.scope.resource{return Err(error());}
+        if !ready.scope.belongs(&self.live.spec,&self.live.lease)||!ready.scope.matches(goal)||ready.target.binding()!=&ready.scope.resource||self.live.spec.native_system_plan.as_ref().is_some_and(|p|!p.target_matches(&ready.target)){return Err(error());}
         self.predecessors(goal,&ready.scope.plan_id,&ready.scope.step_id,&authority)?;
         let worker=self.readiness_worker(crate::assistant_memory::now())?;
         let key=resource_key(&ready.scope.resource)?;
@@ -116,8 +119,11 @@ impl Owned{
                 authority.start_attempt(&self.live.spec,&self.live.proof,&self.live.lease,&native,crate::assistant_memory::now()).map_err(|_|TargetFailure::NotAuthorized)?;
                 authority.start_step(&self.live.spec,&self.live.proof,&self.live.lease,&ready.scope,&native,crate::assistant_memory::now()).map_err(|_|TargetFailure::NotAuthorized)?;
                 if !worker.in_flight_current(crate::assistant_memory::now())||!resource.current(){return Err(TargetFailure::Cancelled);}
-                armed=true;Ok(())
+                armed=true;
+                #[cfg(test)]crate::pet_runtime::system_effect_crash_tests::checkpoint("beforeDispatch",&ready.scope,serde_json::Value::Null);
+                Ok(())
             });
+        #[cfg(test)]crate::pet_runtime::system_effect_crash_tests::checkpoint("afterDispatch",&ready.scope,serde_json::to_value(&observation).unwrap());
         if attempt.is_some()&&!armed{return Err(model::Error::StorageUnavailable);}
         let result=Receipt{observation,finished_at:crate::assistant_memory::now(),criteria_verified:false,goal_complete:false};
         let bytes=serde_json::to_vec(&result).map_err(|_|model::Error::InvalidRecord)?.len() as u64;
@@ -140,8 +146,8 @@ impl Review{
     pub(in crate::pet_runtime)fn approve(mut self,owner:&Owned,goal:&Record,config:&crate::pet_config::Configuration,now:u64)->model::Result<(steps::Approved,Ready)>{
         if now<self.proposal.prepared_at||now>=self.proposal.expires_at||goal.revision!=self.proposal.goal_revision{return Err(error());}
         owner.step_goal(goal,config,now)?;
-        if !self.proposal.scope.belongs(&owner.live.spec,&owner.live.lease)||!self.proposal.scope.matches(goal)||self.target.binding()!=&self.proposal.scope.resource{return Err(error());}
-        let _worker=owner.readiness_worker(now)?;self.target.read().map_err(|_|error())?;
+        if !self.proposal.scope.belongs(&owner.live.spec,&owner.live.lease)||!self.proposal.scope.matches(goal)||self.target.binding()!=&self.proposal.scope.resource||!self.target.permits(&self.action){return Err(error());}
+        let worker=owner.readiness_worker(now)?;if matches!(self.action,Action::HealthBaseline|Action::Inventory){if !self.target.identity_current(&||worker.in_flight_current(crate::assistant_memory::now())){return Err(error());}}else{self.target.read_with(&||worker.in_flight_current(crate::assistant_memory::now())).map_err(|_|error())?;}
         self.proposal.scope.approved_at=now;
         let ready=Ready{scope:self.proposal.scope.clone(),target:self.target,action:self.action};
         Ok((steps::Approved::from_native_review(self.proposal.scope),ready))

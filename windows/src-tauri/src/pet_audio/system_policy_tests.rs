@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::json;
 fn node(kind:Kind,key:&str)->Node {
- Node{key:key.into(),kind,label:"Device".into(),description:"Description".into(),volume:Some(40.0),muted:Some(false),balance:Some(0.0),is_default:false,device_key:None,monitor:false,controllable:true,can_volume:true,can_balance:true,active:true,options:vec![],active_option:None,selector:"PRIVATE_SELECTOR".into(),index:991}
+ Node{key:key.into(),kind,label:"Device".into(),description:"Description".into(),volume:Some(40.0),muted:Some(false),balance:Some(0.0),is_default:false,device_key:None,monitor:false,controllable:true,can_volume:true,can_balance:true,active:true,options:vec![],active_option:None,selector:"PRIVATE_SELECTOR".into(),index:991,native_id:None,native_serial:None}
 }
 fn snapshot()->Snapshot {
  Snapshot{available:true,observed_at:Some(1_792_500_000_000),outputs:vec![node(Kind::Output,"out")],inputs:vec![node(Kind::Input,"in")],cards:vec![node(Kind::Card,"card")],playback:vec![node(Kind::Playback,"play")],recording:vec![node(Kind::Recording,"record")],error:None}

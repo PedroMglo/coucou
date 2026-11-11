@@ -1,4 +1,11 @@
 import assert from "node:assert/strict";
+
+test("Guardian has an independent identity and only explicitly configured Ollama inference",()=>{
+ const f=factoryModule.createPetFactory(source),g=f.get('agent_system_guardian');
+ assert.equal(g.introducedIn,1);assert.equal(g.runtime.adapter,null);assert.deepEqual(g.runtime.inferenceAdapters,['ollama']);assert.equal(g.routing.taskProvider,'agent_system_guardian');assert.equal(g.preferences.provider,'');assert.equal(g.preferences.inference,undefined);assert.equal(g.preferences.systemAccess,undefined);assert.equal(g.preferences.fast.model,'');assert.ok(Object.values(g.preferences.permissions).every(v=>v===false));
+ for(const value of [true,null,-1,2,'1']){const s=clone(source);s.pets.agent_system_guardian.introducedIn=value;assert.throws(()=>factoryModule.createPetFactory(s));}
+ const s=clone(source);s.pets.agent_system_guardian.preferences.permissions.music=true;assert.throws(()=>factoryModule.createPetFactory(s));
+});
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import * as factoryModule from "../src/core/pet-factory.ts";
@@ -9,6 +16,35 @@ const source = JSON.parse(readFileSync(new URL("../src-tauri/pets.factory.json",
 const legacy = JSON.parse(readFileSync(new URL("../src-tauri/pets.default.json", import.meta.url), "utf8"));
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const identity = (id) => ({ id, name: id, color: "#2dd4bf", state: "idle", attention: false, busy: false, dancing: false, active: false, activity: "", outfit: "none", sessions: 0 });
+
+test("inference adapters are explicit per pet and grant no inherited selection",()=>{
+  const factory=factoryModule.createPetFactory(source);
+  for(const id of ["ai_ollama","ai_lmstudio"]){
+    assert.deepEqual(factory.get(id).runtime.inferenceAdapters,["ollama","lmstudio"]);
+    assert.equal(factory.get(id).preferences.inference,undefined);
+  }
+  assert.deepEqual(factory.configuration(),legacy);
+  for(const id of ["agent_codex","integration_spotify","agent_cursor"]){
+    const s=clone(source);s.pets[id].runtime.inferenceAdapters=["ollama"];
+    assert.throws(()=>factoryModule.createPetFactory(s),/invalid bundled pet factory/i);
+  }
+  for(const choices of [["ollama","ollama"],["codex"],null,"ollama"]){
+    const s=clone(source);s.pets.ai_ollama.runtime.inferenceAdapters=choices;
+    assert.throws(()=>factoryModule.createPetFactory(s),/invalid bundled pet factory/i);
+  }
+});
+
+test("templates cannot distribute inference destinations to other pets",()=>{
+  for(const target of [s=>s.base,s=>s.molds.llm,s=>s.extensions["codex-account"]])for(const field of ['inference','inferenceRevision']){
+    const s=clone(source);target(s).preferences={[field]:field==='inferenceRevision'?'a'.repeat(32):{schemaVersion:1,backend:"ollama",endpoint:"http://127.0.0.1:11434",model:"synthetic",credential:"none"}};
+    assert.throws(()=>factoryModule.createPetFactory(s),/invalid bundled pet factory/i);
+  }
+});
+test("a declared local LLM owner needs no borrowed account or inherited grant",()=>{
+  const s=clone(source),row=clone(s.pets.ai_lmstudio);row.runtime.adapter=null;row.preferences.name='Local worker fixture';row.preferences.aliases=['local worker fixture'];row.preferences.permissions={documents:false,emailDrafts:false,music:false,openApps:false};
+  for(const key of ['chat','taskProvider'])row.routing[key]='agent_local_fixture';s.pets.agent_local_fixture=row;
+  const factory=factoryModule.createPetFactory(s),pet=factory.get('agent_local_fixture');assert.equal(pet.runtime.adapter,null);assert.deepEqual(pet.runtime.inferenceAdapters,['ollama','lmstudio']);assert.equal(pet.preferences.provider,'');assert.equal(pet.preferences.inference,undefined);assert.equal(pet.routing.execute,false);assert.deepEqual(pet.preferences.permissions,row.preferences.permissions);assert.equal(factory.forTaskProvider('agent_local_fixture'),'agent_local_fixture');assert.deepEqual(factory.get('ai_lmstudio').preferences,legacy.pets.ai_lmstudio);
+});
 
 test("native services may declare an optional assistant without changing user defaults", () => {
   const s=clone(source), row=clone(s.pets.integration_spotify);
@@ -69,7 +105,7 @@ test("a new application owner reuses the implemented adapter with explicit permi
 
 test("all legacy pet preferences retain their defaults", () => {
   const { PetFactory } = factoryModule;
-  assert.equal(Object.keys(legacy.pets).length, 25);
+  assert.equal(Object.keys(legacy.pets).length, 26);
   for (const [id, expected] of Object.entries(legacy.pets)) {
     assert.deepEqual(PetFactory.get(id)?.preferences, expected, id);
   }
@@ -233,3 +269,5 @@ test("gallery context actions keep the latest exact pet identity for sessions an
   assert.equal(sessions[3], latest[3]);
   assert.deepEqual(opened, [latest[4]]);
 });
+
+test('System access cannot be granted by shared factory recipes or bundled pet defaults',()=>{for(const place of ['base','mold','pet']){const value=clone(source);const target=place==='base'?value.base.preferences:place==='mold'?(value.molds.llm.preferences??={}):value.pets.ai_ollama.preferences;target.systemAccess={schemaVersion:1,revision:'a'.repeat(32),grants:[]};assert.throws(()=>factoryModule.createPetFactory(value));}});

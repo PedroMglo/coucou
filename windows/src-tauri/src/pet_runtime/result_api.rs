@@ -11,12 +11,12 @@ pub async fn pet_runtime_result(window: tauri::WebviewWindow, input: ResultInput
     if !super::adapter::allowed(window.label()) { return Err("InvalidInput".into()); }
     tauri::async_runtime::spawn_blocking(move || {
         use super::{authority::Authority, store::Store, results};
-        let store = Store::existing(&crate::settings::config_dir().join("pet-runtime-v1")).map_err(|e| format!("{e:?}"))?.ok_or("NotFound")?;
+        let store = Store::existing_native(&crate::settings::config_dir().join("pet-runtime-v1")).map_err(|e| format!("{e:?}"))?.ok_or("NotFound")?;
         let goal = store.read(&input.goal_id, &input.pet_id).map_err(|e| format!("{e:?}"))?;
         let row = goal.admissions.iter().find(|a| a.spec.decision_id == input.decision_id).ok_or("NotFound")?;
         let authority = Authority::existing(&super::admission_review::authority_root()).map_err(|e| format!("{e:?}"))?;
-        results::lookup(&authority, &row.spec, row.proof.as_ref().ok_or("Missing")?, &input.request_id)
-            .map(Into::into).map_err(|e| format!("{e:?}"))
+        results::lookup_for_user(&authority, &row.spec, row.proof.as_ref().ok_or("Missing")?, &input.request_id)
+            .map_err(|e| format!("{e:?}"))
     }).await.map_err(|_| "StorageUnavailable".to_string())?
 }
 #[cfg(not(target_os="linux"))]

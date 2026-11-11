@@ -207,23 +207,14 @@ fn key_input(vk: u16, up: bool) -> INPUT {
 }
 
 /// Ctrl+V in the app in front. Ctrl+Shift+V for a terminal that wants it.
-pub fn send_paste(shift: bool) -> Result<(), String> {
-    let mut inputs = vec![key_input(VK_CONTROL, false)];
-    if shift {
-        inputs.push(key_input(VK_SHIFT_KEY, false));
-    }
-    inputs.push(key_input(VK_V, false));
-    inputs.push(key_input(VK_V, true));
-    if shift {
-        inputs.push(key_input(VK_SHIFT_KEY, true));
-    }
-    inputs.push(key_input(VK_CONTROL, true));
-    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    if sent as usize == inputs.len() {
-        Ok(())
-    } else {
-        Err("Windows refused the keystrokes".into())
-    }
+pub fn send_paste(shift:bool,current:&dyn Fn()->bool)->super::paste::Dispatch{
+    use super::paste::{Key,KeyFailure};
+    super::paste::sequence(shift,current,|key,down|{
+        let code=match key{Key::Control=>VK_CONTROL,Key::Shift=>VK_SHIFT_KEY,Key::V=>VK_V};
+        let input=[key_input(code,!down)];
+        let sent=unsafe{SendInput(&input,std::mem::size_of::<INPUT>()as i32)};
+        if sent==1{Ok(())}else{Err(KeyFailure::NotSent)}
+    })
 }
 
 /// A window's program: "outlook", "Outlook".

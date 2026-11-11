@@ -13,13 +13,15 @@ impl Store{
   self.create_restored_future_clock(approved,||now)
  }
  pub(in crate::pet_runtime)fn create_restored_future_clock(&self,approved:&Approved<'_>,clock:impl Fn()->u64)->Result<Receipt>{
-  let spec=approved.spec;spec.validate()?;if self.authority.as_deref()!=Some(approved.witness.authority_path()){return Err(Error::Conflict);}let _guard=self.lock(true)?;let id=id_for(spec);
-  if let Some((record,_))=self.load(&id)?{if record.spec!=*spec{return Err(Error::Conflict);}return Ok(self.stabilize(record));}
-  let now=clock();if now<approved.prepared_at||now>=approved.expires_at{return Err(Error::Conflict);}
-  let source=approved.witness.source();let(parent,_)=self.load(&source.goal_id)?.ok_or(Error::NotFound)?;
-  let _source_lock=approved.witness.lock().map_err(|e|e.control_error())?;approved.witness.current(&parent).map_err(|e|e.control_error())?;approved.witness.target_current(spec).map_err(|e|e.control_error())?;
-  if self.dir.names()?.iter().filter(|n|n.strip_suffix(".json").is_some_and(goal_id)).count()>=MAX_GOALS{return Err(Error::LimitReached);}
-  let record=Record::new(spec.clone(),now,nonce()?)?;
-  self.publish_current(record,None,false,||{let current=clock();if current<now||current>=approved.expires_at{return Err(Error::Conflict);}approved.witness.current(&parent).map_err(|e|e.control_error())})
+  self.create_reviewed_goal_clock(approved,clock)
  }
+}
+
+impl crate::pet_runtime::goal_data_publication::Certificate for Approved<'_>{
+ fn spec(&self)->&Spec{self.spec}
+ fn authority_path(&self)->&std::path::Path{self.witness.authority_path()}
+ fn prepared_at(&self)->u64{self.prepared_at}
+ fn expires_at(&self)->u64{self.expires_at}
+ fn lock_source(&self)->Result<Guard>{self.witness.lock().map_err(|e|e.control_error())}
+ fn current(&self,store:&Store,_now:u64)->Result<()>{let source=self.witness.source();let(parent,_)=store.load(&source.goal_id)?.ok_or(Error::NotFound)?;self.witness.current(&parent).map_err(|e|e.control_error())?;self.witness.target_current(self.spec).map_err(|e|e.control_error())}
 }

@@ -3,7 +3,7 @@
 use super::{authority::Failure,leases::{Lease,StopReason},model::{self,Record,State}};
 use serde::Serialize;
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]#[serde(rename_all="camelCase")]
-pub enum EvidenceKind{GoalLineage,ModelResult,PlanningOutput,ToolStep,ToolObservation,Recipe,Verification,Completion}
+pub enum EvidenceKind{GoalLineage,PeerMessage,ModelResult,PlanningOutput,ToolStep,ToolObservation,Recipe,Verification,Completion}
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]#[serde(rename_all="camelCase")]
 pub enum EvidenceStatus{Verified,Missing,Invalid,Unavailable}
 #[derive(Clone,Serialize)]#[serde(rename_all="camelCase")]
@@ -21,7 +21,7 @@ impl Evidence{
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct Attempt{pub id:String,pub request_id:String,pub kind:&'static str,pub phase:&'static str,pub charged_output_bytes:u64,pub accepted_output_bytes:Option<u64>,pub outcome_known:bool,pub evidence:Vec<Evidence>}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
-pub struct Accounting{pub scope:&'static str,pub model_calls_used:usize,pub tool_calls_used:usize,pub output_bytes_charged:u64,pub model_calls_remaining:usize,pub tool_calls_remaining:usize,pub output_bytes_remaining:u64,pub unknown_attempts:usize}
+pub struct Accounting{#[serde(skip_serializing_if="Option::is_none")]pub delegated_held:Option<super::delegation::Allowance>,pub scope:&'static str,pub model_calls_used:usize,pub tool_calls_used:usize,pub output_bytes_charged:u64,pub model_calls_remaining:usize,pub tool_calls_remaining:usize,pub output_bytes_remaining:u64,pub unknown_attempts:usize}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct Grant{pub decision_id:String,pub revision:String,pub hash:String,pub phase:&'static str,pub lease:Option<Lease>,pub goal_lease_matches:bool,pub control_projection_current:bool,pub stop_reason:Option<StopReason>,pub updated_at:u64,pub closed_at:Option<u64>,pub owner:super::runtime_owner::Observation}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]

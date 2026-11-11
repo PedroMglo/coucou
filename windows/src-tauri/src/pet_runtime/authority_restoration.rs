@@ -11,7 +11,7 @@ const MAX_INDEX:usize=8*1024*1024;
 struct FileRef{name:String,hash:String,bytes:usize}
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-struct HistoricalGrant{file:String,file_hash:String,signature_valid:bool,decision_id:Option<String>,goal_id:Option<String>,source_phase:Option<GrantPhase>,usage_ledger_recorded:Option<bool>}
+struct HistoricalGrant{#[serde(default,skip_serializing_if="Option::is_none")]rule_id:Option<String>,#[serde(default,skip_serializing_if="Option::is_none")]rule_phase:Option<crate::pet_runtime::rules::RulePhase>,#[serde(default,skip_serializing_if="Option::is_none")]rule_reservations:Option<usize>,file:String,file_hash:String,signature_valid:bool,decision_id:Option<String>,goal_id:Option<String>,source_phase:Option<GrantPhase>,usage_ledger_recorded:Option<bool>}
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct GoalRef{id:String,pet_id:String,hash:String,decisions:Vec<String>}
@@ -28,13 +28,13 @@ pub(super)struct Boundary{body:Body,stamp:Stamp,hash:String,prior_stamps:Vec<(St
 fn hash_valid(s:&str)->bool{s.len()==64&&s.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))}
 pub(super)fn protocol_hash(bytes:&[u8])->Result<Option<String>>{
  if bytes==PROTOCOL{return Ok(None);}let p:Protocol=serde_json::from_slice(bytes).map_err(|_|Failure::Invalid)?;
- if !matches!(p.version,2|3)||p.kind!="coucou-native-consent"||!hash_valid(&p.history){return Err(Failure::Invalid);}Ok(Some(p.history))
+ if !matches!(p.version,2|3|4|5)||p.kind!="coucou-native-consent"||!hash_valid(&p.history){return Err(Failure::Invalid);}Ok(Some(p.history))
 }
 fn protocol_version(bytes:&[u8])->Result<u32>{if bytes==PROTOCOL{Ok(1)}else{serde_json::from_slice::<Protocol>(bytes).map(|p|p.version).map_err(|_|Failure::Invalid)}}
-fn message(body:&Body)->Result<Vec<u8>>{let mut b=if body.schema_version==1{b"coucou-restored-authority-history-v1\0".to_vec()}else{b"coucou-restored-authority-history-v2\0".to_vec()};b.extend(serde_json::to_vec(body).map_err(|_|Failure::Invalid)?);Ok(b)}
+fn message(body:&Body)->Result<Vec<u8>>{let mut b=match body.schema_version{1=>b"coucou-restored-authority-history-v1\0".to_vec(),2=>b"coucou-restored-authority-history-v2\0".to_vec(),3=>b"coucou-restored-authority-history-v3\0".to_vec(),4=>b"coucou-restored-authority-history-v4\0".to_vec(),_=>return Err(Failure::Invalid)};b.extend(serde_json::to_vec(body).map_err(|_|Failure::Invalid)?);Ok(b)}
 fn valid(body:&Body)->bool{
- if !matches!(body.schema_version,1|2)||!token(&body.key_id)||!hash_valid(&body.source)||body.files.len()>4096||body.grants.len()>4096||body.goals.len()>4096||body.decisions.len()>32768||body.goal_ids.len()>8192{return false;}
- if body.schema_version==1{if body.parent.is_some()||!body.priors.is_empty(){return false;}}else{
+ if !matches!(body.schema_version,1|2|3|4)||!token(&body.key_id)||!hash_valid(&body.source)||body.files.len()>4096||body.grants.len()>4096||body.goals.len()>4096||body.decisions.len()>32768||body.goal_ids.len()>8192{return false;}
+ if matches!(body.schema_version,1|3){if body.parent.is_some()||!body.priors.is_empty(){return false;}}else{
   if body.priors.is_empty()||body.priors.len()>MAX_PRIORS||body.parent.as_ref().is_none_or(|p|!body.priors.iter().any(|r|&r.hash==p))||body.priors.iter().any(|r|!hash_valid(&r.hash)||r.bytes==0||r.bytes>MAX_INDEX)||body.priors.windows(2).any(|w|w[0].hash>=w[1].hash)||body.priors.iter().map(|p|p.bytes).sum::<usize>()>MAX_PRIOR_BYTES{return false;}
  }
  let unique=|v:Vec<&str>|v.iter().copied().collect::<BTreeSet<_>>().len()==v.len();
@@ -42,6 +42,7 @@ fn valid(body:&Body)->bool{
  &&body.files.iter().all(|f|!f.name.is_empty()&&!f.name.contains('/')&&hash_valid(&f.hash)&&f.bytes<=MAX_GRANT_BYTES)
  &&body.decisions.iter().all(|d|token(d))&&body.goal_ids.iter().all(|g|goal_id(g))
  &&body.grants.iter().all(|g|body.files.iter().any(|f|f.name==g.file&&f.hash==g.file_hash)&&g.decision_id.as_ref().is_none_or(|d|body.decisions.contains(d))&&g.goal_id.as_ref().is_none_or(|id|body.goal_ids.contains(id)))
+ &&body.grants.iter().all(|g|if let Some(rule)=&g.rule_id{matches!(body.schema_version,3|4)&&rule.strip_prefix("rule-").is_some_and(hash_valid)&&g.signature_valid&&g.goal_id.is_none()&&g.source_phase.is_none()&&g.usage_ledger_recorded.is_none()&&g.rule_phase.is_some()&&g.rule_reservations.is_some_and(|n|n<=64)}else{g.rule_phase.is_none()&&g.rule_reservations.is_none()})
  &&body.goals.iter().all(|g|goal_id(&g.id)&&body.goal_ids.contains(&g.id)&&hash_valid(&g.hash)&&g.decisions.iter().all(|d|body.decisions.contains(d)))
 }
 fn decode_history(a:&Authority,raw:&[u8])->Result<Body>{
@@ -91,11 +92,13 @@ fn capture(a:&Authority,path:&Path,source:&str)->Result<Body>{
  if !hash_valid(source){return Err(Failure::Invalid);}let files=files(a)?;let goals=goals(path)?;let mut decisions=BTreeSet::new();let mut goal_ids=BTreeSet::new();let mut grants=vec![];
  for g in &goals{goal_ids.insert(g.id.clone());for id in &g.decisions{decisions.insert(id.clone());}}
  for file in &files{let Some(id)=grant_name(&file.name)else{continue;};if file.name.ends_with(".json"){decisions.insert(id.into());}
-  let verified=a.grant_file_data(&file.name).ok().map(|(b,_)|b);
+  let rule=a.rule_record_data(&file.name).ok().flatten().map(|(b,_)|b);
+  let verified=if rule.is_none(){a.grant_file_data(&file.name).ok().map(|(b,_)|b)}else{None};
   if let Some(body)=&verified{decisions.insert(body.decision_id.clone());goal_ids.insert(body.goal_id.clone());}
-  grants.push(HistoricalGrant{file:file.name.clone(),file_hash:file.hash.clone(),signature_valid:verified.is_some(),decision_id:verified.as_ref().map(|b|b.decision_id.clone()),goal_id:verified.as_ref().map(|b|b.goal_id.clone()),source_phase:verified.as_ref().map(|b|b.phase),usage_ledger_recorded:verified.as_ref().map(|b|b.budget_usage.is_some())});
+  if let Some(body)=&rule{decisions.insert(body.decision_id.clone());}
+  grants.push(HistoricalGrant{rule_id:rule.as_ref().map(|b|b.policy.rule.id.clone()),rule_phase:rule.as_ref().map(|b|b.phase),rule_reservations:rule.as_ref().map(|b|b.reservations.len()),file:file.name.clone(),file_hash:file.hash.clone(),signature_valid:verified.is_some()||rule.is_some(),decision_id:verified.as_ref().map(|b|b.decision_id.clone()).or_else(||rule.as_ref().map(|b|b.decision_id.clone())),goal_id:verified.as_ref().map(|b|b.goal_id.clone()),source_phase:verified.as_ref().map(|b|b.phase),usage_ledger_recorded:verified.as_ref().map(|b|b.budget_usage.is_some())});
  }
- let body=Body{schema_version:1,key_id:a.key_id.clone(),source:source.into(),files,grants,goals,decisions:decisions.into_iter().collect(),goal_ids:goal_ids.into_iter().collect(),parent:None,priors:vec![]};if !valid(&body){return Err(Failure::Capacity);}Ok(body)
+ let body=Body{schema_version:if grants.iter().any(|g|g.rule_id.is_some()){3}else{1},key_id:a.key_id.clone(),source:source.into(),files,grants,goals,decisions:decisions.into_iter().collect(),goal_ids:goal_ids.into_iter().collect(),parent:None,priors:vec![]};if !valid(&body){return Err(Failure::Capacity);}Ok(body)
 }
 pub(crate)struct Review{authority:Authority,goals_path:PathBuf,body:Body}
 #[derive(Clone,Copy,PartialEq,Eq)]enum Step{IndexPublished,ProtocolPublished}
@@ -103,7 +106,7 @@ impl Review{
  /// Caller holds the SAME native inactive-data claim; no model-facing route.
  pub(crate)fn capture(path:&Path,goals_path:&Path,source:&str,current:impl Fn()->Result<()>)->Result<Self>{
   current()?;let authority=Authority::restoration_base(path)?;authority.restoration_raw_fence()?;let existing=marker(&authority)?;
-  let body=if let Some(boundary)=existing{if boundary.body.schema_version!=1||boundary.body.source!=source||boundary.body.files!=files(&authority)?||boundary.body.goals!=goals(goals_path)?{return Err(Failure::Changed);}if protocol_hash(&authority.protocol)?.is_some_and(|h|h!=boundary.hash){return Err(Failure::Changed);}boundary.body}else{if protocol_hash(&authority.protocol)?.is_some(){return Err(Failure::RecoveryRequired);}capture(&authority,goals_path,source)?};
+  let body=if let Some(boundary)=existing{if !matches!(boundary.body.schema_version,1|3)||boundary.body.source!=source||boundary.body.files!=files(&authority)?||boundary.body.goals!=goals(goals_path)?{return Err(Failure::Changed);}if protocol_hash(&authority.protocol)?.is_some_and(|h|h!=boundary.hash){return Err(Failure::Changed);}boundary.body}else{if protocol_hash(&authority.protocol)?.is_some(){return Err(Failure::RecoveryRequired);}capture(&authority,goals_path,source)?};
   let result=Self{authority,goals_path:goals_path.into(),body};result.current(&current)?;Ok(result)
  }
  fn current(&self,current:impl Fn()->Result<()>)->Result<()>{current()?;self.authority.restoration_raw_fence()?;if files(&self.authority)?!=self.body.files||goals(&self.goals_path)?!=self.body.goals{return Err(Failure::Changed);}Ok(())}
@@ -118,7 +121,7 @@ impl Review{
   if let Some(existing)=marker(&self.authority)?{if existing.body!=self.body||existing.hash!=hash{return Err(Failure::Changed);}}else{
    let temp=format!(".restore-index-{}",nonce().map_err(|_|Failure::Unavailable)?);self.authority.dir.write_new(&temp,&raw).map_err(|_|Failure::Unavailable)?;self.current(&current)?;self.authority.dir.rename(&temp,&self.authority.dir,INDEX,true).map_err(|_|Failure::Uncertain)?;self.authority.dir.durable().map_err(|_|Failure::Uncertain)?;step(Step::IndexPublished)?;
   }
-  let protocol=serde_json::to_vec(&Protocol{version:2,kind:"coucou-native-consent".into(),history:hash.clone()}).map_err(|_|Failure::Invalid)?;
+  let protocol=serde_json::to_vec(&Protocol{version:self.body.schema_version+1,kind:"coucou-native-consent".into(),history:hash.clone()}).map_err(|_|Failure::Invalid)?;
   if self.authority.protocol!=protocol{self.current(&current)?;let temp=format!(".restore-protocol-{}",nonce().map_err(|_|Failure::Unavailable)?);self.authority.dir.write_new(&temp,&protocol).map_err(|_|Failure::Unavailable)?;self.current(&current)?;self.authority.dir.rename(&temp,&self.authority.dir,".protocol.json",false).map_err(|_|Failure::Uncertain)?;self.authority.dir.durable().map_err(|_|Failure::Uncertain)?;step(Step::ProtocolPublished)?;}
   current()?;let reopened=Authority::existing(&self.authority.dir.path)?;reopened.fence()?;
   Ok(serde_json::json!({"status":"historicalAuthorityQuarantined","schemaVersion":1,"historyHash":hash,"historicalDecisions":self.body.decisions.len(),"historicalGoals":self.body.goal_ids.len(),"oldExecutionAvailable":false,"ownerAbsenceProven":false,"postSnapshotStateUnknown":true,"runtimeActivationAvailable":false}))
@@ -131,7 +134,7 @@ pub(crate)fn historical_view(path:&Path)->Result<serde_json::Value>{
 }
 fn verify_historical_grants(a:&Authority)->Result<Vec<(String,Stamp)>>{
  let b=a.restoration.as_ref().ok_or(Failure::Missing)?;
- let mut stamps=vec![];for entry in &b.body.grants{let(raw,stamp)=a.dir.bytes(&entry.file,MAX_GRANT_BYTES).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;if model::hash(&raw)!=entry.file_hash{return Err(Failure::Changed);}if entry.signature_valid{a.grant_file_data(&entry.file)?;}stamps.push((entry.file.clone(),stamp));}
+ let mut stamps=vec![];for entry in &b.body.grants{let(raw,stamp)=a.dir.bytes(&entry.file,MAX_GRANT_BYTES).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;if model::hash(&raw)!=entry.file_hash{return Err(Failure::Changed);}if entry.signature_valid{if let Some(id)=&entry.rule_id{let(body,_)=a.rule_record_data(&entry.file)?.ok_or(Failure::Invalid)?;if &body.policy.rule.id!=id||Some(body.phase)!=entry.rule_phase||Some(body.reservations.len())!=entry.rule_reservations{return Err(Failure::Changed);}}else{a.grant_file_data(&entry.file)?;}}stamps.push((entry.file.clone(),stamp));}
  a.fence()?;Ok(stamps)
 }
 #[path="authority_restoration_history.rs"]mod history_snapshot;
@@ -167,3 +170,16 @@ pub(crate)use independent::verify_retained_independent;
 
 #[cfg(test)]pub(crate)use independent::fixture_fresh_independent_goal;
 #[cfg(test)]pub(in crate::pet_runtime)use tests::future_tests::prepared_fixture as fixture_restored_future_review;
+
+/// Native-user DATA only. No load/claim/effect/ACK is produced by this reader.
+/// Verify this one bounded canonical source against the authenticated restore
+/// index; checking a signature alone would accept a replaced historical file.
+pub(in crate::pet_runtime::authority_store)fn message_snapshot_file(a:&Authority,name:&str)->Result<(Grant,crate::pet_runtime::messages::HistoricalSource)>{
+ let b=a.restoration.as_ref().ok_or(Failure::Missing)?;
+ let id=name.strip_suffix(".json").filter(|s|token(s)).ok_or(Failure::Invalid)?;
+ let reference=b.body.grants.iter().find(|g|g.file==name&&g.signature_valid&&g.decision_id.as_deref()==Some(id)).ok_or(Failure::Invalid)?;
+ a.fence()?;let(raw,stamp)=a.dir.bytes(name,MAX_GRANT_BYTES).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;
+ if model::hash(&raw)!=reference.file_hash{return Err(Failure::Changed);}let(body,current)=a.grant_file_data(name)?;
+ if stamp!=current||body.decision_id!=id||reference.goal_id.as_deref()!=Some(body.goal_id.as_str()){return Err(Failure::Changed);}a.fence()?;
+ Ok((body,crate::pet_runtime::messages::HistoricalSource{schema_version:1,history_hash:b.hash.clone(),source_profile_fingerprint:b.body.source.clone(),source_file_hash:reference.file_hash.clone(),snapshot_only:true,post_snapshot_state_unknown:true,execution_authorized:false}))
+}

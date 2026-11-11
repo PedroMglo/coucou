@@ -5,6 +5,7 @@ use serde::Serialize;
 #[derive(Clone,Serialize)]#[serde(rename_all="camelCase")]
 pub struct Proposal{
     pub goal_id:String,pub pet_id:String,pub revision:String,pub request_id:String,pub intent:String,pub criteria:Vec<String>,pub provider:String,pub lease_id:String,
+    #[serde(skip_serializing_if="Option::is_none")]pub peer_resumption:Option<super::continuation::PeerPlanningSnapshot>,
     pub approval_scope:&'static str,pub resulting_state:State,pub snapshot:serde_json::Value,pub prepared_at:u64,pub expires_at:u64,pub execution_available:bool,
 }
 pub(super)struct Review{goal:Record,authority:Authority,gate:Option<AbsentLease>,body:Grant,snapshot:Snapshot,fence:String,proposal:Proposal,id:String,target_revision:String}
@@ -20,7 +21,7 @@ impl Review{
         if !matches!(goal.state,State::Queued|State::Paused|State::Leased|State::Stopping|State::RecoveryRequired|State::Cancelled|State::Completed){return Err(model::Error::Conflict);}
         if body.recovery.is_none()&&goal.events.iter().any(|e|e.request_id==request){return Err(model::Error::Conflict);}
         let target=body.recovery.as_ref().map(|c|c.reference.target_state).unwrap_or_else(||recovery::target(&goal,body.stop_reason==Some(super::leases::StopReason::Cancel)));
-        let proposal=Proposal{goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),revision:goal.revision.clone(),request_id:body.recovery.as_ref().map(|c|c.reference.request_id.clone()).unwrap_or(request),intent:goal.spec.intent.clone(),criteria:goal.spec.criteria.clone(),provider:lease.provider.clone(),lease_id:lease.id.clone(),approval_scope:if body.recovery.is_some(){"ackRecordedClosure"}else{"closeLostExecution"},resulting_state:target,snapshot:serde_json::to_value(&snapshot).map_err(|_|model::Error::InvalidRecord)?,prepared_at:now,expires_at:now.checked_add(30_000).ok_or(model::Error::ClockRollback)?,execution_available:false};
+        let proposal=Proposal{peer_resumption:None,goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),revision:goal.revision.clone(),request_id:body.recovery.as_ref().map(|c|c.reference.request_id.clone()).unwrap_or(request),intent:goal.spec.intent.clone(),criteria:goal.spec.criteria.clone(),provider:lease.provider.clone(),lease_id:lease.id.clone(),approval_scope:if body.recovery.is_some(){"ackRecordedClosure"}else{"closeLostExecution"},resulting_state:target,snapshot:serde_json::to_value(&snapshot).map_err(|_|model::Error::InvalidRecord)?,prepared_at:now,expires_at:now.checked_add(30_000).ok_or(model::Error::ClockRollback)?,execution_available:false};
         let target_revision=if target==State::Completed{goal.revision.clone()}else{nonce()?};Ok(Self{goal,authority,gate,body,snapshot,fence,proposal,id:nonce()?,target_revision})
     }
     pub(super)fn proposal(&self)->Proposal{self.proposal.clone()}

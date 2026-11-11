@@ -30,7 +30,7 @@ while True:
   data=sys.stdin.buffer.read(remaining)
   if not data:raise SystemExit(1)
   remaining-=len(data)
- print(json.dumps({'text':json.dumps(request,ensure_ascii=False),'device':'fake'},ensure_ascii=False),flush=True)
+ print(json.dumps({'protocolVersion':request['protocolVersion'],'requestId':request['requestId'],'text':json.dumps(request,ensure_ascii=False),'device':'fake'},ensure_ascii=False),flush=True)
 "#;
 #[test]#[cfg(target_os="linux")]fn fake_worker_requests_do_not_keep_prior_vocabulary(){
  let _serial=TEST_WORKER_SERIAL.lock().unwrap();

@@ -36,6 +36,7 @@ use crate::island::WINDOW_LABEL;
 use crate::log;
 use crate::session_window;
 #[path="pipe_native_source.rs"]mod native_source;
+#[path="pipe_external_approvals.rs"]pub(crate)mod external_approvals;
 
 /// Slightly under coucou-hook's own 110 s wait, so we always answer first.
 const DECISION_TIMEOUT: Duration = Duration::from_secs(108);
@@ -64,18 +65,21 @@ struct PendingRequest {
     /// Set only by a scoped native card receipt, never by the old blind ACK.
     card_presented:bool,
     native:Option<native_source::Review>,
+    external_route:Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 impl PendingRequest {
     fn new(sender:mpsc::Sender<Reply>, session_id:String, pet_id:String, now:Instant)->Self {
         Self {sender,acknowledged:false,session_id,pet_id,
-            ack_deadline:now+ACK_TIMEOUT,deadline:now+DECISION_TIMEOUT,card_presented:false,native:None}
+            ack_deadline:now+ACK_TIMEOUT,deadline:now+DECISION_TIMEOUT,card_presented:false,native:None,external_route:None}
     }
     fn live(&self,now:Instant)->bool {
-        now < self.deadline && self.native.as_ref().is_none_or(|n|n.source_current()) && (self.acknowledged || now < self.ack_deadline)
+        now < self.deadline && self.external_route.as_ref().is_none_or(|r|r.load(Ordering::Acquire)) && self.native.as_ref().is_none_or(|n|n.source_current()) && (self.acknowledged || now < self.ack_deadline)
     }
 }
 #[derive(Default)]
-pub struct Pending(Mutex<HashMap<String, PendingRequest>>);
+struct RelayState{requests:HashMap<String,PendingRequest>,routing:external_approvals::Routing}
+#[derive(Default)]
+pub struct Pending(Mutex<RelayState>);
 
 
 /// `\\.\pipe\coucou-<sid>` — must match coucou-hook's `pipe_path()` exactly.
@@ -236,6 +240,7 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
     // the authority, so unrelated CLI sessions cannot be mistaken for our jobs.
     payload.as_object_mut().unwrap().remove("coucou_pet_provider");
     payload.as_object_mut().unwrap().remove("nativeIdentity");
+    payload.as_object_mut().unwrap().remove("coucou_decision_in_terminal");
     let backend=payload["coucou_agent"].as_str().unwrap_or("").to_string();
     let session=payload["session_id"].as_str().unwrap_or("").to_string();
     let owner=app.state::<crate::chat::Chat>().hook_owner(&backend,&session);
@@ -279,12 +284,22 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
     let Some(id)=crate::cli_chat::next_native_request_id()else{pipe.finish();return;};
     let (tx, mut rx) = mpsc::channel::<Reply>(4);
     let started_at=Instant::now();
-    {
+    let registration={
         let pending = app.state::<Pending>();
         let mut request=PendingRequest::new(tx,session.clone(),request_pet(&payload),started_at);
         request.native=native.as_ref().map(|n|n.review());
-        let mut requests=pending.0.lock().unwrap();if requests.len()>=128||requests.contains_key(&id){pipe.finish();return;}requests.insert(id.clone(),request);
-    }
+        let mut state=pending.0.lock().unwrap();external_approvals::register(&mut state,id.clone(),request,owner.is_none())
+    };
+    let external_route=match registration{
+        external_approvals::Registration::Terminal=>{
+            // Observation only: no respondible request ID/card or human wait.
+            payload.as_object_mut().unwrap().remove("request_id");
+            payload["coucou_decision_in_terminal"]=json!(true);
+            let _=app.emit_to(WINDOW_LABEL,"hook",payload);pipe.finish();return;
+        },
+        external_approvals::Registration::Queued(route)=>route,
+        external_approvals::Registration::Refused=>{pipe.finish();return;},
+    };
     crate::recap::note_request(&app, &id, &payload);
     payload["request_id"] = json!(id);
     log::line(format!("hook PermissionRequest id={id}"));
@@ -292,11 +307,11 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
 
     // The human cannot answer a relay that has already gone away. This is
     // common to every supported hook, including questions: no orphaned card.
-    let outcome=until_native_closed(&mut pipe,native.as_ref().map(|n|n.review()),wait_for_decision(&id,&mut rx,started_at)).await;
+    let outcome=external_approvals::until_current(external_route.as_ref(),until_native_closed(&mut pipe,native.as_ref().map(|n|n.review()),wait_for_decision(&id,&mut rx,started_at))).await;
     if matches!(&outcome,DecisionOutcome::Handoff("relay-closed")) {
         log::line(format!("hook id={id} handed off reason=relay-closed"));
     }
-    app.state::<Pending>().0.lock().unwrap().remove(&id);
+    app.state::<Pending>().0.lock().unwrap().requests.remove(&id);
     let mut decision=match outcome{
         DecisionOutcome::Decision(decision)=>Some(decision),
         DecisionOutcome::Handoff(reason)=>{
@@ -319,7 +334,7 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
 
     // No decision: say nothing at all. coucou-hook then writes nothing to stdout
     // and Claude Code asks in the terminal, exactly as if Coucou were closed.
-    if let Some(d) = decision.filter(|_|native.as_ref().is_none_or(|n|n.current())) {
+    if let Some(d) = decision.filter(|_|external_route.as_ref().is_none_or(|r|r.load(Ordering::Acquire))&&native.as_ref().is_none_or(|n|n.current())) {
         let _ = pipe.write_all(format!("{d}\n").as_bytes()).await;
         let _ = pipe.flush().await;
     }
@@ -488,7 +503,7 @@ fn send(app: &AppHandle, request_id: &str, reply: Reply) {
     let delivered = {
         let pending = app.state::<Pending>();
         let mut map = pending.0.lock().unwrap();
-        dispatch(&mut map,request_id,reply)
+        dispatch(&mut map.requests,request_id,reply)
     };
     if !delivered{log::line(format!("reply for id={request_id} — no pending request"));}
 }
@@ -548,7 +563,7 @@ pub async fn approval_presented(window:tauri::WebviewWindow,app:AppHandle,reques
         let ready=native_card_ready(app,window);
         let pending=app.state::<Pending>();
         let shown=pending.0.try_lock().ok().is_some_and(|mut requests|
-            present_at(&mut requests,&request_id,&session_id,&pet_id,ready,Instant::now()));
+            present_at(&mut requests.requests,&request_id,&session_id,&pet_id,ready,Instant::now()));
         // No command, prompt, session, cwd, answers, or caller-supplied IDs.
         log::line(if shown{"relay card receipt accepted"}else{"relay card receipt rejected"});
         shown
@@ -567,7 +582,7 @@ pub async fn answer_from_card(app:AppHandle,window:tauri::WebviewWindow,request_
     on_card_thread(app,window,move|app,window|{
         let ready=native_card_ready(app,window);let pending=app.state::<Pending>();
         let accepted=pending.0.try_lock().ok().is_some_and(|mut requests|
-            card_dispatch_at(&mut requests,&request_id,Reply::Decision(word.into()),ready,Instant::now()));
+            card_dispatch_at(&mut requests.requests,&request_id,Reply::Decision(word.into()),ready,Instant::now()));
         log::line(if accepted{"relay card decision accepted"}else{"relay card decision rejected"});
         accepted
     }).await
@@ -576,7 +591,7 @@ pub async fn answer_question_from_card(app:AppHandle,window:tauri::WebviewWindow
     on_card_thread(app,window,move|app,window|{
         let ready=native_card_ready(app,window);let pending=app.state::<Pending>();
         let accepted=pending.0.try_lock().ok().is_some_and(|mut requests|
-            card_dispatch_at(&mut requests,&request_id,Reply::Decision(json!({"answers":answers}).to_string()),ready,Instant::now()));
+            card_dispatch_at(&mut requests.requests,&request_id,Reply::Decision(json!({"answers":answers}).to_string()),ready,Instant::now()));
         log::line(if accepted{"relay card answer accepted"}else{"relay card answer rejected"});
         accepted
     }).await

@@ -8,7 +8,7 @@ import type {PetConfiguration,PetPreference,PetPermissions} from '../mochi/pet-p
 export type PetMold='llm'|'application';
 export type PetRuntimeKind='llm'|'service'|'observer';
 export type PetAdapter='codex'|'copilot'|'antigravity'|'ollama'|'lmstudio'|'spotify';
-export interface PetRuntime {readonly kind:PetRuntimeKind;readonly adapter:PetAdapter|null;readonly assistantAdapter?:PetAdapter|null;}
+export interface PetRuntime {readonly kind:PetRuntimeKind;readonly adapter:PetAdapter|null;readonly assistantAdapter?:PetAdapter|null;readonly inferenceAdapters?:readonly ('ollama'|'lmstudio')[];}
 export interface PetPresentation {
  readonly galleryAvatarSize:number;readonly overviewAvatarSize:number;
  readonly galleryCardRadius:number;readonly galleryCardGap:number;
@@ -22,7 +22,7 @@ export interface PetRouting {
  readonly taskProvider:string|null;readonly role:string|null;readonly taskName:string|null;
 }
 export interface PetBlueprint {
- readonly id:string;readonly mold:PetMold;readonly service:boolean;readonly retired:boolean;
+ readonly id:string;readonly introducedIn:number;readonly mold:PetMold;readonly service:boolean;readonly retired:boolean;
  readonly runtime:PetRuntime;
  readonly preferences:PetPreference;readonly presentation:PetPresentation;readonly routing:PetRouting;
 }
@@ -58,12 +58,13 @@ function presentation(value:unknown):value is PetPresentation {
 export function createPetFactory(input:unknown){
  if(!object(input)||input.schemaVersion!==2||!object(input.configuration)||!object(input.base)||!object(input.molds)||!object(input.extensions)||!object(input.pets))invalid();
  const source=structuredClone(input) as Row;
+ const revision=(source.configuration as Row).catalogRevision??0;if(typeof revision!=='number'||!Number.isInteger(revision)||revision<0||revision>4294967295)invalid();
  const molds=source.molds as Row,extensions=source.extensions as Row,pets=source.pets as Row;
  if(Object.keys(molds).length!==2||!Object.hasOwn(molds,'llm')||!Object.hasOwn(molds,'application'))invalid();
  // Stable identity and access policy are always explicit for each pet.
- const protectedKeys=['name','aliases','provider','permissions','localExecution'];
+ const protectedKeys=['name','aliases','provider','permissions','localExecution','inference','inferenceRevision','systemAccess'];
  for(const recipe of [source.base,...Object.values(molds),...Object.values(extensions)]){
-  if(!object(recipe)||['retired','runtime','routing','service'].some(k=>Object.hasOwn(recipe,k)))invalid();
+  if(!object(recipe)||['retired','runtime','routing','service','introducedIn'].some(k=>Object.hasOwn(recipe,k)))invalid();
   if(recipe.preferences!==undefined&&(!object(recipe.preferences)||protectedKeys.some(k=>Object.hasOwn(recipe.preferences as Row,k))))invalid();
  }
  const entries=new Map<string,PetBlueprint>();
@@ -72,6 +73,9 @@ export function createPetFactory(input:unknown){
   if(!/^[a-zA-Z0-9_-]{1,128}$/.test(id)||['__proto__','prototype','constructor'].includes(id))invalid();
   if(!object(raw)||(raw.retired!==undefined&&typeof raw.retired!=='boolean')||(raw.mold!=='llm'&&raw.mold!=='application')||typeof raw.service!=='boolean'||!object(raw.preferences)||!object(raw.routing))invalid();
   if(!['name','aliases','provider','permissions'].every(k=>Object.hasOwn(raw.preferences as Row,k)))invalid();
+  if(Object.hasOwn(raw.preferences,'systemAccess'))invalid();
+  const introducedIn=raw.introducedIn===undefined?0:raw.introducedIn;
+  if(!Number.isInteger(introducedIn)||Number(introducedIn)<0||Number(introducedIn)>Number((source.configuration as Row).catalogRevision??0))invalid();
   const mold=molds[raw.mold];if(!object(mold))invalid();
   let effective=merge(source.base as Row,mold);
   if(raw.extension!==undefined){
@@ -85,11 +89,15 @@ export function createPetFactory(input:unknown){
    ||!object(p.permissions)||!['documents','emailDrafts','music','openApps'].every(k=>typeof (p.permissions as Row)[k]==='boolean')
    ||!presentation(effective.presentation)||!['chat','voice','taskProvider','role','taskName'].every(k=>r[k]===null||typeof r[k]==='string')||typeof r.execute!=='boolean')invalid();
   if(Object.keys(r).some(k=>!['chat','voice','execute','taskProvider','role','taskName'].includes(k)))invalid();
+  if(Number(introducedIn)>0&&(Object.values(p.permissions).some(v=>v!==false)||p.localExecution!==undefined||p.inference!==undefined||p.inferenceRevision!==undefined||p.systemAccess!==undefined||p.provider!==''||(p.fast as Row).model!==''||(p.reasoning as Row).model!==''))invalid();
   const runtime=raw.runtime;
-  if(!object(runtime)||Object.keys(runtime).some(k=>!['kind','adapter','assistantAdapter'].includes(k))
+  if(!object(runtime)||Object.keys(runtime).some(k=>!['kind','adapter','assistantAdapter','inferenceAdapters'].includes(k))
    ||typeof runtime.kind!=='string'||!['llm','service','observer'].includes(runtime.kind)
    ||!(runtime.adapter===null||typeof runtime.adapter==='string'&&['codex','copilot','antigravity','ollama','lmstudio','spotify'].includes(runtime.adapter))
    ||(runtime.kind==='service')!==(raw.mold==='application')||raw.service&&runtime.kind!=='service')invalid();
+  const choices=runtime.inferenceAdapters;
+  if(choices!==undefined&&(!Array.isArray(choices)||choices.length>2||choices.some(a=>a!=='ollama'&&a!=='lmstudio')||new Set(choices).size!==choices.length
+   ||choices.length>0&&(runtime.kind!=='llm'||runtime.adapter!==null&&!['ollama','lmstudio'].includes(String(runtime.adapter)))))invalid();
   const assistant=runtime.assistantAdapter??null;
   if(assistant!==null&&(!raw.service||runtime.adapter!=='spotify'||assistant!=='codex'))invalid();
   if([r.role,r.taskName].some(s=>s!==null&&(typeof s!=='string'||!s.trim()||s.length>256||/[\u0000-\u001f\u007f]/.test(s))))invalid();
@@ -113,7 +121,7 @@ export function createPetFactory(input:unknown){
   const retired=raw.retired===true;
   // Route identities remain usable for historical conversations. New work is gated separately.
   const routing=retired?{...r,execute:false}:r;
-  entries.set(id,freeze({id,mold:raw.mold,service:raw.service,retired,runtime,preferences:p,presentation:effective.presentation,routing}) as unknown as PetBlueprint);
+  entries.set(id,freeze({id,introducedIn,mold:raw.mold,service:raw.service,retired,runtime,preferences:p,presentation:effective.presentation,routing}) as unknown as PetBlueprint);
  }
  if(entries.size===0)invalid();
  const services=freeze([...entries.values()].filter(p=>p.service).map(p=>p.id));

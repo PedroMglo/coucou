@@ -1,4 +1,13 @@
 use super::*;
+
+#[test]fn guardian_health_restore_inspection_accepts_known_catalog_and_keeps_future_unknown_fields_closed(){
+ use crate::pet_config::system_access::{Grant,Operation,Policy,Resource,Subplugin};
+ let mut config=crate::pet_config::defaults();config.version=2;
+ config.pets.get_mut("agent_system_guardian").unwrap().system_access=Some(Policy{schema_version:1,enabled:true,revision:"a".repeat(32),grants:vec![Grant{subplugin:Subplugin::Health,operation:Operation::Observe,resource:Resource::HostHealth{}}]});
+ let raw=serde_json::to_vec(&config).unwrap();let report=inspect(None,Some(&raw)).unwrap();assert_eq!(report["pets"]["resolved"]["catalogRevision"],1);assert_eq!(report["pets"]["resolved"]["pets"]["agent_system_guardian"]["systemAccess"]["grants"][0]["resource"]["kind"],"hostHealth");assert_eq!(report["activationGranted"],false);assert_eq!(report["oldApprovalsRenewed"],false);
+ for (field,value)in[("catalogRevision",json!(2)),("catalogRevision",json!("1")),("futureRoot",json!(true))]{let mut future=serde_json::to_value(&config).unwrap();future[field]=value;assert!(inspect(None,Some(&serde_json::to_vec(&future).unwrap())).is_err());}
+ let mut legacy=serde_json::to_value(&config).unwrap();legacy.as_object_mut().unwrap().remove("catalogRevision");legacy["pets"].as_object_mut().unwrap().remove("agent_system_guardian");let report=inspect(None,Some(&serde_json::to_vec(&legacy).unwrap())).unwrap();assert_eq!(report["pets"]["resolved"]["catalogRevision"],1);assert!(report["pets"]["resolutionChanges"].as_array().unwrap().iter().any(|v|v=="catalogRevision"));assert_eq!(report["pets"]["resolved"]["pets"]["agent_system_guardian"]["permissions"]["music"],false);assert!(report["pets"]["resolved"]["pets"]["agent_system_guardian"].get("inference").is_none());
+}
 use crate::pet_data::{tests::Temp,startup::tests::Harness,current_profile,bootstrap,restore_cli};
 use std::{fs,os::unix::fs::{DirBuilderExt,PermissionsExt,symlink}};
 fn settings()->Vec<u8>{serde_json::to_vec(&crate::settings::Settings::default()).unwrap()}
@@ -50,4 +59,30 @@ impl Fixture{
 
 #[test]fn ownership_loss_after_receipt_never_reports_activation_or_success_and_retains_partial_receipt(){
  let f=Fixture::new();let r=f.review();let hash=r.fingerprint().unwrap();assert!(r.apply_using(&hash,|step|{if step==PublicationStep::AfterReceipt{f.owner.release();}Ok(())}).is_err());assert!(f.config().join(CONFIG_REVIEW).exists());assert!(!f.config().join(ADMITTED).exists());assert_eq!(fs::read(f.config().join(PAYLOAD).join("settings.json")).unwrap(),settings());
+}
+
+#[test]fn pet_inference_restore_inspection_preserves_choice_revision_and_separate_own_grants(){
+ use crate::pet_inference::{Backend,Choice,CredentialReference};
+ let mut config=crate::pet_config::defaults();config.version=2;
+ for(pet,backend,revision)in[("ai_lmstudio",Backend::Ollama,'a'),("ai_ollama",Backend::Lmstudio,'b')]{let p=config.pets.get_mut(pet).unwrap();p.inference=Some(Choice{schema_version:1,backend,endpoint:"http://127.0.0.1:18477".into(),model:"synthetic-model".into(),credential:CredentialReference::None});p.inference_revision=Some(revision.to_string().repeat(32));}
+ let original=serde_json::to_vec(&config).unwrap();let report=inspect(Some(&settings()),Some(&original)).unwrap();assert_eq!(report["activationGranted"],false);assert_eq!(report["oldApprovalsRenewed"],false);
+ let choices=crate::pet_data::restored_projection::Choices::parse(&serde_json::to_vec(&serde_json::json!({"schemaVersion":1,"inspectionReceipt":"a".repeat(64),"mainPet":"ai_lmstudio","activePets":["ai_lmstudio","ai_ollama"],"grants":[{"petId":"ai_lmstudio","operations":["music"]}]})).unwrap()).unwrap();
+ let projection=crate::pet_data::restored_projection::project(&report,&choices,None,None).unwrap();let restored:crate::pet_config::Configuration=serde_json::from_slice(&projection.pets).unwrap();assert_eq!(restored.version,2);
+ for pet in ["ai_lmstudio","ai_ollama"]{assert_eq!(restored.pets[pet].inference,config.pets[pet].inference);assert_eq!(restored.pets[pet].inference_revision,config.pets[pet].inference_revision);}
+ assert!(restored.permissions("ai_lmstudio").unwrap().music);assert!(!restored.permissions("ai_ollama").unwrap().music);assert_eq!(projection.differences["inferenceFallbackAllowed"],false);assert_eq!(serde_json::to_vec(&config).unwrap(),original);
+ // Clear remains format2 with a durable revision; no legacy writer downgrade.
+ config.pets.get_mut("ai_lmstudio").unwrap().inference=None;let report=inspect(Some(&settings()),Some(&serde_json::to_vec(&config).unwrap())).unwrap();assert_eq!(report["pets"]["resolved"]["version"],2);assert_eq!(report["pets"]["resolved"]["pets"]["ai_lmstudio"]["inferenceRevision"],"a".repeat(32));
+}
+#[test]fn pet_inference_restore_refuses_unknown_fields_invalid_targets_or_downlabels(){
+ use crate::pet_inference::{Backend,Choice,CredentialReference};
+ let mut config=crate::pet_config::defaults();config.version=2;let p=config.pets.get_mut("ai_lmstudio").unwrap();p.inference=Some(Choice{schema_version:1,backend:Backend::Ollama,endpoint:"http://127.0.0.1:18477".into(),model:"synthetic-model".into(),credential:CredentialReference::None});p.inference_revision=Some("a".repeat(32));let source=serde_json::to_value(&config).unwrap();
+ for mode in ["version","unknown","missing-revision","invalid-revision","remote","credential"]{let mut raw=source.clone();match mode{"version"=>raw["version"]=json!(1),"unknown"=>raw["pets"]["ai_lmstudio"]["inference"]["providerFallback"]=json!(true),"missing-revision"=>{raw["pets"]["ai_lmstudio"].as_object_mut().unwrap().remove("inferenceRevision");},"invalid-revision"=>raw["pets"]["ai_lmstudio"]["inferenceRevision"]=json!("bad"),"remote"=>raw["pets"]["ai_lmstudio"]["inference"]["endpoint"]=json!("https://example.invalid"),_=>raw["pets"]["ai_lmstudio"]["inference"]["credential"]=json!("configuredLmstudioEndpoint")};let bytes=serde_json::to_vec(&raw).unwrap();assert!(inspect(Some(&settings()),Some(&bytes)).is_err(),"{mode}");assert_eq!(serde_json::to_vec(&raw).unwrap(),bytes);}
+}
+
+#[test]fn system_access_restore_preserves_exact_data_but_cannot_reactivate_old_grants(){
+ use crate::pet_config::system_access::{Policy,Grant,Subplugin,Operation,Resource};let mut config=crate::pet_config::defaults();config.version=2;
+ config.pets.get_mut("ai_ollama").unwrap().system_access=Some(Policy{schema_version:1,enabled:true,revision:"a".repeat(32),grants:[Operation::Observe,Operation::Volume].into_iter().map(|operation|Grant{subplugin:Subplugin::Sound,operation,resource:Resource::AudioOutput{key:"audio-0123456789abcdef".into()}}).collect()});
+ let bytes=serde_json::to_vec(&config).unwrap();let report=inspect(Some(&settings()),Some(&bytes)).unwrap();assert_eq!(report["activationGranted"],false);assert_eq!(report["pets"]["resolved"]["pets"]["ai_ollama"]["systemAccess"],serde_json::to_value(config.pets["ai_ollama"].system_access.as_ref().unwrap()).unwrap());
+ let choices=crate::pet_data::restored_projection::Choices::parse(&serde_json::to_vec(&json!({"schemaVersion":1,"inspectionReceipt":"a".repeat(64),"mainPet":"ai_ollama","activePets":["ai_ollama"],"grants":[{"petId":"ai_ollama","operations":["music"]}]})).unwrap()).unwrap();let projected=crate::pet_data::restored_projection::project(&report,&choices,None,None).unwrap();let restored:crate::pet_config::Configuration=serde_json::from_slice(&projected.pets).unwrap();let policy=restored.pets["ai_ollama"].system_access.as_ref().unwrap();assert!(!policy.enabled);assert_eq!(policy.revision,"a".repeat(32));assert_eq!(policy.grants,config.pets["ai_ollama"].system_access.as_ref().unwrap().grants);assert!(!policy.permits(Operation::Observe,Some("audio-0123456789abcdef")));assert!(restored.permissions("ai_ollama").unwrap().music);assert_eq!(projected.differences["systemGrantsSuspended"],true);assert_eq!(serde_json::to_vec(&config).unwrap(),bytes);
+ for path in [vec!["systemAccess","unknown"],vec!["systemAccess","grants","0","extra"]]{let mut raw=serde_json::to_value(&config).unwrap();if path.len()==2{raw["pets"]["ai_ollama"]["systemAccess"]["unknown"]=json!(true);}else{raw["pets"]["ai_ollama"]["systemAccess"]["grants"][0]["extra"]=json!(true);}assert!(inspect(Some(&settings()),Some(&serde_json::to_vec(&raw).unwrap())).is_err());}
 }

@@ -13,29 +13,43 @@ pub struct Limits {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all="camelCase")]
-pub enum Catalog { SpotifyTransportV1 }
+pub enum Catalog { SpotifyTransportV1,PeerCorrespondenceV1,PeerCorrespondenceMemoryV1,PeerDelegationV1,PeerDelegationIterationV1 }
+#[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub enum Start { WhenAvailable }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
-pub struct Policy { pub schema_version: u32, pub catalog: Catalog, pub limits: Limits }
+pub struct Policy {
+    pub schema_version: u32, pub catalog: Catalog, pub limits: Limits,
+    #[serde(default,skip_serializing_if="Option::is_none")]pub start:Option<Start>,
+}
 impl Policy {
     pub(super) fn native(limits: Limits, budget: &Budget) -> model::Result<Self> {
-        let p=Self { schema_version:1, catalog:Catalog::SpotifyTransportV1, limits };
+        let p=Self { schema_version:1, catalog:Catalog::SpotifyTransportV1, limits, start:None };
         if !p.valid_for(budget) { return Err(model::Error::InvalidInput); }
         Ok(p)
     }
+    pub(super)fn peer(&self)->bool{matches!(self.catalog,Catalog::PeerCorrespondenceV1|Catalog::PeerCorrespondenceMemoryV1|Catalog::PeerDelegationV1|Catalog::PeerDelegationIterationV1)}
+    pub(super)fn peer_delegation(&self)->bool{matches!(self.catalog,Catalog::PeerDelegationV1|Catalog::PeerDelegationIterationV1)}
+    pub(super)fn peer_iteration(&self)->bool{self.catalog==Catalog::PeerDelegationIterationV1}
+    pub(super)fn peer_memory(&self)->bool{self.catalog==Catalog::PeerCorrespondenceMemoryV1}
+    pub(super)fn with_catalog(mut self,catalog:Catalog,budget:&Budget)->model::Result<Self>{self.catalog=catalog;if self.peer_iteration(){self.schema_version=3;}if !self.valid_for(budget){return Err(model::Error::InvalidInput);}Ok(self)}
+    pub(super)fn receipt_reserve(&self)->u64{if self.peer_memory(){16384}else if self.peer(){8192}else{2048}}
     fn valid(&self)->bool {
-        self.schema_version==1 && (1..=8).contains(&self.limits.max_rounds)
+        (if self.peer_iteration(){matches!((self.schema_version,self.start),(3,None)|(4,Some(Start::WhenAvailable)))}else{matches!((self.schema_version,self.start),(1,None)|(2,Some(Start::WhenAvailable)))}) && (1..=8).contains(&self.limits.max_rounds)
             && (1..=8).contains(&self.limits.max_steps)
             && (2048..=65536).contains(&self.limits.max_output_bytes)
             && (1..=self.limits.max_rounds).contains(&self.limits.no_progress_limit)
     }
     pub(super) fn valid_for(&self, budget:&Budget) -> bool {
-        self.valid()
+        self.valid()&&(!self.peer()||self.peer_iteration()&&self.limits.max_rounds>=2||self.limits.max_rounds==1&&(self.peer_delegation()||budget.max_model_calls==1))
             && u16::from(self.limits.max_rounds)<=budget.max_model_calls
             && u16::from(self.limits.max_steps)<=budget.max_tool_calls
             && u64::from(self.limits.max_output_bytes)<=budget.max_output_bytes
             && budget.max_tokens.is_none() && budget.max_cost_micros.is_none()
     }
+    pub(super)fn request_start(&mut self,start:Start){self.start=Some(start);self.schema_version=if self.peer_iteration(){4}else{2};}
+    pub(super)fn requested(&self)->bool{self.valid()&&self.start==Some(Start::WhenAvailable)}
 }
 
 #[derive(Serialize, Deserialize)]
@@ -62,6 +76,7 @@ pub(super) fn parse(goal:&model::Record, policy:&Policy, raw:&str)->model::Resul
     if !policy.valid() || raw.len()>policy.limits.max_output_bytes as usize || raw.is_empty() {
         return Err(model::Error::LimitReached);
     }
+    if policy.peer(){return super::planned_peer::parse(goal,policy,raw);}
     let output:Output=serde_json::from_str(raw).map_err(|_|model::Error::InvalidInput)?;
     match output {
         Output::Blocked {reason} => {
@@ -107,6 +122,7 @@ pub(super) fn model_input(goal:&model::Record,spec:&super::admission::AdmissionS
             "blocked":{"kind":"blocked","reason":"nonempty text <=4096 bytes"}
         }
     });
+    if policy.peer(){super::planned_peer::model_catalog(&mut input,goal,spec);}
     if let Some(c)=spec.continuation.as_ref().filter(|c|c.uncertain_effects.is_some()){
         input["historicalUncertainty"]=serde_json::json!({"reviewedAt":c.reviewed_at,"effects":c.uncertain_effects,"originalCharge":c.charge,"instructions":"These historical outcomes remain unknown and charged. This is neither proof of success nor a replay permit. Propose only the declared fresh state assignments; each new target and recipe requires its own exact native approval."});
     }

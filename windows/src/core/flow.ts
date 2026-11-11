@@ -64,6 +64,8 @@ export interface FlowStatus {
   platform: "windows" | "linux";
   autostarted: boolean;
   userName?: string | null;
+  /** Missing on older backends; no clipboard read or model resolution. */
+  lastTextAvailable?: boolean;
 }
 
 export interface FlowEntry {
@@ -200,6 +202,7 @@ export const FlowBridge = {
   setStyles: (styles: AppStyle[]) => flowWrite("flow_set_styles", "Estilos", { styles }),
   runningApps: () => call<{ id: string; name: string }[]>("flow_running_apps"),
   copy: (text: string) => call<boolean>("flow_copy", { text }),
+  copyLast: () => call<boolean>("flow_copy_last"),
   pasteAgain: () => call<void>("flow_paste_again"),
   download: () => call<void>("flow_models_download"),
   removeModels: () => call<void>("flow_models_remove"),

@@ -9,8 +9,11 @@
 // and are pasted. The thread sleeps on its channel while nothing happens.
 
 pub mod cleanup;
+mod capture;
 pub mod logic;
 pub mod paste;
+#[cfg(target_os="linux")]pub(crate)mod clipboard_read;
+#[cfg(target_os="linux")]pub(crate)mod clipboard_write;
 pub mod pill;
 pub mod store;
 pub mod text;
@@ -61,6 +64,7 @@ pub struct Flow {
     running: Mutex<Option<Running>>,
     /// Keep persisted preferences, runtime changes and events in the same order.
     prefs_update: Mutex<()>,
+    dictation_cancel:Mutex<Option<Arc<AtomicBool>>>,
 }
 
 struct Running {
@@ -89,6 +93,7 @@ impl Flow {
     }
 
     fn send(&self, event: KeyEvent) {
+        if matches!(event,KeyEvent::Cancel|KeyEvent::Escape|KeyEvent::Quit){capture::cancel_processing(self);}
         if let Some(r) = self.running.lock().unwrap().as_ref() {
             let _ = r.tx.send((event, Instant::now()));
         }
@@ -143,7 +148,7 @@ fn is_terminal(id: &str) -> bool {
 // ── Setup, on and off ─────────────────────────────────────────────────────────
 
 pub fn setup(app: &AppHandle) {
-    let flow = Arc::new(Flow { store: Mutex::new(Store::load()), running: Mutex::new(None), prefs_update: Mutex::new(()) });
+    let flow = Arc::new(Flow { store: Mutex::new(Store::load()), running: Mutex::new(None), prefs_update: Mutex::new(()),dictation_cancel:Mutex::new(None) });
     app.manage(flow.clone());
     pill::setup(app);
     let prefs = flow.store.lock().unwrap().prefs.clone();
@@ -223,6 +228,7 @@ struct Listening {
     take: Arc<Mutex<audio::Take>>,
     started: Instant,
     app: Option<(String, String)>,
+    input:capture::Input,
 }
 
 fn run(app: AppHandle, flow: Arc<Flow>, rx: mpsc::Receiver<(KeyEvent, Instant)>) {
@@ -230,7 +236,6 @@ fn run(app: AppHandle, flow: Arc<Flow>, rx: mpsc::Receiver<(KeyEvent, Instant)>)
     let secs = |at: Instant| at.saturating_duration_since(epoch).as_secs_f64();
     let mut logic = KeyLogic::default();
     let mut listening: Option<Listening> = None;
-    let busy = Arc::new(AtomicBool::new(false));
     loop {
         let active = listening.is_some() || logic.is_active();
         let received = if active {
@@ -245,6 +250,7 @@ fn run(app: AppHandle, flow: Arc<Flow>, rx: mpsc::Receiver<(KeyEvent, Instant)>)
                 Err(_) => break,
             }
         };
+        if received.as_ref().is_some_and(|(event,_)|matches!(event,KeyEvent::Cancel|KeyEvent::Escape|KeyEvent::Quit)){capture::cancel_processing(&flow);}
         let action = match received {
             Some((KeyEvent::Quit, _)) => {
                 drop(listening.take());
@@ -315,7 +321,7 @@ fn run(app: AppHandle, flow: Arc<Flow>, rx: mpsc::Receiver<(KeyEvent, Instant)>)
             }
             Action::Finish => {
                 if let Some(l) = listening.take() {
-                    finish(&app, &flow, l, busy.clone());
+                    finish(&app, &flow, l);
                 } else {
                     pill::update(&app, |s| s.phase = "idle".into());
                 }
@@ -329,7 +335,7 @@ fn run(app: AppHandle, flow: Arc<Flow>, rx: mpsc::Receiver<(KeyEvent, Instant)>)
         });
         if expired {
             logic.reset();
-            if let Some(l) = listening.take() { finish(&app, &flow, l, busy.clone()); }
+            if let Some(l) = listening.take() { finish(&app, &flow, l); }
         }
         // The pill's dots, about 30 times a second while you speak.
         if let Some(l) = &listening {
@@ -343,7 +349,11 @@ fn run(app: AppHandle, flow: Arc<Flow>, rx: mpsc::Receiver<(KeyEvent, Instant)>)
 /// Opens the microphone. None (and the pill says why) when it can't.
 fn begin(app: &AppHandle, flow: &Arc<Flow>) -> Option<Listening> {
     crate::voice::manual::cancel(app);
-    if !crate::voice::asr_ready(app) {
+    let app_front=os::foreground_app().filter(|(id,_)|!is_shell(id));
+    let input=match capture::Input::capture(app,flow,app_front.as_ref().map(|(id,_)|id.as_str())){
+        Ok(input)=>input,Err(error)=>{crate::log::line(format!("flow: {error}"));pill::update(app,|s|s.phase="failed".into());pill::rest_after(app,"failed",1800);pill::announce(app,"mic","#FF6B6B",error,None,8);return None;}
+    };
+    if !input.ready() {
         pill::announce(
             app,
             "download",
@@ -354,11 +364,11 @@ fn begin(app: &AppHandle, flow: &Arc<Flow>) -> Option<Listening> {
         );
         return None;
     }
-    let mic = flow.store.lock().unwrap().prefs.mic.clone();
     let take = Arc::new(Mutex::new(audio::Take::default()));
     let sink_take = take.clone();
-    let source = audio::Source::Mic(if mic.is_empty() { None } else { Some(mic) });
-    let capture = audio::Capture::start(source, audio::CaptureUse::Dictation, move |samples| {
+    let source=input.source.clone();
+    if input.check().is_err(){return None;}
+    let capture = audio::Capture::start_stoppable_for(source, audio::CaptureUse::Dictation,input.stop.clone(), move |samples| {
         let mut t = sink_take.lock().unwrap();
         // Ten minutes at most: a dictation left open by mistake stops growing.
         if t.samples.len() < 16_000 * 600 {
@@ -368,10 +378,10 @@ fn begin(app: &AppHandle, flow: &Arc<Flow>) -> Option<Listening> {
         t.meter.feed(samples);
     });
     match capture {
-        Ok(capture) => {
-            let app_front = os::foreground_app().filter(|(id, _)| !is_shell(id));
+        Ok(mut capture) => {
+            if input.check().is_err(){capture.stop();return None;}
             pill::update(app, |s| s.phase = "listening".into());
-            Some(Listening { capture, take, started: Instant::now(), app: app_front })
+            Some(Listening { capture, take, started: Instant::now(), app: app_front,input })
         }
         Err(err) => {
             crate::log::line(format!("flow: microphone: {err}"));
@@ -392,7 +402,7 @@ fn begin(app: &AppHandle, flow: &Arc<Flow>) -> Option<Listening> {
 
 /// Stops listening and turns what was said into pasted text, on a worker
 /// thread so the key works again at once.
-fn finish(app: &AppHandle, flow: &Arc<Flow>, mut l: Listening, busy: Arc<AtomicBool>) {
+fn finish(app: &AppHandle, flow: &Arc<Flow>, mut l: Listening) {
     l.capture.stop();
     let seconds = l.started.elapsed().as_secs_f64();
     let (samples, peak) = {
@@ -411,9 +421,7 @@ fn finish(app: &AppHandle, flow: &Arc<Flow>, mut l: Listening, busy: Arc<AtomicB
     let flow = flow.clone();
     let front = l.app.clone();
     std::thread::spawn(move || {
-        busy.store(true, Ordering::Relaxed);
-        let result = process(&app, &flow, &samples, front.as_ref(), seconds);
-        busy.store(false, Ordering::Relaxed);
+        let result = process(&app, &flow, &l.input, &samples, front.as_ref(), seconds);
         if let Err(err) = result {
             crate::log::line(format!("flow: {err}"));
             pill::update(&app, |s| s.phase = "idle".into());
@@ -421,70 +429,72 @@ fn finish(app: &AppHandle, flow: &Arc<Flow>, mut l: Listening, busy: Arc<AtomicB
     });
 }
 
-fn process(app: &AppHandle, flow: &Arc<Flow>, samples: &[f32], front: Option<&(String, String)>, seconds: f64) -> Result<(), String> {
+fn process(app: &AppHandle, _flow: &Arc<Flow>, input:&capture::Input, samples: &[f32], front: Option<&(String, String)>, seconds: f64) -> Result<(), String> {
     let started = Instant::now();
-    let transcript = crate::voice::transcribe(app, samples, None).ok_or("the voice model is not loaded")?;
+    input.check()?;
+    let transcript=input.transcribe(samples).ok_or("O reconhecimento terminou sem transcrição válida; o pedido não foi redirecionado.")?;
     let raw = transcript.text.trim().to_string();
     if raw.is_empty() {
         pill::update(app, |s| s.phase = "idle".into());
         pill::announce(app, "mic", "#FFB84D", t("No speech detected. Check your microphone."), None, 6);
         return Ok(());
     }
-    let (prepared, style, cleanup, words, key) = {
-        let store = flow.store.lock().unwrap();
-        let app_id = front.map(|(id, _)| id.as_str());
-        (store.prepare(&raw), store.style_for(app_id), store.prefs.cleanup, store.words.words.clone(), store.prefs.key)
-    };
+    input.check()?;
+    let prepared=input.prepare(&raw);
+    let(style,cleanup,words,key)=(input.options.style,input.options.cleanup,&input.options.words,input.options.key);
     let mut written = prepared.text.clone();
     if cleanup && style != store::Style::Verbatim && cleanup::has_key() {
         let app_name = front.map(|(_, n)| n.clone());
-        let cleaned = tauri::async_runtime::block_on(cleanup::clean(&prepared.text, style, app_name.as_deref(), &words));
+        input.check()?;
+        let cleaned=tauri::async_runtime::block_on(crate::net::while_current(||input.check().is_ok(),||async{Ok::<_,String>(cleanup::clean(&prepared.text,style,app_name.as_deref(),words).await)}))?;
+        input.check()?;
         if text::keeps_marks(&cleaned, &prepared.snippets) {
             written = cleaned;
         }
     }
     let final_text = text::finish(&written, &prepared.snippets);
+    if final_text.trim().is_empty(){input.check()?;pill::update(app,|s|s.phase="idle".into());return Ok(());}
     crate::log::line(format!("flow: {} words in {:?}", text::word_count(&final_text), started.elapsed()));
 
     os::wait_key_released(key);
     let terminal = front.is_some_and(|(id, _)| is_terminal(id));
-    let outcome = paste::paste(&final_text, terminal);
-    let entry = {
-        let mut store = flow.store.lock().unwrap();
-        store.record(&final_text, front.map(|(_, n)| n.as_str()), seconds, store::today(), store::now_ms())
-    };
-    let _ = app.emit_to(crate::HUB_LABEL, "flow-history", entry);
-    match outcome {
-        paste::Outcome::Pasted => pill::update(app, |s| s.phase = "idle".into()),
-        paste::Outcome::Copied => {
-            pill::update(app, |s| s.phase = "copied".into());
-            pill::rest_after(app, "copied", 1800);
-            pill::announce(
-                app,
-                "clipboard",
-                "#F7B32B",
-                t("Your words are copied: click where you want them and press Ctrl+V."),
-                None,
-                8,
-            );
-        }
-        paste::Outcome::Failed => {
-            pill::update(app, |s| s.phase = "idle".into());
-            return Err("the clipboard refused the text".into());
-        }
+    input.check()?;
+    let report=paste::paste(&final_text,terminal,&||input.check().is_ok());
+    if input.check().is_err(){
+        let detail=match report.outcome{
+            paste::Outcome::NotStarted|paste::Outcome::PreservationBlocked|paste::Outcome::OutputTooLarge=>"O ditado foi cancelado antes da cópia.",
+            paste::Outcome::Copied=>"O ditado foi interrompido depois da cópia; o texto pode permanecer no clipboard.",
+            paste::Outcome::CopyUncertain=>"O ditado foi interrompido; a alteração do clipboard não foi confirmada.",
+            paste::Outcome::DispatchUncertain|paste::Outcome::Dispatched=>"O ditado foi interrompido depois de possível envio de teclas; a inserção não foi confirmada e não será repetida.",
+        };
+        pill::announce(app,"clipboard","#F7B32B",detail.into(),None,8);
+        return Err("Ditado interrompido; os efeitos anteriores não foram desfeitos nem repetidos.".into());
     }
+    if report.retain_output(){
+        let entry=input.record(&final_text,front.map(|(_,n)|n.as_str()),seconds)?;
+        input.check()?;
+        let _=app.emit_to(crate::HUB_LABEL,"flow-history",entry);
+    }
+    present_paste(app,&report);
+
     Ok(())
 }
 
 /// "Paste again": the last dictation, in the app in front now.
-fn paste_again(app: &AppHandle, flow: &Arc<Flow>) {
-    let Some(text) = flow.store.lock().unwrap().last_text() else { return };
-    let front = os::foreground_app();
-    let terminal = front.as_ref().is_some_and(|(id, _)| is_terminal(id));
-    if paste::paste(&text, terminal) == paste::Outcome::Pasted {
-        pill::update(app, |s| s.phase = "pastedAgain".into());
-        pill::rest_after(app, "pastedAgain", 1600);
-    }
+fn present_paste(app:&AppHandle,report:&paste::Report){
+    let message=match report.outcome{
+        paste::Outcome::PreservationBlocked=>format!("{} O texto produzido continua disponível em Ditado → Copiar último texto, conforme a retenção escolhida.",report.preservation_message()),
+        paste::Outcome::OutputTooLarge=>"O texto produzido excede o limite de colagem; não foi copiado ou guardado automaticamente.".into(),
+        paste::Outcome::NotStarted=>"A cópia não começou ou o contexto deixou de ser válido. O texto autorizado continua disponível em Ditado → Copiar último texto.".into(),
+        paste::Outcome::CopyUncertain=>"A alteração do clipboard ficou incerta; não foi repetida. O texto autorizado continua disponível em Ditado.".into(),
+        paste::Outcome::Copied=>t("Your words are copied: click where you want them and press Ctrl+V."),
+        paste::Outcome::DispatchUncertain=>"O envio de teclas ficou incerto; confirma o destino antes de repetir.".into(),
+        paste::Outcome::Dispatched=>report.restore_warning().unwrap_or("Atalho de colagem enviado; a aplicação de destino não confirmou a inserção.").into(),
+    };
+    pill::update(app,|s|s.phase="idle".into());pill::announce(app,"clipboard","#F7B32B",message,None,8);
+}
+fn paste_again(app:&AppHandle,source:capture::LastText,terminal:bool){
+    let report=paste::paste(&source.text,terminal,&||source.current());present_paste(app,&report);
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
@@ -505,12 +515,15 @@ pub struct FlowStatus {
     autostarted: bool,
     /// The user's first name, for "Hello Louis".
     user_name: Option<String>,
+    /// Availability only: does not clone text or observe the native clipboard.
+    last_text_available:bool,
 }
 
 #[tauri::command]
 pub fn flow_status(app: AppHandle, flow: State<Arc<Flow>>) -> FlowStatus {
+    let(prefs,last_text_available)={let store=flow.store.lock().unwrap();(store.prefs.clone(),store.has_last_text())};
     FlowStatus {
-        prefs: flow.store.lock().unwrap().prefs.clone(),
+        prefs,last_text_available,
         models: speech::status(),
         recognition: crate::voice::recognition_status(&app),
         keys: match os::keys_supported() {
@@ -686,14 +699,30 @@ pub async fn flow_running_apps() -> Vec<RunningApp> {
 }
 
 #[tauri::command]
-pub fn flow_copy(text: String) -> bool {
-    paste::copy(&text)
+pub async fn flow_copy(text:String,flow:State<'_,Arc<Flow>>)->Result<bool,String>{
+    let flow=flow.inner().clone();
+    let Ok(work)=capture::Work::claim(&flow,Arc::new(AtomicBool::new(false)))else{return Ok(false);};
+    tauri::async_runtime::spawn_blocking(move||paste::copy(&text,&||work.current())).await.map_err(|_|"A cópia terminou sem resultado confirmado; não foi repetida.".into())
 }
 
 #[tauri::command]
-pub fn flow_paste_again(app: AppHandle, flow: State<Arc<Flow>>) {
-    let flow = flow.inner().clone();
-    std::thread::spawn(move || paste_again(&app, &flow));
+pub async fn flow_paste_again(app:AppHandle,flow:State<'_,Arc<Flow>>)->Result<(),String>{
+    let flow=flow.inner().clone();
+    let Some(source)=capture::LastText::capture(&flow)? else{return Ok(());};
+    tauri::async_runtime::spawn_blocking(move||{
+        if !source.current(){return;}
+        let front=os::foreground_app();
+        if !source.current(){return;}
+        let terminal=front.as_ref().is_some_and(|(id,_)|is_terminal(id));
+        paste_again(&app,source,terminal);
+    }).await.map_err(|_|"A colagem terminou sem resultado confirmado; não foi repetida.".into())
+}
+
+#[tauri::command]
+pub async fn flow_copy_last(flow:State<'_,Arc<Flow>>)->Result<bool,String>{
+    let flow=flow.inner().clone();
+    let Some(source)=capture::LastText::capture(&flow)? else{return Ok(false);};
+    tauri::async_runtime::spawn_blocking(move||paste::copy(&source.text,&||source.current())).await.map_err(|_|"A cópia terminou sem resultado confirmado; não foi repetida.".into())
 }
 
 #[tauri::command]
@@ -766,7 +795,7 @@ mod preference_tests {
 
     fn fixture() -> (Flow, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("coucou-flow-prefs-{}-{}", std::process::id(), text::new_id()));
-        let flow = Flow { store: Mutex::new(Store::load_from(dir.clone())), running: Mutex::new(None), prefs_update: Mutex::new(()) };
+        let flow = Flow { store: Mutex::new(Store::load_from(dir.clone())), running: Mutex::new(None), prefs_update: Mutex::new(()),dictation_cancel:Mutex::new(None) };
         (flow, dir)
     }
 

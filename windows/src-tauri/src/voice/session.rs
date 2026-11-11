@@ -52,6 +52,7 @@ fn commit_alias_with(
 pub fn active() -> bool {
     SESSION.lock().unwrap().is_some()
 }
+pub(super)fn current(stop:&Arc<AtomicBool>)->bool{!stop.load(Ordering::Acquire)&&SESSION.lock().is_ok_and(|s|owns(&s,stop))}
 pub fn suspend_hotword() -> bool {
     HOTWORD_SUSPENDED.load(Ordering::Relaxed)
 }
@@ -387,6 +388,12 @@ fn run(app: &AppHandle, stop: &Arc<AtomicBool>, initial:Option<Pet>) -> bool {
         }
         #[cfg(target_os="linux")]if let Some(text)=crate::cli_chat::goal_recipe_voice(app,pet.provider(),&question,stop){
             answer=text;view(app,stop,"speaking",&question,&answer,Some(pet));super::speak_prepared(app,&answer,Some(stop),Some(pet.provider()),None,&input);idle.touch(Instant::now());continue;
+        }
+        if let Some(reply)=super::system_sound::spoken(app,pet,&question,&input,stop){
+            if stop.load(Ordering::Acquire){break;}
+            answer=reply.text;view(app,stop,"speaking",&question,&answer,Some(pet));
+            super::speak_prepared(app,&answer,Some(stop),Some(pet.provider()),None,&input);
+            idle.touch(Instant::now());continue;
         }
         if let Err(reason)=admit_pet(app,pet){
             answer=reason.message().into();

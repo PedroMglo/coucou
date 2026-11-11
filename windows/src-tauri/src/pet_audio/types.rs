@@ -22,6 +22,8 @@ pub struct Node {
     // Native selectors are never accepted from the webview.
     #[serde(skip)] pub selector: String,
     #[serde(skip)] pub index: u64,
+    #[serde(skip)] pub native_id: Option<u32>,
+    #[serde(skip)] pub native_serial: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]

@@ -114,6 +114,8 @@ export const PILL_CATALOG: readonly PillDefinition[] = [
     subtitle: N_("Chat"), source: "n8n", support: "yes", connect: server("ollamaUrl") },
   { id: "ai_lmstudio", name: "LM Studio", color: ACCENT.lmstudio, category: "ai",
     subtitle: N_("Chat"), source: "n8n", support: "yes", connect: server("lmstudioUrl") },
+  { id: "agent_system_guardian", name: "System Guardian", color: "#38BDF8", category: "agent",
+    subtitle: N_("System health"), source: "agent", support: "linux", connect: none },
   // ── Services ───────────────────────────────────────────────────────────────
   { id: "integration_resend", name: "Resend", color: "#22C55E", category: "service",
     subtitle: N_("Integration"), source: "n8n", support: "yes", connect: key("resend-api-key") },

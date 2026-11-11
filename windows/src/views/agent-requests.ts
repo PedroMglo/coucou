@@ -2,7 +2,7 @@ import {Bridge,onEvent,type AgentRequest,type DecisionTarget} from '../core/brid
 import {sameSession,type SessionTarget} from '../core/session-chat';
 import {h} from './dom';
 import {commandReview} from './command-review';
-import {approvalActions} from './approval-actions';
+import {approvalActions,goalVoiceHint} from './approval-actions';
 import {approvalQuestions} from './approval-questions';
 
 /** Public native decisions are keyed by request ID and immutable session. A
@@ -19,7 +19,7 @@ export function buildAgentRequests(selected:()=>SessionTarget|null,changed:()=>v
   if(!alive||transport.accept&&!transport.accept(request)||cards.has(request.id)||ended.has(request.id)||(!request.target&&!request.goalTarget))return;
   const origin=h('p',{class:'session-origin',text:request.origin??request.target?.sessionId??request.goalTarget?.goalId??''});
   const card=h('div',{class:'cli-request',style:'padding:10px;border:1px solid #F5A524;border-radius:10px;margin:6px 0'},h('strong',{text:request.kind==='question'?'Precisa da tua resposta':'Precisa da tua aprovação'}),origin);
-  if(request.goalTarget&&request.voiceCode)card.append(h('p',{text:`Voz: rever receita ${request.voiceCode} · aprovar receita ${request.voiceCode} · recusar receita ${request.voiceCode}`}));
+  const voiceHint=goalVoiceHint(request);if(voiceHint)card.append(h('p',{text:voiceHint}));
   const questions=approvalQuestions(request.kind==='question'?request:{questions:[],detail:''});
   if(request.kind==='question')card.append(questions.el);
   else card.append(commandReview(request.detail,request.provider==='ollama'&&request.approvalScope==='once'));

@@ -17,6 +17,24 @@ fn digest(value:&impl Serialize)->Result<String,String>{
     Ok(ring::digest::digest(&ring::digest::SHA256,&data).as_ref().iter().map(|b|format!("{b:02x}")).collect())
 }
 pub(crate)fn endpoint_key(raw:&str,generation:u64)->Option<String>{let url=net::normalise_server_url(raw).ok()?;digest(&(url.as_str().trim_end_matches('/'),generation)).ok()}
+#[derive(Clone,Copy)]pub(crate)enum MetadataAuth{Legacy(u64),Anonymous,Configured(u64)}
+impl MetadataAuth{
+ fn current(self,server:&Server)->bool{match self{
+  Self::Anonymous=>server.key.is_none(),
+  Self::Legacy(g)=>g%2==0&&g==crate::local_chat::lmstudio_key_generation(),
+  Self::Configured(g)=>g%2==0&&g==crate::local_chat::lmstudio_key_generation()&&server.key.is_some(),
+ }}
+}
+pub(crate)fn endpoint_key_for(raw:&str,auth:MetadataAuth)->Option<String>{
+ let url=net::normalise_server_url(raw).ok()?;let endpoint=url.as_str().trim_end_matches('/');match auth{
+  MetadataAuth::Legacy(g)=>endpoint_key(raw,g),MetadataAuth::Anonymous=>digest(&(endpoint,"anonymous")).ok(),
+  MetadataAuth::Configured(g)if g%2==0=>digest(&(endpoint,"required",g)).ok(),_=>None,
+ }
+}
+pub(crate)fn target_auth(target:&crate::pet_inference::Target)->MetadataAuth{match target.choice.credential{
+ crate::pet_inference::CredentialReference::None=>MetadataAuth::Anonymous,
+ crate::pet_inference::CredentialReference::ConfiguredLmstudioEndpoint=>MetadataAuth::Configured(crate::local_chat::lmstudio_key_generation()),
+}}
 impl Binding{
     pub(crate)fn valid_for(&self,model:&str)->bool{
         self.schema_version==1&&id(&self.model_key)&&id(model)
@@ -75,11 +93,14 @@ impl Catalog{
 }
 /// One explicit native metadata read. No load, download, inference or fallback.
 pub(crate)async fn catalog(server:&Server,current:impl Fn()->bool)->Result<Catalog,String>{
+ catalog_scoped(server,MetadataAuth::Legacy(crate::local_chat::lmstudio_key_generation()),current).await
+}
+pub(crate)async fn catalog_scoped(server:&Server,auth:MetadataAuth,current:impl Fn()->bool)->Result<Catalog,String>{
     if server.id!="lmstudio"{return Err(ERROR.into());}let base=crate::local_chat::base_url(server)?;
     if !net::is_loopback_url(&base){return Err("Este pet LM Studio requer o servidor local explicitamente configurado.".into());}
-    let generation=crate::local_chat::lmstudio_key_generation();if generation%2!=0{return Err("A credencial do LM Studio está a mudar; volta a rever o pedido.".into());}
-    let ticket=crate::pet_capabilities::begin_lmstudio(&server.url,generation);
-    let result=net::while_current(||current()&&generation==crate::local_chat::lmstudio_key_generation(),||async{
+    if !auth.current(server){return Err("A referência de credencial do LM Studio deixou de corresponder ao pedido.".into());}
+    let ticket=crate::pet_capabilities::begin_lmstudio_scoped(&server.url,auth);
+    let result=net::while_current(||current()&&auth.current(server),||async{
         let client=net::local_client(&base,Duration::from_secs(3))?;
         let mut request=client.get(net::join(&base,"api/v1/models"));if let Some(key)=&server.key{request=request.bearer_auth(key);}
         let response=request.send().await.map_err(|_|"Não foi possível consultar o LM Studio local.")?;
@@ -91,5 +112,6 @@ pub(crate)async fn catalog(server:&Server,current:impl Fn()->bool)->Result<Catal
     crate::pet_capabilities::finish_lmstudio(ticket,result.as_ref().ok());result
 }
 pub(crate)async fn inspect(server:&Server,model:&str,current:impl Fn()->bool)->Result<Binding,String>{catalog(server,current).await?.binding(model)}
+pub(crate)async fn inspect_scoped(server:&Server,model:&str,auth:MetadataAuth,current:impl Fn()->bool)->Result<Binding,String>{catalog_scoped(server,auth,current).await?.binding(model)}
 
 #[cfg(test)]#[path="lmstudio_tests.rs"]mod tests;

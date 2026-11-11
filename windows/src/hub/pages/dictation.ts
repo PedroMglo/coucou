@@ -9,7 +9,7 @@ import { FlowBridge, type FlowEntry, type FlowStats } from "../../core/flow";
 import type { HubContext } from "../shell";
 import { emptyState, glowCard } from "../hero";
 import { button, card, icon, iconButton, keyLabel, label, number, row, shortCount, toggle } from "../ui";
-import { modelsControl } from "./flowsettings";
+import { modelsControl, lastTextCopyControl } from "./flowsettings";
 
 function dayKey(ms: number): string {
   const d = new Date(ms);
@@ -41,6 +41,7 @@ export async function dictationPage(page: HTMLElement, ctx: HubContext) {
   const hello = status.userName ? t("Hello {0}", { 0: status.userName }) : t("Hello");
   page.append(ctx.hero("dictation", hello, t("Hold {0} anywhere, speak, let go: it's pasted.", { 0: key }), [record]));
   page.append(alertLine);
+  page.append(card(lastTextCopyControl(ctx)));
 
   if (!ready) page.append(setup(ctx));
 
@@ -104,7 +105,8 @@ export async function dictationPage(page: HTMLElement, ctx: HubContext) {
     draw();
     void FlowBridge.stats().then((s) => right.firstElementChild?.replaceWith(numbers(s)));
   });
-  ctx.onLeave = () => unlisten();
+  const previousLeave=ctx.onLeave;
+  ctx.onLeave=()=>{unlisten();previousLeave?.();};
 }
 
 function numbers(stats: FlowStats | null): HTMLElement {

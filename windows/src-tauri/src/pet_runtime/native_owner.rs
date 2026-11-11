@@ -5,6 +5,8 @@ use std::{ffi::CString,fs::{File,Metadata},io::Read,os::{fd::{AsRawFd,FromRawFd}
 const PROTOCOL:&[u8]=b"{\"version\":1,\"kind\":\"coucou-runtime-owner-locks\"}\n";
 #[path="absent_owner.rs"]mod absent;
 pub(super)use absent::AbsentLease;
+#[path="native_operation.rs"]mod operation;
+pub(super)use operation::{OwnedOperation,EndedOperation};
 fn identity(m:&Metadata)->FileId{FileId{device:m.dev(),inode:m.ino()}}
 fn open_at(parent:&File,name:&str,flags:i32)->std::io::Result<File>{
     let name=CString::new(name).map_err(|_|std::io::Error::other("invalid native path"))?;
@@ -52,6 +54,11 @@ impl OwnerLease{
         if !record.valid_for(lease){return Err(model::Error::InvalidRecord);}let owner=Self{directory,lock,record};owner.current()?;Ok(owner)
     }
     pub(super)fn record(&self)->&Record{&self.record}
+    pub(super)fn resumes(&self,previous:&Record)->bool{
+        self.current().is_ok()&&self.record.profile==previous.profile&&self.record.owner_directory==previous.owner_directory&&self.record.owner_lock==previous.owner_lock
+            &&self.record.controller_id==previous.controller_id&&self.record.lease_id==previous.lease_id&&self.record.process!=previous.process
+            &&Proc::native().is_ok_and(|p|p.uid==previous.process.uid&&p.boot==previous.process.boot_id&&p.namespace==previous.process.pid_namespace&&p.process(previous.process.pid).is_ok_and(|old|old.is_none()))
+    }
     pub(super)fn current(&self)->model::Result<()>{
         if std::process::id()!=self.record.process.pid||unsafe{libc::geteuid()}!=self.record.process.uid{return Err(model::Error::Conflict);}
         self.directory.check()?;if identity(&self.directory.file.metadata().map_err(|_|model::Error::StorageUnavailable)?)!=self.record.owner_directory{return Err(model::Error::Conflict);}let file=self.directory.open_file(&format!("{}.lock",self.record.lease_id),libc::O_RDONLY)?.ok_or(model::Error::NotFound)?;

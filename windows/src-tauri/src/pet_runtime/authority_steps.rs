@@ -9,7 +9,7 @@ const STEP_PROTOCOL:&[u8]=b"{\"version\":1,\"kind\":\"coucou-native-goal-steps\"
 const STEP_BYTES:usize=64*1024;
 #[derive(Serialize,Deserialize)]#[serde(deny_unknown_fields)]struct Envelope{body:StepRecord,tag:String}
 fn message(record:&StepRecord)->Result<Vec<u8>>{
-    let mut bytes=match record.scope.schema_version{1=>b"coucou-native-goal-step-state-v1\0".to_vec(),2=>b"coucou-native-generated-step-state-v1\0".to_vec(),_=>return Err(Failure::Invalid)};bytes.extend(serde_json::to_vec(record).map_err(|_|Failure::Invalid)?);Ok(bytes)
+    let mut bytes=match record.scope.schema_version{1=>b"coucou-native-goal-step-state-v1\0".to_vec(),2=>b"coucou-native-generated-step-state-v1\0".to_vec(),3=>b"coucou-native-system-sound-step-state-v1\0".to_vec(),4=>b"coucou-native-deterministic-system-step-state-v1\0".to_vec(),5=>b"coucou-native-system-health-step-state-v1\0".to_vec(),_=>return Err(Failure::Invalid)};bytes.extend(serde_json::to_vec(record).map_err(|_|Failure::Invalid)?);Ok(bytes)
 }
 impl Authority{
     pub(in crate::pet_runtime::authority_store)fn step_directory(&self,create:bool)->Result<Option<Dir>>{
@@ -76,7 +76,7 @@ impl Authority{
                 if record.phase!=Phase::Started||!stored.same_request(attempt)||!matches!(stored.phase,APhase::Settled|APhase::Uncertain)||record.attempt.as_ref().is_none_or(|a|!a.same_request(attempt)){return Err(Failure::RecoveryRequired);}
                 Some(stored.clone())
             },
-            None=>{if record.phase!=Phase::Approved||result.observation.delivery!=crate::spotify::goal::Delivery::NotDispatched{return Err(Failure::RecoveryRequired);}None},
+            None=>{if record.phase!=Phase::Approved||result.observation.delivery!=crate::pet_runtime::physical_target::Delivery::NotDispatched{return Err(Failure::RecoveryRequired);}None},
         };
         record.phase=Phase::Finished;record.attempt=settled;record.result=Some(result);record.updated_at=now;self.step_publish(&record,false)?;Ok(record)
     }

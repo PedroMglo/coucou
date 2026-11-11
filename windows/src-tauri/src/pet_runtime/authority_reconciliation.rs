@@ -23,7 +23,7 @@ impl Authority{
         let absence=if retained.is_none()&&owner.state==OwnerState::OwnerAbsent{Some(self.retained_absence(spec,proof)?)}else{None};
         let lease_matches=row.lease==body.lease;
         let owner_known=matches!(owner.state,OwnerState::OriginalProcessLive|OwnerState::OwnerAbsent|OwnerState::NotClaimed|OwnerState::Closed);
-        let projection=match body.phase{GrantPhase::Issued=>goal.state==State::Queued,GrantPhase::Claimed|GrantPhase::Waiting=>goal.state==State::Leased,GrantPhase::Draining=>goal.state==State::Stopping&&row.stop_reason==body.stop_reason,GrantPhase::Closed|GrantPhase::Revoked=>!matches!(goal.state,State::Queued|State::Leased|State::Stopping)};
+        let projection=match body.phase{GrantPhase::Issued=>goal.state==State::Queued,GrantPhase::Claimed|GrantPhase::Waiting=>goal.state==State::Leased,GrantPhase::Draining=>goal.state==State::Stopping&&row.stop_reason==body.stop_reason,GrantPhase::Closed|GrantPhase::Revoked=>match(body.recovery.is_some(),body.stop_reason){(true,Some(crate::pet_runtime::leases::StopReason::Cancel))=>goal.state==State::Cancelled,(true,Some(crate::pet_runtime::leases::StopReason::Pause))=>goal.state==State::Paused,_=>!matches!(goal.state,State::Queued|State::Leased|State::Stopping)}};
         snapshot.budget=Some(spec.budget.clone());snapshot.grant=Some(view::Grant{decision_id:body.decision_id.clone(),revision:body.revision.clone(),hash:hash.clone(),phase:match body.phase{GrantPhase::Issued=>"issued",GrantPhase::Claimed=>"claimed",GrantPhase::Waiting=>"waiting",GrantPhase::Draining=>"draining",GrantPhase::Closed=>"closed",GrantPhase::Revoked=>"revoked"},lease:body.lease.clone(),goal_lease_matches:lease_matches,control_projection_current:projection,stop_reason:body.stop_reason,updated_at:body.updated_at,closed_at:body.closed_at,owner});
         snapshot.source_consistent&=lease_matches&&owner_known;
         let inspected=self.reconciliation_evidence_unlocked(goal,row,&body)?;snapshot.attempts=inspected.attempts;snapshot.evidence.extend(inspected.evidence);snapshot.criteria_verified=inspected.criteria_verified;
@@ -31,7 +31,9 @@ impl Authority{
             let evidence=match self.observe_completed_goal(goal){Ok(())=>{snapshot.goal_complete=true;Evidence::verified(K::Completion,goal.id.clone(),&goal.completion)?},Err(e)=>{snapshot.source_consistent=false;Evidence::failed(K::Completion,goal.id.clone(),e)}};snapshot.evidence.push(evidence);
         }
         let model_calls=snapshot.attempts.iter().filter(|a|a.kind=="model").count();let tool_calls=snapshot.attempts.len()-model_calls;let charged=snapshot.attempts.iter().map(|a|a.charged_output_bytes).sum();
-        snapshot.accounting=Some(view::Accounting{scope:"latestAdmission",model_calls_used:model_calls,tool_calls_used:tool_calls,output_bytes_charged:charged,model_calls_remaining:usize::from(spec.budget.max_model_calls).saturating_sub(model_calls),tool_calls_remaining:usize::from(spec.budget.max_tool_calls).saturating_sub(tool_calls),output_bytes_remaining:spec.budget.max_output_bytes.saturating_sub(charged),unknown_attempts:snapshot.attempts.iter().filter(|a|!a.outcome_known).count()});
+        let remaining=body.budget_remaining(&spec.budget).ok_or(Failure::Capacity)?;
+        let delegated_held=if body.delegation_pool.is_some(){Some(body.delegated_held().ok_or(Failure::Capacity)?)}else{None};
+        snapshot.accounting=Some(view::Accounting{delegated_held,scope:"latestAdmission",model_calls_used:model_calls,tool_calls_used:tool_calls,output_bytes_charged:charged,model_calls_remaining:usize::from(remaining.model_calls),tool_calls_remaining:usize::from(remaining.tool_calls),output_bytes_remaining:remaining.output_bytes,unknown_attempts:snapshot.attempts.iter().filter(|a|!a.outcome_known).count()});
         snapshot.scan_complete=owner_known&&snapshot.evidence.iter().chain(snapshot.attempts.iter().flat_map(|a|&a.evidence)).all(|e|!matches!(e.status,S::Invalid|S::Unavailable));
         snapshot.criteria_verified&=snapshot.source_consistent&&snapshot.scan_complete;snapshot.goal_complete&=snapshot.source_consistent&&snapshot.scan_complete;
         let latest=self.load(spec,proof)?;if model::fingerprint(&latest).map_err(|_|Failure::Invalid)?!=hash{return Err(Failure::Changed);}
@@ -51,6 +53,12 @@ impl Authority{
                     attempt.evidence.push(match planning_output::read(self,spec,proof,&a.id){Ok(Some(e))=>Evidence::verified(K::PlanningOutput,a.id.clone(),&e.body)?,Ok(None)=>Evidence::missing(K::PlanningOutput,a.id.clone()),Err(e)=>Evidence::failed(K::PlanningOutput,a.id.clone(),e)});
                 }
             }
+            if a.kind==Kind::Tool{if let Some(receipt)=body.messages.as_ref().and_then(|m|m.entries.iter().find(|r|r.attempt_id==a.id)){
+                // Grant.valid already binds the native origin, receipt and
+                // exact complete-envelope hash to this settled budget attempt.
+                // Known local delivery is not recipient execution or criteria.
+                let mut e=Evidence::verified(K::PeerMessage,receipt.envelope().message_id.clone(),receipt)?;e.effect_verified=Some(true);e.outcome_known=true;attempt.outcome_known=true;attempt.evidence.push(e);
+            }}
             snapshot.attempts.push(attempt);
         }
         if body.lease.is_some(){for plan in &goal.plans{
@@ -64,7 +72,7 @@ impl Authority{
                 match self.step_reconciliation_unlocked(spec,proof,&plan.id,&step.id){
                     Ok(Some((assessment,observed,evidence_hash)))=>{
                         let mut e=Evidence::verified(K::ToolStep,reference.clone(),&assessment.record)?;
-                        if let Some(result)=observed{e.effect_verified=Some(result.observation.effect_verified);e.outcome_known=result.observation.effect_verified||matches!(result.observation.delivery,crate::spotify::goal::Delivery::NotDispatched);}
+                        if let Some(result)=observed{e.effect_verified=Some(result.observation.effect_verified);e.outcome_known=result.observation.effect_verified||matches!(result.observation.delivery,crate::pet_runtime::physical_target::Delivery::NotDispatched);}
                         if let Some(a)=snapshot.attempts.iter_mut().find(|a|a.kind=="tool"&&a.request_id==assessment.record.scope.request_id){a.outcome_known=e.outcome_known;a.evidence.push(e.clone());}
                         snapshot.evidence.push(e);
                         if let Some(hash)=evidence_hash{snapshot.evidence.push(Evidence{kind:K::ToolObservation,reference,status:S::Verified,hash:Some(hash),reason:None,effect_verified:assessment.recovery.recorded_effect_verified,outcome_known:false,criteria_verified:false});}

@@ -25,6 +25,12 @@ impl Owned {
         if self.workers()!=0{return Err(model::Error::Busy);}Ok(PlanGate {owned:self,_guard:guard})
     }
     pub(in crate::pet_runtime)fn publish_generated_plan(&self,store:&Store,request:&str,now:u64)->model::Result<PublicationReceipt> {
+        self.publish_generated_plan_inner(store,request,None,now)
+    }
+    pub(in crate::pet_runtime)fn publish_generated_plan_with_data(&self,store:&Store,request:&str,data:&crate::pet_runtime::peer_round_review::Approved,now:u64)->model::Result<PublicationReceipt>{
+        self.publish_generated_plan_inner(store,request,Some(data),now)
+    }
+    fn publish_generated_plan_inner(&self,store:&Store,request:&str,data:Option<&crate::pet_runtime::peer_round_review::Approved>,now:u64)->model::Result<PublicationReceipt>{
         let gate=self.plan_gate()?;
         if self.workers()!=0||!model::key(request){return Err(model::Error::Busy);}
         let goal=store.read_control(&self.live.spec.goal_id,&self.live.spec.owner.pet_id)?;
@@ -33,6 +39,13 @@ impl Owned {
         let (_,attempt)=authority.result_attempt(&self.live.spec,&self.live.proof,request).map_err(|reason|reason.control_error())?;
         let attempt=attempt.ok_or(model::Error::NotFound)?;
         let output=crate::pet_runtime::planning_output::read(&authority,&self.live.spec,&self.live.proof,&attempt.id).map_err(|reason|reason.control_error())?.ok_or(model::Error::NotFound)?;
+        let journal=authority.planning_ledger(&self.live.spec,&self.live.proof,&self.live.lease,now).map_err(|e|e.control_error())?;
+        let round=journal.rounds.iter().find(|r|r.request_id==request).ok_or(model::Error::NotFound)?;
+        let already_present=goal.generated_plans.iter().any(|r|r.output.attempt_id==attempt.id);
+        if round.peer_data.is_some()&&!already_present{
+            let data=data.ok_or(model::Error::Conflict)?;
+            if data.publication_validity(&authority,&self.live.spec,&self.live.proof,request,now)!=Validity::Current{return Err(model::Error::Conflict);}
+        }
         let certificate=authority.prepare_generated_plan(&self.live.spec,&self.live.proof,&self.live.lease,&goal,&output,&gate,now).map_err(|reason|reason.control_error())?;
         let mut commit=store.commit_generated(&certificate,now)?;
         let acknowledged=if let Some(proof)=&commit.published {authority.acknowledge_generated_plan(&self.live.spec,&self.live.proof,&self.live.lease,&gate,proof,now).is_ok()}else{false};

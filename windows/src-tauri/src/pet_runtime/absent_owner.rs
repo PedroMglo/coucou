@@ -30,4 +30,20 @@ impl AbsentLease{
         Ok(())
     }
     pub(in crate::pet_runtime)fn matches(&self,hash:&str,revision:&str)->bool{self.source.matches(hash,revision)}
+    /// Other authenticated preparations of this same lock may name another
+    /// proposed process. Retain one FD while proving all proposed owners absent.
+    pub(in crate::pet_runtime)fn same_lock_absent(&self,authority:&Authority,other:&Record)->model::Result<()>{
+        self.current(authority)?;let old=self.source.owner();
+        if !other.valid_for(self.source.lease())||other.profile!=old.profile||other.owner_directory!=old.owner_directory||other.owner_lock!=old.owner_lock||other.controller_id!=old.controller_id||other.lease_id!=old.lease_id
+            ||other.process.uid!=old.process.uid||other.process.boot_id!=old.process.boot_id||other.process.pid_namespace!=old.process.pid_namespace||Proc::native()?.process(other.process.pid)?.is_some(){return Err(model::Error::Conflict);}Ok(())
+    }
+    /// Consumed only by the retained, exact native resumption approval. Keep
+    /// the same exclusive FD/inode; never release and reopen the lock in between.
+    pub(in crate::pet_runtime)fn into_resumed_owner(self,authority:&Authority,lease:&Lease,now:u64)->model::Result<OwnerLease>{
+        self.current(authority)?;
+        if self.source.lease()!=lease||now>=lease.deadline_at{return Err(model::Error::Conflict);}
+        let mut record=self.source.owner().clone();record.process=Proc::native()?.current();record.captured_at=now;
+        if !record.valid_for(lease){return Err(model::Error::InvalidRecord);}
+        let owner=OwnerLease{directory:self.directory,lock:self.lock,record};owner.current()?;Ok(owner)
+    }
 }

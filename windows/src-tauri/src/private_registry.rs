@@ -17,12 +17,12 @@ fn private_file(m:&std::fs::Metadata)->bool{m.is_file()&&m.uid()==unsafe{libc::g
 fn digest(bytes:&[u8])->String{ring::digest::digest(&ring::digest::SHA256,bytes).as_ref().iter().map(|b|format!("{b:02x}")).collect()}
 fn absent(error:&std::io::Error)->bool{error.kind()==std::io::ErrorKind::NotFound}
 
-pub(crate)struct WriterLock(pub(crate)File);
+pub(crate)struct WriterLock(pub(crate)File,bool);
 impl WriterLock{
     pub(crate)fn acquire(file:File)->Result<Self,&'static str>{
         if !file.metadata().is_ok_and(|m|private_file(&m)){return Err("invalidRegistryLock");}
         if unsafe{libc::flock(file.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)}!=0{return Err("registryBusy");}
-        Ok(Self(file))
+        Ok(Self(file,true))
     }
 }
 impl Drop for WriterLock{
@@ -31,7 +31,7 @@ impl Drop for WriterLock{
         // closes it at exec, but does not prevent a forked copy retaining the
         // open-file description meanwhile. Explicit unlock releases our
         // writer lease even while such a copy is still alive.
-        unsafe{libc::flock(self.0.as_raw_fd(),libc::LOCK_UN);}
+        if self.1{unsafe{libc::flock(self.0.as_raw_fd(),libc::LOCK_UN);}}
     }
 }
 
@@ -64,6 +64,28 @@ fn operation_lock_guarded(directory:&Directory,name:&str,guard:impl Fn()->Result
         if !directory.current()||stamp(&named.metadata().map_err(|_|"registryUnavailable")?)!=stamp(&lock.0.metadata().map_err(|_|"registryUnavailable")?){return Err("registryChanged");}
         return Ok(lock);
     }Err("registryBusy")
+}
+
+/// Mechanical cooperating-process lifetime, not document authority. Unlike
+/// WriterLock, closing one parent copy must not unlock a surviving child copy.
+pub(crate)struct InheritedLock{file:Arc<File>,directory:Arc<Directory>,name:String,stamp:Stamp}
+impl InheritedLock{
+    pub(crate)fn file(&self)->Arc<File>{self.file.clone()}
+    pub(crate)fn current(&self)->bool{
+        self.directory.current()&&self.file.metadata().is_ok_and(|m|private_file(&m)&&m.len()==0&&stamp(&m)==self.stamp)
+            &&self.directory.open_file(OsStr::new(&self.name),libc::O_PATH,0).and_then(|f|f.metadata()).is_ok_and(|m|private_file(&m)&&stamp(&m)==self.stamp)
+    }
+}
+pub(crate)fn inherited_operation_lock(path:&Path,name:&str)->Result<Arc<InheritedLock>,&'static str>{
+    if !path.is_absolute(){return Err("invalidRegistryDirectory");}
+    let directory=Directory::open(path,false)?.ok_or("registryUnavailable")?;
+    if !directory.file.metadata().is_ok_and(|m|m.mode()&0o077==0){return Err("invalidRegistryDirectory");}
+    let mut lock=operation_lock_in(&directory,name)?;
+    let file=Arc::new(lock.0.try_clone().map_err(|_|"registryUnavailable")?);
+    let original=stamp(&file.metadata().map_err(|_|"registryUnavailable")?);
+    lock.1=false;drop(lock); // Kernel now releases only after the final copy closes.
+    let value=Arc::new(InheritedLock{file,directory,name:name.into(),stamp:original});
+    if !value.current(){return Err("registryChanged");}Ok(value)
 }
 
 struct Directory{path:PathBuf,file:File,device:u64,inode:u64}

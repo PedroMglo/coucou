@@ -2,7 +2,7 @@
 //! recreate these retained approvals, Ready steps, worker or physical target.
 use super::*;
 use super::step_controller::{Review as StepReview,Ready as StepReady};
-use crate::{pet_runtime::{recipes::{self,Scope,Progress,Phase,Outcome,RunResult},steps::Approved as ApprovedStep},spotify::goal::Target};
+use crate::{pet_runtime::{recipes::{self,Scope,Progress,Phase,Outcome,RunResult},steps::Approved as ApprovedStep},pet_runtime::physical_target::Target};
 use serde::Serialize;
 #[derive(Clone,Serialize)]#[serde(rename_all="camelCase")]
 pub struct Proposal{pub scope:Scope,pub goal_revision:String,pub intent:String,pub criteria:Vec<String>,pub steps:Vec<super::step_controller::Proposal>,pub prepared_at:u64,pub expires_at:u64,pub criteria_verified:bool,pub goal_complete:bool}
@@ -14,13 +14,15 @@ impl Proposal {
         serde_json::json!({"scope":self.scope,"goalRevision":self.goal_revision,"intent":self.intent,"criteria":self.criteria,"steps":steps,"preparedAt":self.prepared_at,"expiresAt":self.expires_at,"criteriaVerified":self.criteria_verified,"goalComplete":self.goal_complete})
     }
 }
-pub(in crate::pet_runtime)struct Review{proposal:Proposal,reviews:Vec<StepReview>,target:Arc<Target>}
+pub(in crate::pet_runtime)struct Review{proposal:Proposal,reviews:Vec<StepReview>,target:Target}
 pub(in crate::pet_runtime)struct Approved{scope:Scope}
-pub(in crate::pet_runtime)struct Ready{scope:Scope,steps:Vec<(ApprovedStep,StepReady)>,target:Arc<Target>,observed:Mutex<Option<Observed>>,active:AtomicBool,running:AtomicBool}
+pub(in crate::pet_runtime)struct Ready{scope:Scope,steps:Vec<(ApprovedStep,StepReady)>,target:Target,observed:Mutex<Option<Observed>>,active:AtomicBool,running:AtomicBool,execution_entered:AtomicBool}
 pub(in crate::pet_runtime)struct Observed{report:crate::pet_runtime::criteria::Verification}
 impl Observed{pub(in crate::pet_runtime)fn report(&self)->&crate::pet_runtime::criteria::Verification{&self.report}}
 impl Approved{pub(in crate::pet_runtime)fn scope(&self)->&Scope{&self.scope}}
 impl Ready{
+    /// Observation on this retained object only; never reconstructed authority.
+    pub(in crate::pet_runtime)fn execution_entered(&self)->bool{self.execution_entered.load(Ordering::Acquire)}
     pub(in crate::pet_runtime)fn scope(&self)->&Scope{&self.scope}
     pub(in crate::pet_runtime)fn activate(&self,registered:&Scope)->model::Result<()>{if registered!=&self.scope{return Err(blocked());}self.active.store(true,Ordering::Release);Ok(())}
 }
@@ -31,6 +33,14 @@ impl Review{
     pub(in crate::pet_runtime)fn approve_decision(self,decision:crate::pet_runtime::recipe_decisions::Decision,owner:&Owned,goal:&Record,config:&crate::pet_config::Configuration,now:u64)->model::Result<(Approved,Ready)>{
         if !decision.approved()||!decision.matches(&self.proposal,goal,owner,now){return Err(blocked());}self.approve(owner,goal,config,now)
     }
+    /// Derive only the exact finite recipe already covered by the native signed
+    /// admission. This cannot approve generated plans, grant access or add start.
+    pub(in crate::pet_runtime)fn approve_native_system_plan(self,owner:&Owned,goal:&Record,config:&crate::pet_config::Configuration,now:u64)->model::Result<(Approved,Ready)>{
+        let spec=&owner.live.spec;
+        let policy=spec.native_system_plan.as_ref().ok_or(blocked())?;
+        if !spec.binding_format()||!spec.native_system_requested()||!policy.matches(goal,spec)||!policy.target_matches(&self.target)||!policy.targets_current(config)||self.proposal.scope.verification!=spec.native_verification||self.proposal.scope.plan_id!=policy.steps[0].cause.plan_id||self.proposal.steps.len()!=policy.steps.len(){return Err(blocked());}
+        self.approve(owner,goal,config,now)
+    }
     pub(in crate::pet_runtime)fn proposal(&self)->Proposal{self.proposal.clone()}
     pub(in crate::pet_runtime)fn approve(self,owner:&Owned,goal:&Record,config:&crate::pet_config::Configuration,now:u64)->model::Result<(Approved,Ready)>{
         if goal.revision!=self.proposal.goal_revision||now<self.proposal.prepared_at||now>=self.proposal.expires_at||!self.proposal.scope.matches(goal){return Err(blocked());}
@@ -40,29 +50,30 @@ impl Review{
         if !scope.belongs(&owner.live.spec,&owner.live.lease)||!scope.matches(goal){return Err(blocked());}
         let authority=Authority::existing(&owner.live.authority_path).map_err(|_|blocked())?;
         authority.recipe_headroom(&owner.live.spec,&owner.live.proof,&owner.live.lease,steps.len(),scope.steps.iter().map(|s|s.max_output_bytes).sum(),now).map_err(|_|model::Error::LimitReached)?;
-        Ok((Approved{scope:scope.clone()},Ready{scope,steps,target:self.target,observed:Mutex::new(None),active:AtomicBool::new(false),running:AtomicBool::new(false)}))
+        Ok((Approved{scope:scope.clone()},Ready{scope,steps,target:self.target,observed:Mutex::new(None),active:AtomicBool::new(false),running:AtomicBool::new(false),execution_entered:AtomicBool::new(false)}))
     }
 }
 impl Owned{
     /// Resolve exactly the same native binding for a cached/shared approval as
     /// for a new review. Empty generated-plan input selects its signed mapping.
     pub(in crate::pet_runtime)fn recipe_input_binding(&self,goal:&Record,plan:&str,input:&[crate::pet_runtime::criteria::Input])->model::Result<Option<crate::pet_runtime::criteria::Binding>> {
-        if self.live.spec.schema_version==3 {
+        if self.live.spec.system(){let b=self.live.spec.native_verification.clone().ok_or(blocked())?;if !input.is_empty()&&crate::pet_runtime::criteria::Binding::system_for(goal,input)?!=b{return Err(blocked());}return Ok(Some(b));}
+        if self.live.spec.planning() {
             let authority=Authority::existing(&self.live.authority_path).map_err(|_|blocked())?;
             let (_,candidate)=authority.generated_candidate(&self.live.spec,&self.live.proof,&self.live.lease,goal,plan).map_err(|_|blocked())?;
             if !input.is_empty()&&crate::pet_runtime::criteria::Binding::bind(goal,input)?!=candidate.verification{return Err(blocked());}Ok(Some(candidate.verification))
         }else if input.is_empty(){Ok(None)}else{Ok(Some(crate::pet_runtime::criteria::Binding::bind(goal,input)?))}
     }
-    #[cfg(test)]pub(in crate::pet_runtime)fn review_recipe(&self,goal:&Record,plan_id:&str,request:&str,target:Arc<Target>,config:&crate::pet_config::Configuration,now:u64)->model::Result<Review>{
+    #[cfg(test)]pub(in crate::pet_runtime)fn review_recipe(&self,goal:&Record,plan_id:&str,request:&str,target:impl Into<Target>,config:&crate::pet_config::Configuration,now:u64)->model::Result<Review>{
         self.review_recipe_with_criteria(goal,plan_id,request,target,config,&[],now)
     }
-    pub(in crate::pet_runtime)fn review_recipe_with_criteria(&self,goal:&Record,plan_id:&str,request:&str,target:Arc<Target>,config:&crate::pet_config::Configuration,criteria:&[crate::pet_runtime::criteria::Input],now:u64)->model::Result<Review>{
-        self.step_goal(goal,config,now)?;if !model::key(request){return Err(model::Error::InvalidInput);}
-        let generated=if self.live.spec.schema_version==3{
+    pub(in crate::pet_runtime)fn review_recipe_with_criteria(&self,goal:&Record,plan_id:&str,request:&str,target:impl Into<Target>,config:&crate::pet_config::Configuration,criteria:&[crate::pet_runtime::criteria::Input],now:u64)->model::Result<Review>{
+        let target=target.into();self.step_goal(goal,config,now)?;if !model::key(request){return Err(model::Error::InvalidInput);}
+        let generated=if self.live.spec.planning(){
             let authority=Authority::existing(&self.live.authority_path).map_err(|_|blocked())?;
             Some(authority.generated_candidate(&self.live.spec,&self.live.proof,&self.live.lease,goal,plan_id).map_err(|_|blocked())?)
         }else{None};
-        let verification=if let Some((_,candidate))=&generated{
+        let verification=if self.live.spec.system(){self.recipe_input_binding(goal,plan_id,criteria)?}else if let Some((_,candidate))=&generated{
             if !criteria.is_empty()&&crate::pet_runtime::criteria::Binding::bind(goal,criteria)?!=candidate.verification{return Err(blocked());}
             Some(candidate.verification.clone())
         }else if criteria.is_empty(){None}else{Some(crate::pet_runtime::criteria::Binding::bind(goal,criteria)?)};
@@ -78,7 +89,7 @@ impl Owned{
         let proposed:Vec<_>=reviews.iter().map(StepReview::proposal).collect();let scopes:Vec<_>=proposed.iter().map(|p|p.scope.clone()).collect();
         let generated_plan=generated.map(|(reference,_)|reference);
         let proposal_hash=if generated_plan.is_some(){crate::pet_runtime::plans::fingerprint(goal)?}else{self.live.spec.proposal_hash.clone().ok_or(blocked())?};
-        let scope=Scope{schema_version:if generated_plan.is_some(){3}else if verification.is_some(){2}else{1},generated_plan,id:nonce()?,request_id:request.into(),goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),provider:goal.spec.owner.provider.clone(),decision_id:self.live.spec.decision_id.clone(),lease_id:self.live.lease.id.clone(),controller_id:self.live.lease.controller_id.clone(),plan_id:plan_id.into(),proposal_hash,approved_at:now,deadline_at:self.live.lease.deadline_at,steps:scopes,verification};
+        let scope=Scope{schema_version:if self.live.spec.schema_version==28{6}else if self.live.spec.system(){5}else if generated_plan.is_some(){3}else if target.binding().sound().is_some(){4}else if verification.is_some(){2}else{1},generated_plan,id:nonce()?,request_id:request.into(),goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),provider:goal.spec.owner.provider.clone(),decision_id:self.live.spec.decision_id.clone(),lease_id:self.live.lease.id.clone(),controller_id:self.live.lease.controller_id.clone(),plan_id:plan_id.into(),proposal_hash,approved_at:now,deadline_at:self.live.lease.deadline_at,steps:scopes,verification};
         if !scope.belongs(&self.live.spec,&self.live.lease)||!scope.matches(goal){return Err(blocked());}
         let expires_at=now.saturating_add(120_000).min(scope.deadline_at);
         let proposal=Proposal{scope,goal_revision:goal.revision.clone(),intent:goal.spec.intent.clone(),criteria:goal.spec.criteria.clone(),steps:proposed,prepared_at:now,expires_at,criteria_verified:false,goal_complete:false};
@@ -105,6 +116,8 @@ impl Owned{
         let worker=self.readiness_worker(crate::assistant_memory::now())?;
         let first=ready.scope.steps.first().ok_or(blocked())?;let key=super::step_controller::resource_key(&first.resource)?;
         let resource=self.live.chat.runtime_resources().acquire(&key,Arc::new(AtomicBool::new(false)),Some(self.live.deadline)).map_err(|_|model::Error::Busy)?;
+        // Below this point an effect or its receipt can become uncertain.
+        ready.execution_entered.store(true,Ordering::Release);
         for(approved,step)in &ready.steps{
             if !worker.in_flight_current(crate::assistant_memory::now())||!resource.current(){return Ok(RunResult{outcome:Outcome::Invalidated,progress,completion:None});}
             let stored=authority.read_step_assessment(&self.live.spec,&self.live.proof,&step.scope.plan_id,&step.scope.step_id).map_err(|_|model::Error::StorageUnavailable)?;
@@ -122,28 +135,39 @@ impl Owned{
         progress=self.recipe_progress(authority,ready)?;
         if progress.phase==Phase::Verified&&ready.scope.verification.is_some(){
             let mut captured=ready.observed.lock().map_err(|_|model::Error::StorageUnavailable)?;
-            if captured.is_none(){*captured=Some(self.observe_final(goal,ready,&resource,&worker)?);}
+            if captured.is_none(){*captured=Some(self.observe_final(goal,ready,authority,&resource,&worker)?);}
             let observed=captured.as_ref().ok_or(blocked())?;
             if authority.record_verification(&self.live.spec,&self.live.proof,&self.live.lease,&ready.scope,observed,crate::assistant_memory::now()).is_err(){return Ok(RunResult{outcome:Outcome::RecoveryRequired,progress,completion:None});}
             progress=self.recipe_progress(authority,ready)?;notify(&progress);
         }
         Ok(RunResult{outcome:if progress.phase==Phase::Verified{Outcome::Verified}else{Outcome::Blocked},progress,completion:None})
     }
-    fn observe_final(&self,goal:&Record,ready:&Ready,resource:&crate::pet_resources::Hold,worker:&WorkerGuard)->model::Result<Observed>{
+    fn observe_final(&self,goal:&Record,ready:&Ready,authority:&Authority,resource:&crate::pet_resources::Hold,worker:&WorkerGuard)->model::Result<Observed>{
         use crate::pet_runtime::criteria::{Verification,CompletionRef,CriterionResult,Status};
         let binding=ready.scope.verification.as_ref().ok_or(blocked())?;
         if !binding.matches(goal){return Err(blocked());}let expected=&ready.scope.steps.first().ok_or(blocked())?.resource;
         let current=worker.in_flight_current(crate::assistant_memory::now())&&resource.current()&&ready.target.binding()==expected;
-        let snapshot=if current{ready.target.read().ok()}else{None};
+        let original_artifact=ready.scope.steps.len()==1&&matches!(ready.scope.steps[0].operation_id.as_str(),"system.health.baseline"|"system.inventory.observe");
+        let snapshot=if current&&original_artifact{
+            // This predicate verifies the original measured artifact, not a new
+            // measurement performed by the verifier outside its tool budget.
+            let step=&ready.scope.steps[0];
+            if !ready.target.identity_current(&||worker.in_flight_current(crate::assistant_memory::now())&&resource.current()){None}else{
+                authority.read_step_assessment(&self.live.spec,&self.live.proof,&step.plan_id,&step.step_id).map_err(|_|blocked())?.and_then(|a|{
+                    if a.record.scope!=*step||a.record.phase!=crate::pet_runtime::steps::Phase::Finished{return None;}
+                    a.record.result.filter(|r|r.observation.effect_verified&&r.observation.scope_current).and_then(|r|r.observation.after).filter(|s|matches!(s,super::super::physical_target::Snapshot::HealthBaseline(_)|super::super::physical_target::Snapshot::Inventory(_))&&s.matches_resource(expected))
+                })
+            }
+        }else if current{ready.target.read_with(&||worker.in_flight_current(crate::assistant_memory::now())&&resource.current()).ok()}else{None};
         let scope_current=current&&snapshot.is_some()&&worker.in_flight_current(crate::assistant_memory::now())&&resource.current();
         let results=goal.spec.criteria.iter().enumerate().map(|(i,text)|{
             let condition=binding.conditions.iter().find(|c|c.criterion_index as usize==i);
-            let status=match(condition,snapshot.as_ref(),scope_current){(Some(c),Some(s),true)=>if c.predicate.matches(s){Status::Met}else{Status::Unmet},_=>Status::Unknown};
+            let status=match(condition,snapshot.as_ref(),scope_current){(Some(c),Some(s),true)=>c.predicate.target_status(s),_=>Status::Unknown};
             Ok(CriterionResult{criterion_index:i as u32,criterion_hash:model::fingerprint(text)?,status})
         }).collect::<model::Result<Vec<_>>>()?;
         let criteria_verified=scope_current&&results.iter().all(|r|r.status==Status::Met);let now=crate::assistant_memory::now();
-        let reference=CompletionRef{schema_version:1,goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),recipe_id:ready.scope.id.clone(),decision_id:self.live.spec.decision_id.clone(),lease_id:self.live.lease.id.clone(),plan_id:ready.scope.plan_id.clone(),source_revision:goal.revision.clone(),target_revision:nonce()?,report_hash:String::new(),observed_at:snapshot.as_ref().map(|s|s.observed_at).unwrap_or(0)};
-        let mut report=Verification{schema_version:1,reference,recipe_hash:model::fingerprint(&ready.scope)?,spec_hash:model::fingerprint(&goal.spec)?,source_sequence:goal.sequence,source_updated_at:goal.updated_at,source_record_hash:model::fingerprint(goal)?,snapshot,scope_current,recorded_at:now,results,criteria_verified};
+        let reference=CompletionRef{source:None,schema_version:1,goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),recipe_id:ready.scope.id.clone(),decision_id:self.live.spec.decision_id.clone(),lease_id:self.live.lease.id.clone(),plan_id:ready.scope.plan_id.clone(),source_revision:goal.revision.clone(),target_revision:nonce()?,report_hash:String::new(),observed_at:snapshot.as_ref().map(|s|s.observed_at()).unwrap_or(0)};
+        let mut report=Verification{schema_version:if ready.scope.schema_version==6{4}else if ready.scope.schema_version==5{3}else if ready.scope.schema_version==4{2}else{1},reference,recipe_hash:model::fingerprint(&ready.scope)?,spec_hash:model::fingerprint(&goal.spec)?,source_sequence:goal.sequence,source_updated_at:goal.updated_at,source_record_hash:model::fingerprint(goal)?,snapshot,scope_current,recorded_at:now,results,criteria_verified};
         report.reference.report_hash=report.content_hash()?;if !report.valid_for(&ready.scope){return Err(blocked());}Ok(Observed{report})
     }
     pub(in crate::pet_runtime)fn run_recipe_for_store(&self,store:&Store,goal:&Record,ready:&Ready,configuration:impl FnMut()->model::Result<crate::pet_config::Configuration>,notify:impl FnMut(&Progress))->model::Result<RunResult>{

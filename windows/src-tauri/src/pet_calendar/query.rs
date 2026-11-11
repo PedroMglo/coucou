@@ -1,6 +1,6 @@
 //! A read-only tool sealed to the source and authority captured by a Note.
 use super::{unavailable, Value, MAX_PROMPT};
-use serde::Deserialize;
+use serde::{Deserialize,Serialize};
 use serde_json::json;
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 
@@ -8,7 +8,7 @@ pub(crate) const NAME: &str = "calendar_query";
 const MAX_CALLS: usize = 8;
 const MAX_TOTAL: usize = 128 * 1024;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Query {
     pub start: String,

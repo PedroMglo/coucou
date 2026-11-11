@@ -31,14 +31,18 @@ impl Pending{
     pub(in crate::pet_runtime)fn confirm_with_data<G>(&self,store:&Store,authority_path:&Path,approve:bool,memory_consent:Option<crate::pet_memory::context_model::GoalConsent>,
         observe:impl Fn(&Record,u64)->model::Result<std::result::Result<(Evidence,G),Denial>>,
         clock:impl Fn()->u64)->model::Result<ConfirmResult>{
+        self.confirm_with_scopes(store,authority_path,approve,memory_consent,None,observe,clock)
+    }
+    pub(in crate::pet_runtime)fn confirm_with_scopes<G>(&self,store:&Store,authority_path:&Path,approve:bool,memory_consent:Option<crate::pet_memory::context_model::GoalConsent>,disclosure_consent:Option<crate::pet_runtime::work_disclosure::Consent>,observe:impl Fn(&Record,u64)->model::Result<std::result::Result<(Evidence,G),Denial>>,clock:impl Fn()->u64)->model::Result<ConfirmResult>{
         let mut native=self.native.try_lock().map_err(|e|match e{std::sync::TryLockError::WouldBlock=>Error::Busy,_=>Error::StorageUnavailable})?;
         if matches!(*native,Native::Ended){return Err(Error::Conflict);}
+        if matches!(*native,Native::Review(_))&&!self.origin.frame.current(){*native=Native::Ended;return Err(Error::Conflict);}
         if let Native::Approved{approved,authority,..}=&*native{
             match store.admission_ack(authority,approved){Ok(Some(receipt))=>return Ok(published(&mut native,receipt)),Ok(None)=>{},Err(error)=>return storage_error(error)}
         }
         if !approve{return end(&mut native,store,clock(),None);}
         if let Native::Review(review)=&*native{
-            if let Err(reason)=review.data_consent_current(memory_consent,clock()){
+            if let Err(reason)=review.data_consent_current(memory_consent,clock()).and_then(|_|review.disclosure_consent_current(disclosure_consent,clock())){
                 return if reason==Denial::Expired{end(&mut native,store,clock(),Some(reason))}else{Ok(ConfirmResult::Blocked{reason,retryable:false})};
             }
         }
@@ -49,14 +53,19 @@ impl Pending{
             Err(reason)=>return end(&mut native,store,clock(),Some(reason)),
         };
         if let Native::Review(review)=&*native{
+            if !self.origin.frame.current(){*native=Native::Ended;return Err(Error::Conflict);}
             if let Err(reason)=review.confirmation_current(&goal,&observation,clock()){
                 return if temporary(reason){Ok(ConfirmResult::Blocked{reason,retryable:true})}else{end(&mut native,store,clock(),Some(reason))};
             }
             // Capture the actual authority once. Later retry cannot adopt a new
             // key, directory or profile after a replaced/lost authority source.
             let authority=if review.has_native_authority(){None}else{Some(match Authority::ensure(authority_path){Ok(a)=>a,Err(reason)=>return Ok(authority_blocked(reason))})};
+            if !self.origin.frame.current(){*native=Native::Ended;return Err(Error::Conflict);}
             let Native::Review(review)=std::mem::replace(&mut*native,Native::Ended)else{return Err(Error::Conflict);};
-            let mut approved=match review.approve_with_data(&goal,observation,memory_consent,clock()){Ok(a)=>a,Err(reason)=>return Ok(ConfirmResult::Blocked{reason,retryable:false})};
+            let mut approved=match review.approve_with_scopes(&goal,observation,memory_consent,disclosure_consent,clock()){Ok(a)=>a,Err(reason)=>return Ok(ConfirmResult::Blocked{reason,retryable:false})};
+            // Approval construction only captures typed state/data; no grant is
+            // issued yet. This is the exact human-choice consumption point.
+            if !self.origin.frame.current(){return Err(Error::Conflict);}
             let authority=approved.take_native_authority().or(authority).ok_or(Error::Conflict)?;
             *native=Native::Approved{approved,authority,acknowledged:false};
         }else if let Native::Approved{approved,..}=&*native{

@@ -1,3 +1,4 @@
+import {buildRelayApprovalRouting} from './relay-approvals';
 import {buildShortcutReconciliation} from './shortcuts-reconciliation';
 import {SettingsRequestIntent} from './request-intent';
 // The Coucou window (settings.html): Flow dictation, the Notetaker and, under
@@ -606,6 +607,7 @@ function chatProvidersSection(
     });
     list.append(h("div", { class: "row" }, h("label", { text: provider.name }), connect), status);
   }
+  list.append(buildRelayApprovalRouting({read:()=>Bridge.relayExternalApprovalStatus(),change:request=>Bridge.relayExternalApprovalSet(request)}).el);
   const workspace = h("input", { type: "text", value: settings.cliWorkspace, placeholder: t("Home folder"), style: "flex:1" }) as HTMLInputElement;
   workspace.addEventListener("change", () => { settings.cliWorkspace = workspace.value.trim(); void save().catch(Bridge.reportSettingsError); });
   list.append(h("div", { class: "row" }, h("label", { text: t("Working folder") }), workspace));

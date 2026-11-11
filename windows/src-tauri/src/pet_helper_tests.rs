@@ -141,11 +141,29 @@ const FAMILY:&str="import os,pathlib,signal,sys,time\np=os.fork()\nif p==0:\n si
 
 #[tokio::test]async fn helper_lifecycle_early_exit_does_not_claim_all_speech_input_was_delivered(){
     let resources=Arc::default();let speech=session(&resources,Lane::SpeechOutput,2000);
-    // A fast exit can still buffer every byte. Close the child's read endpoint
-    // in pre_exec, before spawn acknowledges exec, to prove a broken pipe.
+    // Other concurrently forking tests can briefly inherit a reader, even
+    // though this child closes stdin before exec. Bound pipe capacity below
+    // the payload, and attest that setup, so buffering cannot imply delivery.
+    use std::os::fd::{FromRawFd,AsRawFd,OwnedFd};
+    let mut pipe=[-1;2];assert_eq!(unsafe{libc::pipe2(pipe.as_mut_ptr(),libc::O_CLOEXEC)},0);
+    let mut report=std::fs::File::from(unsafe{OwnedFd::from_raw_fd(pipe[0])});
+    let setup=unsafe{OwnedFd::from_raw_fd(pipe[1])};
+    nonblocking(report.as_raw_fd()).unwrap();
     let mut closed=command("/usr/bin/true",&[]);
-    unsafe{closed.pre_exec(||{libc::close(libc::STDIN_FILENO);Ok(())});}
-    assert!(speech.run_input(closed,Some(vec![b'x';64*1024]),16,Duration::from_secs(1),||Ok(()),Arc::new(||true)).await.is_err());drop(speech);drained(&resources).await;
+    unsafe{closed.pre_exec(move||{
+        let capacity=libc::fcntl(libc::STDIN_FILENO,libc::F_SETPIPE_SZ,4096);
+        if capacity<=0||capacity>=64*1024{return Err(std::io::Error::from_raw_os_error(libc::EINVAL));}
+        if libc::close(libc::STDIN_FILENO)!=0{return Err(std::io::Error::last_os_error());}
+        let bytes=capacity.to_ne_bytes();
+        if libc::write(setup.as_raw_fd(),bytes.as_ptr().cast(),bytes.len())!=bytes.len()as isize{return Err(std::io::Error::from_raw_os_error(libc::EIO));}Ok(())
+    });}
+    assert!(speech.run_input(closed,Some(vec![b'x';64*1024]),16,Duration::from_secs(1),||Ok(()),Arc::new(||true)).await.is_err());
+    let mut bytes=[0;4];let mut read=0;let end=Instant::now()+Duration::from_secs(2);
+    while read<bytes.len(){assert!(Instant::now()<end,"private fixture setup deadline");match report.read(&mut bytes[read..]){
+        Ok(0)=>panic!("fixture setup did not close and constrain the input"),Ok(n)=>read+=n,
+        Err(e)if e.kind()==std::io::ErrorKind::WouldBlock=>tokio::time::sleep(Duration::from_millis(2)).await,Err(e)=>panic!("private fixture receipt: {e}"),
+    }}
+    assert!((1..64*1024).contains(&i32::from_ne_bytes(bytes)));drop(speech);drained(&resources).await;
 }
 
 #[tokio::test]async fn helper_lifecycle_revoke_during_backpressured_speech_input_keeps_family_owned_until_reaped(){
@@ -153,4 +171,10 @@ const FAMILY:&str="import os,pathlib,signal,sys,time\np=os.fork()\nif p==0:\n si
     let cmd=python(FAMILY,&marker);let task=tokio::spawn(async move{speech.run_input(cmd,Some(vec![b'x';64*1024]),64,Duration::from_secs(3),||Ok(()),Arc::new(move||a.load(Ordering::Acquire))).await});
     until(||marker.exists()&&std::fs::read_to_string(&marker).is_ok_and(|v|v.split_whitespace().count()==2)).await;let ids=pids(&marker);
     assert!(Session::acquire_on(resources.clone(),Lane::SpeechOutput,Duration::from_secs(1)).is_err());alive.store(false,Ordering::Release);assert!(task.await.unwrap().is_err());drained(&resources).await;assert!(ids.iter().all(|id|gone(*id)));
+}
+
+#[test]fn helper_authority_that_waits_past_deadline_cannot_admit_preflight_or_spawn(){
+ let f=Fixture::new();let marker=f.file("expired-authority-no-effect");let resources=Arc::default();let session=session(&resources,Lane::ClipboardRead,1000);let preflight=AtomicBool::new(false);
+ let result=session.run_sync_input(python("import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('effect')",&marker),None,64,Duration::from_millis(10),||{preflight.store(true,Ordering::Release);Ok(())},&||{std::thread::sleep(Duration::from_millis(30));true});
+ assert!(result.is_err());assert!(!preflight.load(Ordering::Acquire));assert!(!marker.exists());assert!(Session::acquire_on(resources,Lane::ClipboardRead,Duration::from_secs(1)).is_ok());
 }

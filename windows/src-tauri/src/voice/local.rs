@@ -178,13 +178,17 @@ impl Brain {
         };
         let usage_origin = chat.usage_capture_origin(&turn);
         let _lease=chat.lease(&turn).broadcast(app,transcript);
+        let captured=turn.captured_inference();
+        if let Some(c)=&captured{if c.adapter!="ollama"||c.check().is_err(){return Some(Reply{text:"Este percurso de comandos de voz requer o motor Ollama capturado. O pet foi preservado; não foi usado outro motor.".into(),acted:false,language:None});}}
+        let configuration=captured.as_ref().map(|c|c.configuration.as_ref()).unwrap_or(configuration);
         let identity = match chat.capture_local_identity(&turn, configuration, "ai_ollama") {
             Ok(identity) => identity,
             Err(text) => return Some(Reply { text, acted: false, language: None }),
         };
-        let requested=chat::model_for(settings,"ollama");
+        let requested=if captured.as_ref().is_some_and(|c|c.explicit.is_some()){"@default".into()}else{chat::model_for(settings,"ollama")};
         let selection=configuration.select("ollama",&requested,transcript).ok()?;
         let mut selected_settings=settings.clone();selected_settings.chat_models.insert("ollama".into(),selection.model.clone());
+        if let Some(c)=&captured{selected_settings.ollama_url=c.endpoint.clone();}
         let (url,model)=config(&selected_settings)?;
         let thinking=selection.mode=="reasoning";let selected_profile=Some(selection);
         let attachments=crate::pet_documents::contexts(identity.owner(),identity.conversation_id());
@@ -202,7 +206,7 @@ impl Brain {
         let base=crate::local_chat::user_text(turn.first,ordinary.as_ref(),transcript);
         let user_text=crate::pet_calendar::prepend_text(calendar.as_ref(),base);
         let user=json!({"role": "user", "content": user_text});
-        let context_current=||{current()?;documents.validate()?;crate::pet_calendar::validate(calendar.as_ref())};
+        let context_current=||{current()?;turn.check_inference()?;documents.validate()?;crate::pet_calendar::validate(calendar.as_ref())};
         let mut messages = vec![json!({"role": "system", "content": system})];
         messages.extend(turn.history.iter().cloned());messages.push(user.clone());
         if documents.validate_contents_blocking().and_then(|_|context_current()).is_err() { return None; }

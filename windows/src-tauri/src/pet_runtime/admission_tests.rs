@@ -11,7 +11,7 @@ impl Fixture{
  }
  pub(super)fn goal_named_criteria(&self,provider:&str,request:&str,criteria:Vec<String>)->Record{
   let pet=crate::pet_config::pet_id(provider).unwrap();let adapter=crate::pet_config::blueprint(pet).unwrap().runtime.adapter.unwrap().key();
-  let spec=Spec{restored_from:None,request_id:request.into(),owner:Owner{pet_id:pet.into(),provider:provider.into(),adapter:adapter.into(),model_hint:None},context:Context::Unbound,intent:"Original complete intent".into(),criteria};
+  let spec=Spec{received_from:None,restored_from:None,request_id:request.into(),owner:Owner{pet_id:pet.into(),provider:provider.into(),adapter:adapter.into(),model_hint:None},context:Context::Unbound,intent:"Original complete intent".into(),criteria};
   let store=self.store();let g=store.create(spec,100_000).unwrap().record;let main=Chat::persistent(self.path.join("main.json"));let(b,c)=context::prepare(&self.path.join("contexts"),&g,&main,PreparationMode::Dedicated,"context").unwrap();drop(c);
   store.mutate(&g.id,pet,&g.revision,"context".into(),Action::BindContext{binding:b},100_001).unwrap().record
  }
@@ -71,8 +71,8 @@ fn err<T>(r:std::result::Result<T,Denial>,e:Denial){assert_eq!(r.err(),Some(e));
  r=f.store().mutate(&g.id,"agent_codex",&r.revision,"cancel".into(),Action::Cancel,100_010).unwrap().record;assert_eq!(r.state,State::Cancelled);assert_eq!(r.admissions[1].phase,QueuePhase::Cancelled);assert!(r.validate().is_ok());
 }
 #[test]fn review_tokens_are_scoped_single_use_and_retries_do_not_reset_deadlines(){
- let f=Fixture::new();let g=f.goal("codex");let mut cache=Reviews::default();let ticket=cache.insert("window",review(&g,"queue",100_002),nonce().unwrap(),100_002).unwrap();let retry=cache.insert("window",review(&g,"queue",100_003),nonce().unwrap(),100_003).unwrap();assert_eq!(ticket.token,retry.token);assert_eq!(ticket.proposal.expires_at,retry.proposal.expires_at);
- let input=ConfirmInput{memory_consent:None,pet_id:g.spec.owner.pet_id.clone(),goal_id:g.id.clone(),revision:g.revision.clone(),token:ticket.token,approve:true};assert!(cache.take("foreign",&input,100_004).is_err());let review=cache.take("window",&input,100_004).unwrap();assert!(cache.take("window",&input,100_004).is_err());assert!(review.approve(&g,evidence(&g,100_004),100_004).is_ok());
+ let f=Fixture::new();let g=f.goal("codex");let mut cache=Reviews::default();let ticket=cache.insert(&cache.origin_for_test("window"),review(&g,"queue",100_002),nonce().unwrap(),100_002).unwrap();let retry=cache.insert(&cache.origin_for_test("window"),review(&g,"queue",100_003),nonce().unwrap(),100_003).unwrap();assert_eq!(ticket.token,retry.token);assert_eq!(ticket.proposal.expires_at,retry.proposal.expires_at);
+ let input=ConfirmInput{disclosure_consent:None,memory_consent:None,pet_id:g.spec.owner.pet_id.clone(),goal_id:g.id.clone(),revision:g.revision.clone(),token:ticket.token,approve:true};assert!(cache.take(&cache.origin_for_test("foreign"),&input,100_004).is_err());let review=cache.take(&cache.origin_for_test("window"),&input,100_004).unwrap();assert!(cache.take(&cache.origin_for_test("window"),&input,100_004).is_err());assert!(review.approve(&g,evidence(&g,100_004),100_004).is_ok());
 }
 #[test]fn all_configured_native_pet_and_service_queue_owners_remain_independent(){
  let f=Fixture::new();for provider in ["codex","copilot","antigravity","ollama","integration_notion"]{let g=f.goal(provider);let r=f.store().enqueue(&approved(&g,"queue"),100_004).unwrap().record;assert_eq!(r.admissions[0].spec.owner.provider,provider);assert_eq!(r.admissions[0].spec.context.provider,provider);}assert_eq!(f.store().list(None).unwrap().goals.len(),5);
@@ -84,14 +84,14 @@ fn err<T>(r:std::result::Result<T,Denial>,e:Denial){assert_eq!(r.err(),Some(e));
 }
 
 #[test]fn review_origin_target_and_expiration_cannot_be_reused(){
- let f=Fixture::new();let g=f.goal("codex");let mut cache=Reviews::default();let ticket=cache.insert("window",review(&g,"queue",100_002),nonce().unwrap(),100_002).unwrap();
- let mut input=ConfirmInput{memory_consent:None,pet_id:"agent_copilot".into(),goal_id:g.id.clone(),revision:g.revision.clone(),token:ticket.token.clone(),approve:true};assert!(cache.take("window",&input,100_003).is_err());input.pet_id=g.spec.owner.pet_id.clone();assert!(cache.take("window",&input,ticket.proposal.expires_at).is_err());assert!(cache.take("window",&input,100_003).is_err());
+ let f=Fixture::new();let g=f.goal("codex");let mut cache=Reviews::default();let ticket=cache.insert(&cache.origin_for_test("window"),review(&g,"queue",100_002),nonce().unwrap(),100_002).unwrap();
+ let mut input=ConfirmInput{disclosure_consent:None,memory_consent:None,pet_id:"agent_copilot".into(),goal_id:g.id.clone(),revision:g.revision.clone(),token:ticket.token.clone(),approve:true};assert!(cache.take(&cache.origin_for_test("window"),&input,100_003).is_err());input.pet_id=g.spec.owner.pet_id.clone();assert!(cache.take(&cache.origin_for_test("window"),&input,ticket.proposal.expires_at).is_err());assert!(cache.take(&cache.origin_for_test("window"),&input,100_003).is_err());
 }
 #[test]fn review_capacity_refuses_new_entries_without_evicting_live_decisions(){
  let f=Fixture::new();let g=f.goal("codex");let mut cache=Reviews::default();let mut first=None;
- for n in 0..64{let ticket=cache.insert(&format!("window-{n}"),review(&g,&format!("queue-{n}"),100_002),nonce().unwrap(),100_002).unwrap();if n==0{first=Some(ticket);}}
- assert!(matches!(cache.insert("overflow",review(&g,"overflow",100_002),nonce().unwrap(),100_002),Err(Error::LimitReached)));
- let t=first.unwrap();let input=ConfirmInput{memory_consent:None,pet_id:g.spec.owner.pet_id.clone(),goal_id:g.id.clone(),revision:g.revision.clone(),token:t.token,approve:false};assert!(cache.take("window-0",&input,100_003).is_ok());
+ for n in 0..64{let ticket=cache.insert(&cache.origin_for_test(&format!("window-{n}")),review(&g,&format!("queue-{n}"),100_002),nonce().unwrap(),100_002).unwrap();if n==0{first=Some(ticket);}}
+ assert!(matches!(cache.insert(&cache.origin_for_test("overflow"),review(&g,"overflow",100_002),nonce().unwrap(),100_002),Err(Error::LimitReached)));
+ let t=first.unwrap();let input=ConfirmInput{disclosure_consent:None,memory_consent:None,pet_id:g.spec.owner.pet_id.clone(),goal_id:g.id.clone(),revision:g.revision.clone(),token:t.token,approve:false};assert!(cache.take(&cache.origin_for_test("window-0"),&input,100_003).is_ok());
 }
 #[test]fn admission_history_limit_preserves_intent_and_all_previous_decisions(){
  let f=Fixture::new();let mut r=f.goal("codex");let original=r.spec.clone();let mut now=100_002;

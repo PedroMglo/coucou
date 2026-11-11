@@ -21,7 +21,7 @@ fn merge(base:&mut Value,overlay:&Value)->Result<(),String>{
  use super::*;
  fn source()->Value{serde_json::from_str(include_str!("../pets.factory.json")).unwrap()}
  #[test]fn catalog_covers_native_identities_without_conflating_logical_owners(){
-  assert_eq!(blueprints().count(),25);
+  assert_eq!(blueprints().count(),26);
   for p in blueprints(){
    for provider in [&p.routing.chat,&p.routing.voice,&p.routing.task_provider].into_iter().flatten(){assert_eq!(for_provider(provider),Some(p.id.as_str()));}
    if let Some(provider)=&p.routing.task_provider{assert_eq!(for_task_provider(provider),Some(p.id.as_str()));}
@@ -46,7 +46,7 @@ fn merge(base:&mut Value,overlay:&Value)->Result<(),String>{
  }
  #[test]fn adding_a_service_owner_uses_the_existing_adapter_contract(){
   let mut s=source();let mut p=s["pets"]["integration_notion"].clone();for k in ["chat","voice","taskProvider"]{p["routing"][k]=serde_json::json!("integration_fixture");}p["preferences"]["name"]=serde_json::json!("Fixture");p["preferences"]["aliases"]=serde_json::json!(["fixture"]);p["preferences"]["permissions"]=serde_json::json!({"documents":false,"emailDrafts":false,"music":false,"openApps":false});s["pets"]["integration_fixture"]=p;
-  let resolved=resolve(&s).unwrap();assert_eq!(resolved.entries.len(),26);let p=&resolved.entries["integration_fixture"];assert!(p.service);assert_eq!(p.configured_adapter("codex"),Some(Adapter::Codex));assert_eq!(p.configured_adapter("copilot"),None);assert_eq!(p.routing.task_provider.as_deref(),Some("integration_fixture"));assert!(!resolved.config.pets["integration_fixture"].permissions.as_ref().unwrap().open_apps);
+  let resolved=resolve(&s).unwrap();assert_eq!(resolved.entries.len(),blueprints().count()+1);let p=&resolved.entries["integration_fixture"];assert!(p.service);assert_eq!(p.configured_adapter("codex"),Some(Adapter::Codex));assert_eq!(p.configured_adapter("copilot"),None);assert_eq!(p.routing.task_provider.as_deref(),Some("integration_fixture"));assert!(!resolved.config.pets["integration_fixture"].permissions.as_ref().unwrap().open_apps);
  }
  #[test]fn retirement_and_missing_model_routes_never_grant_new_execution(){
   let github=blueprint("integration_github").unwrap();assert!(github.retired);assert!(!github.routing.execute);assert_eq!(for_provider("integration_github"),Some("integration_github"));
@@ -76,10 +76,10 @@ fn resolve(source:&Value)->Result<Bundled,String>{
     let extensions=source.get("extensions").and_then(Value::as_object).ok_or_else(invalid)?;
     // Templates cannot provide identity, grants or an execution policy.
     for recipe in std::iter::once(source.get("base").ok_or_else(invalid)?).chain(molds.values()).chain(extensions.values()){
-        if !recipe.is_object()||["retired","runtime","routing","service"].iter().any(|k|recipe.get(k).is_some()){return Err(invalid());}
+        if !recipe.is_object()||["retired","runtime","routing","service","introducedIn"].iter().any(|k|recipe.get(k).is_some()){return Err(invalid());}
         if let Some(prefs)=recipe.get("preferences"){
             let prefs=prefs.as_object().ok_or_else(invalid)?;
-            if ["name","aliases","provider","permissions","localExecution"].iter().any(|k|prefs.contains_key(*k)){return Err(invalid());}
+            if ["name","aliases","provider","permissions","localExecution","inference","inferenceRevision","systemAccess"].iter().any(|k|prefs.contains_key(*k)){return Err(invalid());}
         }
     }
     let pets=source.get("pets").and_then(Value::as_object).ok_or_else(invalid)?;
@@ -89,6 +89,7 @@ fn resolve(source:&Value)->Result<Bundled,String>{
         if entry.get("retired").is_some_and(|v|!v.is_boolean()){return Err(invalid());}
         let own=entry.get("preferences").and_then(Value::as_object).ok_or_else(invalid)?;
         if !["name","aliases","provider","permissions"].iter().all(|k|own.contains_key(*k)){return Err(invalid());}
+        if own.contains_key("systemAccess"){return Err(invalid());}
         let mold=entry.get("mold").and_then(Value::as_str).filter(|m|matches!(*m,"llm"|"application")).ok_or_else(invalid)?;
         let mut recipe=source.get("base").cloned().ok_or_else(invalid)?;
         merge(&mut recipe,&molds[mold])?;
@@ -125,9 +126,47 @@ pub(super) fn for_provider(provider:&str)->Option<&'static str>{blueprints().fin
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]fn pet_inference_factory_never_inherits_a_selection_or_promotes_an_account(){
+        let source:Value=serde_json::from_str(include_str!("../pets.factory.json")).unwrap();
+        let resolved=resolve(&source).unwrap();
+        assert!(resolved.config.pets.values().all(|pet|pet.inference.is_none()));
+        for id in ["ai_ollama","ai_lmstudio"]{assert_eq!(resolved.entries[id].runtime.inference_adapters,vec![Adapter::Ollama,Adapter::Lmstudio]);}
+        for id in ["agent_codex","integration_spotify","agent_cursor"]{
+            let mut forged=source.clone();forged["pets"][id]["runtime"]["inferenceAdapters"]=serde_json::json!(["ollama"]);assert!(resolve(&forged).is_err());
+        }
+        for field in ["inference","inferenceRevision"]{let mut forged=source.clone();forged["extensions"]["codex-account"]["preferences"][field]=serde_json::json!({});assert!(resolve(&forged).is_err());}
+        let mut forged=source.clone();forged["pets"]["ai_ollama"]["runtime"]["inferenceAdapters"]=serde_json::json!(["ollama","ollama"]);assert!(resolve(&forged).is_err());
+    }
+    #[test]fn system_access_cannot_be_issued_from_a_factory_template_or_bundled_identity(){
+        let source:Value=serde_json::from_str(include_str!("../pets.factory.json")).unwrap();
+        for place in ["base","mold","pet"]{let mut forged=source.clone();let target=match place{"base"=>&mut forged["base"]["preferences"],"mold"=>&mut forged["molds"]["llm"]["preferences"],_=>&mut forged["pets"]["ai_ollama"]["preferences"]};target["systemAccess"]=serde_json::json!({"schemaVersion":1,"revision":"a".repeat(32),"grants":[]});assert!(resolve(&forged).is_err());}
+    }
     #[test]fn templates_preserve_all_legacy_defaults_and_grants(){
         let legacy:Configuration=serde_json::from_str(include_str!("../pets.default.json")).unwrap();
         assert_eq!(serde_json::to_value(bundled()).unwrap(),serde_json::to_value(legacy).unwrap());
+    }
+    #[test]fn pet_inference_factory_accepts_a_new_logical_llm_owner_without_a_native_account_or_inherited_grants(){
+        let mut source:Value=serde_json::from_str(include_str!("../pets.factory.json")).unwrap();let mut row=source["pets"]["ai_lmstudio"].clone();row["runtime"]["adapter"]=Value::Null;row["preferences"]["name"]=serde_json::json!("Local worker fixture");row["preferences"]["aliases"]=serde_json::json!(["local worker fixture"]);row["preferences"]["permissions"]=serde_json::json!({"documents":false,"emailDrafts":false,"music":false,"openApps":false});for field in ["chat","taskProvider"]{row["routing"][field]=serde_json::json!("agent_local_fixture");}source["pets"]["agent_local_fixture"]=row;
+        let resolved=resolve(&source).unwrap();let b=&resolved.entries["agent_local_fixture"];assert!(b.runtime.adapter.is_none());assert!(b.recognizes_owner("agent_local_fixture","ollama"));assert!(!b.recognizes_owner("ollama","ollama"));assert!(!b.recognizes_owner("agent_local_fixture","codex"));assert!(resolved.config.pets["agent_local_fixture"].provider.is_empty());assert_eq!(resolved.config.pets["agent_local_fixture"].permissions,Some(crate::pet_config::Permissions::default()));assert!(resolved.config.pets["agent_local_fixture"].inference.is_none());
+    }
+    #[test]fn configurable_adapterless_factory_identity_exists_before_a_model_is_chosen(){
+        let mut source:Value=serde_json::from_str(include_str!("../pets.factory.json")).unwrap();
+        let mut row=source["pets"]["ai_lmstudio"].clone();
+        row["runtime"]["adapter"]=Value::Null;
+        row["preferences"]["name"]=serde_json::json!("Unbound logical fixture");
+        row["preferences"]["aliases"]=serde_json::json!(["unbound logical fixture"]);
+        for field in ["chat","taskProvider"]{row["routing"][field]=serde_json::json!("agent_unbound_fixture");}
+        source["pets"]["agent_unbound_fixture"]=row;
+        let resolved=resolve(&source).unwrap();let b=&resolved.entries["agent_unbound_fixture"];
+        assert!(b.runtime.adapter.is_none()&&!b.runtime.inference_adapters.is_empty());
+        assert_eq!(b.runtime_identity_adapter("agent_unbound_fixture",None).as_deref(),Some("agent_unbound_fixture"));
+        assert!(resolved.config.pets["agent_unbound_fixture"].inference.is_none());
+        for engine in ["ollama","lmstudio"]{
+            assert_eq!(b.runtime_identity_adapter("agent_unbound_fixture",Some(engine)).as_deref(),Some(engine));
+            assert!(b.runtime_identity_adapter(engine,Some(engine)).is_none());
+        }
+        for invalid in ["codex","unknown",""]{assert!(b.runtime_identity_adapter("agent_unbound_fixture",Some(invalid)).is_none());}
+        assert!(b.runtime_identity_adapter("agent_codex",None).is_none());
     }
     #[test]fn unknown_mold_or_extension_cannot_fall_back_to_llm(){
         for field in ["mold","extension"]{

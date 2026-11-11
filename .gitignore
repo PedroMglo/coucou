@@ -33,3 +33,6 @@ windows/.cargo/
 
 /windows/.npm-cache/
 /linux/__pycache__/
+
+# Root project npm cache; logs are local build data.
+/.npm-cache/

@@ -28,7 +28,7 @@ pub fn create(app:&AppHandle){
   .title("Coucou · Pets").inner_size(760.0,700.0).decorations(false).transparent(true).shadow(false)
   .always_on_top(true).skip_taskbar(true).visible_on_all_workspaces(true).focusable(false).focused(false).visible(false)
   .resizable(true).maximizable(false).minimizable(false).closable(false).disable_drag_drop_handler().build(){
-   Ok(win)=>{#[cfg(target_os="linux")]if !crate::platform::prepare_pet_control(&win){let _=win.destroy();return;}
+   Ok(win)=>{crate::settings::review::register_window(&win);#[cfg(target_os="linux")]if !crate::platform::prepare_pet_control(&win){let _=win.destroy();return;}
     if crate::pet_native_binding::attach(app,&win).is_err(){crate::log::line("pet control native binding unavailable");}
     #[cfg(target_os="linux")]if let Err(error)=crate::linux_documents::install(&win){crate::log::line(format!("pet control drop: {error}"));}},
    Err(e)=>crate::log::line(format!("pet control bar: {e}")),

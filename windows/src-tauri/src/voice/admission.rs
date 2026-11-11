@@ -6,6 +6,7 @@ use super::dialogue::Pet;
 
 /// Existing work remains addressable after a pet is disabled or retired.
 pub(super) fn uses_pet_response(question: &str) -> bool {
+    if super::system_sound::requested(question){return false;}
     #[cfg(target_os="linux")]if crate::cli_chat::goal_recipe_voice_requested(question){return false;}
     !matches!(super::dialogue::parse(question), super::dialogue::Command::Stop | super::dialogue::Command::Dictate | super::dialogue::Command::CancelTask | super::dialogue::Command::TaskStatus)
 }

@@ -4,27 +4,31 @@ use std::{io::{Read,Write}, os::{fd::AsRawFd, unix::process::CommandExt}, proces
     sync::{Arc,OnceLock,atomic::{AtomicBool,Ordering}}, time::{Duration,Instant}};
 use crate::{pet_process_group::OwnedChild,pet_resources::{Coordinator,Hold}};
 
-#[derive(Clone,Copy)] pub(crate) enum Lane { AudioEffect, AudioRead, DmsEffect, DmsRead, DmsRelease, SpeechOutput }
+#[derive(Clone,Copy)] pub(crate) enum Lane { AudioEffect, AudioRead, DmsEffect, DmsRead, DmsRelease, SpeechOutput, ClipboardRead, ClipboardWrite }
 impl Lane {
     fn slots(self) -> (&'static str,usize) { match self {
         Self::AudioEffect=>("system_audio_effect",1), Self::AudioRead=>("system_audio_read",16),
         Self::DmsEffect=>("system_dms_effect",1), Self::DmsRead=>("system_dms_read",2),
-        Self::DmsRelease=>("system_dms_release",1), Self::SpeechOutput=>("voice_native_output",1),
+        Self::DmsRelease=>("system_dms_release",1), Self::SpeechOutput=>("voice_native_output",1), Self::ClipboardRead=>("voice_clipboard_read",1),
+        Self::ClipboardWrite=>("voice_clipboard_write",1),
     }}
 }
+#[path="pet_helper_resident.rs"]mod resident;
+pub(crate)use resident::{Resident,ExchangeError};
 fn resources()->Arc<Coordinator> {
     static RESOURCES:OnceLock<Arc<Coordinator>>=OnceLock::new();
     RESOURCES.get_or_init(Arc::default).clone()
 }
-pub(crate) struct Session { hold:Arc<Hold>, cancel:Arc<AtomicBool>, deadline:Instant }
+pub(crate) struct Session { hold:Arc<Hold>, cancel:Arc<AtomicBool>, deadline:Instant, native_lifetime:Option<Arc<std::fs::File>> }
 impl Session {
+    pub(crate)fn with_native_lifetime(mut self,file:Arc<std::fs::File>)->Self{self.native_lifetime=Some(file);self}
     pub(crate) fn acquire(lane:Lane,timeout:Duration)->Result<Self,String>{Self::acquire_on(resources(),lane,timeout)}
     fn acquire_on(resources:Arc<Coordinator>,lane:Lane,timeout:Duration)->Result<Self,String>{
         let deadline=Instant::now().checked_add(timeout).ok_or("Prazo inválido do serviço do sistema.")?;
         let cancel=Arc::new(AtomicBool::new(false));let(prefix,slots)=lane.slots();
         for n in 0..slots {
             match resources.acquire(&format!("{prefix}_{n}"),cancel.clone(),Some(deadline)) {
-                Ok(hold)=>return Ok(Self{hold,cancel,deadline}),
+                Ok(hold)=>return Ok(Self{hold,cancel,deadline,native_lifetime:None}),
                 Err(crate::pet_resources::Failure::Busy)=>continue,
                 Err(_)=>return Err("O serviço do sistema não está disponível para outro pedido.".into()),
             }
@@ -43,9 +47,22 @@ impl Session {
         if input.as_ref().is_some_and(|b|b.len()>64*1024){return Err("O conteúdo do serviço excede o limite.".into());}
         self.run_owned(command,input,limit,timeout,before_spawn,current).await
     }
+    /// Consumed by an existing synchronous caller worker. The session and its
+    /// physical hold cannot be reused before our family has been collected.
+    pub(crate) fn run_sync_input(self,mut command:Command,input:Option<Vec<u8>>,limit:usize,timeout:Duration,
+        before_spawn:impl FnOnce()->Result<(),String>,current:&dyn Fn()->bool,
+    )->Result<Vec<u8>,String>{
+        if input.as_ref().is_some_and(|b|b.len()>64*1024){return Err("O conteúdo do serviço excede o limite.".into());}
+        if let Some(file)=&self.native_lifetime{crate::pet_process_group::inherit_file(&mut command,file.clone());}
+        command.stdin(if input.is_some(){Stdio::piped()}else{Stdio::null()});
+        let deadline=self.deadline.min(Instant::now()+timeout);let mut owned=None;
+        let result=supervise(&mut command,input,limit,deadline,&self.cancel,before_spawn,current,&mut owned);
+        drop(owned);result
+    }
     async fn run_owned(&self,mut command:Command,input:Option<Vec<u8>>,limit:usize,timeout:Duration,
         before_spawn:impl FnOnce()->Result<(),String>+Send+'static,current:Arc<dyn Fn()->bool+Send+Sync>,
     )->Result<Vec<u8>,String>{
+        if let Some(file)=&self.native_lifetime{crate::pet_process_group::inherit_file(&mut command,file.clone());}
         command.stdin(if input.is_some(){Stdio::piped()}else{Stdio::null()});
         let deadline=self.deadline.min(Instant::now()+timeout);
         let hold=self.hold.clone();let cancel=self.cancel.clone();
@@ -58,7 +75,7 @@ impl Session {
         let _worker=tokio::task::spawn_blocking(move||{
             let _hold=hold;
             let mut owned=None;
-            let result=supervise(&mut command,input,limit,deadline,&cancel,before_spawn,&current,&mut owned);
+            let result=supervise(&mut command,input,limit,deadline,&cancel,before_spawn,current.as_ref(),&mut owned);
             // Errors are uncertain immediately; cleanup may need longer than
             // the UI deadline. The worker keeps its hold throughout Drop.
             let _=tx.send(result);
@@ -79,9 +96,17 @@ pub(crate) fn command(program:&str,args:&[String])->Command{
     command.args(args).env("LC_ALL","C").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0);
     command
 }
+pub(crate) fn nonblocking(fd:i32)->std::io::Result<()>{
+    let flags=unsafe{libc::fcntl(fd,libc::F_GETFL)};
+    if flags<0||unsafe{libc::fcntl(fd,libc::F_SETFL,flags|libc::O_NONBLOCK)}<0{Err(std::io::Error::last_os_error())}else{Ok(())}
+}
 fn supervise(command:&mut Command,input:Option<Vec<u8>>,limit:usize,deadline:Instant,cancel:&AtomicBool,
-    before_spawn:impl FnOnce()->Result<(),String>,authority:&Arc<dyn Fn()->bool+Send+Sync>,owned:&mut Option<OwnedChild>)->Result<Vec<u8>,String>{
-    let current=||!cancel.load(Ordering::Acquire)&&Instant::now()<deadline&&authority();
+    before_spawn:impl FnOnce()->Result<(),String>,authority:&dyn Fn()->bool,owned:&mut Option<OwnedChild>)->Result<Vec<u8>,String>{
+    let current=||{
+        if cancel.load(Ordering::Acquire)||Instant::now()>=deadline{return false;}
+        let allowed=authority();
+        allowed&&!cancel.load(Ordering::Acquire)&&Instant::now()<deadline
+    };
     if !current(){return Err("O pedido terminou antes de iniciar o serviço do sistema.".into());}
     before_spawn()?;
     if !current(){return Err("O pedido terminou antes de iniciar o serviço do sistema.".into());}
@@ -91,17 +116,17 @@ fn supervise(command:&mut Command,input:Option<Vec<u8>>,limit:usize,deadline:Ins
     // the request. OwnedChild's drop finishes cleanup before the hold is freed.
     let uncertain=||"O serviço do sistema não confirmou o pedido. Uma alteração pode ter ocorrido; consulta o estado antes de outro pedido.".to_string();
     let mut stdout=child.child.stdout.take().ok_or_else(uncertain)?;
-    let flags=unsafe{libc::fcntl(stdout.as_raw_fd(),libc::F_GETFL)};
-    if flags<0||unsafe{libc::fcntl(stdout.as_raw_fd(),libc::F_SETFL,flags|libc::O_NONBLOCK)}<0{return Err(uncertain());}
+    nonblocking(stdout.as_raw_fd()).map_err(|_|uncertain())?;
     let mut stdin=child.child.stdin.take();let input=input.unwrap_or_default();let mut written=0;
-    if let Some(pipe)=&stdin{let flags=unsafe{libc::fcntl(pipe.as_raw_fd(),libc::F_GETFL)};if flags<0||unsafe{libc::fcntl(pipe.as_raw_fd(),libc::F_SETFL,flags|libc::O_NONBLOCK)}<0{return Err(uncertain());}}
+    if let Some(pipe)=&stdin{nonblocking(pipe.as_raw_fd()).map_err(|_|uncertain())?;}
     let mut bytes=Vec::new();let mut eof=false;
     loop {
         if !current(){return Err(uncertain());}
+        let mut progressed=false;
         if written==input.len(){drop(stdin.take());}
         if let Some(pipe)=&mut stdin{
             match pipe.write(&input[written..]){
-                Ok(0)=>return Err(uncertain()),Ok(n)=>written+=n,
+                Ok(0)=>return Err(uncertain()),Ok(n)=>{written+=n;progressed=true;},
                 Err(e)if matches!(e.kind(),std::io::ErrorKind::WouldBlock|std::io::ErrorKind::Interrupted)=>{},
                 Err(_)=>return Err(uncertain()),
             }
@@ -109,8 +134,8 @@ fn supervise(command:&mut Command,input:Option<Vec<u8>>,limit:usize,deadline:Ins
         if !eof {
             let mut buffer=[0;4096];let cap=(limit.saturating_add(1)-bytes.len()).min(buffer.len());
             match stdout.read(&mut buffer[..cap]) {
-                Ok(0)=>eof=true,
-                Ok(n)=>{bytes.extend_from_slice(&buffer[..n]);if bytes.len()>limit{return Err(uncertain());}},
+                Ok(0)=>{eof=true;progressed=true;},
+                Ok(n)=>{progressed=true;bytes.extend_from_slice(&buffer[..n]);if bytes.len()>limit{return Err(uncertain());}},
                 Err(e) if matches!(e.kind(),std::io::ErrorKind::WouldBlock|std::io::ErrorKind::Interrupted)=>{},
                 Err(_)=>return Err(uncertain()),
             }
@@ -120,7 +145,7 @@ fn supervise(command:&mut Command,input:Option<Vec<u8>>,limit:usize,deadline:Ins
             let status=child.stop_and_reap().map_err(|_|uncertain())?;
             return if status.success()&&written==input.len(){Ok(bytes)}else{Err(uncertain())};
         }
-        std::thread::sleep(Duration::from_millis(5));
+        if !progressed{std::thread::sleep(Duration::from_millis(5));}
     }
 }
 

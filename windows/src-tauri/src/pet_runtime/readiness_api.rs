@@ -12,22 +12,77 @@ async fn inspect(server:&crate::local_chat::Server,model:&str,current:impl Fn()-
     if !crate::net::is_loopback_url(&base){return Err(model::Error::InvalidInput);}
     crate::net::while_current(current,||async{crate::local_tasks::protocol::capabilities(&base,model).await;Ok(())}).await.map_err(|_|model::Error::Conflict)
 }
+#[cfg(target_os="linux")]
+pub(in crate::pet_runtime)async fn inspect_captured(server:&crate::local_chat::Server,model:&str,captured:Option<&crate::pet_inference::Captured>,current:impl Fn()->model::Result<()>)->model::Result<()>{
+ use std::sync::atomic::{AtomicBool,Ordering};
+ let busy=AtomicBool::new(false);
+ let check=||{
+  busy.store(false,Ordering::Release);
+  let observed=current().and_then(|()|match captured.map(crate::pet_inference::Captured::observation){
+   Some(crate::pet_inference::CaptureObservation::Busy)=>Err(model::Error::Busy),
+   Some(crate::pet_inference::CaptureObservation::Changed)=>Err(model::Error::Conflict),_=>Ok(()),
+  });
+  if observed==Err(model::Error::Busy){busy.store(true,Ordering::Release);}observed.is_ok()
+ };
+ if !check(){return Err(if busy.load(Ordering::Acquire){model::Error::Busy}else{model::Error::Conflict});}
+ let result=if let Some(captured)=captured.filter(|_|server.id=="lmstudio"){
+  crate::local_chat::lmstudio::inspect_scoped(server,model,crate::local_chat::metadata_auth_for_capture(captured).map_err(|_|model::Error::Conflict)?,check).await.map(|_|()).map_err(|_|model::Error::Conflict)
+ }else{inspect(server,model,check).await};
+ if result.is_err()&&busy.load(Ordering::Acquire){Err(model::Error::Busy)}else{result}
+}
+#[cfg(target_os="linux")]pub(super)fn requested_inference(spec:&super::admission::AdmissionSpec)->bool{
+ spec.owner.local_engine()&&spec.binding_format()&&spec.execution_requested()&&!spec.deterministic()
+}
+/// Active inspection belongs to the explicit signed requested goal, never a
+/// passive status query. The acquired native hold and exact destination survive
+/// the wait; no current UI selection may replace them.
+#[cfg(target_os="linux")]
+pub(super)async fn inspect_requested(app:&AppHandle,goal:&model::Record,hold:std::sync::Arc<crate::pet_resources::Hold>)->model::Result<()>{
+    let row=goal.admissions.last().ok_or(model::Error::Conflict)?;
+    if row.spec.rule_occurrence.is_some(){let authority=super::authority::Authority::existing(&super::admission_review::authority_root()).map_err(super::authority::Failure::control_error)?;let reference=row.spec.rule_occurrence.as_ref().ok_or(model::Error::Conflict)?;let grant=authority.rule_grant(&reference.rule_decision_id).map_err(super::authority::Failure::control_error)?;if grant.policy.dispatch.is_some(){return super::rules::scheduled::inspect_admitted(app,goal,hold).await;}}
+    if !requested_inference(&row.spec){return Err(model::Error::Conflict);}
+    let store=Store::existing_native(&crate::settings::config_dir().join("pet-runtime-v1"))?.ok_or(model::Error::NotFound)?;
+    let authority=super::authority::Authority::existing(&super::admission_review::authority_root()).map_err(super::authority::Failure::control_error)?;
+    authority.verify_queued(goal,crate::assistant_memory::now()).map_err(super::authority::Failure::control_error)?;
+    let projection=crate::pet_capabilities::native_projection(app,Some(&hold)).map_err(|_|model::Error::StorageUnavailable)?;
+    let config=projection.configuration.as_ref().ok_or(model::Error::StorageUnavailable)?;
+    let descriptor=projection.snapshot.pets.iter().find(|p|p.pet_id==row.spec.owner.pet_id).ok_or(model::Error::NotFound)?;
+    if !projection.preferences_ready||descriptor.binding.model.as_deref()!=Some(row.spec.resolved_model.as_str())
+        ||super::native_validity::policy_revision(config,&projection.settings,goal)?!=row.spec.policy_revision{return Err(model::Error::Conflict);}
+    let captured=hold.captured();
+    let server=if let Some(c)=&captured{crate::local_chat::server_for_capture(c).map_err(|_|model::Error::Conflict)?}else{crate::local_chat::server(&projection.settings,&row.spec.owner.provider).ok_or(model::Error::Conflict)?};
+    if server.id!=row.spec.owner.adapter{return Err(model::Error::Conflict);}
+    let until=std::time::Instant::now()+std::time::Duration::from_secs(6);
+    inspect_captured(&server,&row.spec.resolved_model,captured.as_deref(),||{
+        if !hold.current()||std::time::Instant::now()>=until{return Err(model::Error::Conflict);}
+        let current=store.read(&goal.id,&goal.spec.owner.pet_id)?;
+        if current.revision!=goal.revision{return Err(model::Error::Conflict);}
+        authority.verify_queued(&current,crate::assistant_memory::now()).map_err(super::authority::Failure::control_error)?;
+        let capture=crate::pet_capabilities::native_projection(app,Some(&hold)).map_err(|_|model::Error::StorageUnavailable)?;
+        if !capture.configuration.as_ref().is_some_and(|config|capture.preferences_ready&&super::native_validity::policy_revision(config,&capture.settings,&current).ok().as_ref()==Some(&row.spec.policy_revision)){return Err(model::Error::Conflict);}Ok(())
+    }).await
+}
+// This permits only explicitly requested metadata IO. Admission/F2/source
+// validity and a new exact budget still guard every inference effect.
+#[cfg(target_os="linux")]
+fn refreshable_goal(g:&model::Record)->bool{matches!(g.state,model::State::Draft|model::State::Queued|model::State::RecoveryRequired)||g.state==model::State::Paused&&g.admissions.last().is_some_and(|r|r.spec.funded_response())}
 #[tauri::command]
 pub async fn pet_runtime_refresh_readiness(app:AppHandle,window:tauri::WebviewWindow,pet_id:String,goal_id:String)->model::Result<crate::pet_capabilities::Descriptor>{
     if !super::adapter::allowed(window.label()){return Err(model::Error::InvalidInput);}
     #[cfg(not(target_os="linux"))]{let _=(app,pet_id,goal_id);Err(model::Error::UnsupportedPlatform)}
     #[cfg(target_os="linux")]{
         let root=crate::settings::config_dir().join("pet-runtime-v1");let store=Store::existing_native(&root)?.ok_or(model::Error::NotFound)?;let goal=store.read(&goal_id,&pet_id)?;
-        if !matches!(goal.state,model::State::Draft|model::State::Queued|model::State::RecoveryRequired){return Err(model::Error::Conflict);}
+        if !refreshable_goal(&goal){return Err(model::Error::Conflict);}
         let projection=crate::pet_capabilities::native_projection(&app,None).map_err(|_|model::Error::StorageUnavailable)?;
         let descriptor=projection.snapshot.pets.iter().find(|p|p.pet_id==pet_id).ok_or(model::Error::NotFound)?;
         let owner=model::Owner::from_descriptor(descriptor)?;if !owner.same_runtime_binding(&goal.spec.owner)||!owner.local_engine(){return Err(model::Error::Conflict);}
         let model=descriptor.binding.model.as_ref().ok_or(model::Error::Conflict)?;
-        let server=crate::local_chat::server(&projection.settings,&owner.provider).ok_or(model::Error::Conflict)?;
         let stop=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));let until=std::time::Instant::now()+std::time::Duration::from_secs(6);
         let chat=app.state::<crate::chat::Chat>();let hold=chat.runtime_resources().acquire(&owner.provider,stop,Some(until)).map_err(|_|model::Error::Busy)?;
+        let captured=hold.captured();let server=if let Some(c)=&captured{crate::local_chat::server_for_capture(c).map_err(|_|model::Error::Conflict)?}else{crate::local_chat::server(&projection.settings,&owner.provider).ok_or(model::Error::Conflict)?};
+        if server.id!=owner.adapter{return Err(model::Error::Conflict);}
         let revision=goal.revision.clone();
-        inspect(&server,model,||hold.current()&&store.read(&goal_id,&pet_id).is_ok_and(|g|g.revision==revision&&g.spec.owner==goal.spec.owner&&matches!(g.state,model::State::Draft|model::State::Queued|model::State::RecoveryRequired))).await?;
+        inspect_captured(&server,model,captured.as_deref(),||{if !hold.current(){return Err(model::Error::Conflict);}let g=store.read(&goal_id,&pet_id)?;if g.revision!=revision||g.spec.owner!=goal.spec.owner||!refreshable_goal(&g){return Err(model::Error::Conflict);}Ok(())}).await?;
         drop(hold);let current=store.read(&goal_id,&pet_id)?;if current.revision!=revision{return Err(model::Error::Conflict);}
         let fresh=crate::pet_capabilities::provider_descriptor(&app,&owner.provider).map_err(|_|model::Error::StorageUnavailable)?;
         if model::Owner::from_descriptor(&fresh)?!=owner||fresh.binding.model.as_ref()!=Some(model){return Err(model::Error::Conflict);}Ok(fresh)

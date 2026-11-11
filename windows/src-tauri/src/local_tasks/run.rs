@@ -36,7 +36,7 @@ async fn plain_response(chat:&Chat,turn:&crate::chat::Turn,base:&reqwest::Url,mo
 #[allow(clippy::too_many_arguments)]
 async fn plain_response_captured(chat:&Chat,turn:&crate::chat::Turn,base:&reqwest::Url,model:&str,effort:Option<&str>,messages:&[serde_json::Value],user:serde_json::Value,plain:&str,deadline:Instant,origin:Option<&UsageOrigin>,prepared:Option<&crate::local_chat::PreparedUser>,delta:impl FnMut(String))->Result<(ChatReply,crate::pet_usage::Usage,Option<String>),String>{
  if let Some(prepared)=prepared{prepared.validate_contents().await?;}
- let round=crate::net::while_current(||chat.is_current(turn)&&prepared.is_none_or(|p|p.validate().is_ok()),||protocol::round_captured(base,model,messages,false,effort,deadline,&turn.cancel,origin,delta)).await?;
+ let round=crate::net::while_current(||chat.is_current(turn)&&prepared.is_none_or(|p|p.validate().is_ok()),||protocol::round_calendar_captured_while(base,model,messages,false,None,effort,deadline,&turn.cancel,origin,delta,||turn.check_inference())).await?;
  if let Some(prepared)=prepared{prepared.validate_contents().await?;}
  if !round.calls.is_empty()||round.text.is_empty(){return Err("O modelo não devolveu uma resposta de texto válida.".into());}
  let notice=chat.commit_observed_reply(turn,user,json!({"role":"assistant","content":round.text}),plain,&round.text)?;
@@ -55,12 +55,14 @@ pub(crate) async fn respond(app:&AppHandle,chat:&Chat,settings:&crate::settings:
  policy.validate()?;
  if policy.mode!=crate::pet_config::LocalExecutionMode::Ask{return Err("Os pedidos de execução local estão desativados.".into());}
  if server.id!="ollama"||model.trim().is_empty()||model.ends_with(":cloud")||model.ends_with("-cloud"){return Err("Escolhe um modelo local Ollama instalado.".into());}
- let base=crate::local_chat::base_url(server)?;let cwd=crate::cli_chat::workspace_for(settings,"ollama")?;
  let turn=chat.begin_cli("ollama",Arc::default())?;
  let capture_origin=chat.usage_capture_origin(&turn);
  let _cancel_on_drop=CancelOnDrop(turn.cancel.clone());
  let mut lease=Some(chat.lease(&turn).broadcast(app,&query));
- let config=crate::pet_config::read_existing()?;
+ let captured=turn.captured_inference();let resolved=captured.as_ref().map(|c|crate::local_chat::server_for_capture(c)).transpose()?;let server=resolved.as_ref().unwrap_or(server);
+ if server.id!="ollama"||captured.as_ref().and_then(|c|c.explicit.as_ref()).is_some_and(|t|t.choice.model!=model){return Err("O motor/modelo capturado não corresponde ao executor Ollama; não foi usado outro destino.".into());}
+ let base=crate::local_chat::base_url(server)?;let cwd=crate::cli_chat::workspace_for(settings,"ollama")?;
+ let config=if let Some(c)=&captured{c.configuration.as_ref().clone()}else{crate::pet_config::read_existing()?};
  let identity=chat.capture_local_identity(&turn,&config,"ai_ollama")?;
  let prompt=crate::chat::system_prompt_for_pet(&identity,false);
  let activity=Reporter::new(app,"ollama",Some(turn.cancel.clone())).observe(chat.clone(),turn.clone());
@@ -95,7 +97,7 @@ pub(crate) async fn respond(app:&AppHandle,chat:&Chat,settings:&crate::settings:
    if !chat.is_current(&turn){return Err("A tarefa foi interrompida.".into());}
    let offer_tools=count<scope.policy.max_calls&&budget.can_run();
    incomplete_round=Some(Instant::now());
-   let round=crate::net::while_current(||chat.is_current(&turn)&&prepared.validate().is_ok(),||protocol::round_calendar_captured(&scope.base,&scope.model,&messages,offer_tools,calendar.as_ref(),scope.reasoning_effort.as_deref(),scope.deadline,&turn.cancel,capture_origin.as_ref(),|s|{if prepared.validate().is_ok(){chat.publish_delta(app,&turn,&s);activity.update("message",s.rsplit("\n\n").next().unwrap_or(&s));}})).await?;
+   let round=crate::net::while_current(||chat.is_current(&turn)&&prepared.validate().is_ok(),||protocol::round_calendar_captured_while(&scope.base,&scope.model,&messages,offer_tools,calendar.as_ref(),scope.reasoning_effort.as_deref(),scope.deadline,&turn.cancel,capture_origin.as_ref(),|s|{if prepared.validate().is_ok(){chat.publish_delta(app,&turn,&s);activity.update("message",s.rsplit("\n\n").next().unwrap_or(&s));}},||turn.check_inference())).await?;
    prepared.validate_contents().await?;
    incomplete_round=None;
    if let Some(total)=&mut usage{total.add(&round.usage);}else{usage=Some(round.usage.clone());}

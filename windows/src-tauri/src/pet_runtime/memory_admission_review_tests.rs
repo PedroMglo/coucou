@@ -20,10 +20,10 @@ fn fixture()->(Fixture,Record,Chat,crate::local_chat::Server,u64){
 }
 
 #[test]fn old_confirmation_cannot_consume_the_data_review_create_authority_read_the_store_or_dispatch(){
- let(f,g,_private,server,now)=fixture();let review=Review::prepare(&g,observation(&f,&g,&server,now),budget(now),"review-data".into(),nonce().unwrap(),now).unwrap();let mut cache=Reviews::default();let ticket=cache.insert("settings",review,nonce().unwrap(),now).unwrap();
- let input=ConfirmInput{memory_consent:None,pet_id:g.spec.owner.pet_id.clone(),goal_id:g.id.clone(),revision:g.revision.clone(),token:ticket.token.clone(),approve:true};let pending=cache.lookup("settings",&input,now+1).unwrap();let store=Store::ensure(&f.root.join("empty-goal-store")).unwrap();let authority=f.root.join("must-not-create-authority");
+ let(f,g,_private,server,now)=fixture();let review=Review::prepare(&g,observation(&f,&g,&server,now),budget(now),"review-data".into(),nonce().unwrap(),now).unwrap();let mut cache=Reviews::default();let ticket=cache.insert(&cache.origin_for_test("settings"),review,nonce().unwrap(),now).unwrap();
+ let input=ConfirmInput{disclosure_consent:None,memory_consent:None,pet_id:g.spec.owner.pet_id.clone(),goal_id:g.id.clone(),revision:g.revision.clone(),token:ticket.token.clone(),approve:true};let pending=cache.lookup(&cache.origin_for_test("settings"),&input,now+1).unwrap();let store=Store::ensure(&f.root.join("empty-goal-store")).unwrap();let authority=f.root.join("must-not-create-authority");
  for at in [now+1,now+2]{let result=pending.confirm::<()>(&store,&authority,true,|_,_|panic!("incomplete data admission must block before observation or store read"),||at).unwrap();assert!(matches!(result,ConfirmResult::Blocked{reason:Denial::DataConsentRequired,retryable:false}));assert!(!authority.exists());}
- assert!(std::sync::Arc::ptr_eq(&pending,&cache.lookup("settings",&input,now+3).unwrap()));
+ assert!(std::sync::Arc::ptr_eq(&pending,&cache.lookup(&cache.origin_for_test("settings"),&input,now+3).unwrap()));
  assert!(matches!(pending.confirm::<()>(&store,&authority,false,|_,_|panic!("decline does not observe"),||now+4).unwrap(),ConfirmResult::Declined));assert!(!authority.exists());assert!(g.admissions.is_empty());
 }
 

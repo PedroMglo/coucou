@@ -28,7 +28,8 @@ pub struct AppChat {
 
 impl AppChat {
     pub fn new(app: AppHandle) -> Self {
-        Self { app, chat: Arc::new(Chat::default()) }
+        let resources=app.state::<Chat>().runtime_resources();
+        Self { app, chat: Arc::new(Chat::default().with_runtime_resources(resources)) }
     }
 
     fn settings(&self) -> Settings {

@@ -11,7 +11,7 @@ impl Environment{
     }
     fn kill(&mut self){self.child.0.kill().unwrap();self.child.0.wait().unwrap();assert_eq!(self._connection.request_name("com.coucou.OwnerFixture.SingleInstance",false,false,true).unwrap(),dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply::PrimaryOwner);let claim=crate::pet_data::fixture_native_claim(&self._bus.address,"com.coucou.OwnerFixture",&self.fixture.path).unwrap();claim.current().unwrap();self._claim=Some(Box::new(claim));}
     pub(super)fn review(&self,request:&str)->Review{self.review_at(request,100_020)}
-    fn review_at(&self,request:&str,now:u64)->Review{match self.store.prepare_recovery(&root(&self.fixture),&self.goal.id,&self.goal.spec.owner.pet_id,&self.goal.revision,request.into(),now).unwrap(){Prepared::Review(r)=>r,_=>panic!("original lost owner must require a review")}}
+    pub(super)fn review_at(&self,request:&str,now:u64)->Review{match self.store.prepare_recovery(&root(&self.fixture),&self.goal.id,&self.goal.spec.owner.pet_id,&self.goal.revision,request.into(),now).unwrap(){Prepared::Review(r)=>r,_=>panic!("original lost owner must require a review")}}
     pub(super)fn grant(&self)->serde_json::Value{serde_json::from_slice::<serde_json::Value>(&fs::read(root(&self.fixture).join(format!("{}.json",self.goal.admissions[0].spec.decision_id))).unwrap()).unwrap()["body"].clone()}
 }
 #[test]fn every_native_pet_can_close_its_actual_lost_owner_without_replaying_or_resetting_unknown_usage(){

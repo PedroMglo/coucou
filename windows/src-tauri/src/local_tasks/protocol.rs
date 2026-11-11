@@ -133,6 +133,13 @@ impl ModelCapabilities{
   }
  }
 }
+pub(crate)fn verify_local_model(value:&serde_json::Value)->Result<(),String>{
+ if ["remote_host","remote_model"].iter().any(|k|value.get(k).is_some_and(|v|!v.is_null()&&v.as_str().is_none_or(|s|!s.trim().is_empty())))
+  ||!value.get("model_info").and_then(|v|v.as_object()).is_some_and(|v|!v.is_empty())
+  ||!value.get("capabilities").and_then(|v|v.as_array()).is_some_and(|v|v.iter().any(|v|v.as_str()==Some("completion"))){return Err("O modelo local instalado não foi confirmado; nenhum pedido de inferência foi enviado.".into());}
+ Ok(())
+}
+
 pub async fn capabilities(base:&reqwest::Url,model:&str)->ModelCapabilities{
  let mut observation=crate::pet_capabilities::begin_local(base.as_str(),model);
  let result=async{
@@ -172,7 +179,11 @@ pub async fn round_captured(base:&reqwest::Url,model:&str,messages:&[Value],tool
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn round_calendar_captured(base:&reqwest::Url,model:&str,messages:&[Value],tools:bool,calendar:Option<&crate::pet_calendar::query::Service>,effort:Option<&str>,deadline:Instant,cancel:&std::sync::atomic::AtomicBool,origin:Option<&UsageOrigin>,mut delta:impl FnMut(String))->Result<Round,String>{
+pub async fn round_calendar_captured(base:&reqwest::Url,model:&str,messages:&[Value],tools:bool,calendar:Option<&crate::pet_calendar::query::Service>,effort:Option<&str>,deadline:Instant,cancel:&std::sync::atomic::AtomicBool,origin:Option<&UsageOrigin>,delta:impl FnMut(String))->Result<Round,String>{
+ round_calendar_captured_while(base,model,messages,tools,calendar,effort,deadline,cancel,origin,delta,||Ok(())).await
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate)async fn round_calendar_captured_while(base:&reqwest::Url,model:&str,messages:&[Value],tools:bool,calendar:Option<&crate::pet_calendar::query::Service>,effort:Option<&str>,deadline:Instant,cancel:&std::sync::atomic::AtomicBool,origin:Option<&UsageOrigin>,mut delta:impl FnMut(String),before_send:impl Fn()->Result<(),String>)->Result<Round,String>{
  let began=Instant::now();let body=calendar_body(model,messages,tools,calendar,effort)?;
  // The guard outlives the selected stream future. Stop/deadline can discard that
  // future without discarding counters already observed for this exact attempt.
@@ -181,7 +192,7 @@ pub async fn round_calendar_captured(base:&reqwest::Url,model:&str,messages:&[Va
   let remaining=deadline.saturating_duration_since(Instant::now());if remaining.is_zero(){return Err("O prazo da tarefa terminou.".into());}
   let client=crate::net::exact_destination_client(base,remaining)?;
   let request=client.post(crate::net::join(base,"v1/chat/completions")).header("Authorization","Bearer ollama").json(&body).build().map_err(|_|"Não foi possível contactar o servidor Ollama.".to_string())?;
-  crate::settings::effect_allowed()?;
+  crate::settings::effect_allowed()?;before_send()?;
   capture=Some(Capture::begin(origin,model));
   let mut response=client.execute(request).await.map_err(|_|"Não foi possível contactar o servidor Ollama.".to_string())?;
   if !response.status().is_success(){let status=response.status();return Err(format!("O servidor Ollama recusou a ronda (HTTP {}).",status.as_u16()));}

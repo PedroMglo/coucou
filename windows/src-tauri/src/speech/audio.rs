@@ -296,10 +296,13 @@ impl Capture {
     /// Cancelling the caller revokes startup/play/data delivery without
     /// turning normal capture completion into cancellation of the whole turn.
     pub fn start_stoppable(source:Source,stop:Arc<AtomicBool>,sink:impl FnMut(&[f32])+Send+'static)->Result<Capture,String>{
-        Self::start_owned(source,CaptureUse::Voice,Some(stop),sink)
+        Self::start_stoppable_for(source,CaptureUse::Voice,stop,sink)
+    }
+    pub(crate) fn start_stoppable_for(source:Source,usage:CaptureUse,stop:Arc<AtomicBool>,sink:impl FnMut(&[f32])+Send+'static)->Result<Capture,String>{
+        Self::start_owned(source,usage,Some(stop),sink)
     }
     fn start_owned(source:Source,usage:CaptureUse,stop:Option<Arc<AtomicBool>>,mut sink:impl FnMut(&[f32])+Send+'static)->Result<Capture,String>{
-        if matches!(&source,Source::Mic(Some(name))if name.is_empty()||name.len()>1024){return Err(selection::Failure::Invalid.message());}
+        if matches!(&source,Source::Mic(Some(name))if name.is_empty()||name.len()>1024||name.chars().any(char::is_control)){return Err(selection::Failure::Invalid.message());}
         let request=usage.key(&source)?;
         let owner=worker::start(request,Duration::from_secs(5),stop,move|authority|{
             let device=open_device(&source)?;

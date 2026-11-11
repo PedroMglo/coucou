@@ -1,7 +1,7 @@
 //! Separate, exact authority for one goal step. Serializable scope/records are
 //! data: only a native retained Target, live Owned controller and review may act.
 use super::{admission::AdmissionSpec, effect_budget::{Attempt,Kind,Phase as AttemptPhase}, leases::Lease, model::{self,Record,WorkState}};
-use crate::spotify::goal::{Binding,Observation,Delivery};
+use super::physical_target::{Binding,Observation,Delivery};
 use serde::{Serialize,Deserialize};
 pub(super) const MAX_OUTPUT:u64=16_000;
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
@@ -19,19 +19,17 @@ pub struct Scope {
 impl Scope {
     pub(super) fn slot(&self)->model::Result<String>{slot(&self.decision_id,&self.plan_id,&self.step_id)}
     pub(super) fn valid(&self)->bool{
-        (match(self.schema_version,&self.generated_plan){(1,None)=>true,(2,Some(r))=>r.valid()&&r.published_at<=self.approved_at&&r.plan_id==self.plan_id&&r.decision_id==self.decision_id&&r.source.lease_id==self.lease_id&&r.source.controller_id==self.controller_id&&r.proposal_hash==self.proposal_hash,_=>false})&&model::token(&self.grant_id)&&model::key(&self.request_id)&&model::goal_id(&self.goal_id)
+        (match(self.schema_version,&self.generated_plan){(1,None)|(3,None)|(4,None)|(5,None)=>true,(2,Some(r))=>r.valid()&&r.published_at<=self.approved_at&&r.plan_id==self.plan_id&&r.decision_id==self.decision_id&&r.source.lease_id==self.lease_id&&r.source.controller_id==self.controller_id&&r.proposal_hash==self.proposal_hash,_=>false})&&model::token(&self.grant_id)&&model::key(&self.request_id)&&model::goal_id(&self.goal_id)
             &&model::key(&self.pet_id)&&model::key(&self.provider)&&model::token(&self.decision_id)
             &&model::token(&self.lease_id)&&model::token(&self.controller_id)&&model::key(&self.plan_id)&&model::key(&self.step_id)
-            &&self.operation_id=="spotify.control"&&self.version==1
+            &&self.version==1&&match(&self.resource,self.schema_version){(Binding::Spotify(_),1|2)=>self.operation_id=="spotify.control",(Binding::Inventory(b),5)=>b.pet_id==self.pet_id&&self.operation_id=="system.inventory.observe",(Binding::Health(b),5)=>b.pet_id==self.pet_id&&matches!(self.operation_id.as_str(),"system.health.observe"|"system.health.baseline"),(Binding::Sound(b),3|4)=>b.pet_id==self.pet_id&&matches!(self.operation_id.as_str(),"system.sound.volume"|"system.sound.mute"),_=>false}
             &&[&self.main_spec_hash,&self.context_hash,&self.proposal_hash,&self.policy_revision,&self.arguments_hash].iter().all(|s|super::authority::decode(s).is_some())
-            &&self.resource.schema_version==1&&!self.resource.bus_id.is_empty()&&self.resource.bus_id.len()<=128
-            &&self.resource.owner.starts_with(':')&&self.resource.owner.len()<=256&&self.resource.pid>0
-            &&!self.resource.identity.trim().is_empty()&&self.resource.identity.len()<=256
+            &&self.resource.valid()
             &&self.approved_at>0&&self.approved_at<self.deadline_at&&self.deadline_at<=8_640_000_000_000_000
             &&(2048..=MAX_OUTPUT).contains(&self.max_output_bytes)
     }
     pub(super) fn belongs(&self,spec:&AdmissionSpec,lease:&Lease)->bool{
-        self.valid()&&(match(self.schema_version,spec.schema_version,&self.generated_plan){(1,2,None)=>Some(&self.proposal_hash)==spec.proposal_hash.as_ref(),(2,3,Some(r))=>r.source.matches(spec,lease)&&r.decision_id==spec.decision_id,_=>false})&&self.main_spec_hash==model::fingerprint(spec).unwrap_or_default()
+        self.valid()&&spec.native_system_plan.as_ref().is_none_or(|p|p.binding_matches(&self.resource)&&p.steps.iter().any(|s|s.cause.plan_id==self.plan_id&&s.cause.step_id==self.step_id&&s.operation.operation_id==self.operation_id&&s.operation.version==self.version&&model::fingerprint(&s.operation.arguments).ok().as_ref()==Some(&self.arguments_hash)))&&(match(self.schema_version,spec.schema_version,&self.generated_plan){(1|3,2,None)|(4,27,None)|(5,28,None)=>Some(&self.proposal_hash)==spec.proposal_hash.as_ref(),(2,3,Some(r))=>r.source.matches(spec,lease)&&r.decision_id==spec.decision_id,_=>false})&&self.main_spec_hash==model::fingerprint(spec).unwrap_or_default()
             &&self.goal_id==spec.goal_id&&self.pet_id==spec.owner.pet_id&&self.provider==spec.owner.provider
             &&self.decision_id==spec.decision_id&&self.lease_id==lease.id&&self.controller_id==lease.controller_id
             &&self.context_hash==spec.context_hash
@@ -60,7 +58,7 @@ impl Receipt {
     pub(super) fn valid_for(&self,scope:&Scope,recorded_at:u64)->bool{
         if self.criteria_verified||self.goal_complete||self.finished_at<scope.approved_at||self.finished_at>recorded_at{return false;}
         for snapshot in [&self.observation.before,&self.observation.after].into_iter().flatten(){
-            if !matches!(snapshot.playback_status.as_str(),"Playing"|"Paused"|"Stopped")||!snapshot.volume.is_finite()||!(0.0..=1.0).contains(&snapshot.volume)||snapshot.observed_at<scope.approved_at||snapshot.observed_at>self.finished_at{return false;}
+            if !snapshot.valid_between(scope.approved_at,self.finished_at)||!snapshot.matches_resource(&scope.resource){return false;}
         }
         !self.observation.effect_verified||(self.observation.scope_current&&self.observation.after.is_some()&&self.observation.delivery!=Delivery::NotDispatched)
     }

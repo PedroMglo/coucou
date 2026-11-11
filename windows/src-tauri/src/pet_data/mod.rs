@@ -15,6 +15,13 @@ mod startup;
 mod settings_io;
 pub(crate)use settings_io::Format as SettingsIoFormat;
 #[cfg(test)]pub(crate)use startup::fixture_native_claim;
+/// Native compatibility fixtures use the real publication/admission boundary.
+/// This seam is absent from application builds and grants no pet execution.
+#[cfg(test)]pub(crate)fn fixture_publish_profile(address:&str,identifier:&str,layout:Layout)->Result<(PathBuf,PathBuf)>{
+    let claim=fixture_native_claim(address,identifier,&layout.legacy_config)?;
+    let active=publication::Publication::begin(claim,layout).map_err(|f|f.error)?.publish().map_err(|f|f.error)?;
+    let paths=active.paths()?;Ok((paths.config,paths.data))
+}
 mod publication;
 pub(crate)mod bootstrap;
 #[cfg(test)] mod tests;

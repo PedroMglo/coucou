@@ -17,7 +17,7 @@ impl UnusedSource{
     pub(in crate::pet_runtime)fn unlinked(&self)->usize{self.unlinked}
     pub(in crate::pet_runtime)fn staged(&self)->usize{self.staged}
     pub(in crate::pet_runtime)fn reference(&self,goal:&Record,request:&str,id:&str,prepared:u64,approved:u64)->model::Result<Reference>{
-        let reference=Reference{schema_version:1,id:id.into(),request_id:request.into(),goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),decision_id:self.body.decision_id.clone(),source_goal_revision:goal.revision.clone(),source_goal_hash:model::fingerprint(goal)?,source_sequence:goal.sequence,source_grant_revision:self.body.revision.clone(),source_grant_hash:model::fingerprint(&self.body)?,source_grant_schema:self.body.schema_version,source_grant_updated_at:self.body.updated_at,inventory_hash:self.inventory_hash.clone(),artifact_fence:self.artifact_fence.clone(),profile:self.profile.clone(),prepared_at:prepared,approved_at:approved,history_continuity_verified:false};
+        let reference=Reference{schema_version:if self.body.native_system_plan_hash.is_some(){3}else if self.body.operation==Operation::GoalDeterministic{2}else{1},id:id.into(),request_id:request.into(),goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),decision_id:self.body.decision_id.clone(),source_goal_revision:goal.revision.clone(),source_goal_hash:model::fingerprint(goal)?,source_sequence:goal.sequence,source_grant_revision:self.body.revision.clone(),source_grant_hash:model::fingerprint(&self.body)?,source_grant_schema:self.body.schema_version,source_grant_updated_at:self.body.updated_at,inventory_hash:self.inventory_hash.clone(),artifact_fence:self.artifact_fence.clone(),profile:self.profile.clone(),prepared_at:prepared,approved_at:approved,history_continuity_verified:false};
         if !reference.source_matches(goal){return Err(model::Error::Conflict);}Ok(reference)
     }
 }
@@ -37,7 +37,7 @@ impl Authority{
             if self.historical_file(&name){continue;}
             if matches!(name.as_str(),".key.json"|".catalog.lock"|".protocol.json"){continue;}
             let canonical=name.strip_suffix(".json").filter(|s|model::token(s));let staged=name.strip_prefix(".grant-").is_some_and(model::token);
-            if canonical.is_none()&&!staged{return Err(Failure::RecoveryRequired);}let(body,stamp)=self.grant_file(&name)?;
+            if canonical.is_none()&&!staged{return Err(Failure::RecoveryRequired);}if self.rule_record_data(&name)?.is_some(){continue;}let(body,stamp)=self.grant_file(&name)?;
             if canonical.is_some_and(|id|id!=body.decision_id){return Err(Failure::Invalid);}if body.goal_id!=goal{continue;}
             if staged&&own.is_some_and(|r|body.retirement.as_ref()==Some(r)){continue;}
             catalogue.stamps.insert(name.clone(),stamp.clone());
@@ -90,7 +90,7 @@ impl Authority{
         let reference=canonical.retirement.as_ref().ok_or(Failure::Missing)?;
         for name in self.dir.names().map_err(|_|Failure::Unavailable)?{
             if self.historical_file(&name){continue;}
-            if !name.strip_prefix(".grant-").is_some_and(model::token){continue;}let(image,stamp)=self.grant_file(&name)?;
+            if !name.strip_prefix(".grant-").is_some_and(model::token){continue;}if self.rule_record_data(&name)?.is_some(){continue;}let(image,stamp)=self.grant_file(&name)?;
             if image.goal_id!=canonical.goal_id||image.decision_id!=canonical.decision_id{continue;}
             if image.retirement.as_ref()!=Some(reference)&&!same_unused(&image,canonical){return Err(Failure::Changed);}
             self.fence()?;self.dir.remove_exact(&name,&stamp).map_err(|_|Failure::Uncertain)?;
@@ -105,7 +105,7 @@ impl Authority{
         let _guard=self.lock()?;crate::pet_data::bootstrap::write_allowed().map_err(|_|Failure::Unavailable)?;
         let(current,_)=self.grant_file(&format!("{}.json",reference.decision_id))?;
         if current.retirement.as_ref()==Some(reference){let body=self.retirement_recorded(goal,reference)?;self.stabilize(&body)?;self.retirement_cleanup(&body)?;return Ok(false);}
-        self.retirement_current_unlocked(goal,source,reference)?;let mut body=source.body.clone();body.retirement=Some(reference.clone());body.schema_version=8;body.phase=GrantPhase::Revoked;body.revision=reference.id.clone();body.updated_at=reference.approved_at;
+        self.retirement_current_unlocked(goal,source,reference)?;let mut body=source.body.clone();body.retirement=Some(reference.clone());body.schema_version=if body.operation==Operation::GoalDeterministic{body.native_schema()}else{8};body.phase=GrantPhase::Revoked;body.revision=reference.id.clone();body.updated_at=reference.approved_at;
         if !body.valid(){return Err(Failure::Invalid);}*started=true;self.publish(body.clone(),false)?;self.retirement_cleanup(&body)?;Ok(true)
     }
     pub(in crate::pet_runtime)fn acknowledge_retirement(&self,goal:&Record,reference:&Reference)->Result<()>{
@@ -116,7 +116,7 @@ impl Authority{
         if body.retirement.as_ref()==Some(reference){return Ok(false);}if goal.id!=reference.goal_id||goal.spec.owner.pet_id!=reference.pet_id||model::fingerprint(&body).ok().as_ref()!=Some(&reference.source_grant_hash)||model::fingerprint(&source.body).ok().as_ref()!=Some(&reference.source_grant_hash){return Err(Failure::Changed);}
         self.retirement_profile(reference)?;
         for name in self.dir.names().map_err(|_|Failure::Unavailable)?{
-            if self.historical_file(&name){continue;}if !name.strip_prefix(".grant-").is_some_and(model::token){continue;}let(image,stamp)=self.grant_file(&name)?;if image.retirement.as_ref()==Some(reference){self.dir.remove_exact(&name,&stamp).map_err(|_|Failure::Uncertain)?;}}
+            if self.historical_file(&name){continue;}if !name.strip_prefix(".grant-").is_some_and(model::token){continue;}if self.rule_record_data(&name)?.is_some(){continue;}let(image,stamp)=self.grant_file(&name)?;if image.retirement.as_ref()==Some(reference){self.dir.remove_exact(&name,&stamp).map_err(|_|Failure::Uncertain)?;}}
         self.dir.durable().map_err(|_|Failure::Uncertain)?;self.fence()?;Ok(true)
     }
 }

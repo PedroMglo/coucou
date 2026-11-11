@@ -20,10 +20,15 @@ fn value<T:Serialize>(v:T)->Result<Value>{serde_json::to_value(v).map_err(|_|Err
 fn object(bytes:&[u8])->Result<Value>{let bytes=bytes.strip_prefix(&[0xef,0xbb,0xbf]).unwrap_or(bytes);let v:Value=serde_json::from_slice(bytes).map_err(|_|Error::UnsupportedProfile)?;if !v.is_object(){return Err(Error::UnsupportedProfile);}Ok(v)}
 fn fields(v:&Value,allowed:&[&str])->Result<()>{let o=v.as_object().ok_or(Error::UnsupportedProfile)?;if o.keys().any(|k|!allowed.contains(&k.as_str())){return Err(Error::UnsupportedProfile);}Ok(())}
 fn closed_pets(v:&Value)->Result<()>{
- fields(v,&["version","reasoningTerms","reasoningLength","pets"])?;
+ fields(v,&["version","catalogRevision","reasoningTerms","reasoningLength","pets"])?;
  for p in v["pets"].as_object().ok_or(Error::UnsupportedProfile)?.values(){
-  fields(p,&["name","aliases","provider","mode","fast","reasoning","permissions","localExecution"])?;
+  fields(p,&["name","aliases","provider","mode","fast","reasoning","permissions","localExecution","inference","inferenceRevision","systemAccess"])?;
   for name in ["fast","reasoning"]{fields(&p[name],&["model","effort"])?;}
+  if let Some(policy)=p.get("systemAccess").filter(|c|!c.is_null()){
+   fields(policy,&["schemaVersion","enabled","revision","grants"])?;
+   for grant in policy["grants"].as_array().ok_or(Error::UnsupportedProfile)?{fields(grant,&["subplugin","operation","resource"])?;fields(&grant["resource"],&["kind","key"])?;}
+  }
+  if let Some(choice)=p.get("inference").filter(|c|!c.is_null()){fields(choice,&["schemaVersion","backend","endpoint","model","credential"])?;}
   if let Some(p)=p.get("permissions").filter(|p|!p.is_null()){fields(p,&["documents","emailDrafts","music","openApps"])?;}
   if let Some(p)=p.get("localExecution").filter(|p|!p.is_null()){fields(p,&["mode","taskTimeoutMs","approvalTimeoutMs","commandTimeoutMs","maxCalls","maxOutputBytes","allowedPrograms"])?;}
  }Ok(())

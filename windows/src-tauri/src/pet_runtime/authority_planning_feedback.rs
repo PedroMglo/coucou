@@ -11,6 +11,20 @@ impl Authority {
         for round in &journal.rounds {if let Some(feedback)=&round.feedback {self.planning_feedback_unlocked(spec,proof,feedback)?;}}
         Ok(journal)
     }
+    /// Native capture supplies observation only. Original plan ACK and every
+    /// delivery must already exist; no feedback can grant DATA use or success.
+    pub(in crate::pet_runtime)fn record_peer_round_feedback(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,goal:&Record,data:&crate::pet_runtime::peer_round_data::Captured,now:u64)->Result<crate::pet_runtime::peer_round_feedback::Feedback>{
+        if !spec.peer_iteration(){return Err(Failure::Invalid);}let reference=crate::pet_runtime::planned_peer::reference(goal,spec).map_err(|_|Failure::Changed)?;
+        let feedback=data.feedback(goal,reference,now).map_err(|_|Failure::Changed)?;
+        let _lock=self.lock()?;let mut body=self.budget_body(spec,proof,lease,now,false)?;if !matches!(body.phase,GrantPhase::Claimed|GrantPhase::Waiting)||now>=lease.deadline_at{return Err(Failure::Revoked);}Self::generated_acknowledged(&body,spec,reference)?;
+        let plan=goal.plans.iter().find(|p|p.id==reference.plan_id).ok_or(Failure::Invalid)?;
+        if !plan.steps.iter().all(|step|body.messages.as_ref().is_some_and(|m|m.entries.iter().any(|r|r.scope.envelope.cause.plan_id==plan.id&&r.scope.envelope.cause.step_id==step.id))){return Err(Failure::RecoveryRequired);}
+        let journal=body.planning_usage.as_mut().ok_or(Failure::Invalid)?;let round=journal.rounds.last_mut().filter(|r|r.attempt_id==reference.output.attempt_id).ok_or(Failure::Changed)?;
+        if let Some(old)=&round.peer_feedback{if old!=&feedback{return Err(Failure::Changed);}return self.stabilize(&body).map(|_|feedback);}
+        round.peer_feedback=Some(feedback.clone());journal.schema_version=journal.schema_version.max(3);
+        if !journal.valid_for(spec,body.lease.as_ref(),body.budget_usage.as_ref()){return Err(Failure::Invalid);}
+        body.updated_at=now;body.revision=nonce().map_err(|_|Failure::Unavailable)?;self.publish(body,false)?;Ok(feedback)
+    }
     /// Caller holds the original authority lock. Revalidate the referenced
     /// native files; a copied progress counter is not a substitute for evidence.
     pub(super)fn planning_feedback_unlocked(&self,spec:&AdmissionSpec,proof:&ConsentProof,feedback:&Feedback)->Result<crate::pet_runtime::criteria::Verification> {

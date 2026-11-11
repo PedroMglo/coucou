@@ -17,6 +17,8 @@ impl Frame{
  pub(crate)fn current(&self)->bool{self.epoch!=u64::MAX&&self.owner.epoch.load(Ordering::Acquire)==self.epoch}
  pub(crate)fn same(&self,other:&Self)->bool{self.epoch==other.epoch&&self.owner.same(&other.owner)}
  #[cfg(test)]pub(crate)fn invalidate_for_test(&self){self.owner.invalidate();}
+ #[cfg(test)]pub(crate)fn fixture()->Self{let owner=Owner::new();Self{owner,epoch:1}}
+ #[cfg(test)]pub(crate)fn next_for_test(&self)->Self{Self{owner:self.owner.clone(),epoch:self.owner.epoch.load(Ordering::Acquire)}}
 }
 #[derive(Clone,Debug,PartialEq,Serialize)]#[serde(rename_all="camelCase")]
 pub(crate)struct Destinations{pub revision:String,pub values:Value}
@@ -121,13 +123,12 @@ impl Controller{
   *current=next;let status=super::io_status(&current);let receipt=Receipt{schema_version:1,data_adopted:true,retained_review:reference.id,status,message:"Dados revistos e confirmados. As componentes mantêm-se suspensas; objetivos, decisões e efeitos anteriores conservam a sua autoridade e incerteza."};Ok((current.clone(),receipt))
  }
 }
-// Lifecycle belongs to the native window, never a renderer-supplied label/id.
+#[path="settings_review_window.rs"]mod native_window;
+// Shared identity only; the configuration Controller still belongs to Settings.
 pub(crate)fn register_window(window:&tauri::WebviewWindow){
- if window.label()!=crate::HUB_LABEL{return;}
- let owner=controller().register();window.on_window_event(move|event|{
-  if matches!(event,tauri::WindowEvent::CloseRequested{..}|tauri::WindowEvent::Destroyed){owner.invalidate();}
- });
+ native_window::register(window);
 }
+pub(crate)async fn capture_window(window:&tauri::WebviewWindow)->Result<Frame,()>{native_window::capture(window).await}
 fn permitted(window:&tauri::WebviewWindow)->bool{window.label()==crate::HUB_LABEL&&window.is_visible().unwrap_or(false)}
 fn destinations()->Result<Destinations,String>{let document=crate::pet_config::pet_configuration()?;Ok(Destinations{revision:document.revision,values:serde_json::to_value(document.config).map_err(|_|refused())?})}
 #[tauri::command]

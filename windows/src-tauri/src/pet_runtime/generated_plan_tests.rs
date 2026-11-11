@@ -47,6 +47,19 @@ fn write(f:&Fixture,g:&Record) {std::fs::write(f.path.join("goals").join(format!
     a.fault=Fault::AfterGrantPublish;assert_eq!(ack!(a,g,o,gate,commit.published.as_ref().unwrap(),100_015).err(),Some(Failure::Uncertain));a.fault=Fault::None;
     ack!(a,g,o,gate,commit.published.as_ref().unwrap(),100_016).unwrap();let current=store.read(&g.id,"ai_ollama").unwrap();assert_eq!(current.sequence,g.sequence+1);assert_eq!(current.revision,commit.receipt.record.revision);assert_eq!(current.events.iter().filter(|e|matches!(e.kind,model::EventKind::PlanGenerated)).count(),1);
 }
+#[test]fn retained_publication_proof_reloads_content_before_ack_and_preserves_the_original_event() {
+    let(f,a,g,_p,o,e)=proposal();let store=native(&f);let gate=o.plan_gate().unwrap();
+    let cert=prepare!(a,g,o,e,gate,100_013).unwrap();let commit=store.commit_generated(&cert,100_013).unwrap();drop(cert);
+    let canonical=commit.receipt.record.clone();let before=grant(&f,&g);
+    // The receipt and opaque Published value are retained, but cannot bless
+    // content swapped on disk during a delayed ACK.
+    let mut changed=canonical.clone();changed.plans[0].steps[0].description="Substituted after publication".into();changed.validate().unwrap();write(&f,&changed);
+    assert_eq!(ack!(a,g,o,gate,commit.published.as_ref().unwrap(),100_014).err(),Some(Failure::Changed));
+    assert_eq!(grant(&f,&g),before);assert!(store.read(&g.id,"ai_ollama").is_err());
+    write(&f,&canonical);ack!(a,g,o,gate,commit.published.as_ref().unwrap(),100_015).unwrap();
+    let actual=store.read(&g.id,"ai_ollama").unwrap();assert_eq!(actual.revision,canonical.revision);assert_eq!(actual.sequence,g.sequence+1);
+    assert_eq!(grant(&f,&g)["body"]["budgetUsage"],before["body"]["budgetUsage"]);
+}
 #[test]fn native_reader_detects_deleted_refs_plans_or_model_candidate_substitution() {
     for variant in ["allRemoved","allHistoryRemoved","operation","description","reference"] {
         let(f,_a,g,_p,o,_)=proposal();let store=native(&f);let current=o.publish_generated_plan(&store,"plan-1",100_013).unwrap().receipt.record;

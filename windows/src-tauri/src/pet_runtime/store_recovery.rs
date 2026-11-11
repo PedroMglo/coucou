@@ -33,6 +33,16 @@ impl Store{
 }
 
 impl Store{
+    pub(in crate::pet_runtime)fn prepare_peer_planning_continuation(self:&std::sync::Arc<Self>,path:&Path,id:&str,pet:&str,revision:&str,now:u64)->Result<crate::pet_runtime::continuation::CapturedPeerPlanning>{
+        let authority=Authority::existing(path).map_err(crate::pet_runtime::authority::Failure::control_error)?;
+        self.bound_authority(&authority)?;
+        let goal=self.read_control(id,pet)?;
+        if goal.revision!=revision{return Err(Error::Conflict);}
+        let snapshot=authority.peer_continuation_snapshot(&goal,now).map_err(crate::pet_runtime::authority::Failure::control_error)?;
+        let remaining=snapshot.original_budget.deadline_at.checked_sub(now).ok_or(Error::Conflict)?;
+        let deadline=std::time::Instant::now().checked_add(std::time::Duration::from_millis(remaining)).ok_or(Error::ClockRollback)?;
+        Ok(crate::pet_runtime::continuation::CapturedPeerPlanning{snapshot,authority,store:self.clone(),invalidated:std::sync::atomic::AtomicBool::new(false),deadline})
+    }
     #[cfg(test)]pub(in crate::pet_runtime)fn prepare_continuation(&self,path:&Path,id:&str,pet:&str,revision:&str,now:u64)->Result<std::result::Result<(Record,crate::pet_runtime::continuation::Captured),crate::pet_runtime::admission::Denial>>{
         self.prepare_continuation_review(path,id,pet,revision,now,false)
     }

@@ -1,5 +1,13 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {Bridge} from '../src/core/bridge.ts';import {internals} from './tauri.mjs';
+test('calendar source scope reaches native admission preparation without widening legacy requests or trusting foreign fields',async()=>{
+ const saved=internals.invoke,calls=[];try{internals.invoke=async(command,args)=>{calls.push({command,args});return null;};
+ const selectedCalendars={sourceScope:'pet',selected:[{id:'own-calendar',revision:3,authority:'forged'}],query:{start:'2026-11-10T00:00:00Z',end:'2026-11-11T00:00:00Z',timeZone:'Europe/Lisbon',limit:1},consent:'forged'};
+ const input={petId:'ai_ollama',goalId:'own-goal',revision:'original',requestId:'own-context',mode:'dedicated',selectedCalendars};await Bridge.petRuntimePrepareContext(input);selectedCalendars.sourceScope='changed';selectedCalendars.selected[0].revision=99;selectedCalendars.query.start='changed';
+ assert.deepEqual(calls[0],{command:'pet_runtime_prepare_context',args:{input:{petId:'ai_ollama',goalId:'own-goal',revision:'original',requestId:'own-context',mode:'dedicated',selectedCalendars:{sourceScope:'pet',selected:[{id:'own-calendar',revision:3}],query:{start:'2026-11-10T00:00:00Z',end:'2026-11-11T00:00:00Z',timeZone:'Europe/Lisbon',limit:1}}}}});
+ await Bridge.petRuntimePrepareContext({...input,selectedCalendars:{selected:[{id:'legacy',revision:1}],query:{start:'a',end:'b',timeZone:'c',limit:1}}});assert.equal(Object.hasOwn(calls[1].args.input.selectedCalendars,'sourceScope'),false);assert.equal(calls.length,2);
+ }finally{internals.invoke=saved;}
+});
 test('unused authorization recovery accepts references only and cannot submit a fabricated authority or usage',async()=>{
  const saved=internals.invoke,calls=[];try{internals.invoke=async(command,args)=>{calls.push({command,args});return null;};
  const refs={petId:'agent_codex',goalId:'original-goal',revision:'reviewed'},prepare={...refs,decisionId:'unused-native-decision',requestId:'explicit-review'},confirm={...refs,decisionId:prepare.decisionId,token:'native-review-token',approve:true};

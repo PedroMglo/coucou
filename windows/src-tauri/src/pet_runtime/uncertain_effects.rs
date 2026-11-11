@@ -10,6 +10,7 @@ pub struct Effect{
     pub operation:OperationProposal,pub target_label:String,
 }
 pub(super)fn state_assignment(operation:&OperationProposal)->bool{
+    #[cfg(target_os="linux")]if matches!(operation.operation_id.as_str(),"system.sound.volume"|"system.sound.mute"){return operation.valid();}
     operation.operation_id=="spotify.control"&&operation.version==1&&operation.valid()
         &&serde_json::from_value::<crate::pet_operations::Music>(operation.arguments.clone())
             .is_ok_and(|a|matches!(a,crate::pet_operations::Music::Play|crate::pet_operations::Music::Pause|crate::pet_operations::Music::SetVolume{..}))

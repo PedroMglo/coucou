@@ -11,6 +11,22 @@ pub(super)struct Profile{pub directory:FileId,pub key_id:String}
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super)struct Process{pub pid:u32,pub uid:u32,pub start_ticks:u64,pub boot_id:String,pub pid_namespace:FileId}
+/// Typed metadata operation; not a Goal, lease, controller or execution permit.
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super)struct Operation{
+    pub schema_version:u32,pub operation_id:String,pub scope_hash:String,pub captured_at:u64,
+    pub profile:Profile,pub process:Process,pub owner_directory:FileId,pub owner_lock:FileId,
+}
+impl Operation{
+    pub(super)fn valid(&self,id:&str,scope:&str,at:u64)->bool{
+        self.schema_version==1&&model::token(id)&&self.operation_id==id&&self.scope_hash==scope
+            &&scope.len()==64&&scope.bytes().all(|b|b.is_ascii_hexdigit())&&self.captured_at==at&&at>0
+            &&self.profile.directory.inode>0&&model::token(&self.profile.key_id)
+            &&self.process.pid>0&&self.process.start_ticks>0&&uuid(&self.process.boot_id)&&self.process.pid_namespace.inode>0
+            &&self.owner_directory.inode>0&&self.owner_lock.inode>0
+    }
+}
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super)struct Record{

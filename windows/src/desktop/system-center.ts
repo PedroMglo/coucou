@@ -1,11 +1,7 @@
 import type {ControlNavigation} from '../core/control-navigation';
-import {failureContext} from '../core/control-navigation';
-import {SystemNetwork,type NetworkTransport} from '../core/system-network';
-import {networkPage} from './system-network';
+import type {NetworkTransport} from '../core/system-network';
 import {Bridge} from '../core/bridge';
 import {systemDetails,type SystemCenterStatus,type SystemPanel,type SystemTrayItem} from '../core/system-center';
-import {IslandSystemAudio} from '../core/system-audio';
-import {buildSpotyCard} from '../views/spoty-audio';
 export type {SystemCenterStatus} from '../core/system-center';
 const make=<K extends keyof HTMLElementTagNameMap>(tag:K,text?:string)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;return el;};
 const icons:Record<string,string>={wifi:'M3 8a15 15 0 0 1 18 0M6 12a10 10 0 0 1 12 0m-9 4a5 5 0 0 1 6 0m-3 4h.01',bluetooth:'m7 7 10 10-5 4V3l5 4L7 17',audio:'M11 5 6 9H3v6h3l5 4V5m4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14',battery:'M3 7h16v10H3V7m18 3v4M6 10h7v4H6v-4',clipboard:'M8 5H5v16h14V5h-3M8 3h8v4H8V3m0 9h8m-8 4h5',disks:'M4 4h16v16H4V4m0 10h16M7 17h.01M10 17h.01',recording:'M4 4h16v13H4V4m5 17h6m-3-4v4M9 10a3 3 0 1 0 6 0 3 3 0 1 0-6 0',tray:'M4 4h6v6H4V4m10 0h6v6h-6V4M4 14h6v6H4v-6m10 0h6v6h-6v-6'};
@@ -36,31 +32,8 @@ export function systemCenter(surface:HTMLElement,compact:HTMLElement,changed:()=
  const traySection=make('section');traySection.className='system-tray-section';const trayHeading=make('h2','Aplicações em segundo plano'),trayList=make('div'),trayEmpty=make('p','A obter os ícones das aplicações…');trayList.className='system-tray-list';trayEmpty.className='system-tray-empty';traySection.append(trayHeading,trayList,trayEmpty);
  const trayRows=new Map<string,{el:HTMLElement;name:HTMLElement;open:HTMLButtonElement;menu:HTMLButtonElement;item:SystemTrayItem}>();
  const overview=make('div');overview.className='system-center-overview';overview.append(hero,statusLine,cards,controls,traySection);
- const audioPage=make('section');audioPage.className='system-audio-page';audioPage.hidden=true;audioPage.setAttribute('aria-label','Som do sistema');
- const audioBack=make('button','← Voltar ao sistema');audioBack.type='button';audioBack.className='system-audio-back';audioPage.append(audioBack);
- tools.append(overview,audioPage);surface.insertBefore(tools,document.getElementById('control-header'));surface.append(feedback);
+ tools.append(overview);surface.insertBefore(tools,document.getElementById('control-header'));surface.append(feedback);
  let enabled=false,reading=false,generation=0,actionPending=false,lastStatus:SystemCenterStatus|null=null;
- let audio:ReturnType<typeof buildSpotyCard>|null=null,audioOpen=false,audioVisible=false,networkOpen=false,networkRevision='';
- const network=options.networkTransport&&options.navigation?new SystemNetwork(options.networkTransport,()=>options.navigation!.systemEligible?options.navigation!.context:null,error=>{const context=failureContext(error);if(context)options.navigation!.observe(context);}):null;
- const networks=network?networkPage(network,()=>child('overview')):null;if(networks){networks.el.hidden=true;tools.append(networks.el);}
- const systemVisible=()=>enabled&&surface.isConnected&&!surface.hidden&&!document.hidden&&surface.dataset.mode==='home'&&surface.dataset.page==='system';
- function syncAudio(){
-  const visible=audioOpen&&systemVisible();
-  if(audioVisible&&!visible)IslandSystemAudio.invalidate();audioVisible=visible;audio?.sync();
-  network?.setActive(networkOpen&&systemVisible()&&networkRevision===options.navigation?.context?.revision);
- }
- function openAudio(value:boolean){
-  if(value&&!systemVisible())return;audioOpen=value;networkOpen=false;overview.hidden=value;audioPage.hidden=!value;if(networks)networks.el.hidden=true;tools.scrollTop=0;feedback.hidden=true;
-  if(value&&!audio){audio=buildSpotyCard({devicesOnly:true,controller:IslandSystemAudio,visible:()=>audioOpen&&systemVisible()});audioPage.append(audio.el);}
-  syncAudio();if(!value&&document.hasFocus())settingCards.get('audio')?.button.focus();changed();
- }
- function child(page:'overview'|'audio'|'network'){
-  const commit=()=>{if(page==='network'&&networks){audioOpen=false;networkOpen=true;networkRevision=options.navigation?.context?.revision??'';overview.hidden=true;audioPage.hidden=true;networks.el.hidden=false;tools.scrollTop=0;feedback.hidden=true;syncAudio();changed();}else openAudio(page==='audio');};
-  if(options.navigateChild)options.navigateChild(commit);else commit();
- }
- audioBack.onclick=()=>child('overview');
- const unobserveNavigation=options.navigation?.subscribe(syncAudio);
- const observeVisibility=new MutationObserver(syncAudio);observeVisibility.observe(surface,{attributes:true,attributeFilter:['data-mode','data-page','hidden']});
  const locale=document.documentElement.lang||undefined;
  function actionButtons(){return [...tools.querySelectorAll<HTMLButtonElement>('button')];}
  async function perform(button:HTMLButtonElement,run:()=>Promise<unknown>){
@@ -71,7 +44,8 @@ export function systemCenter(surface:HTMLElement,compact:HTMLElement,changed:()=
  }
  const action=(panel:SystemPanel,button:HTMLButtonElement)=>{button.onclick=()=>void perform(button,()=>Bridge.petSystemPanel(panel));};
  action('calendar',calendar);action('weather',weather);action('notifications',notifications);action('quick-settings',quick);
- for(const[panel,c]of settingCards){if(panel==='audio')c.button.onclick=()=>child('audio');else if(panel==='wifi')c.button.onclick=()=>child('network');else action(panel as SystemPanel,c.button);}
+ // Navigate to existing native settings; pets keep their own shared brokers/grants.
+ for(const[panel,c]of settingCards)action(panel as SystemPanel,c.button);
  function syncTray(items:SystemTrayItem[]|null|undefined){
   const ids=new Set(items?.map(i=>i.id));for(const[id,row]of trayRows)if(!ids.has(id)){row.el.remove();trayRows.delete(id);}
   let index=0;for(const item of items??[]){
@@ -108,9 +82,9 @@ export function systemCenter(surface:HTMLElement,compact:HTMLElement,changed:()=
   catch{if(!enabled||ticket!==generation)return;tools.dataset.stale='true';renderRecording(lastStatus,true);statusLine.textContent=lastStatus?'Ligação ao sistema interrompida. Os valores mostram a última leitura.':'Não foi possível obter o estado do sistema. Podes continuar a abrir os painéis.';}
   finally{reading=false;}
  }
- const visibilityChanged=()=>{renderClock();void refresh();syncAudio();};
+ const visibilityChanged=()=>{renderClock();void refresh();};
  clock.hidden=true;const clockTimer=window.setInterval(()=>{renderClock();void refresh();},3000);document.addEventListener('visibilitychange',visibilityChanged);
  return {get height(){return enabled?640+(feedback.hidden?0:56):0;},get width(){return enabled?432:288;},setEnabled(value:boolean){
-  if(enabled===value)return;enabled=value;generation++;surface.dataset.systemCenter=String(value);clock.hidden=!value;tools.hidden=!value;feedback.hidden=true;syncAudio();renderRecording(lastStatus);surface.setAttribute('aria-label',value?'Centro dos pets e do sistema':'Centro de controlo dos pets');compact.setAttribute('aria-label',value?'Abrir centro dos pets e do sistema':'Abrir centro de controlo dos pets');renderClock();void refresh();changed();
- },resetPage(){openAudio(false);},dispose(){unobserveNavigation?.();network?.dispose();networks?.dispose();observeVisibility.disconnect();document.removeEventListener('visibilitychange',visibilityChanged);window.clearInterval(clockTimer);if(audioVisible)IslandSystemAudio.invalidate();audio?.dispose();}};
+  if(enabled===value)return;enabled=value;generation++;surface.dataset.systemCenter=String(value);clock.hidden=!value;tools.hidden=!value;feedback.hidden=true;renderRecording(lastStatus);surface.setAttribute('aria-label',value?'Centro dos pets e do sistema':'Centro de controlo dos pets');compact.setAttribute('aria-label',value?'Abrir centro dos pets e do sistema':'Abrir centro de controlo dos pets');renderClock();void refresh();changed();
+ },resetPage(){feedback.hidden=true;tools.scrollTop=0;changed();},dispose(){document.removeEventListener('visibilitychange',visibilityChanged);window.clearInterval(clockTimer);}};
 }

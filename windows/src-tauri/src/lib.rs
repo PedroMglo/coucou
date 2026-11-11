@@ -32,6 +32,8 @@ mod pet_autostart_settings;
 mod pet_center_settings;
 mod pet_roster_settings;
 mod pet_audio;
+mod pet_health;
+mod pet_host_inventory;
 mod local_tasks;
 mod agent_hooks;
 mod agents;
@@ -91,6 +93,7 @@ mod phone_link;
 mod pipe;
 mod pet_activity;
 mod pet_config;
+mod pet_inference;
 mod pet_presence;
 mod platform;
 #[cfg(target_os = "linux")]
@@ -661,7 +664,7 @@ async fn chat_send(
     #[cfg(target_os="linux")]let memory_context_hash=if memory_decision.is_some(){Some(pet_memory::context::request_context_hash(context.as_ref(),document_sequence).map_err(|_|"O contexto do pedido mudou ou excede o limite da revisão de memória.")?)}else{None};
     let context=context.map(|context|pet_documents::checked_context(&settings.chat_provider,&chat.conversation_id(&settings.chat_provider)?,context,document_sequence)).transpose()?;
     if let Some(model)=selected_model {
-        chat::select_for_turn(&mut settings,model)?;
+        chat.select_reserved_model(&mut settings,model)?;
     }
     #[cfg(target_os="linux")]let memory=memory_decision.map(|decision|pet_memory::manual::accept(window.label(),&chat,&settings,&query,memory_context_hash.as_deref().ok_or("Falta a revisão do contexto deste pedido.")?,decision)).transpose()?;
     #[cfg(target_os="linux")]let channel=match memory{Some(memory)=>chat.with_selected_memory(memory),None=>chat.inner().clone()};
@@ -675,9 +678,7 @@ async fn chat_send(
 async fn chat_models(shared: State<'_, Shared>, provider: String) -> Result<Vec<ModelInfo>, String> {
     settings::effect_allowed()?;
     let settings = shared.settings.lock().unwrap().clone();
-    let observation=pet_capabilities::begin_catalog(&settings,&provider);
-    let result=chat::models(&settings, &provider).await;
-    pet_capabilities::finish_catalog(observation,result.is_ok());result
+    chat::models(&settings, &provider).await
 }
 
 /// Settings → Local models → Connect: does the server answer, and with which models?
@@ -887,12 +888,21 @@ pub fn show_settings_window(app: &AppHandle) {
 
 /// Shows the Coucou window, on `page` when given ("dictation", "notes",
 /// "settings", "general", "shortcuts"…).
+// Latest transient UI destination, retained across frontend listener startup.
+// No authority, profile mutation or scheduler; only the addressed Hub reads it.
+static HUB_REQUESTED_PAGE: std::sync::Mutex<Option<String>>=std::sync::Mutex::new(None);
+#[tauri::command]
+fn hub_requested_page(window:tauri::WebviewWindow)->Result<Option<String>,String>{
+ if window.label()!=HUB_LABEL{return Err("Esta navegação pertence à janela Coucou.".into());}
+ HUB_REQUESTED_PAGE.lock().map(|page|page.clone()).map_err(|_|"A navegação está indisponível.".into())
+}
 pub fn show_hub(app: &AppHandle, page: Option<&str>) {
     let Some(win) = app.get_webview_window(HUB_LABEL) else {
         log::line("Coucou window missing");
         return;
     };
-    if let Some(page) = page {
+    if let Some(page) = page.filter(|s|s.len()<=256&&!s.chars().any(char::is_control)) {
+        if let Ok(mut pending)=HUB_REQUESTED_PAGE.lock(){*pending=Some(page.to_string());}
         let _ = win.emit("hub-page", page.to_string());
     }
     let _ = win.unminimize();
@@ -919,6 +929,10 @@ fn voice_request(args: &[String]) -> bool {
 }
 
 pub fn run() {
+    #[cfg(target_os="linux")]
+    if flow::clipboard_read::entry(){return;}
+    #[cfg(target_os="linux")]
+    if flow::clipboard_write::entry(){return;}
     #[cfg(target_os="linux")]
     if pet_calendar::helper::entry() {return;}
     if gravity_hook::maybe_run() {return;}
@@ -994,6 +1008,8 @@ pub fn run() {
             approval_answer,
             approval_ack,
             pipe::approval_presented,
+            pipe::external_approvals::relay_external_approval_status,
+            pipe::external_approvals::relay_external_approval_set,
             approval_decline,
             log_line,
             chat_send,
@@ -1025,21 +1041,60 @@ pub fn run() {
             pet_config::pet_configuration,
             pet_capabilities::pet_capabilities_snapshot,
             pet_capabilities::pet_capabilities_target,
+            pet_runtime::rules::recovery_api::pet_runtime_rule_probe_recovery_prepare,
+            pet_runtime::rules::recovery_api::pet_runtime_rule_probe_recovery_confirm,
+            pet_runtime::rules::intent_retirement_api::pet_runtime_rule_intent_retirement_prepare,
+            pet_runtime::rules::intent_retirement_api::pet_runtime_rule_intent_retirement_confirm,
+            pet_runtime::rules::succession_api::pet_runtime_rule_succession_prepare,
+            pet_runtime::rules::succession_api::pet_runtime_rule_succession_confirm,
+            pet_runtime::rules::revision_api::pet_runtime_rule_revision_prepare,
+            pet_runtime::rules::revision_api::pet_runtime_rule_revision_confirm,
+            pet_runtime::rules::authority_api::pet_runtime_rule_authority_prepare,
+            pet_runtime::rules::authority_api::pet_runtime_rule_authority_confirm,
+            pet_runtime::rules::authority_api::pet_runtime_rule_authority_status,
+            pet_runtime::rules::authority_api::pet_runtime_rule_authority_revoke,
+            pet_runtime::rules::occurrences::pet_runtime_rule_occurrence_admit,
+            pet_runtime::rules::pet_runtime_rules,
+            pet_runtime::rules::pet_runtime_rule_save,
+            pet_runtime::rules::pet_runtime_rule_preview,
             pet_runtime::pet_runtime_create,
+            pet_runtime::pet_runtime_create_deterministic,
             pet_runtime::pet_runtime_list,
             pet_runtime::pet_runtime_read,
             pet_runtime::pet_runtime_reconcile,
             pet_runtime::pet_runtime_history,
+            pet_runtime::pet_runtime_prepare_funded_goal,
+            pet_runtime::pet_runtime_prepare_recursive_funded_goal,
+            pet_runtime::pet_runtime_prepare_received_result_goal,
+            pet_runtime::pet_runtime_confirm_received_result_goal,
+            pet_runtime::pet_runtime_confirm_funded_goal,
+            pet_runtime::pet_runtime_confirm_recursive_funded_goal,
+            pet_runtime::pet_runtime_prepare_received_goal,
+            pet_runtime::pet_runtime_received_work,
+            pet_runtime::pet_runtime_work_report_draft,
+            pet_runtime::pet_runtime_delegations,
+            pet_runtime::pet_runtime_peer_feedback,
+            pet_runtime::pet_runtime_prepare_delegation_withdrawal,
+            pet_runtime::pet_runtime_confirm_delegation_withdrawal,
+            pet_runtime::pet_runtime_prepare_delegation_branch,
+            pet_runtime::pet_runtime_confirm_delegation_branch,
+            pet_runtime::pet_runtime_confirm_received_goal,
             pet_runtime::pet_runtime_prepare_restored_future,
             pet_runtime::pet_runtime_confirm_restored_future,
             pet_runtime::pet_runtime_prepare_retirement,
             pet_runtime::pet_runtime_confirm_retirement,
             pet_runtime::pet_runtime_prepare_recovery,
+            pet_runtime::pet_runtime_prepare_peer_resume,
             pet_runtime::pet_runtime_confirm_recovery,
             pet_runtime::pet_runtime_mutate,
             pet_runtime::pet_runtime_import_legacy,
             pet_runtime::pet_runtime_prepare_context,
             pet_runtime::pet_runtime_context_read,
+            pet_runtime::pet_runtime_prepare_deterministic,
+            pet_runtime::pet_runtime_prepare_system,
+            pet_runtime::pet_runtime_prepare_result_disclosure,
+            pet_runtime::pet_runtime_prepare_deterministic_continuation,
+            pet_runtime::pet_runtime_verify_deterministic,
             pet_runtime::pet_runtime_prepare_admission,
             pet_runtime::pet_runtime_prepare_continuation,
             pet_runtime::pet_runtime_prepare_planning,
@@ -1050,8 +1105,21 @@ pub fn run() {
             pet_runtime::pet_runtime_claim,
             pet_runtime::pet_runtime_claim_status,
             pet_runtime::pet_runtime_release_claim,
+            pet_runtime::pet_runtime_close_deterministic,
+            pet_runtime::pet_runtime_native_plan_revisions,
+            pet_runtime::pet_runtime_prepare_native_plan_revision,
+            pet_runtime::pet_runtime_confirm_native_plan_revision,
+            pet_runtime::pet_runtime_ack_native_plan_revision,
+            pet_runtime::pet_runtime_abandon_native_plan_revision,
             pet_runtime::pet_runtime_respond_once,
             pet_runtime::pet_runtime_result,
+            pet_runtime::pet_runtime_pending_messages,
+            pet_runtime::pet_runtime_prepare_message_retirement,
+            pet_runtime::pet_runtime_confirm_message_retirement,
+            pet_runtime::pet_runtime_prepare_message,
+            pet_runtime::pet_runtime_confirm_message,
+            pet_runtime::pet_runtime_message_result,
+            pet_runtime::pet_runtime_message_inbox,
             pet_runtime::pet_runtime_prepare_step,
             pet_runtime::pet_runtime_confirm_step,
             pet_runtime::pet_runtime_run_step,
@@ -1068,6 +1136,13 @@ pub fn run() {
             pet_runtime::pet_runtime_complete_recipe,
             pet_config::pet_roster,
             pet_config::pet_configuration_save,
+            pet_config::pet_inference_set,
+            pet_config::system_access::pet_system_access_set,
+            pet_audio::pet_sound_snapshot,
+            pet_health::pet_health_snapshot,
+            pet_health::pet_health_baseline,
+            pet_host_inventory::pet_host_inventory,
+            pet_audio::pet_sound_control,
             pet_sources::pet_source_configuration,
             pet_sources::pet_source_configuration_save,
             pet_memory::pet_memory_list,
@@ -1111,6 +1186,7 @@ pub fn run() {
             github_refresh,
             open_n8n,
             open_settings_window,
+            hub_requested_page,
             set_paused,
             shortcuts_status,
             shortcuts::review::shortcuts_review_prepare,
@@ -1231,6 +1307,7 @@ pub fn run() {
             flow::flow_set_styles,
             flow::flow_running_apps,
             flow::flow_copy,
+            flow::flow_copy_last,
             flow::flow_paste_again,
             flow::flow_models_download,
             flow::flow_models_remove,
@@ -1265,8 +1342,12 @@ pub fn run() {
             i18n::set_picked(&loaded.language);
             let current_settings=Arc::new(Mutex::new(loaded.clone()));
             settings::install_effect_source(&current_settings)?;
-            app.manage(Shared {settings:current_settings,gate:gate.clone()});
-            app.manage(Chat::persistent(platform::data_dir().join("assistant").join("conversations.json")));
+            // Initialize the existing profile once, outside resource/chat
+            // locks. Failure leaves local inference unavailable and visible
+            // through its usual configuration diagnostics.
+            let _=pet_config::read();
+            app.manage(Shared {settings:current_settings.clone(),gate:gate.clone()});
+            app.manage(Chat::persistent(platform::data_dir().join("assistant").join("conversations.json")).with_resource_settings(current_settings));
             app.manage(recap::load());
             pet_native_binding::setup(&handle,loaded.pet_system_center);
             pet_observability::runtime::start(&handle);
@@ -1283,6 +1364,7 @@ pub fn run() {
             pet_presence::setup(&handle);
             flow::setup(&handle);
             notes::setup(&handle);
+            #[cfg(target_os="linux")]pet_runtime::start(handle.clone());
 
             if let Some(win) = island::window(&handle) {
                 #[cfg(target_os="linux")]if let Err(error)=linux_documents::install(&win){log::line(error);}
@@ -1343,6 +1425,8 @@ pub fn run() {
         .run(|app, event| {
             // Withdraw the phone link's announcement on the local network before the process ends.
             if let tauri::RunEvent::Exit = event {
+                #[cfg(target_os="linux")]
+                flow::clipboard_write::shutdown(app);
                 pet_native_binding::shutdown(app);
                 pet_system::release_on_exit();
                 phone_link::stop_on_exit(app);

@@ -34,6 +34,7 @@ fn offered(id: &str, windows: bool) -> bool {
         && !crate::pet_config::retired(id)
         && id != "integration_music"
         && (windows || id != "agent_claude-desktop")
+        && (!windows || id != "agent_system_guardian")
 }
 fn change(settings: &mut Settings, request: Request) -> io::Result<()> {
     let id = match &request { Request::SetMain { id } | Request::SetActive { id, .. } => id };

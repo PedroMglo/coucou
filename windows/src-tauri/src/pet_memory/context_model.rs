@@ -68,11 +68,22 @@ pub(crate)const GOAL_INPUT_LIMIT:usize=256*1024;
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate)struct GoalGrant{
+ #[cfg(target_os="linux")]
+ #[serde(default,skip_serializing_if="Option::is_none")]pub calendar_selection:Option<crate::pet_calendar::goal::Selection>,
+ #[serde(default,skip_serializing_if="Option::is_none")]pub received_request:Option<crate::pet_runtime::received_context::Selection>,
  pub schema_version:u32,pub consent:GoalConsent,pub destination:Destination,pub max_input_bytes:usize,
 }
 impl GoalGrant{
+ pub(crate)fn has_calendars(&self)->bool{
+  #[cfg(target_os="linux")]{self.calendar_selection.is_some()}
+  #[cfg(not(target_os="linux"))]{false}
+ }
+ fn calendar_format(&self)->bool{
+  #[cfg(target_os="linux")]{self.calendar_selection.as_ref().is_some_and(|s|self.schema_version==(if s.pet_scope(){10}else{9})&&self.received_request.is_none()&&s.valid(&s.goal_id,&s.pet_id,&s.provider,s.source_conversation_id.as_deref()))}
+  #[cfg(not(target_os="linux"))]{false}
+ }
  pub(crate)fn valid(&self,provider:&str,model:&str)->bool{
-  self.schema_version==1&&self.consent==GoalConsent::BoundedGoalContext&&self.max_input_bytes==GOAL_INPUT_LIMIT
+  (if self.has_calendars(){self.calendar_format()}else{match(self.schema_version,&self.received_request){(1,None)=>true,(2,Some(s))=>s.schema_version==1&&s.structurally_valid(),(3,Some(s))=>s.schema_version==2&&s.structurally_valid(),(4,Some(s))=>s.schema_version==3&&s.structurally_valid(),(5,Some(s))=>s.schema_version==4&&s.structurally_valid(),(6,Some(s))=>s.schema_version==5&&s.structurally_valid(),(7,Some(s))=>s.schema_version==6&&s.structurally_valid(),(8,Some(s))=>s.schema_version==7&&s.structurally_valid(),_=>false}})&&self.consent==GoalConsent::BoundedGoalContext&&self.max_input_bytes==GOAL_INPUT_LIMIT
    &&self.destination.valid()&&matches!(&self.destination,Destination::Server{provider:p,endpoint,model:m}
     if p==provider&&m==model&&model.trim()==model&&!model.starts_with('@')&&reqwest::Url::parse(endpoint).is_ok_and(|url|crate::net::is_loopback_url(&url)))
  }
@@ -81,6 +92,10 @@ impl GoalGrant{
 #[derive(Clone,PartialEq,Eq,Serialize)]
 #[serde(rename_all="camelCase")]
 pub(crate)struct GoalPreview{
+ #[cfg(target_os="linux")]
+ #[serde(skip_serializing_if="Option::is_none")]pub calendar_selection:Option<crate::pet_calendar::goal::Selection>,
+ #[serde(skip_serializing_if="Option::is_none")]pub received_request:Option<crate::pet_runtime::received_context::Preview>,
+ #[serde(skip_serializing_if="Option::is_none")]pub composed_message:Option<serde_json::Value>,
  pub schema_version:u32,pub goal_id:String,pub pet_id:String,
  pub source_conversation_id:Option<String>,pub destination:Destination,
  pub records:Vec<Entry>,pub required_consent:GoalConsent,pub max_input_bytes:usize,

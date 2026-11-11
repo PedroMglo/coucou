@@ -59,7 +59,9 @@ fn voice_in(chat:&Chat,requests:&Mutex<HashMap<String,PendingRequest>>,provider:
     let Some((id,source))=found else{return Some("Não há uma receita pendente com esse código para este pet. Revê o cartão atual.".into());};
     if action==Spoken::Review{return Some(source.spoken_review(&code));}
     if stop.load(Ordering::Acquire){return Some("A decisão de voz foi interrompida.".into());}
-    let allow=action==Spoken::Approve;let target=serde_json::to_value(source.target()).ok()?;
+    let allow=action==Spoken::Approve;
+    if allow&&!source.voice_approval_available(){return Some("Revê o corpo integral e as fontes no cartão antes de autorizar estes dados. A aprovação por voz ainda não está disponível para este âmbito.".into());}
+    let target=serde_json::to_value(source.target()).ok()?;
     Some(match decisions::answer_in(chat,requests,&id,json!({"allow":allow}),Some(target)){
         Ok(())if allow=>"A decisão de autorização foi enviada para esta receita. A execução e o resultado ainda têm de ser confirmados pelo motor.".into(),
         Ok(())=>"A decisão de recusa foi enviada para esta receita.".into(),

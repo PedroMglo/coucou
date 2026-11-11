@@ -26,7 +26,7 @@ pub(super)fn microphone<T,I:IntoIterator<Item=T>>(
     wanted:Option<&str>,devices:impl FnOnce()->Result<I,Failure>,default:impl FnOnce()->Option<T>,describe:impl Fn(&T)->Description,
 )->Result<T,Failure>{
     if let Some(name)=wanted{
-        if name.is_empty()||name.len()>1024{return Err(Failure::Invalid);}
+        if name.is_empty()||name.len()>1024||name.chars().any(char::is_control){return Err(Failure::Invalid);}
         unique(devices()?,|d|{let d=describe(d);!d.monitor&&!d.default_alias&&d.name==name})
     }else{
         let device=default().ok_or(Failure::Missing)?;
@@ -65,7 +65,7 @@ pub(super)fn microphone<T,I:IntoIterator<Item=T>>(
         assert_eq!(microphone(None,||Ok(vec![mic(7,"available")]),||None,describe),Err(Failure::Missing));
     }
     #[test]fn invalid_or_excessive_selection_fails_before_a_different_input_is_opened(){
-        for name in["".to_owned(),"x".repeat(1025)]{assert_eq!(microphone(Some(&name),||->Result<Vec<Device>,Failure>{panic!("invalid selection enumerated")},||panic!("default fallback"),describe),Err(Failure::Invalid));}
+        for name in["".to_owned(),"x".repeat(1025),"chosen\0device".into(),"chosen\nother".into(),"\tchosen".into(),"chosen\u{7f}".into(),"chosen\u{85}".into()]{assert_eq!(microphone(Some(&name),||->Result<Vec<Device>,Failure>{panic!("invalid selection enumerated")},||panic!("default fallback"),describe),Err(Failure::Invalid));}
         let rows=(0..257).map(|i|mic(i,"other"));assert_eq!(unique(rows,|d|d.id==1),Err(Failure::InventoryLimit));
         assert_eq!(unique((0..256).map(|i|mic(i,"other")),|d|d.id==255).unwrap().id,255);
     }

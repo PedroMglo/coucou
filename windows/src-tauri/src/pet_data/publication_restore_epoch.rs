@@ -88,7 +88,7 @@ pub(in crate::pet_data)fn completed(data:&Review)->Result<Custody>{completed_usi
 pub(in crate::pet_data)fn completed_using(data:&Review,extra:&[(Area,PathBuf,Vec<u8>)])->Result<Custody>{
  let(core,plan,bytes)=capture_parts_using(data,extra)?;verify_current_using(data,&core,&plan,&bytes,extra)?;
  let view=restoration::historical_view(&consent(data)?).map_err(core_error)?;
- if view["historyHash"].as_str()!=Some(plan.proposed.as_str())||view["historyBodyVersion"]!=2{return Err(Error::UnsupportedProfile);}
+ if view["historyHash"].as_str()!=Some(plan.proposed.as_str())||!matches!(view["historyBodyVersion"].as_u64(),Some(2|4)){return Err(Error::UnsupportedProfile);}
  let job=Dir::root(data.layout.config())?.dir(OsStr::new(tx::JOB))?;let ready=read_file(&job,tx::READY,4096)?.ok_or(Error::UnsupportedProfile)?;verify_originals(data,&job)?;verify_current_using(data,&core,&plan,&bytes,extra)?;
  Ok(Custody{manifest:digest(&bytes),ready:digest(&ready),authority:plan.proposed})
 }

@@ -11,12 +11,23 @@ impl Fixture{
  fn main(&self)->Chat{Chat::persistent(self.root.join("main.json"))}
  fn write(&self,items:Vec<Value>){let generation=fs::read(self.catalog()).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok()).and_then(|v|v["generation"].as_u64()).unwrap_or(0)+1;fs::write(self.catalog(),serde_json::to_vec(&json!({"version":1,"generation":generation,"items":items})).unwrap()).unwrap();fs::set_permissions(self.catalog(),fs::Permissions::from_mode(0o600)).unwrap();}
  fn record(id:&str,pet:&str,cid:Option<&str>)->Value{json!({"id":id,"revision":1,"owner":{"petId":pet,"scope":cid.map(|c|json!({"kind":"conversation","conversationId":c})).unwrap_or(json!({"kind":"pet"}))},"kind":"note","title":"Explicit goal data","content":"PRIVATE_GOAL_MEMORY_SENTINEL","provenance":"explicitUser","sensitivity":"sensitive","retention":"untilDeleted","createdAt":100,"updatedAt":100,"observedAt":100,"expiresAt":null})}
- fn goal(context:Context)->Record{Record::new(Spec{restored_from:None,request_id:"new-goal".into(),owner:Owner{pet_id:"ai_ollama".into(),provider:"ollama".into(),adapter:"ollama".into(),model_hint:Some("fixture-free".into())},context,intent:"Use only explicitly admitted data".into(),criteria:vec!["Verify the original criterion".into()]},100_000,nonce().unwrap()).unwrap()}
+ fn goal(context:Context)->Record{Record::new(Spec{received_from:None,restored_from:None,request_id:"new-goal".into(),owner:Owner{pet_id:"ai_ollama".into(),provider:"ollama".into(),adapter:"ollama".into(),model_hint:Some("fixture-free".into())},context,intent:"Use only explicitly admitted data".into(),criteria:vec!["Verify the original criterion".into()]},100_000,nonce().unwrap()).unwrap()}
  fn selected(id:&str)->Selected{Selected{id:id.into(),revision:1}}
  fn prepare(&self,g:&Record,main:&Chat,mode:Mode,selection:Option<&[Selected]>)->Result<(Binding,Chat)>{prepare_at(&self.contexts(),g,main,mode,"prepare",selection,&self.catalog())}
  fn bind(g:&mut Record,b:Binding){g.apply("prepare".into(),Action::BindContext{binding:b},100_001,nonce().unwrap()).unwrap();}
 }
 impl Drop for Fixture{fn drop(&mut self){let _=fs::remove_dir_all(&self.root);}}
+
+#[test]fn native_snapshot_survives_note_revocation_without_granting_execution_or_changing_saved_bytes(){
+ let f=Fixture::new();let main=f.main();f.write(vec![Fixture::record("selected","ai_ollama",None)]);let mut g=Fixture::goal(Context::Unbound);
+ let(b,private)=f.prepare(&g,&main,Mode::Dedicated,Some(&[Fixture::selected("selected")])).unwrap();Fixture::bind(&mut g,b.clone());
+ let t=private.begin("ollama");private.commit(&t,json!({"role":"user","content":"Own instruction"}),json!({"role":"assistant","content":"Saved answer"}),"Own instruction","Saved answer").unwrap();
+ assert!(matches!(read_snapshot(&f.contexts(),&g),Err(Error::Busy)));drop(t);drop(private);f.write(vec![]);
+ let journal=f.contexts().join(&g.id).join(JOURNAL);let before=fs::read(&journal).unwrap();let catalog=fs::read(f.catalog()).unwrap();
+ assert!(open_at(&f.contexts(),&g,&main,&f.catalog()).is_err());let(binding,snapshot)=read_snapshot(&f.contexts(),&g).unwrap();assert_eq!(binding,b);assert_eq!(snapshot.source_messages,2);assert_eq!(snapshot.messages[1]["content"],"Saved answer");
+ let mut foreign=g.clone();foreign.execution_context.as_mut().unwrap().conversation_id="foreign-cid".into();assert!(read_snapshot(&f.contexts(),&foreign).is_err());
+ assert_eq!(fs::read(&journal).unwrap(),before);assert_eq!(fs::read(f.catalog()).unwrap(),catalog);assert!(main.history("ollama").is_empty());assert!(g.admissions.is_empty());
+}
 
 #[test]fn selected_goal_context_uses_conditional_formats_and_never_copies_raw_memory_into_seed_or_public_history(){
  let f=Fixture::new();let main=f.main();f.write(vec![Fixture::record("note-one","ai_ollama",None)]);let mut g=Fixture::goal(Context::Unbound);let(b,private)=f.prepare(&g,&main,Mode::Dedicated,Some(&[Fixture::selected("note-one")])).unwrap();assert_eq!(b.schema_version,2);assert_eq!(b.memory.as_ref().unwrap().references.len(),1);assert!(private.history("ollama").is_empty());assert!(!f.root.join("main.json").exists());
@@ -48,3 +59,5 @@ impl Drop for Fixture{fn drop(&mut self){let _=fs::remove_dir_all(&self.root);}}
 #[test]fn data_references_alone_do_not_create_an_autonomous_admission_or_bypass_goal_specific_review(){
  let f=Fixture::new();let main=f.main();f.write(vec![Fixture::record("selected","ai_ollama",None)]);let mut g=Fixture::goal(Context::Unbound);let(b,_)=f.prepare(&g,&main,Mode::Dedicated,Some(&[Fixture::selected("selected")])).unwrap();Fixture::bind(&mut g,b);let now=100_002;let descriptor=crate::pet_runtime::admission_tests::descriptor(&g,now);let result=crate::pet_runtime::admission::Evidence::observe(&g,&descriptor,"a".repeat(64),now,false,false);assert_eq!(result.err(),Some(crate::pet_runtime::admission::Denial::Unsupported));assert!(g.admissions.is_empty());assert_eq!(g.state,State::Draft);
 }
+
+#[path="planned_peer_memory_tests.rs"]mod planned_peer_memory;

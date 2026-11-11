@@ -45,7 +45,7 @@ fn typed_final_predicates_publish_native_evidence_then_complete_and_close_the_or
 #[test]
 fn a_later_action_undoing_an_earlier_success_leaves_the_final_criterion_unmet(){
     let steps=vec![proposed(json!({"action":"pause"})),proposed(json!({"action":"play"}))];let(f,a,g,_p,o,_)=setup_plan_criteria(steps,2,Arc::new(|_,_,_|Validity::Current),vec!["Final playback is paused".into()]);let bus=Bus::new();let player=Player::new(&bus,"Private criteria player");let(approved,ready)=typed(&o,&g,&bus,&bindings()[..1]);register(&a,&g,&o,&approved,&ready);
-    let result=o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|_|{}).unwrap();assert_eq!(result.progress.phase,RecipePhase::Verified);assert_eq!(result.progress.verified_steps,2);assert_eq!(result.outcome,Outcome::CriteriaUnmet);let v=result.progress.verification.unwrap();assert_eq!(v.snapshot.unwrap().playback_status,"Playing");assert_eq!(v.results[0].status,Status::Unmet);assert!(!result.progress.goal_complete);assert_eq!(f.store().read(&g.id,&g.spec.owner.pet_id).unwrap().state,State::Leased);
+    let result=o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|_|{}).unwrap();assert_eq!(result.progress.phase,RecipePhase::Verified);assert_eq!(result.progress.verified_steps,2);assert_eq!(result.outcome,Outcome::CriteriaUnmet);let v=result.progress.verification.unwrap();assert_eq!(v.snapshot.unwrap().spotify().unwrap().playback_status,"Playing");assert_eq!(v.results[0].status,Status::Unmet);assert!(!result.progress.goal_complete);assert_eq!(f.store().read(&g.id,&g.spec.owner.pet_id).unwrap().state,State::Leased);
     player.state.lock().unwrap().status="Paused".into();assert_eq!(o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|_|{}).unwrap().outcome,Outcome::CriteriaUnmet);assert_eq!(player.calls.lock().unwrap().len(),2);
 }
 
@@ -83,7 +83,7 @@ fn stop_after_native_proof_but_before_goal_publication_blocks_the_completion_tra
 fn verification_publication_retries_reuse_the_original_native_observation_without_another_read_or_effect(){
     for fault in [Fault::BeforeVerificationPublish,Fault::AfterVerificationPublish]{let(f,mut a,g,_p,o,_)=setup();let bus=Bus::new();let player=Player::new(&bus,"Private criteria player");let(approved,ready)=typed(&o,&g,&bus,&bindings());register(&a,&g,&o,&approved,&ready);a.fault=fault;
         assert_eq!(o.run_recipe_with_authority(&g,&ready,&a,||Ok(config()),|_|{}).unwrap().outcome,Outcome::RecoveryRequired);a.fault=Fault::None;player.state.lock().unwrap().volume=0.99;
-        let result=o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|_|{}).unwrap();assert_eq!(result.outcome,Outcome::GoalCompleted);assert_eq!(result.progress.verification.unwrap().snapshot.unwrap().volume,0.17);assert_eq!(player.calls.lock().unwrap().len(),2);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);
+        let result=o.run_recipe_for_store(&f.store(),&g,&ready,||Ok(config()),|_|{}).unwrap();assert_eq!(result.outcome,Outcome::GoalCompleted);assert_eq!(result.progress.verification.unwrap().snapshot.unwrap().spotify().unwrap().volume,0.17);assert_eq!(player.calls.lock().unwrap().len(),2);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),2);
     }
 }
 

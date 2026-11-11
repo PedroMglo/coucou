@@ -3,11 +3,15 @@ use super::model::*;
 use std::{ffi::CString,fs::{File,OpenOptions},io::{Read,Write},os::{fd::{AsRawFd,FromRawFd},unix::fs::{MetadataExt,OpenOptionsExt}},path::{Path,PathBuf}};
 use ring::rand::{SecureRandom,SystemRandom};
 #[path="store_plan_commit.rs"]mod plan_commit;
+#[path="store_native_plan.rs"]mod native_plan;
 #[path="store_recovery.rs"]mod recovery;
+#[path="store_peer_resume.rs"]mod peer_resume;
 #[path="store_retirement.rs"]mod retirement;
 #[path="store_step_recovery.rs"]mod step_recovery;
 #[path="store_restored_future.rs"]mod restored_future;
-pub(in crate::pet_runtime)use plan_commit::{PlanPublished,PlanAbsent};
+#[path="store_goal_data.rs"]mod goal_data;
+#[path="store_received_request.rs"]mod received_request;
+pub(in crate::pet_runtime)use plan_commit::{PlanPublished,PlanAbsent,NativePlanPublished,NativePlanAbsent};
 const PROTOCOL:&[u8]=b"{\"version\":1,\"kind\":\"coucou-goals\"}\n";
 const MARKER:&str=".protocol.json";
 const LOCK:&str=".catalog.lock";
@@ -90,8 +94,10 @@ pub(super)fn protocol_directory(path:&Path,protocol:&[u8],create:bool)->Result<O
 pub(super)struct Guard(pub(super)File);
 impl Drop for Guard{fn drop(&mut self){unsafe{libc::flock(self.0.as_raw_fd(),libc::LOCK_UN);}}}
 #[cfg(test)]#[derive(Clone,Copy,Default)]pub(super)enum Fault{#[default]None,BeforePublish,AfterPublish}
+#[path="store_native_drain.rs"]mod native_drain;
 pub struct Store{dir:Dir,authority:Option<PathBuf>,#[cfg(test)]pub(super)fault:Fault}
 impl super::Repository for Store{
+    fn stop_peer_owner_handoff(&self,path:&Path,id:&str,pet:&str,revision:&str,request:&str,action:&Action,now:u64)->Result<Option<Receipt>>{Store::stop_peer_owner_handoff(self,path,id,pet,revision,request,action,now)}
     fn read(&self,id:&str,pet_id:&str)->Result<Record>{Store::read(self,id,pet_id)}
     fn read_control(&self,id:&str,pet_id:&str)->Result<Record>{Store::read_control(self,id,pet_id)}
     fn create(&self,spec:Spec,now:u64)->Result<Receipt>{Store::create(self,spec,now)}
@@ -99,6 +105,13 @@ impl super::Repository for Store{
     fn list(&self,pet_id:Option<&str>)->Result<Listing>{Store::list(self,pet_id)}
 }
 impl Store{
+    pub(super)fn root_path(&self)->&Path{&self.dir.path}
+    /// Read and authenticate before Authority takes its writer. Keep the exact
+    /// goal reader throughout the small atomic local-message transaction.
+    pub(super)fn with_message_goal<T>(&self,expected:&Record,run:impl FnOnce(&Record)->Result<T>)->Result<T>{
+        let _guard=self.lock(false)?;let(record,_)=self.load(&expected.id)?.ok_or(Error::NotFound)?;
+        if record.state!=State::Leased||fingerprint(&record)?!=fingerprint(expected)?{return Err(Error::Conflict);}self.require_current_goal(&record)?;run(&record)
+    }
     #[cfg(test)]pub(super)fn test_lock(&self,write:bool)->Result<Guard>{self.lock(write)}
     pub fn existing(path:&Path)->Result<Option<Self>>{Ok(protocol_directory(path,PROTOCOL,false)?.map(|dir|Self{dir,authority:None,#[cfg(test)]fault:Fault::None}))}
     pub fn ensure(path:&Path)->Result<Self>{Ok(Self{dir:protocol_directory(path,PROTOCOL,true)?.ok_or(Error::StorageUnavailable)?,authority:None,#[cfg(test)]fault:Fault::None})}
@@ -114,6 +127,14 @@ impl Store{
         let a=guard.0.metadata().map_err(|_|Error::UnsafePath)?;let b=current.metadata().map_err(|_|Error::UnsafePath)?;
         if a.dev()!=b.dev()||a.ino()!=b.ino(){return Err(Error::UnsafePath);}Ok(guard)
     }
+    /// Atomic source DATA snapshot for a caller already authenticating it with
+    /// the original Authority transaction. It never creates authority or writes.
+    /// No catalog flock: received-goal publication may already own that exact
+    /// global writer lock while rechecking OTHER source records. Native atomic
+    /// file reads/stamps + signed plan/grant/result hashes fence those records.
+    pub(super)fn source_snapshot(&self,id:&str,pet:&str)->Result<Record>{
+        if self.authority.is_some(){return Err(Error::InvalidInput);}let(record,stamp)=self.load(id)?.ok_or(Error::NotFound)?;if record.spec.owner.pet_id!=pet||!self.dir.has_stamp(&format!("{id}.json"),&stamp)?{return Err(Error::Conflict);}Ok(record)
+    }
     fn load(&self,id:&str)->Result<Option<(Record,Stamp)>>{self.load_with_pending(id,false)}
     fn proof_error(error:super::authority::Failure)->Error{match error{super::authority::Failure::Busy=>Error::Busy,super::authority::Failure::Unavailable=>Error::StorageUnavailable,_=>Error::InvalidRecord}}
     fn load_with_pending(&self,id:&str,allow_pending:bool)->Result<Option<(Record,Stamp)>>{
@@ -123,8 +144,8 @@ impl Store{
         if record.state==State::Completed{if let Some(path)=&self.authority{super::authority::Authority::existing(path).and_then(|a|a.verify_completed_goal(&record)).map_err(Self::proof_error)?;}}
         if let Some(path)=&self.authority {
             match super::authority::Authority::existing(path) {
-                Ok(a)=>{a.verify_restored_origin(&record).map_err(Self::proof_error)?;a.verify_continuations_goal(&record).map_err(Self::proof_error)?;a.verify_generated_goal(&record,allow_pending).map_err(Self::proof_error)?;a.verify_recovered_goal(&record).map_err(Self::proof_error)?;},
-                Err(super::authority::Failure::Missing) if record.spec.restored_from.is_none()&&record.generated_plans.is_empty()&&!record.admissions.iter().any(|r|r.spec.schema_version==3||r.spec.continuation.is_some())=>{},
+                Ok(a)=>{a.verify_goal_origin(&record).map_err(Self::proof_error)?;a.verify_continuations_goal(&record).map_err(Self::proof_error)?;a.verify_generated_goal(&record,allow_pending).map_err(Self::proof_error)?;a.verify_recovered_goal(&record).map_err(Self::proof_error)?;},
+                Err(super::authority::Failure::Missing) if record.native_plan_revisions.is_empty()&&record.native_drains.is_empty()&&record.spec.restored_from.is_none()&&record.spec.received_from.is_none()&&record.generated_plans.is_empty()&&!record.admissions.iter().any(|r|r.spec.planning()||r.spec.continuation.is_some())=>{},
                 Err(error)=>return Err(Self::proof_error(error)),
             }
         }
@@ -159,6 +180,16 @@ impl Store{
         let _guard=self.lock(false)?;let(record,_)=self.load(id)?.ok_or(Error::NotFound)?;
         if record.spec.owner.pet_id!=pet_id{return Err(Error::Conflict);}Ok(record)
     }
+    /// Reconcile and stabilize the exact signed requested admission before the
+    /// runtime acquires resources or performs IO. Never re-certifies consent.
+    pub(super)fn acknowledge_requested(&self,id:&str,pet_id:&str,revision:&str,now:u64)->Result<Record>{
+        let _guard=self.lock(false)?;let(goal,_)=self.load(id)?.ok_or(Error::NotFound)?;
+        if goal.spec.owner.pet_id!=pet_id||goal.revision!=revision{return Err(Error::Conflict);}
+        let path=self.authority.as_ref().ok_or(Error::Conflict)?;
+        super::authority::Authority::existing(path).and_then(|a|a.acknowledge_requested(&goal,now)).map_err(super::authority::Failure::control_error)?;
+        let receipt=self.stabilize(goal);if receipt.status==CommitStatus::Uncertain{return Err(Error::StorageUnavailable);}
+        self.dir.check()?;Ok(receipt.record)
+    }
     fn historical_source(&self,record:&Record)->Result<bool>{
         let Some(path)=&self.authority else{return Ok(false);};match super::authority::Authority::existing(path){Ok(a)=>super::restoration::matches_historical_goal(&a,record).map_err(Self::proof_error),Err(super::authority::Failure::Missing)=>Ok(false),Err(e)=>Err(Self::proof_error(e))}
     }
@@ -181,22 +212,25 @@ impl Store{
         authority.history(&goal,now).map_err(super::authority::Failure::control_error)
     }
     pub fn create(&self,spec:Spec,now:u64)->Result<Receipt>{
-        spec.validate()?;if spec.restored_from.is_some(){return Err(Error::InvalidInput);}let _guard=self.lock(true)?;let id=id_for(&spec);
+        spec.validate()?;if spec.restored_from.is_some()||spec.received_from.is_some(){return Err(Error::InvalidInput);}let _guard=self.lock(true)?;let id=id_for(&spec);
         if let Some((record,_))=self.load(&id)?{if record.spec!=spec{return Err(Error::Conflict);}return Ok(self.stabilize(record));}
-        if spec.request_id.starts_with("rf-"){return Err(Error::InvalidInput);}
+        if spec.request_id.starts_with("rf-")||spec.request_id.starts_with("rq-"){return Err(Error::InvalidInput);}
         let count=self.dir.names()?.iter().filter(|n|n.strip_suffix(".json").is_some_and(goal_id)).count();if count>=MAX_GOALS{return Err(Error::LimitReached);}
         self.publish(Record::new(spec,now,nonce()?)?,None,false)
     }
     pub fn mutate(&self,id:&str,pet_id:&str,revision:&str,request:String,action:Action,now:u64)->Result<Receipt>{
+        // Descendant Stop and direct controls use this same atomic handoff
+        // reduction, even when the caller already persisted its revocation.
+        if matches!(action,Action::Pause|Action::Cancel){if let Some(path)=&self.authority{if let Some(receipt)=self.stop_peer_owner_handoff(path,id,pet_id,revision,&request,&action,now)?{return Ok(receipt);}}}
         let _guard=self.lock(true)?;let(mut record,before)=self.load_with_pending(id,matches!(&action,Action::Pause|Action::Cancel))?.ok_or(Error::NotFound)?;
         self.require_current_goal(&record)?;
         if record.spec.owner.pet_id!=pet_id{return Err(Error::Conflict);}
         if record.replay(&request,&action)?{return Ok(self.stabilize(record));}
-        if let Some(path)=&self.authority{match super::authority::Authority::existing(path){Ok(a)=>if a.verify_recovered_goal(&record).map_err(|e|e.control_error())?{return Err(Error::Busy);},Err(super::authority::Failure::Missing)if !record.events.iter().any(|e|matches!(e.kind,EventKind::LostOwnerClosed|EventKind::UnclaimedOwnerClosed))=>{},Err(e)=>return Err(e.control_error())}}
+        if let Some(path)=&self.authority{match super::authority::Authority::existing(path){Ok(a)=>if a.verify_recovered_goal(&record).map_err(|e|e.control_error())?&&!(matches!(action,Action::Pause|Action::Cancel)&&a.native_plan_pending_control(&record).map_err(|e|e.control_error())?){return Err(Error::Busy);},Err(super::authority::Failure::Missing)if !record.events.iter().any(|e|matches!(e.kind,EventKind::LostOwnerClosed|EventKind::UnclaimedOwnerClosed))=>{},Err(e)=>return Err(e.control_error())}}
         if record.revision!=revision{return Err(Error::Conflict);}let control=matches!(action,Action::Cancel);
         record.apply(request,action,now,nonce()?)?;self.publish(record,Some(&before),control)
     }
-    pub(super)fn complete_certified(&self,certificate:&super::authority::CompletionCertified<'_>,now:u64,current:impl Fn(&Record)->Result<()>)->Result<Receipt>{
+    pub(super)fn complete_certified(&self,certificate:&impl super::criteria::Certificate,now:u64,current:impl Fn(&Record)->Result<()>)->Result<Receipt>{
         let reference=certificate.reference();let _guard=self.lock(true)?;
         let(mut goal,before)=self.load(&reference.goal_id)?.ok_or(Error::NotFound)?;
         certificate.current(&goal,now).map_err(|reason|if reason==super::authority::Failure::Busy{Error::Busy}else{Error::Conflict})?;
@@ -250,16 +284,16 @@ impl Store{
         certified.current(&record,now)?;record.enqueue(approved,Some(certified.proof().clone()),now,nonce()?)?;self.publish(record,Some(&before),false)
     }
     pub(super)fn claim_owned(&self,authority:&super::authority::Authority,lease:&super::leases::Lease,owner:&super::native_owner::OwnerLease,evidence:&super::admission::Evidence,now:u64)->Result<Receipt>{
-        let _guard=self.lock(true)?;let(mut goal,before)=self.load(&lease.goal_id)?.ok_or(Error::NotFound)?;
+        let _guard=self.lock(true).inspect_err(|e|{#[cfg(debug_assertions)]eprintln!("[pet-runtime-claim] goal-lock: {e:?}");})?;let(mut goal,before)=self.load(&lease.goal_id).inspect_err(|e|{#[cfg(debug_assertions)]eprintln!("[pet-runtime-claim] goal-load: {e:?}");})?.ok_or(Error::NotFound)?;
         evidence.for_claim(&goal,now).map_err(|_|Error::Conflict)?;
         let row=goal.admissions.last().ok_or(Error::InvalidRecord)?;let proof=row.proof.as_ref().ok_or(Error::Conflict)?;
         if row.lease.as_ref()==Some(lease)&&goal.state==State::Leased{
-            authority.claim(&row.spec,proof,lease,owner,now).map_err(super::authority::Failure::control_error)?;return Ok(self.stabilize(goal));
+            authority.claim(&row.spec,proof,lease,owner,now).inspect_err(|e|{#[cfg(debug_assertions)]eprintln!("[pet-runtime-claim] grant-claim: {e:?}");}).map_err(super::authority::Failure::control_error)?;return Ok(self.stabilize(goal));
         }
         if goal.revision!=lease.source_revision{return Err(Error::Conflict);}
         // Validate the complete candidate before the independent ledger claim.
         let mut candidate=goal.clone();candidate.claim(lease.clone(),now,nonce()?)?;
-        authority.claim(&row.spec,proof,lease,owner,now).map_err(super::authority::Failure::control_error)?;
+        authority.claim(&row.spec,proof,lease,owner,now).inspect_err(|e|{#[cfg(debug_assertions)]eprintln!("[pet-runtime-claim] grant-claim: {e:?}");}).map_err(super::authority::Failure::control_error)?;
         goal=candidate;self.publish(goal,Some(&before),false)
     }
     pub(super)fn drain_owned(&self,authority:&super::authority::Authority,drain:&super::lease_controller::DrainProof,now:u64)->Result<Receipt>{
@@ -269,6 +303,7 @@ impl Store{
         let unclaimed=drain.unstarted()&&row.lease.is_none()&&matches!(goal.state,State::Queued|State::Paused|State::Cancelled);
         if row.lease.as_ref()!=Some(drain.lease())&&!unclaimed{return Err(Error::Conflict);}
         let expected=if goal.state==State::Cancelled{Some(super::leases::StopReason::Cancel)}else if unclaimed{match goal.state{State::Paused=>Some(super::leases::StopReason::Pause),_ if drain.deadline_elapsed(now)=>Some(super::leases::StopReason::Expired),_=>None}}else{row.stop_reason};
+        if row.spec.deterministic()&&!unclaimed&&!drain.unstarted()&&matches!(goal.state,State::Leased|State::Stopping){return self.drain_native_owned(authority,drain,goal,&before,now);}
         let reason=authority.finish(&row.spec,proof,drain.lease(),drain.unstarted(),expected,now).map_err(super::authority::Failure::control_error)?;
         if unclaimed{
             goal.abandoned(drain.lease(),reason,now,nonce()?,drain.request_id().into())?;return self.publish(goal,Some(&before),true);

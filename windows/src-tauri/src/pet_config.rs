@@ -4,17 +4,28 @@ use std::{collections::{BTreeMap},hash::{Hash,Hasher},io::{Read,Write},path::{Pa
 use tauri::{AppHandle,Emitter};
 #[path="pet_factory.rs"]
 mod factory;
+#[path="pet_inference_config.rs"]mod inference_config;
+#[path="pet_system_access.rs"]pub(crate)mod system_access;
+pub use inference_config::*;
 pub use factory::{Adapter,Blueprint,RuntimeKind};
+pub use crate::pet_inference::Choice as InferenceChoice;
 pub fn blueprint(id:&str)->Option<&'static Blueprint>{factory::blueprint(id)}
 pub fn blueprints()->impl Iterator<Item=&'static Blueprint>{factory::blueprints()}
 const MAX_BYTES:u64=256*1024;
 static EDIT:Mutex<()>=Mutex::new(());
+// Mechanical resource admission must not perform profile IO while holding a
+// chat/queue mutex. Native reads/writes refresh this projection; transports
+// re-read the authoritative profile before an effect, so a stale projection
+// can refuse work but cannot silently redirect or authorize it.
+static RESOURCE_SNAPSHOT:Mutex<Option<std::sync::Arc<Configuration>>>=Mutex::new(None);
+fn publish_resource_snapshot(config:&Configuration){if let Ok(mut snapshot)=RESOURCE_SNAPSHOT.lock(){*snapshot=Some(std::sync::Arc::new(config.clone()));}}
+pub(crate)fn resource_snapshot()->Result<std::sync::Arc<Configuration>,String>{RESOURCE_SNAPSHOT.try_lock().map_err(|_|"O perfil de inferência está ocupado.")?.clone().ok_or("O perfil de inferência ainda não foi confirmado.".into())}
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Profile {pub model:String,pub effort:String}
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct Pet {pub name:String,pub aliases:Vec<String>,pub provider:String,pub mode:String,pub fast:Profile,pub reasoning:Profile,#[serde(default,skip_serializing_if="Option::is_none")]pub permissions:Option<Permissions>,#[serde(default,skip_serializing_if="Option::is_none")]pub local_execution:Option<LocalExecution>}
+pub struct Pet {pub name:String,pub aliases:Vec<String>,pub provider:String,pub mode:String,pub fast:Profile,pub reasoning:Profile,#[serde(default,skip_serializing_if="Option::is_none")]pub permissions:Option<Permissions>,#[serde(default,skip_serializing_if="Option::is_none")]pub local_execution:Option<LocalExecution>,#[serde(default,skip_serializing_if="Option::is_none")]pub inference:Option<InferenceChoice>,#[serde(default,skip_serializing_if="Option::is_none")]pub inference_revision:Option<String>,#[serde(default,skip_serializing_if="Option::is_none")]pub system_access:Option<system_access::Policy>}
 /// Missing in an older configuration means disabled. New bundled identities may
 /// explicitly opt into proposals; every actual command still needs approval.
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
@@ -53,7 +64,24 @@ impl LocalExecution {
 pub struct Permissions {pub documents:bool,pub email_drafts:bool,pub music:bool,pub open_apps:bool}
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct Configuration {pub version:u32,pub reasoning_terms:Vec<String>,pub reasoning_length:usize,pub pets:BTreeMap<String,Pet>}
+pub struct Configuration {pub version:u32,#[serde(default,skip_serializing_if="Option::is_none")]pub catalog_revision:Option<u32>,pub reasoning_terms:Vec<String>,pub reasoning_length:usize,pub pets:BTreeMap<String,Pet>}
+
+#[cfg(test)]mod guardian_catalog_tests{
+ use super::*;
+ #[test]fn guardian_health_legacy_catalog_adds_only_unbound_identity_and_preserves_existing_preferences(){
+  let mut old=defaults();old.catalog_revision=None;old.pets.remove("agent_system_guardian");old.pets.get_mut("agent_codex").unwrap().name="My Codex".into();old.pets.get_mut("ai_ollama").unwrap().fast.model="keep-existing-model".into();
+  let bytes=serde_json::to_vec(&old).unwrap();let migrated=resolve_existing_bytes(&bytes).unwrap();assert_eq!(migrated.catalog_revision,Some(1));assert_eq!(migrated.pets.len(),26);
+  for(id,p)in &old.pets{assert_eq!(serde_json::to_value(&migrated.pets[id]).unwrap(),serde_json::to_value(p).unwrap());}
+  let guardian=&migrated.pets["agent_system_guardian"];assert!(guardian.provider.is_empty()&&guardian.fast.model.is_empty()&&guardian.reasoning.model.is_empty());assert!(guardian.inference.is_none()&&guardian.inference_revision.is_none()&&guardian.system_access.is_none()&&guardian.local_execution.is_none());assert_eq!(guardian.permissions,Some(Permissions::default()));
+  let b=blueprint("agent_system_guardian").unwrap();assert_eq!(b.introduced_in,1);assert_eq!(b.runtime_identity_adapter("agent_system_guardian",None).as_deref(),Some("agent_system_guardian"));assert_eq!(b.runtime.inference_adapters,vec![Adapter::Ollama]);assert!(!b.routing.execute);
+ }
+ #[test]fn guardian_health_missing_acknowledged_identity_or_future_catalog_cannot_reset_or_downgrade(){
+  let mut current=defaults();current.pets.remove("agent_system_guardian");assert!(resolve_existing_bytes(&serde_json::to_vec(&current).unwrap()).is_err());
+  current=defaults();current.catalog_revision=Some(2);assert!(resolve_existing_bytes(&serde_json::to_vec(&current).unwrap()).is_err());
+  current=defaults();current.catalog_revision=None;current.pets.remove("agent_system_guardian");current.pets.remove("agent_codex");assert!(resolve_existing_bytes(&serde_json::to_vec(&current).unwrap()).is_err());
+  current=defaults();current.catalog_revision=None;assert!(resolve_existing_bytes(&serde_json::to_vec(&current).unwrap()).is_err());
+ }
+}
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct Document {pub config:Configuration,pub path:String,pub revision:String}
@@ -77,7 +105,8 @@ impl Configuration {
  pub fn uses_optional_assistant(&self,id:&str)->bool{
   self.pets.get(id).zip(blueprint(id)).is_some_and(|(p,b)|b.runtime.assistant_adapter.is_some_and(|adapter|b.configured_adapter(&p.provider)==Some(adapter)))
  }
- pub fn local_execution(&self)->LocalExecution{self.pets.get("ai_ollama").and_then(|p|p.local_execution.clone()).unwrap_or_default()}
+ pub fn local_execution_for(&self,pet_id:&str)->LocalExecution{self.pets.get(pet_id).and_then(|p|p.local_execution.clone()).unwrap_or_default()}
+ pub fn local_execution(&self)->LocalExecution{self.local_execution_for("ai_ollama")}
  pub fn permissions(&self,id:&str)->Result<Permissions,String>{
   let pet=self.pets.get(id).ok_or("Pet desconhecido.")?;
   Ok(pet.permissions.clone().unwrap_or_else(||defaults().pets[id].permissions.clone().unwrap_or_default()))
@@ -92,7 +121,7 @@ fn normalized(text:&str)->String {crate::voice::wake::normalize(text)}
 fn short_text(text:&str,max:usize)->bool {!text.trim().is_empty() && text.chars().count()<=max && !text.chars().any(char::is_control)}
 pub(crate)fn validate(c:&Configuration)->Result<(),String> {
  let base=defaults();
- if c.version!=1 || c.pets.len()!=base.pets.len() || !(200..=12000).contains(&c.reasoning_length) || c.reasoning_terms.len()>80 {return Err("Versão ou limites inválidos na configuração dos pets.".into());}
+ if c.catalog_revision!=base.catalog_revision || !matches!(c.version,1|2) || c.version==1&&c.pets.values().any(|p|p.inference.is_some()||p.inference_revision.is_some()) || c.pets.len()!=base.pets.len() || !(200..=12000).contains(&c.reasoning_length) || c.reasoning_terms.len()>80 {return Err("Versão ou limites inválidos na configuração dos pets.".into());}
  let mut names=BTreeMap::<String,String>::new();
  for(id,p)in &base.pets {for name in std::iter::once(&p.name).chain(&p.aliases){names.insert(normalized(name),id.clone());}}
  for (id,p) in &c.pets {
@@ -111,7 +140,13 @@ pub(crate)fn validate(c:&Configuration)->Result<(),String> {
    if !profile.model.is_empty() && !crate::cli_chat::model_matches(&p.provider,&profile.model) {return Err(format!("O modelo de {id} não pertence à sua conta/família."));}
    if p.provider=="ollama" && (profile.model.ends_with(":cloud") || profile.model.ends_with("-cloud")) {return Err("O pet Ollama usa apenas os modelos locais.".into());}
   }
-  if let Some(policy)=&p.local_execution {if id!="ai_ollama" {return Err("A execução local só está disponível no pet Ollama.".into());}policy.validate()?;}
+  if p.inference_revision.as_ref().is_some_and(|r|!crate::pet_inference::revision_key(r)||blueprint(id).is_none_or(|b|b.runtime.inference_adapters.is_empty())){return Err("Revisão de inferência inválida para este pet.".into());}
+  if let Some(policy)=&p.system_access{if c.version!=2||!policy.valid(){return Err("Concessão de Sistema inválida para este pet.".into());}}
+  if let Some(choice)=&p.inference{
+   choice.validate(blueprint(id).ok_or("Pet sem contrato de inferência.")?)?;
+   if p.inference_revision.is_none(){return Err("Falta a revisão nativa do binding. Revê a escolha na gestão do pet.".into());}
+  }
+  if let Some(policy)=&p.local_execution {if id!="ai_ollama"&&!p.inference.as_ref().is_some_and(|choice|choice.backend==crate::pet_inference::Backend::Ollama) {return Err("Este pet ainda não tem um adaptador de ferramentas locais configurado.".into());}policy.validate()?;}
  }
  if c.reasoning_terms.iter().any(|s|!short_text(s,100)) {return Err("Termo de raciocínio inválido.".into());}
  Ok(())
@@ -126,6 +161,10 @@ fn bytes(path:&Path)->Result<Vec<u8>,String> {
 }
 fn revision(data:&[u8])->String {let mut h=std::collections::hash_map::DefaultHasher::new();data.hash(&mut h);format!("{:016x}",h.finish())}
 fn write(path:&Path,c:&Configuration)->Result<(),String> {
+ write_guarded(path,c,||true)
+}
+fn write_guarded(path:&Path,c:&Configuration,current:impl Fn()->bool)->Result<(),String> {
+ if !current(){return Err("O perfil ou a revisão da alteração deixou de estar atual. Nenhuma alteração foi aplicada.".into());}
  #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed().map_err(|_|"O perfil está indisponível; a configuração anterior foi conservada.".to_string())?;
  validate(c)?;let dir=path.parent().ok_or("Falta a pasta dos pets.")?;
  std::fs::create_dir_all(dir).map_err(|e|e.to_string())?;
@@ -138,17 +177,28 @@ fn write(path:&Path,c:&Configuration)->Result<(),String> {
   let mut o=std::fs::OpenOptions::new();o.write(true).create_new(true);
   #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;o.mode(0o600).custom_flags(libc::O_NOFOLLOW);}
   let mut f=o.open(&temp).map_err(|e|e.to_string())?;f.write_all(&data).and_then(|_|f.write_all(b"\n")).and_then(|_|f.sync_all()).map_err(|e|e.to_string())?;drop(f);
-  std::fs::rename(&temp,path).map_err(|e|e.to_string())?;Ok(())
+  if !current(){return Err("O perfil ou a revisão mudou antes da gravação. Recarrega antes de repetir.".into());}
+  std::fs::rename(&temp,path).map_err(|e|e.to_string())?;
+  #[cfg(unix)]std::fs::File::open(dir).and_then(|d|d.sync_all()).map_err(|_|"A alteração pode ter sido gravada, mas a persistência não foi confirmada. Recarrega o perfil antes de repetir.".to_string())?;
+  Ok(())
  })();if result.is_err(){let _=std::fs::remove_file(temp);}result
 }
 fn read_at(path:&Path)->Result<Document,String> {read_at_policy(path,true)}
 fn read_at_policy(path:&Path,create_defaults:bool)->Result<Document,String> {
- if create_defaults && !path.exists() {write(path,&defaults())?;}
+ if create_defaults && !path.exists() {write_guarded(path,&defaults(),||!path.exists())?;}
  let data=bytes(path)?;let c=resolve_existing_bytes(&data)?;Ok(Document{config:c,path:path.to_string_lossy().to_string(),revision:revision(&data)})
 }
 /// Pure existing-profile resolution, shared by runtime and native restoration review.
 pub(crate)fn resolve_existing_bytes(data:&[u8])->Result<Configuration,String>{
  let mut c:Configuration=serde_json::from_slice(data).map_err(|e|format!("Corrige pets.json: {e}"))?;
+ // Explicit catalogue migration only. Loading does not publish or grant access.
+ let base=defaults();let seen=c.catalog_revision.unwrap_or(0);let current=base.catalog_revision.unwrap_or(0);
+ if seen>current{return Err("Este perfil usa uma revisão mais recente do catálogo; os dados foram preservados.".into());}
+ for b in blueprints().filter(|b|b.introduced_in>seen){
+  if c.pets.contains_key(&b.id){return Err("O perfil contém uma identidade posterior à revisão do catálogo.".into());}
+  c.pets.insert(b.id.clone(),base.pets[&b.id].clone());
+ }
+ c.catalog_revision=base.catalog_revision;
  // Upgrade the existing Copilot identity without replacing names, aliases or grants.
  if let Some(p)=c.pets.get_mut("agent_copilot") {if p.provider.is_empty(){let base=defaults();p.provider="copilot".into();if p.fast.model.is_empty(){p.fast=base.pets["agent_copilot"].fast.clone();}if p.reasoning.model.is_empty(){p.reasoning=base.pets["agent_copilot"].reasoning.clone();}}}
  // Native service controls and an explicitly configured assistant coexist.
@@ -159,11 +209,12 @@ pub(crate)fn resolve_existing_bytes(data:&[u8])->Result<Configuration,String>{
  let base=defaults();for(id,p)in &mut c.pets{if p.permissions.is_none(){p.permissions=base.pets[id].permissions.clone();}}
  Ok(c)
 }
-pub fn read()->Result<Configuration,String> {let _edit=EDIT.lock().unwrap();Ok(read_at(&path())?.config)}
+pub fn read()->Result<Configuration,String> {let _edit=EDIT.lock().unwrap();let config=read_at(&path())?.config;publish_resource_snapshot(&config);Ok(config)}
 /// Read existing identities with the same in-memory upgrades/validation, without
 /// creating defaults, directories or files when configuration is unavailable.
 pub(crate) fn read_existing()->Result<Configuration,String> {
- read_existing_at(&path())
+ let _edit=EDIT.lock().map_err(|_|"As identidades dos pets estão indisponíveis.")?;
+ let config=read_at_policy(&path(),false)?.config;publish_resource_snapshot(&config);Ok(config)
 }
 /// Native callers supply this path; it is never taken from model arguments.
 pub(crate) fn read_existing_at(path:&Path)->Result<Configuration,String> {
@@ -190,6 +241,10 @@ impl Configuration {
  }
  pub fn select(&self,provider:&str,requested:&str,query:&str)->Result<Selection,String> {
   require_active_provider(provider)?;let id=pet_id(provider).ok_or("Este pet não tem perfil de modelos.")?;let p=self.pets.get(id).ok_or("Falta o perfil deste pet.")?;
+  if let Some(target)=crate::pet_inference::Target::configured(self,id)?{
+   if !requested.is_empty()&&requested!="@default"&&requested!=target.choice.model{return Err("Este pet tem um modelo explícito. Revê o binding do pet antes de escolher outro modelo.".into());}
+   return Ok(Selection{model:target.choice.model,effort:String::new(),mode:"binding".into()});
+  }
   if p.provider.is_empty(){
    if blueprint(id).is_some_and(|b|b.runtime.adapter==Some(Adapter::Lmstudio)){return Err("Associa primeiro este pet ao LM Studio no perfil do pet.".into());}
    if blueprint(id).is_some_and(|b|b.runtime.assistant_adapter.is_some()){return Err("Este pet mantém os controlos nativos. Configura um backend de AI para conversar.".into());}
@@ -208,7 +263,7 @@ impl Configuration {
 }
 pub fn select(provider:&str,requested:&str,query:&str)->Result<Selection,String> {read()?.select(provider,requested,query)}
 #[tauri::command]
-pub fn pet_configuration()->Result<Document,String> {let _edit=EDIT.lock().unwrap();read_at(&path())}
+pub fn pet_configuration()->Result<Document,String> {let _edit=EDIT.lock().unwrap();let doc=read_at(&path())?;publish_resource_snapshot(&doc.config);Ok(doc)}
 #[tauri::command]
 pub fn pet_roster(shared:tauri::State<'_,crate::Shared>)->Vec<String>{
  let settings=shared.settings.lock().unwrap();let base=defaults();let mut ids=vec![settings.main_pill.clone()];
@@ -218,11 +273,21 @@ pub fn pet_roster(shared:tauri::State<'_,crate::Shared>)->Vec<String>{
 fn save_at(file:&Path,config:&Configuration,expected:&str)->Result<Document,String> {
  let current=read_at(file)?;
  if current.revision!=expected {return Err("pets.json foi alterado entretanto. Reabre a configuração antes de guardar.".into());}
- write(file,config)?;read_at(file)
+ // Older whole-document editors own the legacy preferences only. Even a fresh
+ // revision cannot remove/replace a binding through this compatibility command.
+ let mut merged=config.clone();
+ if !matches!(merged.version,1|2)||current.config.version==1&&merged.version!=1{return Err("Altera o binding na gestão própria do pet.".into());}
+ merged.version=current.config.version;
+ for(id,pet)in &mut merged.pets{
+  pet.inference=current.config.pets.get(id).and_then(|p|p.inference.clone());
+  pet.inference_revision=current.config.pets.get(id).and_then(|p|p.inference_revision.clone());
+  pet.system_access=current.config.pets.get(id).and_then(|p|p.system_access.clone());
+ }
+ write_guarded(file,&merged,||bytes(file).is_ok_and(|data|revision(&data)==current.revision))?;read_at(file)
 }
 #[tauri::command]
 pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revision:String)->Result<Document,String> {
- let _edit=EDIT.lock().unwrap();let doc=save_at(&path(),&config,&expected_revision)?;let _=app.emit("pet-configuration-changed",&doc.config);Ok(doc)
+ let _edit=EDIT.lock().unwrap();let doc=save_at(&path(),&config,&expected_revision)?;publish_resource_snapshot(&doc.config);let _=app.emit("pet-configuration-changed",&doc.config);Ok(doc)
 }
 
 #[cfg(test)]mod tests {

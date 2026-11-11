@@ -1,0 +1,53 @@
+//! The original worker really dies and the private profile is reacquired.
+//! No real providers, copied accounts, host effects or recipient execution.
+use super::{admission::{Budget,Payment,Review,Denial},authority_tests::root,deterministic_runtime_tests::{evidence,owned},model::*,native_completion_tests::send,recovery_tests::Environment,store::{nonce,Store},reconciliation_tests::inventory};
+use crate::{chat::Chat,settings::Settings};
+use std::{fs,sync::Arc};
+fn now()->u64{crate::assistant_memory::now()}
+fn closed(provider:&str,phase:&str)->(Environment,Record){
+ let env=Environment::new(provider,phase,true);let at=now();let review=env.review_at("close-native-original",at);let choice=review.decide(at).unwrap();let mut approved=review.approve(choice);let receipt=approved.confirm(&env.store,at).unwrap();assert_ne!(receipt.status,CommitStatus::Uncertain);assert_eq!(receipt.record.state,State::RecoveryRequired);(env,receipt.record)
+}
+fn budget(at:u64,tools:u16)->Budget{Budget{deadline_at:at+120_000,max_model_calls:0,max_tool_calls:tools,max_output_bytes:32768,max_tokens:None,max_cost_micros:None,payment:Payment::RuntimeOnly}}
+fn review(env:&Environment,g:&Record,at:u64,tools:u16)->Review{
+ let(source,captured)=env.store.prepare_continuation(&root(&env.fixture),&g.id,&g.spec.owner.pet_id,&g.revision,at).unwrap().unwrap();
+ Review::prepare_deterministic_continuation(&source,evidence(&source,at),budget(at,tools),captured,format!("continue-native-{}",nonce().unwrap()),nonce().unwrap(),at).unwrap()
+}
+fn admit(env:&Environment,g:&Record,tools:u16)->Record{
+ let at=now();let mut approved=review(env,g,at,tools).approve(g,evidence(g,at),at).unwrap();let authority=approved.take_native_authority().unwrap();let cert=authority.certify(&approved,g,at).unwrap();let q=env.store.enqueue_certified(&cert,at).unwrap().record;assert_eq!(q.schema_version,18);assert_eq!(q.admissions.last().unwrap().spec.schema_version,6);q
+}
+fn old_bytes(env:&Environment,g:&Record)->Vec<u8>{fs::read(root(&env.fixture).join(format!("{}.json",g.admissions[0].spec.decision_id))).unwrap()}
+fn review_step(g:&Record,o:&super::lease_controller::Owned,index:usize)->super::model::Result<super::lease_controller::message_controller::Review>{
+ let p=&g.plans[0];let s=&p.steps[index];let config=crate::pet_config::defaults();let mut settings=Settings::default();settings.active_integrations=vec!["ai_ollama".into(),"integration_spotify".into()];let args=super::messages::Arguments::parse(&s.operation.as_ref().unwrap().arguments).unwrap();let target=Arc::new(super::messages::Target::capture(&config,&settings,&args.to_pet_id).unwrap());o.review_message(g,&p.id,&s.id,nonce().unwrap(),target,now())
+}
+#[test]fn native_continuation_partial_delivery_preserves_each_original_witness_and_only_debits_new_work_for_every_owner(){
+ for provider in ["codex","copilot","antigravity","ollama","lmstudio","openai","integration_spotify"]{
+  let(env,g)=closed(provider,"native-partial");let before=inventory(&env.fixture.path);let at=now();let proposal=review(&env,&g,at,1).proposal();let carry=proposal.continuation.as_ref().unwrap();assert_eq!(carry.schema_version,3);assert_eq!(carry.previous[0].native_schema,Some(5));assert!(carry.previous[0].resolved_model.is_empty());assert_eq!(carry.charge.model_calls,0);assert_eq!(carry.charge.tool_calls,1);assert_eq!(carry.charge.unknown_tool_results,0);assert_eq!(carry.native.as_ref().unwrap().receipts.len(),1);assert_eq!(inventory(&env.fixture.path),before);
+  let frozen=old_bytes(&env,&g);let q=admit(&env,&g,1);let(g,o)=owned(&env.fixture,&env.authority,&q,&Chat::persistent(env.fixture.path.join("new-native-main.json")));assert_ne!(o.lease().id,g.admissions[0].lease.as_ref().unwrap().id);assert!(o.lease().model.is_empty());let before=inventory(&env.fixture.path);assert!(review_step(&g,&o,0).is_err());assert_eq!(inventory(&env.fixture.path),before);
+  let partial=o.verify_native_goal(&env.store,&g).unwrap();assert!(!partial.report.criteria_verified);assert_eq!(partial.report.receipts.len(),1);send(&g,&o,1);let progress=o.verify_native_goal(&env.store,&g).unwrap();assert_eq!(progress.report.schema_version,2);assert!(progress.report.criteria_verified);assert!(!progress.recipient_execution_verified);assert_eq!(progress.report.receipts.len(),2);assert_eq!(progress.report.receipts[0].source_decision_id.as_deref(),Some(g.admissions[0].spec.decision_id.as_str()));assert!(progress.report.receipts[1].source_decision_id.is_none());let done=progress.completion.unwrap().record;assert_eq!(done.state,State::Completed);assert_eq!(done.schema_version,18);assert_eq!(old_bytes(&env,&g),frozen);
+  let drain=o.drain(super::leases::DrainOutcome::Confirmed).unwrap();env.store.drain_owned(&env.authority,&drain,now()).unwrap();
+  let h=env.store.history(&root(&env.fixture),&done.id,&done.spec.owner.pet_id,&done.revision,now()).unwrap();assert!(h.accounting_complete&&h.source_consistent);let charge=h.cumulative_charge.unwrap();assert_eq!(charge.model_calls,0);assert_eq!(charge.tool_calls,2);assert_eq!(charge.unknown_tool_results,0);
+  let body:serde_json::Value=serde_json::from_slice(&fs::read(root(&env.fixture).join(format!("{}.json",g.admissions[1].spec.decision_id))).unwrap()).unwrap();assert_eq!(body["body"]["schemaVersion"],12);assert_eq!(body["body"]["messages"]["entries"].as_array().unwrap().len(),1);
+  let store=Store::existing_verified(&env.fixture.path.join("goals"),&root(&env.fixture)).unwrap().unwrap();let loaded=store.read(&done.id,&done.spec.owner.pet_id).unwrap();let before=inventory(&env.fixture.path);let cert=env.authority.certify_native_completion(&loaded).unwrap();assert_eq!(store.complete_certified(&cert,now(),|_|panic!("ACK is not new execution authority")).unwrap().status,CommitStatus::Unchanged);assert_eq!(inventory(&env.fixture.path),before);
+ }
+}
+#[test]fn native_continuation_completed_deliveries_need_no_new_tool_balance_or_model_to_verify(){
+ let(env,g)=closed("openai","native-all");let frozen=old_bytes(&env,&g);let q=admit(&env,&g,0);let(g,o)=owned(&env.fixture,&env.authority,&q,&Chat::persistent(env.fixture.path.join("verification-main.json")));assert!(review_step(&g,&o,0).is_err());let progress=o.verify_native_goal(&env.store,&g).unwrap();assert!(progress.report.criteria_verified);assert_eq!(progress.completion.unwrap().record.state,State::Completed);assert_eq!(progress.report.receipts.len(),1);assert!(progress.report.receipts[0].source_decision_id.is_some());let body:serde_json::Value=serde_json::from_slice(&fs::read(root(&env.fixture).join(format!("{}.json",g.admissions[1].spec.decision_id))).unwrap()).unwrap();assert_eq!(body["body"]["schemaVersion"],12);assert!(body["body"].get("messages").is_none()&&body["body"].get("budgetUsage").is_none());assert_eq!(old_bytes(&env,&g),frozen);
+}
+#[test]fn native_continuation_uncovered_expiry_is_not_extended_and_covered_expiry_is_only_a_historical_fact(){
+ for phase in ["native-partial","native-all"]{
+  let(env,g)=closed("ollama",phase);let at=now()+180_000;let(_,captured)=env.store.prepare_continuation(&root(&env.fixture),&g.id,&g.spec.owner.pet_id,&g.revision,at).unwrap().unwrap();let before=inventory(&env.fixture.path);let prepared=Review::prepare_deterministic_continuation(&g,evidence(&g,at),budget(at,1),captured,"exact-old-expiry".into(),nonce().unwrap(),at);
+  if phase=="native-partial"{assert_eq!(prepared.err(),Some(Denial::Expired));}else{let p=prepared.unwrap().proposal();assert_eq!(p.proposals.plans.len(),g.plans.len());assert_eq!(p.budget.max_model_calls,0);}assert_eq!(inventory(&env.fixture.path),before);
+ }
+ let b=budget(now(),0);assert!(b.valid_runtime_continuation(now()));assert!(!b.valid_runtime(now())&&!b.valid(now()));
+}
+#[test]fn native_continuation_missing_original_or_forged_witness_cannot_publish_a_completion(){
+ let(env,g)=closed("copilot","native-all");let q=admit(&env,&g,0);let(g,o)=owned(&env.fixture,&env.authority,&q,&Chat::persistent(env.fixture.path.join("witness-main.json")));let row=&g.admissions[1];let at=now();let original=env.authority.observe_native_criteria(&g,&row.spec,row.proof.as_ref().unwrap(),o.lease(),at).unwrap();let mut forged=original.clone();forged.receipts[0].source_decision_id=Some(nonce().unwrap());forged.reference.report_hash=forged.content_hash().unwrap();let before=inventory(&env.fixture.path);assert!(env.authority.record_native_verification(&g,&row.spec,row.proof.as_ref().unwrap(),o.lease(),&forged,at,||true).is_err());assert_eq!(inventory(&env.fixture.path),before);
+ let path=root(&env.fixture).join(format!("{}.json",g.admissions[0].spec.decision_id));let bytes=fs::read(&path).unwrap();fs::remove_file(&path).unwrap();assert!(env.authority.record_native_verification(&g,&row.spec,row.proof.as_ref().unwrap(),o.lease(),&original,at,||true).is_err());fs::write(&path,bytes).unwrap();fs::set_permissions(&path,std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();assert!(o.verify_native_goal(&env.store,&g).unwrap().completion.is_some());
+}
+#[test]fn native_continuation_original_live_worker_and_unknown_effects_remain_blocking(){
+ let env=Environment::new("ollama","native-partial",false);let before=inventory(&env.fixture.path);assert!(env.store.prepare_recovery(&root(&env.fixture),&env.goal.id,&env.goal.spec.owner.pet_id,&env.goal.revision,"no-live-takeover".into(),now()).is_err());assert_eq!(inventory(&env.fixture.path),before);drop(env);
+ let(env,g)=closed("ollama","native-uncertain");let before=inventory(&env.fixture.path);assert!(matches!(env.store.prepare_continuation_review(&root(&env.fixture),&g.id,&g.spec.owner.pet_id,&g.revision,now(),true).unwrap(),Err(Denial::UnreconciledEffects)));assert_eq!(inventory(&env.fixture.path),before);
+}
+#[test]fn native_continuation_stop_cannot_be_bypassed_by_a_report_or_fresh_draft(){
+ let(env,g)=closed("codex","native-all");let q=admit(&env,&g,0);let(g,o)=owned(&env.fixture,&env.authority,&q,&Chat::persistent(env.fixture.path.join("stop-main.json")));let paused=super::authority_store::mutate_with_authority(&env.store,&root(&env.fixture),&g.id,&g.spec.owner.pet_id,&g.revision,"stop-native-continuation".into(),Action::Pause,now()).unwrap().record;let drain=o.drain(super::leases::DrainOutcome::Confirmed).unwrap();let paused=env.store.drain_owned(&env.authority,&drain,now()).unwrap().record;assert_eq!(paused.state,State::Paused);let before=inventory(&env.fixture.path);assert!(env.store.mutate(&g.id,&g.spec.owner.pet_id,&paused.revision,"not-fresh-authority".into(),Action::ResumeDraft,now()).is_err());assert!(o.verify_native_goal(&env.store,&paused).is_err());assert_eq!(inventory(&env.fixture.path),before);
+}

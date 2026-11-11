@@ -3,6 +3,7 @@ use super::{authority::{Authority,Operation},authority_store::UnusedSource,retir
 use serde::Serialize;
 #[derive(Clone,Serialize)]#[serde(rename_all="camelCase")]
 pub struct Proposal{
+    #[serde(skip_serializing_if="Option::is_none")]pub native_system_plan_hash:Option<String>,
     pub goal_id:String,pub pet_id:String,pub revision:String,pub request_id:String,pub decision_id:String,pub intent:String,pub criteria:Vec<String>,
     pub approval_scope:&'static str,pub original_operation:&'static str,pub original_spec_hash:String,pub original_approved_at:u64,pub source_grant_revision:String,pub source_grant_hash:String,
     pub authenticated_subtotal:Charge,pub linked_accounting_complete:bool,pub history_continuity_verified:bool,pub target_usage_known_zero:bool,
@@ -16,7 +17,7 @@ pub(super)enum Prepared{Review(Review),Retired(Receipt)}
 impl Review{
     pub(super)fn captured(goal:Record,authority:Authority,source:UnusedSource,request:String,now:u64)->model::Result<Self>{
         if !model::key(&request)||now<goal.updated_at||now>8_640_000_000_000_000-30_000{return Err(model::Error::InvalidInput);}
-        let body=source.body();let proposal=Proposal{goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),revision:goal.revision.clone(),request_id:request,decision_id:body.decision_id.clone(),intent:goal.spec.intent.clone(),criteria:goal.spec.criteria.clone(),approval_scope:"retireUnlinkedAdmission",original_operation:if body.operation==Operation::GoalPlanning{"goalPlanning"}else{"conversationRespond"},original_spec_hash:body.spec_hash.clone(),original_approved_at:body.approved_at,source_grant_revision:body.revision.clone(),source_grant_hash:model::fingerprint(body)?,authenticated_subtotal:source.charge().clone(),linked_accounting_complete:source.linked_accounting_complete(),history_continuity_verified:false,target_usage_known_zero:true,same_goal_unlinked:source.unlinked(),matching_staged_images:source.staged(),prepared_at:now,expires_at:now+30_000,execution_available:false};
+        let body=source.body();let proposal=Proposal{native_system_plan_hash:body.native_system_plan_hash.clone(),goal_id:goal.id.clone(),pet_id:goal.spec.owner.pet_id.clone(),revision:goal.revision.clone(),request_id:request,decision_id:body.decision_id.clone(),intent:goal.spec.intent.clone(),criteria:goal.spec.criteria.clone(),approval_scope:"retireUnlinkedAdmission",original_operation:if body.operation==Operation::GoalDeterministic{"goalDeterministic"}else if body.operation==Operation::GoalPlanning{"goalPlanning"}else{"conversationRespond"},original_spec_hash:body.spec_hash.clone(),original_approved_at:body.approved_at,source_grant_revision:body.revision.clone(),source_grant_hash:model::fingerprint(body)?,authenticated_subtotal:source.charge().clone(),linked_accounting_complete:source.linked_accounting_complete(),history_continuity_verified:false,target_usage_known_zero:true,same_goal_unlinked:source.unlinked(),matching_staged_images:source.staged(),prepared_at:now,expires_at:now+30_000,execution_available:false};
         Ok(Self{goal,authority,source,proposal,id:nonce()?})
     }
     pub(super)fn proposal(&self)->Proposal{self.proposal.clone()}

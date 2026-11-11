@@ -31,8 +31,7 @@ function sharedSounds(): Plugin {
     closeBundle() {
       const out = resolve(__dirname, "dist/sounds");
       if (!existsSync(SOUNDS_DIR)) {
-        this.warn(`sounds not found at ${SOUNDS_DIR} — the build will ship without audio`);
-        return;
+        this.error(`Required shared sounds are missing at ${SOUNDS_DIR}; refusing an incomplete app bundle`);
       }
       mkdirSync(out, { recursive: true });
       for (const f of readdirSync(SOUNDS_DIR)) {

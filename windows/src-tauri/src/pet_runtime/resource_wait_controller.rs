@@ -40,11 +40,12 @@ fn failure(f:crate::pet_runtime::authority::Failure)->model::Error{match f{crate
 impl Owned{
     fn wait_inputs(&self,store:&Store,source:&Source,entry:&Entry,now:u64)->model::Result<()>{
         if self.live.closed.load(Ordering::Acquire)||Instant::now()>=self.live.deadline||!self.live.chat.goal_context_current(&self.live.lease.goal_id)
-            ||!source.matches_wait(self,entry,now){self.live.closed.store(true,Ordering::Release);self.live.hold.cancel();return Err(model::Error::Conflict);}
+            ||!source.matches_wait(self,entry,now){self.live.close_with_cause(InvalidationCause::WaitSourceChanged,now);return Err(model::Error::Conflict);}
         let goal=store.read(&self.live.lease.goal_id,&self.live.spec.owner.pet_id)?;
-        if goal.revision!=entry.goal_revision||model::fingerprint(&goal)?!=entry.goal_hash||!source.wait_configuration_current()?{self.live.hold.cancel();return Err(model::Error::Conflict);}
+        if goal.revision!=entry.goal_revision||model::fingerprint(&goal)?!=entry.goal_hash{self.live.invalidate(InvalidationCause::WaitGoalChanged,now);return Err(model::Error::Conflict);}
+        if !source.wait_configuration_current()?{self.live.invalidate(InvalidationCause::WaitConfigurationChanged,now);return Err(model::Error::Conflict);}
         match(self.live.fence)(&self.live.lease,&self.live.hold,Validation::PendingDecision){
-            Validity::Current=>Ok(()),Validity::Unknown=>Err(model::Error::StorageUnavailable),Validity::Changed=>{self.live.hold.cancel();Err(model::Error::Conflict)},
+            Validity::Current=>Ok(()),Validity::Busy=>Err(model::Error::Busy),Validity::Unknown=>Err(model::Error::StorageUnavailable),Validity::Changed=>{self.live.invalidate(InvalidationCause::PolicyChanged,now);Err(model::Error::Conflict)},
         }
     }
     /// Publication uncertainty retains this native proposal and physical slot.

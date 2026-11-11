@@ -15,7 +15,7 @@ installFakeDom();
 
 // ── The catalog itself ────────────────────────────────────────────────────────
 
-test("the catalog holds the Mac's pills with the Claude Code label for Windows and Linux", () => {
+test("the catalog preserves original pills and adds the Linux System Guardian", () => {
   // Copied from NotchBuddy/Sources/CoucouKit/PillCatalog.swift: an ID is a
   // contract value, and a colour or subtitle that drifts is a visible bug.
   // Windows and Linux name the Claude Code integration after the agent.
@@ -36,6 +36,7 @@ test("the catalog holds the Mac's pills with the Claude Code label for Windows a
     ["ai_openai", "OpenAI", "#10A37F", "ai", "Chat"],
     ["ai_ollama", "Ollama", "#FACC15", "ai", "Chat"],
     ["ai_lmstudio", "LM Studio", "#A3E635", "ai", "Chat"],
+    ["agent_system_guardian", "System Guardian", "#38BDF8", "agent", "System health"],
     ["integration_resend", "Resend", "#22C55E", "service", "Integration"],
     ["integration_n8n", "n8n", "#F29B38", "service", "Integration"],
     ["integration_vercel", "Vercel", "#7C5CFF", "service", "Integration"],
@@ -96,7 +97,9 @@ test("this build leaves out what only macOS has, and Claude Desktop on Linux", (
   // Spotify: MPRIS on Linux, the system media controls on Windows.
   assert.ok(linux.includes("integration_spotify"));
   assert.ok(windows.includes("integration_spotify"));
-  assert.deepEqual(linux, windows.filter((id) => id !== "agent_claude-desktop"));
+  assert.ok(linux.includes("agent_system_guardian"));
+  assert.ok(!windows.includes("agent_system_guardian"));
+  assert.deepEqual(linux.filter((id)=>id!=="agent_system_guardian"), windows.filter((id) => id !== "agent_claude-desktop"));
 });
 
 test("Spotify: a service on both systems with nothing to set up", () => {

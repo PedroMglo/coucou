@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {installFakeDom} from './fakedom.mjs';
-import {approvalActions} from '../src/views/approval-actions.ts';
+import {approvalActions,goalVoiceHint} from '../src/views/approval-actions.ts';
 installFakeDom();
 const choice=(id,scope,allow=true,extra={})=>({id,label:`Native ${scope}`,scope,allow,...extra});
 test('native scopes are explicit and buttons send only their local choice ID',()=>{
@@ -20,4 +20,11 @@ test('one pending response disables every native choice until explicit retry',()
 });
 test('legacy local decisions remain plain booleans without a native choice or wire value',()=>{
  const sent=[];const view=approvalActions({kind:'permission',approvalScope:'once'},(...a)=>sent.push(a));view.el.find('button')[0].fire('click');assert.deepEqual(sent,[[true,undefined]]);
+});
+
+test('shared goal voice hint never advertises approval for exact DATA, derived peer plans or unknown reviews',()=>{
+ const request={voiceCode:'004321',goalTarget:{origin:'goalPeerPlan'},goalReview:{approvalScope:'exactReviewedNativePeerPlan',recipe:{}}};assert.match(goalVoiceHint(request),/aprovar receita 004321/);
+ for(const provenance of [{nativePublishedScopeRequired:true},null]){const derived=structuredClone(request);derived.goalReview.recipe.roundDataProvenance=provenance;assert.doesNotMatch(goalVoiceHint(derived),/· aprovar receita/);assert.match(goalVoiceHint(derived),/rever receita 004321 · recusar receita 004321/);}
+ for(const origin of ['goalPeerData','goalPeerPlan']){const unknown={voiceCode:'004321',goalTarget:{origin}};assert.doesNotMatch(goalVoiceHint(unknown),/· aprovar receita/);}
+ assert.match(goalVoiceHint({voiceCode:'004321',goalTarget:{origin:'goal'}}),/aprovar receita 004321/);assert.equal(goalVoiceHint({voiceCode:'forged code',goalTarget:{origin:'goal'}}),null);assert.equal(goalVoiceHint({voiceCode:'004321'}),null);
 });

@@ -4,7 +4,7 @@ fn descriptor_for(id:&str,adapter:Option<&'static str>,provider:Option<&str>)->D
     let b=pet_config::blueprint(id).unwrap();let kind=match b.runtime.kind{RuntimeKind::Llm=>Kind::Llm,RuntimeKind::Service=>Kind::Service,RuntimeKind::Observer=>Kind::Observer};
     Descriptor{schema_version:1,pet_id:id.into(),name:"Private fixture".into(),kind,lifecycle:Lifecycle::Active,binding:Binding{engine_binding:None,adapter,provider:provider.map(str::to_string),model:None,profile:None},revision:"fixture".into(),observed_at:None,configuration_available:true,capabilities:vec![],concurrency:Concurrency{scope:None,max_active:None}}
 }
-fn spec(owner:Owner,request:&str)->Spec{Spec{restored_from:None,request_id:request.into(),owner,context:Context::Unbound,intent:"Preserve the original logical pet".into(),criteria:vec!["Original pet and adapter independently checked".into()]}}
+fn spec(owner:Owner,request:&str)->Spec{Spec{received_from:None,restored_from:None,request_id:request.into(),owner,context:Context::Unbound,intent:"Preserve the original logical pet".into(),criteria:vec!["Original pet and adapter independently checked".into()]}}
 #[test]
 fn every_declared_native_owner_uses_the_factory_without_borrowing_a_different_pets_route(){
     let f=Fixture::new();let mut count=0;
@@ -53,4 +53,16 @@ fn optional_assistant_admission_requires_its_exact_adapter_and_cannot_adopt_a_ch
     let f=Fixture::new();let owner=Owner::from_descriptor(&descriptor_for("integration_spotify",Some("codex"),Some("integration_spotify"))).unwrap();let g=f.store().create(spec(owner,"optional-assistant"),100_000).unwrap().record;let main=crate::chat::Chat::persistent(f.path.join("main.json"));let(binding,chat)=context::prepare(&f.path.join("contexts"),&g,&main,PreparationMode::Dedicated,"context").unwrap();drop(chat);let g=f.store().mutate(&g.id,&g.spec.owner.pet_id,&g.revision,"context".into(),Action::BindContext{binding},100_001).unwrap().record;
     let mut native=descriptor(&g,100_002);native.kind=Kind::Service;native.binding.adapter=Some("codex");assert!(Evidence::observe(&g,&native,"a".repeat(64),100_002,false,false).is_ok());
     native.binding.adapter=Some("spotify");assert_eq!(Evidence::observe(&g,&native,"a".repeat(64),100_002,false,false).err(),Some(Denial::OwnerChanged));native.binding.adapter=Some("codex");native.binding.provider=Some("codex".into());assert_eq!(Evidence::observe(&g,&native,"a".repeat(64),100_002,false,false).err(),Some(Denial::OwnerChanged));
+}
+#[test]
+fn unconfigured_native_identity_keeps_its_pet_without_creating_an_inference_binding(){
+    for id in ["ai_openai","ai_anthropic","ai_google","ai_lmstudio"]{
+        let d=descriptor_for(id,None,None);let owner=Owner::from_runtime_descriptor(&d).unwrap();
+        let b=pet_config::blueprint(id).unwrap();assert_eq!(owner.pet_id,id);
+        assert_eq!(Some(owner.provider.as_str()),b.routing.task_provider.as_deref().or(b.routing.chat.as_deref()));
+        assert!(owner.model_hint.is_none()&&d.binding.adapter.is_none()&&d.binding.provider.is_none()&&d.binding.engine_binding.is_none());
+        assert!(Owner::from_descriptor(&d).is_err());
+        for mode in 0..6{let mut wrong=d.clone();match mode{0=>wrong.configuration_available=false,1=>wrong.lifecycle=Lifecycle::Inactive,2=>wrong.kind=Kind::Observer,3=>wrong.binding.provider=Some("codex".into()),4=>wrong.binding.adapter=Some("unknown"),_=>wrong.lifecycle=Lifecycle::Retired};assert!(Owner::from_runtime_descriptor(&wrong).is_err());}
+    }
+    for id in ["agent_gemini","integration_claude","integration_github"]{assert!(Owner::from_runtime_descriptor(&descriptor_for(id,None,None)).is_err());}
 }

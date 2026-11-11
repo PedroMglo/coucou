@@ -10,14 +10,19 @@ pub(super)fn native(f:&Fixture)->Store {Store::existing_verified(&f.path.join("g
 pub(super)fn setup(acknowledge:bool)->(Fixture,Authority,Record,Pending,Owned,Chat) {setup_custom(acknowledge,17,2)}
 fn setup_custom(acknowledge:bool,volume:u8,tools:u16)->(Fixture,Authority,Record,Pending,Owned,Chat) {setup_policy(acknowledge,volume,tools,2)}
 pub(super)fn setup_policy(acknowledge:bool,volume:u8,tools:u16,no_progress_limit:u8)->(Fixture,Authority,Record,Pending,Owned,Chat) {
+    setup_observed(acknowledge,volume,tools,no_progress_limit,|_,_,_|Validity::Current)
+}
+pub(super)fn setup_observed<F>(acknowledge:bool,volume:u8,tools:u16,no_progress_limit:u8,observe:F)->(Fixture,Authority,Record,Pending,Owned,Chat)
+where F:for<'a>Fn(&super::leases::Lease,&crate::pet_resources::Hold,Validation<'a>)->Validity+Send+Sync+'static {
     let f=Fixture::new();let a=Authority::ensure(&root(&f)).unwrap();let draft=f.goal_named_criteria("ollama","generated-effects",vec!["Playback is paused".into(),"Volume is 17 percent".into()]);let at=crate::assistant_memory::now()-100;
     let mut b=budget();b.deadline_at=at+120_000;b.max_output_bytes=32_768;b.max_tool_calls=tools;b.payment=Payment::LocalOnly;
     let l=Limits{max_rounds:3,max_steps:2,max_output_bytes:2048,no_progress_limit};
     let approved=Review::prepare_planning(&draft,evidence(&draft,at),b,l,&config(),"admit".into(),nonce().unwrap(),at).unwrap().approve(&draft,evidence(&draft,at+1),at+1).unwrap();
     let cert=a.certify(&approved,&draft,at+2).unwrap();let queued=f.store().enqueue_certified(&cert,at+3).unwrap().record;let main=Chat::persistent(f.path.join("main-live.json"));
     let goals=f.path.join("goals");let authority=root(&f);let pet=queued.spec.owner.pet_id.clone();let id=queued.id.clone();
-    let fence=Arc::new(move|lease:&super::leases::Lease,_:&crate::pet_resources::Hold,mode:Validation<'_>|{
-        let g=if let Validation::Commit(g)=mode {g.clone()}else{match Store::existing_verified(&goals,&authority).ok().flatten().and_then(|s|s.read(&id,&pet).ok()){Some(g)=>g,None=>return Validity::Unknown}};
+    let fence=Arc::new(move|lease:&super::leases::Lease,hold:&crate::pet_resources::Hold,mode:Validation<'_>|{
+        let observed=observe(lease,hold,mode);if observed!=Validity::Current{return observed;}
+        let g=if let Validation::Commit(g)=mode {g.clone()}else{let Some(store)=Store::existing_verified(&goals,&authority).ok().flatten()else{return Validity::Unknown;};match super::native_validity::read_goal(&store,&id,&pet){Ok(g)=>g,Err(validity)=>return validity}};
         if g.state==State::Leased&&g.admissions.last().and_then(|a|a.lease.as_ref())==Some(lease)&&g.execution_context.as_ref().is_some_and(|c|c.conversation_id==lease.conversation_id){Validity::Current}else{Validity::Changed}
     });
     let controller=Controller::new().unwrap();let pending=controller.prepare(&queued,&root(&f),&f.path.join("contexts"),&main,&evidence(&queued,at+4),"claim".into(),at+4,fence).unwrap();let(r,o)=pending.claim(&f.store(),&a,&evidence(&queued,at+5),at+5).unwrap();let g=r.record;let o=o.unwrap();

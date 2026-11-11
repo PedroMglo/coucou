@@ -30,7 +30,7 @@ pub fn freeze(input:CommandInput,cwd:&Path,policy:&LocalExecution)->Result<Comma
 }
 
 pub enum Outcome {Allowed(ApprovedCommand),Denied,Expired,Cancelled}
-pub fn policy_current(scope:&ExecutionScope)->bool{crate::pet_config::read().is_ok_and(|c|c.local_execution()==scope.policy)}
+pub fn policy_current(scope:&ExecutionScope)->bool{scope.turn.check_inference().is_ok()&&crate::pet_config::read_existing().is_ok_and(|c|c.local_execution_for(&scope.target.pet_id)==scope.policy)}
 pub async fn request(app:&tauri::AppHandle,scope:&ExecutionScope,step:&StepReceipt,spec:CommandSpec)->Result<Outcome,String>{
  if scope.turn.cancel.load(Ordering::Acquire){return Ok(Outcome::Cancelled);}
  if !policy_current(scope){return Err("As permissões de execução foram alteradas; o comando não foi iniciado.".into());}

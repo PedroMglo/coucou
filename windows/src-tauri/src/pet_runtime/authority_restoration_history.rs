@@ -16,7 +16,7 @@ pub(in crate::pet_runtime::authority_store)fn captured_goal_snapshot(a:&Authorit
  // Reuse the same bounded hash/signature/fence reader as the native restore
  // inspection. Validity here means preserved source bytes, never execution.
  let stamps=verify_historical_grants(a)?;
- let source=RestoredSource{schema_version:1,history_hash:boundary.hash.clone(),source_fingerprint:boundary.body.source.clone(),source_goal_hash:goal_hash,historical_related_grants:boundary.body.grants.iter().filter(|g|g.goal_id.as_deref()==Some(goal.id.as_str())||g.decision_id.as_ref().is_some_and(|id|reference.decisions.contains(id))).count(),unattributed_historical_grants:boundary.body.grants.iter().filter(|g|g.goal_id.is_none()).count(),owner_absence_proven:false,post_snapshot_state_unknown:true,execution_authority_granted:false};
+ let source=RestoredSource{schema_version:1,history_hash:boundary.hash.clone(),source_fingerprint:boundary.body.source.clone(),source_goal_hash:goal_hash,historical_related_grants:boundary.body.grants.iter().filter(|g|g.goal_id.as_deref()==Some(goal.id.as_str())||g.decision_id.as_ref().is_some_and(|id|reference.decisions.contains(id))).count(),unattributed_historical_grants:boundary.body.grants.iter().filter(|g|g.goal_id.is_none()&&g.rule_id.is_none()).count(),owner_absence_proven:false,post_snapshot_state_unknown:true,execution_authority_granted:false};
  let mut snapshot=Snapshot::empty(goal,now).map_err(|_|Failure::Invalid)?;
  snapshot.schema_version=2;snapshot.scope="restoredSnapshotOnly";snapshot.history_coverage="immutableRestoredSnapshotOnly";
  snapshot.source_hash=model::fingerprint(&("coucou-restored-goal-history-v1",&snapshot.goal_hash,&source)).map_err(|_|Failure::Invalid)?;

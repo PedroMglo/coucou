@@ -21,7 +21,8 @@
       "reason carefully",
       "high reasoning"
     ],
-    "reasoningLength": 1600
+    "reasoningLength": 1600,
+    "catalogRevision": 1
   },
   "molds": {
     "llm": {},
@@ -524,7 +525,11 @@
       },
       "runtime": {
         "kind": "llm",
-        "adapter": "ollama"
+        "adapter": "ollama",
+        "inferenceAdapters": [
+          "ollama",
+          "lmstudio"
+        ]
       }
     },
     "ai_lmstudio": {
@@ -553,7 +558,11 @@
       },
       "runtime": {
         "kind": "llm",
-        "adapter": "lmstudio"
+        "adapter": "lmstudio",
+        "inferenceAdapters": [
+          "ollama",
+          "lmstudio"
+        ]
       },
       "presentation": {
         "profiles": true
@@ -849,6 +858,53 @@
         "kind": "service",
         "adapter": "spotify",
         "assistantAdapter": "codex"
+      }
+    },
+    "agent_system_guardian": {
+      "mold": "llm",
+      "service": false,
+      "introducedIn": 1,
+      "preferences": {
+        "name": "System Guardian",
+        "aliases": [
+          "guardian",
+          "guardião do sistema"
+        ],
+        "provider": "",
+        "fast": {
+          "model": "",
+          "effort": ""
+        },
+        "reasoning": {
+          "model": "",
+          "effort": ""
+        },
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": "agent_system_guardian",
+        "voice": null,
+        "execute": false,
+        "taskProvider": "agent_system_guardian",
+        "role": "Especialista em saúde, segurança e manutenção do sistema",
+        "taskName": "System Guardian"
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": null,
+        "inferenceAdapters": [
+          "ollama"
+        ]
+      },
+      "presentation": {
+        "galleryAction": "Saúde do sistema",
+        "galleryState": "Observação autorizada · motor opcional",
+        "profiles": true
       }
     }
   },

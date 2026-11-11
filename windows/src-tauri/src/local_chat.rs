@@ -105,6 +105,30 @@ pub struct Server {
     pub url: String,
     pub key: Option<String>,
 }
+pub(crate)fn server_for_target(target:&crate::pet_inference::Target)->Result<Server,String>{
+    let url=net::normalise_server_url(&target.choice.endpoint)?;
+    let key=match target.choice.credential{
+        crate::pet_inference::CredentialReference::None=>None,
+        crate::pet_inference::CredentialReference::ConfiguredLmstudioEndpoint=>Some(secrets::get(LMSTUDIO_KEY).and_then(|s|key_for(&s,&url)).ok_or("A credencial escolhida não está disponível para este endpoint exato. Não foi usada outra credencial ou ligação anónima.")?),
+    };
+    Ok(Server{id:target.choice.backend.key(),name:if target.choice.backend==crate::pet_inference::Backend::Ollama{"Ollama"}else{"LM Studio"},url:target.choice.endpoint.clone(),key})
+}
+pub(crate)fn server_for_capture(captured:&crate::pet_inference::Captured)->Result<Server,String>{
+    captured.check()?;
+    let server=if let Some(target)=&captured.explicit{server_for_target(target)?}else{
+        let url=net::normalise_server_url(&captured.endpoint)?;
+        let key=match captured.adapter{"lmstudio"=>secrets::get(LMSTUDIO_KEY).and_then(|s|key_for(&s,&url)),"custom"=>custom_key_for(&url),_=>None};
+        Server{id:captured.adapter,name:match captured.adapter{"ollama"=>"Ollama","lmstudio"=>"LM Studio",_=>"OpenAI-compatible server"},url:captured.endpoint.clone(),key}
+    };
+    captured.check()?;Ok(server)
+}
+pub(crate)fn metadata_auth_for_capture(captured:&crate::pet_inference::Captured)->Result<lmstudio::MetadataAuth,String>{
+    if captured.adapter!="lmstudio"{return Err("Este destino não usa metadados LM Studio.".into());}
+    if let Some(target)=&captured.explicit{if target.choice.credential==crate::pet_inference::CredentialReference::None{return Ok(lmstudio::MetadataAuth::Anonymous);}
+        return captured.credential_revision.map(lmstudio::MetadataAuth::Configured).ok_or("Falta a revisão da credencial capturada.".into());
+    }
+    captured.credential_revision.map(lmstudio::MetadataAuth::Legacy).ok_or("Falta a revisão da credencial legada.".into())
+}
 
 /// Ollama, LM Studio or "custom", from the settings; None for any other id.
 pub fn server(settings: &Settings, id: &str) -> Option<Server> {
@@ -286,6 +310,22 @@ fn request_body(model: &str, system: &str, history: &[Value], user: &Value) -> V
 }
 
 /// One chat turn with a model server; the island gets the streamed text as `chat-delta` events.
+pub(crate)async fn send_captured(app:&AppHandle,chat:&Chat,settings:&Settings,captured:&crate::pet_inference::Captured,query:String,context:Option<ChatContext>)->Result<ChatReply,String>{
+    let server=server_for_capture(captured)?;let provider=captured.provider.as_str();let config=&captured.configuration;
+    let requested=if captured.explicit.is_some(){"@default".into()}else{chat::model_for(settings,provider)};
+    let selection=if captured.explicit.is_some()||crate::pet_config::pet_id(provider).is_some_and(|id|config.pets.get(id).is_some_and(|p|p.provider==provider)){
+        Some(config.select(provider,&requested,&query)?)
+    }else{None};
+    let model=selection.as_ref().map(|s|s.model.as_str()).unwrap_or(&requested);
+    if server.id=="ollama"&&cfg!(target_os="linux"){
+        let policy=crate::pet_config::pet_id(provider).map(|id|config.local_execution_for(id)).unwrap_or_default();
+        if policy.mode==crate::pet_config::LocalExecutionMode::Ask{
+            if provider!="ollama"{return Err("O adaptador de ferramentas deste dono ainda está em integração. A política de outro pet não foi utilizada.".into());}
+            return crate::local_tasks::respond(app,chat,settings,&server,model,selection.as_ref(),query,context,policy,None).await;
+        }
+    }
+    send_inner(chat,&server,provider,model,query,context,Some(app),selection.as_ref(),|_|{}).await
+}
 pub async fn send(
     app: &AppHandle,
     chat: &Chat,
@@ -296,11 +336,12 @@ pub async fn send(
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
+    if let Some(captured)=chat.captured_inference(server.id)?{return send_captured(app,chat,settings,&captured,query,context).await;}
     if server.id=="ollama"&&cfg!(target_os="linux"){
         let policy=crate::pet_config::read()?.local_execution();
         if policy.mode==crate::pet_config::LocalExecutionMode::Ask{return crate::local_tasks::respond(app,chat,settings,server,model,selection,query,context,policy,None).await;}
     }
-    send_inner(chat,server,model,query,context,Some(app),selection,|_|{}).await
+    send_inner(chat,server,server.id,model,query,context,Some(app),selection,|_|{}).await
 }
 
 /// The same turn, with the streamed text handed to `on_delta` instead (the phone link uses this).
@@ -312,22 +353,31 @@ pub async fn send_with(
     context: Option<ChatContext>,
     on_delta: impl FnMut(String),
 ) -> Result<ChatReply, String> {
-    send_inner(chat,server,model,query,context,None,None,on_delta).await
+    send_inner(chat,server,server.id,model,query,context,None,None,on_delta).await
 }
 
 async fn send_inner(
-    chat:&Chat,server:&Server,model:&str,query:String,context:Option<ChatContext>,app:Option<&AppHandle>,selection:Option<&crate::pet_config::Selection>,mut on_delta:impl FnMut(String),
+    chat:&Chat,server:&Server,owner:&str,model:&str,query:String,context:Option<ChatContext>,app:Option<&AppHandle>,selection:Option<&crate::pet_config::Selection>,mut on_delta:impl FnMut(String),
 )->Result<ChatReply,String> {
     chat.check_new_effect()?;
-    let base = base_url(server)?;
     if model.is_empty() {
         return Err(t("Pick a model above the chat box first."));
     }
-    let turn = chat.begin_cli(server.id,std::sync::Arc::default())?;
+    let turn = chat.begin_cli(owner,std::sync::Arc::default())?;
     let capture_origin = chat.usage_capture_origin(&turn);
     let lease=chat.lease(&turn);
     let _lease=if let Some(app)=app{lease.broadcast(app,&query)}else{lease};
-    let identity = if server.id == "ollama" {
+    let captured=turn.captured_inference();
+    let resolved=captured.as_ref().map(|c|server_for_capture(c)).transpose()?;let server=resolved.as_ref().unwrap_or(server);
+    if captured.as_ref().and_then(|c|c.explicit.as_ref()).is_some_and(|t|t.choice.model!=model){return Err("O modelo não corresponde ao binding capturado; o pedido não foi redirecionado.".into());}
+    let base=base_url(server)?;
+    let identity = if let Some(captured)=&captured{
+        if server.id=="lmstudio"&&(captured.explicit.is_some()||captured.configuration.pets.get("ai_lmstudio").is_some_and(|p|p.provider=="lmstudio")){
+            lmstudio::inspect_scoped(server,model,metadata_auth_for_capture(captured)?,||chat.is_current(&turn)&&turn.check_inference().is_ok()).await?;
+        }
+        let configured=crate::pet_config::pet_id(owner).filter(|id|captured.explicit.is_some()||captured.configuration.pets.get(*id).is_some_and(|p|p.provider==owner));
+        configured.map(|id|chat.capture_local_identity(&turn,&captured.configuration,id)).transpose()?
+    }else if server.id == "ollama" {
         let config = crate::pet_config::read_existing()?;
         Some(chat.capture_local_identity(&turn, &config, "ai_ollama")?)
     } else if server.id=="lmstudio" {
@@ -337,13 +387,13 @@ async fn send_inner(
             Some(chat.capture_local_identity(&turn,&config,"ai_lmstudio")?)
         }else{if selection.is_some(){return Err("A associação do pet LM Studio mudou.".into());}None}
     }else{None};
-    let activity=app.map(|app|crate::pet_activity::Reporter::new(app,server.id,Some(turn.cancel.clone())).observe(chat.clone(),turn.clone()));
+    let activity=app.map(|app|crate::pet_activity::Reporter::new(app,owner,Some(turn.cancel.clone())).observe(chat.clone(),turn.clone()));
     let prepared = user_text_for_turn(chat, &turn, context.as_ref(), &query).await?;
     let user = json!({ "role": "user", "content": prepared.text });
     let system = identity.as_ref().map(|identity| chat::system_prompt_for_pet(identity, false))
         .unwrap_or_else(|| chat::system_prompt(false));
     let mut body = request_body(model, &system, &turn.history, &user);
-    chat.append_selected_memory(server.id,&query,&crate::pet_memory::context_model::Destination::Server{provider:server.id.into(),endpoint:net::join(&base,"v1/chat/completions"),model:model.into()},server.key.as_deref(),body["messages"].as_array_mut().unwrap())?;
+    chat.append_selected_memory(owner,&query,&crate::pet_memory::context_model::Destination::Server{provider:server.id.into(),endpoint:net::join(&base,"v1/chat/completions"),model:model.into()},server.key.as_deref(),body["messages"].as_array_mut().unwrap())?;
     if server.id=="ollama"{body["stream_options"]=json!({"include_usage":true});}
     let mut calendar_tools = prepared.calendar().and_then(|n|n.query()).is_some();
     if server.id=="ollama"&&(selection.is_some()||calendar_tools){
@@ -371,7 +421,7 @@ async fn send_inner(
     prepared.validate_contents().await?;
     let mut capture = None;
     let streamed = tokio::select! {
-        result=stream_bounded_captured(&base, server.key.as_deref(), model, &body, capture_origin.as_ref(), &mut capture, |text|{if prepared.validate().is_ok()&&chat.is_current(&turn){if let Some(app)=app {chat.publish_delta(app,&turn,&text);}if let Some(activity)=&activity{activity.update("message",text.rsplit("\n\n").next().unwrap_or(&text));}on_delta(text);}},MAX_ANSWER,false,||chat.check_new_effect())=>Some(result),
+        result=stream_bounded_captured(&base, server.key.as_deref(), model, &body, capture_origin.as_ref(), &mut capture, |text|{if prepared.validate().is_ok()&&chat.is_current(&turn){if let Some(app)=app {chat.publish_delta(app,&turn,&text);}if let Some(activity)=&activity{activity.update("message",text.rsplit("\n\n").next().unwrap_or(&text));}on_delta(text);}},MAX_ANSWER,false,||{chat.check_new_effect()?;if !chat.is_current(&turn){return Err(crate::net::CANCELLED.into());}turn.check_inference()})=>Some(result),
         _=async {while chat.is_current(&turn) && prepared.validate().is_ok() {tokio::time::sleep(Duration::from_millis(50)).await;}}=>None,
     };
     // The select futures have been dropped before accessing capture again.
@@ -414,27 +464,54 @@ async fn send_inner(
 
 /// The native goal writer supplies this non-serializable, single-use boundary.
 pub(crate)trait RuntimeFence:Send+Sync{
+ fn provider(&self)->&str;
  fn current(&self)->bool;
  fn output_limit(&self)->usize;
  fn before_send(&self,model:&str,body:&Value)->Result<(),String>;
  fn memory_message(&self)->Result<Option<Value>,String>{Ok(None)}
  fn before_send_to(&self,_server:&Server,model:&str,body:&Value)->Result<(),String>{self.before_send(model,body)}
 }
-pub(crate)struct RuntimeReply{pub reply:ChatReply,pub accepted_output_bytes:u64}
-pub(crate)async fn send_runtime_once(app:Option<&AppHandle>,chat:&Chat,server:&Server,model:&str,query:String,model_input:String,fence:&impl RuntimeFence,config:&crate::pet_config::Configuration)->Result<RuntimeReply,String>{
- let base=base_url(server)?;if !fence.current(){return Err("O objetivo deixou de estar pronto.".into());}
- let turn=chat.begin_cli(server.id,std::sync::Arc::default())?;let lease=chat.lease(&turn);let _lease=if let Some(app)=app{lease.broadcast(app,&query)}else{lease};
- let identity=chat.capture_local_identity(&turn,config,crate::pet_config::pet_id(server.id).ok_or("O pet do modelo mudou.")?)?;
- let user=json!({"role":"user","content":model_input});let mut body=request_body(model,&chat::system_prompt_for_pet(&identity,false),&turn.history,&user);
- // This distinct data message is never committed as the public user question
- // or copied into turn history. The fence hashes the actual complete body.
- if let Some(memory)=fence.memory_message()?{
-  let messages=body.get_mut("messages").and_then(Value::as_array_mut).filter(|m|!m.is_empty()).ok_or("O pedido do objetivo é inválido.")?;
-  messages.insert(messages.len()-1,memory);
+pub(crate)struct RuntimeReply{pub reply:ChatReply,pub accepted_output_bytes:u64,_turn_lease:crate::chat::TurnLease}
+/// Exact actual request, owned by the native caller before budget reservation.
+/// It is deliberately not Clone/Deserialize and is neither consent nor an IO
+/// permit. Dropping it abandons this turn; a body copied from JSON cannot send.
+pub(crate)struct PreparedRuntimeRequest{chat:Chat,turn:crate::chat::Turn,lease:crate::chat::TurnLease,server:Server,model:String,query:String,user:Value,body:Value,origin:Option<CaptureOrigin>}
+impl PreparedRuntimeRequest{
+ pub(crate)fn body(&self)->&Value{&self.body}
+ pub(crate)fn select_peer_context(&mut self,history:Option<&crate::pet_runtime::peer_round_history::Captured>,own_memory:Option<Value>)->Result<(),String>{
+  let old=self.body["messages"].as_array().filter(|m|m.len()>=3).ok_or("O corpo peer não contém identidade/dados/pedido.")?;
+  let mut messages=vec![old[0].clone()];if let Some(memory)=own_memory{if memory["role"]!="user"||!memory["content"].is_string(){return Err("A memória própria não corresponde ao contexto nativo.".into());}messages.push(memory);}if let Some(history)=history{messages.extend(history.messages().iter().cloned());}messages.extend(old[old.len()-2..].iter().cloned());self.body["messages"]=Value::Array(messages);Ok(())
  }
- let origin=chat.usage_capture_origin(&turn);let mut capture=None;
+ pub(crate)fn server(&self)->&Server{&self.server}
+ pub(crate)fn turn_binding(&self)->Option<(String,u64)>{self.chat.usage_origin(&self.turn)}
+ /// Logical turn witness survives an authenticated physical resource yield.
+ /// It neither owns a worker nor ignores Stop/turn replacement.
+ pub(crate)fn turn_witness(&self)->Option<std::sync::Arc<dyn Fn()->bool+Send+Sync>>{
+  let expected=self.turn_binding()?;let chat=self.chat.clone();let turn=self.turn.clone();Some(std::sync::Arc::new(move||chat.usage_origin(&turn).as_ref()==Some(&expected)))
+ }
+}
+pub(crate)fn prepare_runtime_request(chat:&Chat,server:&Server,model:&str,query:String,model_input:String,provider:&str,memory:Option<Value>,config:&crate::pet_config::Configuration)->Result<PreparedRuntimeRequest,String>{
+ let turn=chat.begin_cli(provider,std::sync::Arc::default())?;let lease=chat.lease(&turn);
+ let captured=turn.captured_inference();let resolved=captured.as_ref().map(|c|server_for_capture(c)).transpose()?;let server=resolved.as_ref().unwrap_or(server);base_url(server)?;
+ let config=captured.as_ref().map(|c|c.configuration.as_ref()).unwrap_or(config);
+ let identity=chat.capture_local_identity(&turn,config,crate::pet_config::pet_id(provider).ok_or("O pet do modelo mudou.")?)?;
+ let user=json!({"role":"user","content":model_input});let mut body=request_body(model,&chat::system_prompt_for_pet(&identity,false),&turn.history,&user);
+ if let Some(memory)=memory{let messages=body.get_mut("messages").and_then(Value::as_array_mut).filter(|m|!m.is_empty()).ok_or("O pedido do objetivo é inválido.")?;messages.insert(messages.len()-1,memory);}
+ let origin=chat.usage_capture_origin(&turn);let server=Server{id:server.id,name:server.name,url:server.url.clone(),key:server.key.clone()};
+ Ok(PreparedRuntimeRequest{chat:chat.clone(),turn,lease,server,model:model.into(),query,user,body,origin})
+}
+pub(crate)async fn send_runtime_once(app:Option<&AppHandle>,chat:&Chat,server:&Server,model:&str,query:String,model_input:String,fence:&impl RuntimeFence,config:&crate::pet_config::Configuration)->Result<RuntimeReply,String>{
+ if !fence.current(){return Err("O objetivo deixou de estar pronto.".into());}
+ let prepared=prepare_runtime_request(chat,server,model,query,model_input,fence.provider(),fence.memory_message()?,config)?;
+ send_runtime_prepared(app,chat,prepared,fence).await
+}
+pub(crate)async fn send_runtime_prepared(app:Option<&AppHandle>,chat:&Chat,prepared:PreparedRuntimeRequest,fence:&impl RuntimeFence)->Result<RuntimeReply,String>{
+ if !fence.current()||fence.provider()!=prepared.turn.provider||!chat.is_current(&prepared.turn){return Err("O objetivo ou o pedido preparado deixou de estar atual.".into());}
+ let PreparedRuntimeRequest{turn,lease,server,model,query,user,body,origin,..}=prepared;
+ let _lease=if let Some(app)=app{lease.broadcast(app,&query)}else{lease};let base=base_url(&server)?;
+ let mut capture=None;
  let result=tokio::select!{
-  result=stream_bounded_captured(&base,server.key.as_deref(),model,&body,origin.as_ref(),&mut capture,|text|{if fence.current()&&chat.is_current(&turn){if let Some(app)=app{chat.publish_delta(app,&turn,&text);}}},fence.output_limit(),true,||fence.before_send_to(server,model,&body))=>result,
+  result=stream_bounded_captured(&base,server.key.as_deref(),&model,&body,origin.as_ref(),&mut capture,|text|{if fence.current()&&chat.is_current(&turn){if let Some(app)=app{chat.publish_delta(app,&turn,&text);}}},fence.output_limit(),true,||{turn.check_inference()?;fence.before_send_to(&server,&model,&body)})=>result,
   _=async{loop{if !fence.current()||!chat.is_current(&turn){break;}tokio::time::sleep(Duration::from_millis(50)).await;}}=>Err("A execução foi interrompida.".into()),
  };
  let answer=match result{Ok(answer)=>answer,Err(error)=>{finish_text_capture(&mut capture,AttemptOutcome::Failed);return Err(error);}};
@@ -443,7 +520,7 @@ pub(crate)async fn send_runtime_once(app:Option<&AppHandle>,chat:&Chat,server:&S
  if answer.text.is_empty(){finish_text_capture(&mut capture,AttemptOutcome::Failed);return Err(t("No response text."));}
  chat.commit_observed_reply(&turn,user,json!({"role":"assistant","content":answer.text}),&query,&answer.text)?;
  finish_text_capture(&mut capture,AttemptOutcome::Completed);crate::pet_usage::record(app,chat,&turn,answer.usage);
- Ok(RuntimeReply{reply:ChatReply{text:answer.text},accepted_output_bytes:answer.accepted_output_bytes})
+ Ok(RuntimeReply{reply:ChatReply{text:answer.text},accepted_output_bytes:answer.accepted_output_bytes,_turn_lease:_lease})
 }
 
 /// Calendar reads use actual non-streamed function-call envelopes. A measured
@@ -460,7 +537,7 @@ async fn calendar_answer(chat:&Chat,turn:&crate::chat::Turn,prepared:&PreparedUs
         let response=net::while_current(
             ||chat.is_current(turn)&&prepared.validate().is_ok()&&session.validate().is_ok(),
             ||async{
-                chat.check_new_effect()?;
+                chat.check_new_effect()?;turn.check_inference()?;
                 let client=net::exact_destination_client(base,Duration::from_secs(90))?;
                 let request=client.post(net::join(base,"v1/chat/completions")).header("Authorization",bearer(key)).json(&body).build().map_err(|_|"Não foi possível preparar a consulta.")?;
                 capture=Some(Capture::begin(origin,model));

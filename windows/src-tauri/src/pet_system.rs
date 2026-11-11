@@ -2,31 +2,11 @@
 use serde::{Deserialize,Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-#[cfg(target_os="linux")]
-static LEASE_OWNER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-#[cfg(target_os="linux")]
-fn lease_owner(app:&AppHandle)->Option<String>{
- let mut owner=LEASE_OWNER.lock().unwrap();
- if !app.state::<crate::Shared>().settings.lock().unwrap().pet_system_center{return None;}
- Some(owner.get_or_insert_with(||format!("coucou-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos())).clone())
-}
-/// Disabling System withdraws only this launch's claim. An in-flight request
-/// from an earlier activation cannot withdraw a newer owner's surface.
-pub async fn release_lease(){
- #[cfg(target_os="linux")]{
-  let owner=LEASE_OWNER.lock().unwrap().take();
-  if let Some(owner)=owner{let _=dms(&["ipc","call","pets-system","release",&owner],DmsUse::Release,std::sync::Arc::new(||Ok(()))).await;}
- }
-}
-/// RunEvent::Exit is outside the async runtime. Use a bounded IPC on a helper
-/// thread; a crash still has the independent native twenty-second watchdog.
-pub fn release_on_exit(){
- #[cfg(target_os="linux")]
- if let Err(_)=std::thread::spawn(||tauri::async_runtime::block_on(release_lease())).join(){
-  crate::log::line("system lease release interrupted; native watchdog remains active");
- }
-}
-fn can_lease(label:&str,visible:bool)->bool{label==crate::pet_control::LABEL&&visible}
+// Compatibility entry points retained for existing shutdown/settings callers.
+// Native widgets belong to the desktop; this process never claims or hides them.
+// An older process releases its own legacy claim when it exits.
+pub async fn release_lease(){}
+pub fn release_on_exit(){}
 
 #[derive(Clone,Copy,Debug,Deserialize)]
 #[serde(rename_all="kebab-case")]
@@ -37,12 +17,12 @@ impl Panel {
   Self::Media=>&["ipc","call","dash","openAt","media","center"],
   Self::Weather=>&["ipc","call","dash","openAt","weather","center"],
   Self::Notifications=>&["ipc","call","notifications","open"],
-  Self::QuickSettings=>&["ipc","call","pets-system","open","quick-settings"],
-  Self::Wifi=>&["ipc","call","pets-system","open","wifi"],
-  Self::Bluetooth=>&["ipc","call","pets-system","open","bluetooth"],
-  Self::Battery=>&["ipc","call","pets-system","open","battery"],
-  Self::Audio=>&["ipc","call","pets-system","open","audio"],
-  Self::Clipboard=>&["ipc","call","pets-system","open","clipboard"],
+  Self::QuickSettings=>&["ipc","call","control-center","open"],
+  Self::Wifi=>&["ipc","call","control-center","openWith","network"],
+  Self::Bluetooth=>&["ipc","call","control-center","openWith","bluetooth"],
+  Self::Battery=>&["ipc","call","control-center","openWith","battery"],
+  Self::Audio=>&["ipc","call","control-center","openWith","audioOutput"],
+  Self::Clipboard=>&["ipc","call","clipboard","open"],
   Self::Disks=>&["ipc","call","pets-system","open","disks"],
   Self::Recording=>&["ipc","call","pets-system","open","recording"],
   Self::Tray=>&["ipc","call","pets-system","open","tray"],
@@ -50,6 +30,8 @@ impl Panel {
  fn accepted(self,reply:&str)->bool{match self{
   Self::Calendar|Self::Media|Self::Weather=>reply=="DASH_OPEN_SUCCESS",
   Self::Notifications=>matches!(reply,"NOTIFICATION_MODAL_OPEN_SUCCESS"|"NOTIFICATION_ISLAND_OPEN_SUCCESS"),
+  Self::QuickSettings|Self::Wifi|Self::Bluetooth|Self::Battery|Self::Audio=>reply=="CONTROL_CENTER_OPEN_SUCCESS",
+  Self::Clipboard=>reply=="CLIPBOARD_OPEN_SUCCESS",
   _=>reply=="PETS_SYSTEM_OPEN_SUCCESS",
  }}
  fn island_fallback(self)->Option<&'static [&'static str]>{match self{
@@ -132,11 +114,11 @@ fn present_system_panel(app:&AppHandle){
 }
 
 #[cfg(target_os="linux")]
-#[derive(Clone,Copy)]enum DmsUse{Read,Renew,Action,Release}
+#[derive(Clone,Copy)]enum DmsUse{Read,Action}
 #[cfg(target_os="linux")]
 impl DmsUse{
  fn check(self)->Result<(),String>{self.check_with(crate::settings::effect_allowed)}
- fn check_with(self,current:impl FnOnce()->Result<(),String>)->Result<(),String>{match self{Self::Read|Self::Release=>Ok(()),Self::Renew|Self::Action=>current()}}
+ fn check_with(self,current:impl FnOnce()->Result<(),String>)->Result<(),String>{match self{Self::Read=>Ok(()),Self::Action=>current()}}
 }
 #[cfg(target_os="linux")]
 type DmsCaller=std::sync::Arc<dyn Fn()->Result<(),String>+Send+Sync>;
@@ -158,7 +140,7 @@ fn dms_executable()->Result<(),String>{
 async fn dms(args:&[&str],use_:DmsUse,caller:DmsCaller)->Result<Vec<u8>,String>{
  use crate::pet_helper::{Lane,Session};use std::time::Duration;
  use_.check()?;dms_executable()?;
- let lane=match use_{DmsUse::Read=>Lane::DmsRead,DmsUse::Release=>Lane::DmsRelease,DmsUse::Renew|DmsUse::Action=>Lane::DmsEffect};
+ let lane=match use_{DmsUse::Read=>Lane::DmsRead,DmsUse::Action=>Lane::DmsEffect};
  let session=Session::acquire(lane,Duration::from_secs(3))?;
  let args=args.iter().map(|s|s.to_string()).collect::<Vec<_>>();
  session.run(crate::pet_helper::command("/usr/bin/dms",&args),16384,Duration::from_secs(3),move||{
@@ -170,24 +152,9 @@ async fn dms(args:&[&str],use_:DmsUse,caller:DmsCaller)->Result<Vec<u8>,String>{
 pub async fn pet_system_status(window:tauri::WebviewWindow,app:AppHandle)->Result<Status,String>{
  authorize(&window,&app)?;
  #[cfg(target_os="linux")]{
-  // Optional public metadata: an unavailable producer is unknown, never zero.
-  // Only the visible control island claims the migrated native widgets.
-  // Hub/diagnostic status reads remain pure and cannot hide the fallback.
-  let ready=crate::settings::effect_allowed().is_ok();
-  if !ready{release_lease().await;}
-  let owner=(ready&&can_lease(window.label(),window.is_visible().unwrap_or(false))).then(||lease_owner(&app)).flatten();
-  let args=match &owner{Some(owner)=>vec!["ipc","call","pets-system","lease",owner.as_str()],None=>vec!["ipc","call","pets-system","status"]};
-  let caller=if let Some(expected)=owner.clone(){
-   let original_window=window.clone();let original_app=app.clone();
-   std::sync::Arc::new(move||{
-    authorize(&original_window,&original_app)?;
-    if !can_lease(original_window.label(),original_window.is_visible().unwrap_or(false))||!LEASE_OWNER.lock().is_ok_and(|v|v.as_ref()==Some(&expected)){
-     return Err("A claim original do centro do sistema deixou de estar ativa.".into());
-    }
-    Ok(())
-   })as DmsCaller
-  }else{dms_caller(&window,&app)};
-  let bytes=match dms(&args,if owner.is_some(){DmsUse::Renew}else{DmsUse::Read},caller).await{Ok(bytes)=>bytes,Err(_)=>return Ok(Status::default())};
+  // Transitional metadata producer only. A passive read cannot claim, hide,
+  // renew or reactivate the existing desktop widgets, even for a visible card.
+  let bytes=match dms(&["ipc","call","pets-system","status"],DmsUse::Read,dms_caller(&window,&app)).await{Ok(bytes)=>bytes,Err(_)=>return Ok(Status::default())};
   Ok(parse_status(&bytes,crate::assistant_memory::now()).unwrap_or_default())
  }
  #[cfg(not(target_os="linux"))]{Ok(Status::default())}
@@ -231,15 +198,8 @@ pub async fn pet_system_tray(window:tauri::WebviewWindow,app:AppHandle,id:String
 #[cfg(test)]mod tests{
  use super::*;
  #[cfg(target_os="linux")]
- #[test]fn system_io_unknown_origin_never_grants_renewal_or_actions_and_never_blocks_release_or_read(){
-  let io=crate::settings::EffectFixture::new();io.external();for kind in [DmsUse::Renew,DmsUse::Action]{assert!(kind.check_with(||io.probe.check()).is_err());}let held=io.current.lock().unwrap();for kind in [DmsUse::Read,DmsUse::Release]{assert!(kind.check_with(||panic!("control/read must not wait on preferences")).is_ok());}drop(held);
- }
- #[test]fn only_the_visible_control_surface_can_renew_the_native_bar_lease(){
-  assert!(can_lease(crate::pet_control::LABEL,true));
-  for label in [crate::pet_control::LABEL,crate::island::WINDOW_LABEL,crate::HUB_LABEL,"unknown"]{
-   assert!(!can_lease(label,false));
-   if label!=crate::pet_control::LABEL{assert!(!can_lease(label,true));}
-  }
+ #[test]fn system_io_unknown_origin_blocks_actions_but_does_not_escalate_a_passive_read(){
+  let io=crate::settings::EffectFixture::new();io.external();for kind in [DmsUse::Action]{assert!(kind.check_with(||io.probe.check()).is_err());}let held=io.current.lock().unwrap();for kind in [DmsUse::Read]{assert!(kind.check_with(||panic!("control/read must not wait on preferences")).is_ok());}drop(held);
  }
  #[test]fn panel_identifiers_cannot_turn_into_commands_or_settings_writes(){
   for value in ["settings","calendar;rm","quick-settings open","notifications/clearAll","", "control-center"]{
@@ -252,7 +212,7 @@ pub async fn pet_system_tray(window:tauri::WebviewWindow,app:AppHandle,id:String
  #[test]fn only_native_success_for_the_requested_panel_is_acknowledged(){
   assert!(Panel::Calendar.accepted("DASH_OPEN_SUCCESS"));assert!(!Panel::Calendar.accepted("DASH_OPEN_FAILED"));
   assert!(!Panel::Notifications.accepted("DASH_OPEN_SUCCESS"));assert!(Panel::Notifications.accepted("NOTIFICATION_MODAL_OPEN_SUCCESS"));
-  assert!(Panel::QuickSettings.accepted("PETS_SYSTEM_OPEN_SUCCESS"));assert!(!Panel::QuickSettings.accepted("CONTROL_CENTER_OPEN_SUCCESS"));assert!(!Panel::QuickSettings.accepted("true"));
+  assert!(Panel::QuickSettings.accepted("CONTROL_CENTER_OPEN_SUCCESS"));assert!(!Panel::QuickSettings.accepted("PETS_SYSTEM_OPEN_SUCCESS"));assert!(!Panel::QuickSettings.accepted("true"));
  }
  #[test]fn background_or_other_app_surfaces_cannot_open_system_panels(){
   assert!(allowed(crate::pet_control::LABEL));assert!(!allowed(crate::pet_chat::LABEL));assert!(!allowed(crate::companions::LABEL));assert!(!allowed("phone"));
@@ -268,12 +228,16 @@ pub async fn pet_system_tray(window:tauri::WebviewWindow,app:AppHandle,id:String
   assert!(Panel::Notifications.island_fallback().is_none()&&Panel::QuickSettings.island_fallback().is_none());
  }
  #[test]fn migrated_system_controls_use_only_fixed_native_routes(){
-  for panel in [Panel::QuickSettings,Panel::Wifi,Panel::Bluetooth,Panel::Battery,Panel::Audio,Panel::Clipboard,Panel::Disks,Panel::Recording,Panel::Tray]{
-   let args=panel.arguments();assert_eq!(&args[..5],["ipc","call","pets-system","open",args[4]]);
-   assert_eq!(args.len(),5);assert!(panel.accepted("PETS_SYSTEM_OPEN_SUCCESS"));
-   assert!(!panel.accepted("CONTROL_CENTER_OPEN_SUCCESS"));assert!(panel.island_fallback().is_none());
+  for panel in [Panel::QuickSettings,Panel::Wifi,Panel::Bluetooth,Panel::Battery,Panel::Audio]{
+   let args=panel.arguments();assert_eq!(&args[..3],["ipc","call","control-center"]);
+   assert!(panel.accepted("CONTROL_CENTER_OPEN_SUCCESS"));assert!(!panel.accepted("PETS_SYSTEM_OPEN_SUCCESS"));assert!(!panel.accepted("CONTROL_CENTER_OPEN_FAILED"));assert!(panel.island_fallback().is_none());
   }
-  assert_eq!(Panel::QuickSettings.arguments(),["ipc","call","pets-system","open","quick-settings"]);
+  assert_eq!(Panel::QuickSettings.arguments(),["ipc","call","control-center","open"]);
+  assert_eq!(Panel::Wifi.arguments(),["ipc","call","control-center","openWith","network"]);
+  assert_eq!(Panel::Audio.arguments(),["ipc","call","control-center","openWith","audioOutput"]);
+  assert_eq!(Panel::Clipboard.arguments(),["ipc","call","clipboard","open"]);assert!(Panel::Clipboard.accepted("CLIPBOARD_OPEN_SUCCESS"));assert!(!Panel::Clipboard.accepted("CLIPBOARD_NOT_AVAILABLE"));
+  // Keep the bounded compatibility bridge for widgets without accepted native parity.
+  for panel in [Panel::Disks,Panel::Recording,Panel::Tray]{assert_eq!(&panel.arguments()[..4],["ipc","call","pets-system","open"]);assert!(panel.accepted("PETS_SYSTEM_OPEN_SUCCESS"));assert!(panel.island_fallback().is_none());}
   for id in ["","udiskie","tray-a-2-3","tray-1-2-3;open","tray-1-2-3-4","tray-1--3"]{assert!(!valid_tray_id(id));}
   assert!(valid_tray_id("tray-1234-5678-1"));
   assert!(serde_json::from_value::<TrayAction>(serde_json::json!("toggle-wifi")).is_err());

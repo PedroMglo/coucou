@@ -832,3 +832,10 @@ test('late withdrawn Gravity hook cannot close a later review from the same nati
  emit('approval-handoff',{requestId:'old-native-hook',sessionId:'native-session',reason:'native-source-ended'});
  assert.equal(State.pendingApproval.requestId,'new-native-hook');assert.notEqual(State.petSessions.list('agent_gemini')[0].decisionInTerminal,true);
 });
+
+for(const backend of ['codex','copilot','antigravity',''])test(`terminal-only ${backend||'claude'} observation cannot interrupt the open editor or reserve a card`,()=>{
+ State.mode='expanded';State.view='prompt';State.focusId='ai_ollama';
+ hook({coucou_agent:backend,session_id:'independent',hook_event_name:'PermissionRequest',coucou_decision_in_terminal:true,tool_name:'Bash',tool_input:{command:'synthetic-only'}});
+ assert.equal(State.pendingApproval,null);assert.equal(State.focusId,'ai_ollama');assert.equal(State.view,'prompt');assert.deepEqual(asked,[]);assert.deepEqual(presented(),[]);assert.deepEqual(sent('approval_decision'),[]);
+ const pet=backend?'agent_'+backend:CLAUDE;const session=State.petSessions.list(pet).find(s=>s.sessionId==='independent');assert.equal(session.state,'approval');assert.equal(session.decisionInTerminal,true);
+});

@@ -24,7 +24,7 @@ impl Reference {
             &&goal.plans.iter().any(|p|p.id==self.plan_id&&p.task_id==self.task_id)
             &&goal.events.get(self.target_sequence as usize-1).is_some_and(|e|matches!(e.kind,model::EventKind::PlanGenerated)
                 &&e.sequence==self.target_sequence&&e.at==self.published_at&&e.request_id==format!("publish-plan-{}",self.output.attempt_id)&&model::fingerprint(self).ok().as_ref()==Some(&e.fingerprint))
-            &&goal.admissions.iter().any(|a|a.spec.schema_version==3&&a.spec.decision_id==self.decision_id
+            &&goal.admissions.iter().any(|a|a.spec.planning()&&a.spec.decision_id==self.decision_id
                 &&a.lease.as_ref().is_some_and(|l|self.source.matches(&a.spec,l)))
     }
 }
@@ -38,7 +38,7 @@ pub(super)struct Publication {pub phase:Phase,pub reference:Reference}
 /// This structural seed match is deliberately separate from native signature
 /// and authoritative-journal checks. It never permits execution by itself.
 pub(super)fn seed_matches(goal:&Record,spec:&super::admission::AdmissionSpec)->bool {
-    if spec.schema_version!=3||!spec.binding_format(){return false;}
+    if !spec.planning()||!spec.binding_format(){return false;}
     let refs=goal.generated_plans.iter().filter(|r|r.decision_id==spec.decision_id).collect::<Vec<_>>();
     if refs.iter().any(|r|!r.structurally_present(goal)){return false;}
     let mut seed=goal.clone();seed.tasks.retain(|t|!refs.iter().any(|r|r.task_id==t.id));seed.plans.retain(|p|!refs.iter().any(|r|r.plan_id==p.id));

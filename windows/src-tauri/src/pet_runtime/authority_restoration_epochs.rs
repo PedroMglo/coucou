@@ -17,20 +17,20 @@ fn prior_staging(a:&Authority,parent:&[u8])->Result<Vec<FileRef>>{
 fn protocol_current_or_parent(a:&Authority,b:&Boundary)->Result<()>{
  let p:Protocol=serde_json::from_slice(&a.protocol).map_err(|_|Failure::RecoveryRequired)?;
  if p.history==b.hash&&p.version==b.body.schema_version+1{return Ok(());}
- if b.body.schema_version==2&&b.body.parent.as_ref()==Some(&p.history){let name=prior_name(&p.history);let(raw,_)=a.dir.bytes(&name,MAX_INDEX).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;let parent=decode_history(a,&raw)?;if model::hash(&raw)==p.history&&p.version==parent.schema_version+1{return Ok(());}}
+ if matches!(b.body.schema_version,2|4)&&b.body.parent.as_ref()==Some(&p.history){let name=prior_name(&p.history);let(raw,_)=a.dir.bytes(&name,MAX_INDEX).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;let parent=decode_history(a,&raw)?;if model::hash(&raw)==p.history&&p.version==parent.schema_version+1{return Ok(());}}
  Err(Failure::RecoveryRequired)
 }
 fn epoch_raw(a:&Authority,body:&Body)->Result<Vec<u8>>{let raw=serde_json::to_vec(&Envelope{body:body.clone(),tag:encode(hmac::sign(&a.key,&message(body)?).as_ref())}).map_err(|_|Failure::Invalid)?;if raw.len()>MAX_INDEX{return Err(Failure::Capacity);}Ok(raw)}
 impl EpochReview{
  pub(crate)fn capture(path:&Path,goals_path:&Path,source:&str,current:impl Fn()->Result<()>)->Result<Self>{
   current()?;if !hash_valid(source){return Err(Failure::Invalid);}let authority=Authority::restoration_base(path)?;authority.restoration_raw_fence()?;let b=epoch_marker(&authority)?.ok_or(Failure::Missing)?;protocol_current_or_parent(&authority,&b)?;
-  let(body,parent_raw,parent_hash)=if b.body.schema_version==2&&b.body.source==source{
+  let(body,parent_raw,parent_hash)=if matches!(b.body.schema_version,2|4)&&b.body.source==source{
    if b.body.files!=files(&authority)?||b.body.goals!=goals(goals_path)?{return Err(Failure::Changed);}let ph=b.body.parent.clone().ok_or(Failure::Invalid)?;let(pr,_)=authority.dir.bytes(&prior_name(&ph),MAX_INDEX).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;(b.body,pr,ph)
   }else{
    if b.body.source==source{return Err(Failure::Changed);}
    // Starting another epoch requires the old boundary to be fully published.
    let p:Protocol=serde_json::from_slice(&authority.protocol).map_err(|_|Failure::RecoveryRequired)?;if p.history!=b.hash||p.version!=b.body.schema_version+1{return Err(Failure::RecoveryRequired);}
-   let(old_raw,_)=authority.dir.bytes(INDEX,MAX_INDEX).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;let mut body=capture(&authority,goals_path,source)?;body.schema_version=2;body.parent=Some(b.hash.clone());body.priors=b.body.priors.clone();body.priors.push(IndexRef{hash:b.hash.clone(),bytes:old_raw.len()});body.priors.sort_by(|a,b|a.hash.cmp(&b.hash));
+   let(old_raw,_)=authority.dir.bytes(INDEX,MAX_INDEX).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;let mut body=capture(&authority,goals_path,source)?;body.schema_version=if body.schema_version==3||matches!(b.body.schema_version,3|4){4}else{2};body.parent=Some(b.hash.clone());body.priors=b.body.priors.clone();body.priors.push(IndexRef{hash:b.hash.clone(),bytes:old_raw.len()});body.priors.sort_by(|a,b|a.hash.cmp(&b.hash));
    body.decisions.extend(b.body.decisions);body.decisions.sort();body.decisions.dedup();body.goal_ids.extend(b.body.goal_ids);body.goal_ids.sort();body.goal_ids.dedup();if !valid(&body){return Err(Failure::Capacity);}(body,old_raw,b.hash)
   };
   let raw=epoch_raw(&authority,&body)?;let hash=model::hash(&raw);let staged=prior_staging(&authority,&parent_raw)?;let r=Self{authority,goals_path:goals_path.into(),body,raw,hash,parent_raw,parent_hash,staged};r.current(&current)?;Ok(r)
@@ -75,7 +75,7 @@ impl EpochReview{
   let b=epoch_marker(&self.authority)?.ok_or(Failure::Missing)?;if b.hash!=self.hash{
    if b.hash!=self.parent_hash{return Err(Failure::Changed);}let tmp=format!(".restore-index-{}",nonce().map_err(|_|Failure::Unavailable)?);self.authority.dir.write_new(&tmp,&self.raw).map_err(|_|Failure::Unavailable)?;self.current(&current)?;self.authority.dir.rename(&tmp,&self.authority.dir,INDEX,false).map_err(|_|Failure::Uncertain)?;self.authority.dir.durable().map_err(|_|Failure::Uncertain)?;
   }step(EpochStep::IndexPublished)?;self.current(&current)?;
-  let protocol=serde_json::to_vec(&Protocol{version:3,kind:"coucou-native-consent".into(),history:self.hash.clone()}).map_err(|_|Failure::Invalid)?;
+  let protocol=serde_json::to_vec(&Protocol{version:self.body.schema_version+1,kind:"coucou-native-consent".into(),history:self.hash.clone()}).map_err(|_|Failure::Invalid)?;
   if self.authority.protocol!=protocol{let tmp=format!(".restore-protocol-{}",nonce().map_err(|_|Failure::Unavailable)?);self.authority.dir.write_new(&tmp,&protocol).map_err(|_|Failure::Unavailable)?;self.current(&current)?;self.authority.dir.rename(&tmp,&self.authority.dir,".protocol.json",false).map_err(|_|Failure::Uncertain)?;self.authority.dir.durable().map_err(|_|Failure::Uncertain)?;}step(EpochStep::ProtocolPublished)?;current()?;
   let reopened=Authority::existing(&self.authority.dir.path)?;reopened.fence()?;Ok(serde_json::json!({"status":"nextEpochAuthorityQuarantined","schemaVersion":2,"historyHash":self.hash,"parentHistoryHash":self.parent_hash,"historyEpochs":self.body.priors.len()+1,"historicalDecisions":self.body.decisions.len(),"historicalGoals":self.body.goal_ids.len(),"oldExecutionAvailable":false,"ownerAbsenceProven":false,"postSnapshotStateUnknown":true,"runtimeActivationAvailable":false,"allowanceRenewed":false}))
  }

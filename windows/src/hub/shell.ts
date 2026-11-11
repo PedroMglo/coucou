@@ -6,7 +6,8 @@
 import "./hub.css";
 import { h, clear } from "../views/dom";
 import { t } from "../i18n/i18n";
-import { onEvent } from "../core/bridge";
+import { Bridge, onEvent } from "../core/bridge";
+import {createHubNavigation} from "./navigation";
 import { FlowBridge, type FlowPrefs, type FlowStatus, type ModelsStatus } from "../core/flow";
 import { hero, liveMochi } from "./hero";
 import {labelControls} from './control-labels';
@@ -192,14 +193,19 @@ export async function startHub(root: HTMLElement, opts: HubOptions) {
   clear(root);
   root.append(side, h("main", { class: "hub-panel" }, scroll));
   drawStatus();
-  await show(current);
-
-  void onEvent<string>("hub-page", (page) => {
-    const [requested,pet]=page.split(":");
-    ctx.petSelection=requested==="pets"?pet:undefined;
-    const id = (requested === "settings" ? "flowsettings" : requested) as PageId;
-    if (ALL.some((p) => p.id === id)) void show(id);
+  const nativeNavigation=createHubNavigation(()=>Bridge.hubRequestedPage(),()=>rendering,async(page)=>{
+    if(page){
+      const [requested,pet]=page.split(":");
+      const id=(requested==="settings"?"flowsettings":requested) as PageId;
+      if(ALL.some(p=>p.id===id)){ctx.petSelection=requested==="pets"?pet:undefined;await show(id);return;}
+    }
+    if(rendering===0)await show(current);
   });
+  const navigationFailed=()=>{statusLine.textContent="A navegação ficou indisponível. Escolhe uma área no menu.";};
+  // Register before restoring the retained native request. Events carry only a
+  // wake-up: re-read the latest destination rather than apply a stale payload.
+  await onEvent<string>("hub-page",()=>{void nativeNavigation().catch(navigationFailed);});
+  try{await nativeNavigation();}catch{if(rendering===0)await show(current);navigationFailed();}
   void onEvent<FlowPrefs>("flow-prefs", (prefs) => {
     status = { ...status, prefs };
     drawStatus();

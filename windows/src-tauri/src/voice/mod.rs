@@ -21,6 +21,7 @@ pub mod manual;
 pub mod wake;
 pub mod dialogue;
 mod services;
+mod system_sound;
 pub mod session;
 mod tts;
 mod native;
@@ -28,6 +29,8 @@ pub(crate) mod native_surface;
 mod native_worker;
 mod speech_http;
 mod input;
+mod recognition_scope;
+pub(crate) use recognition_scope::RecognitionScope;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -349,13 +352,11 @@ pub(crate) fn recognition_status(app:&AppHandle)->RecognitionStatus {
     RecognitionStatus{engine,ready:if engine=="whisper"{whisper_available}else{engine=="parakeet"&&crate::speech::is_ready()},whisper_available}
 }
 pub(crate) fn asr_ready(app: &AppHandle) -> bool {recognition_status(app).ready}
-fn preload_asr(app: &AppHandle, stop: std::sync::Arc<AtomicBool>) {
-    let settings=match app.state::<crate::Shared>().settings.lock(){Ok(s)=>s.clone(),Err(_)=>return};
-    let Ok(configuration)=crate::pet_config::read_existing()else{return};
-    let Ok(plan)=input::Recognition::prepare(&settings,&configuration)else{return};
-    if stop.load(Ordering::Acquire){return;}
-    if matches!(plan.backend(),input::Recognizer::Parakeet){crate::speech::preload();return;}
-    std::thread::spawn(move || {let _=plan.transcribe(&[],Some(&stop));});
+fn preload_asr(app:&AppHandle,stop:std::sync::Arc<AtomicBool>){
+    let Ok(scope)=RecognitionScope::capture(app)else{return;};
+    if stop.load(Ordering::Acquire)||scope.check().is_err(){return;}
+    if matches!(scope.recognition.backend(),input::Recognizer::Parakeet){crate::speech::preload();return;}
+    std::thread::spawn(move||{let _=scope.transcribe(&[],Some(&stop),||true);});
 }
 
 const ASR_TECHNICAL_TERMS:&[&str]=&["Docker Compose","unit tests","pull requests","issues","next steps"];
@@ -379,14 +380,6 @@ fn asr_vocabulary(config:&crate::pet_config::Configuration,settings:&crate::sett
     terms
 }
 
-/// Existing dictation callers prepare ASR at transcription time. Voice
-/// occurrences use Input captured before audio; this is not their admission.
-pub(crate) fn transcribe(app:&AppHandle,samples:&[f32],stop:Option<&AtomicBool>)->Option<crate::speech::Transcript>{
-    if stop.is_some_and(|s|s.load(Ordering::Acquire)){return None;}
-    let settings=app.state::<crate::Shared>().settings.lock().ok()?.clone();
-    let configuration=crate::pet_config::read_existing().ok()?;
-    input::Recognition::prepare(&settings,&configuration).ok()?.transcribe(samples,stop)
-}
 
 fn cancel_speech(app: &AppHandle) {
     let _ = app.emit_to(pill::LABEL, "voice-cancel", ());

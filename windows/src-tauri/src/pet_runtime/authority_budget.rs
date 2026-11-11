@@ -4,23 +4,26 @@ use super::*;
 use crate::pet_runtime::{effect_budget::{Attempt,Ledger,Phase},leases::Lease};
 impl Authority{
  pub(super)fn budget_body(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,now:u64,starting:bool)->Result<Grant>{
-  let body=self.load(spec,proof)?;
+  let body=self.load(spec,proof)?;if starting&&!spec.execution_due(now){return Err(Failure::NotDue);}if starting{self.funding_current_unlocked(spec,now)?;}
   if !lease.valid(spec)||body.lease.as_ref()!=Some(lease){return Err(Failure::Invalid);}
   if starting&&(body.phase!=GrantPhase::Claimed||now>=lease.deadline_at){return Err(Failure::Revoked);}
   if now<body.updated_at||now<lease.claimed_at||now>8_640_000_000_000_000{return Err(Failure::Invalid);}Ok(body)
  }
  pub(in crate::pet_runtime)fn output_remaining(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,now:u64)->Result<u64>{
   let _lock=self.lock_shared()?;let body=self.budget_body(spec,proof,lease,now,true)?;
-  let used=body.budget_usage.as_ref().map(|u|u.attempts.iter().map(Attempt::charge).sum::<u64>()).unwrap_or(0);
-  spec.budget.max_output_bytes.checked_sub(used).ok_or(Failure::Invalid)
+  body.budget_remaining(&spec.budget).map(|remaining|remaining.output_bytes).ok_or(Failure::Invalid)
  }
  pub(in crate::pet_runtime)fn reserve_attempt(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,attempt:&Attempt,now:u64)->Result<()>{
   // Planning cannot bypass its journal through the generic model/tool path.
-  if spec.planning_policy.is_some(){return Err(Failure::Invalid);}
+  if spec.planning_policy.is_some()||spec.deterministic()&&attempt.kind==crate::pet_runtime::effect_budget::Kind::Model{return Err(Failure::Invalid);}
   self.reserve_attempt_inner(spec,proof,lease,attempt,None,None,now)
  }
  pub(in crate::pet_runtime)fn reserve_planning_attempt(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,attempt:&Attempt,request:&crate::pet_runtime::planning_journal::Request,now:u64)->Result<()>{
   if !request.matches(spec,lease)||request.request_id!=attempt.request_id||attempt.kind!=crate::pet_runtime::effect_budget::Kind::Model{return Err(Failure::Invalid);}
+  // Native DATA proof before acquiring the grant transaction; re-entering its
+  // reader under the writer lock would deadlock. The boundary writer also
+  // rechecks it immediately before HTTP and while IO/result publication runs.
+  #[cfg(target_os="linux")]if request.peer_data.as_ref().is_some_and(|d|!d.for_attempt(spec,lease,attempt,&request.source,now)){return Err(Failure::Changed);}
   self.reserve_attempt_inner(spec,proof,lease,attempt,Some(request),None,now)
  }
  pub(in crate::pet_runtime)fn reserve_generated_step_budget(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,scope:&crate::pet_runtime::steps::Scope,attempt:&Attempt,now:u64)->Result<()>{
@@ -33,6 +36,7 @@ impl Authority{
   // Finite unmetered caps cannot be approximated by call counts/output bytes.
   if spec.budget.max_tokens.is_some()||spec.budget.max_cost_micros.is_some(){return Err(Failure::Invalid);}
   let _lock=self.lock()?;let mut body=self.budget_body(spec,proof,lease,now,true)?;
+  if body.native_completion.is_some(){return Err(Failure::Revoked);}
   if (request.is_some()||step.is_some())!=body.planning_usage.is_some()||request.is_some()&&step.is_some(){return Err(Failure::Invalid);}
   if let Some(scope)=step{
    let reference=scope.generated_plan.as_ref().ok_or(Failure::Invalid)?;Self::generated_acknowledged(&body,spec,reference)?;
@@ -44,6 +48,7 @@ impl Authority{
   if let Some(request)=request{
    let journal=body.planning_usage.as_ref().ok_or(Failure::Invalid)?;
    for round in &journal.rounds{if let Some(feedback)=&round.feedback{self.planning_feedback_unlocked(spec,proof,feedback)?;}}
+   if spec.peer_iteration()&&!journal.rounds.is_empty()&&!journal.rounds.iter().any(|r|r.request_id==request.request_id)&&!request.data_reference().is_some_and(|d|journal.rounds.last().and_then(|r|r.peer_feedback.as_ref()).is_some_and(|f|f.matches_data(d))){return Err(Failure::Changed);}
    if journal.rounds.iter().any(|r|r.request_id==request.request_id&&r.source!=request.source){return Err(Failure::Changed);}
   }
   let ledger=body.budget_usage.get_or_insert_with(Ledger::empty);
@@ -56,6 +61,7 @@ impl Authority{
    journal.append(request,attempt).map_err(|_|Failure::RecoveryRequired)?;
    if !journal.valid_for(spec,body.lease.as_ref(),body.budget_usage.as_ref()){return Err(Failure::Capacity);}
   }
+  if !body.pool_valid(){return Err(Failure::Capacity);}
   body.schema_version=if body.runtime_owner.is_some(){6}else if body.resource_usage.is_some(){5}else if body.planning_usage.is_some(){4}else{3};body.updated_at=now;body.revision=nonce().map_err(|_|Failure::Unavailable)?;self.publish(body,false)
  }
  pub(in crate::pet_runtime)fn start_attempt(&self,spec:&AdmissionSpec,proof:&ConsentProof,lease:&Lease,attempt:&Attempt,now:u64)->Result<()>{

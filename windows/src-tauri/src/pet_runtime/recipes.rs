@@ -13,18 +13,18 @@ pub struct Scope{
 impl Scope{
     pub(super)fn slot(&self)->model::Result<String>{slot(&self.decision_id,&self.plan_id)}
     pub(super)fn valid(&self)->bool{
-        if !match(self.schema_version,&self.generated_plan,&self.verification){(1,None,None)=>true,(2,None,Some(v))=>v.valid(),(3,Some(r),Some(v))=>r.valid()&&r.published_at<=self.approved_at&&r.plan_id==self.plan_id&&r.decision_id==self.decision_id&&r.proposal_hash==self.proposal_hash&&v.valid(),_=>false}{return false;}
+        if !match(self.schema_version,&self.generated_plan,&self.verification){(1,None,None)=>true,(6,None,Some(v))=>v.valid()&&v.schema_version==7&&v.conditions.len()==v.criteria_count as usize,(5,None,Some(v))=>v.valid()&&v.schema_version==5&&v.conditions.len()==v.criteria_count as usize,(2,None,Some(v))=>v.valid()&&v.schema_version==1,(4,None,v)=>v.as_ref().is_none_or(|v|v.schema_version==4&&v.valid()),(3,Some(r),Some(v))=>r.valid()&&r.published_at<=self.approved_at&&r.plan_id==self.plan_id&&r.decision_id==self.decision_id&&r.proposal_hash==self.proposal_hash&&v.valid(),_=>false}{return false;}
         if !model::token(&self.id)||!model::key(&self.request_id)||!model::goal_id(&self.goal_id)
             ||!model::key(&self.pet_id)||!model::key(&self.provider)||!model::token(&self.decision_id)||!model::token(&self.lease_id)
             ||!model::token(&self.controller_id)||!model::key(&self.plan_id)||super::authority::decode(&self.proposal_hash).is_none()
             ||self.approved_at==0||self.approved_at>=self.deadline_at||self.steps.is_empty()||self.steps.len()>MAX_STEPS{return false;}
         let mut ids=std::collections::BTreeSet::new();let mut grants=std::collections::BTreeSet::new();let mut requests=std::collections::BTreeSet::new();
-        self.steps.iter().all(|s|s.valid()&&s.generated_plan==self.generated_plan&&s.goal_id==self.goal_id&&s.pet_id==self.pet_id&&s.provider==self.provider
+        self.steps.iter().all(|s|matches!(self.schema_version,4|5)==s.resource.sound().is_some()&&(self.schema_version==6)==s.resource.host_read()&&(self.schema_version!=6||s.schema_version==5)&&(self.schema_version!=5||s.schema_version==4)&&s.valid()&&s.generated_plan==self.generated_plan&&s.goal_id==self.goal_id&&s.pet_id==self.pet_id&&s.provider==self.provider
             &&s.decision_id==self.decision_id&&s.lease_id==self.lease_id&&s.controller_id==self.controller_id&&s.plan_id==self.plan_id
             &&s.proposal_hash==self.proposal_hash&&s.approved_at==self.approved_at&&s.deadline_at==self.deadline_at
             &&s.resource==self.steps[0].resource&&ids.insert(&s.step_id)&&grants.insert(&s.grant_id)&&requests.insert(&s.request_id))
     }
-    pub(super)fn belongs(&self,spec:&AdmissionSpec,lease:&Lease)->bool{self.valid()&&self.steps.iter().all(|s|s.belongs(spec,lease))}
+    pub(super)fn belongs(&self,spec:&AdmissionSpec,lease:&Lease)->bool{self.valid()&&(!matches!(self.schema_version,5|6)||spec.system()&&self.verification==spec.native_verification)&&self.steps.iter().all(|s|s.belongs(spec,lease))}
     pub(super)fn matches(&self,goal:&model::Record)->bool{
         self.valid()&&self.verification.as_ref().is_none_or(|v|v.matches(goal))&&super::plans::fingerprint(goal).ok().as_ref()==Some(&self.proposal_hash)
             &&goal.plans.iter().find(|p|p.id==self.plan_id).is_some_and(|p|p.steps.len()==self.steps.len()

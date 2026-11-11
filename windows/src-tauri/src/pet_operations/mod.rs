@@ -52,7 +52,16 @@ pub(crate) fn validate_arguments(name: &str, value: &Value) -> Result<(), Failur
 /// Validate proposal data by the stable operation ID. This constructs no call
 /// or permit and never checks/grants execution authority.
 pub(crate) fn validate_proposal(id: &str, version: u32, arguments: &Value) -> Result<(), Failure> {
-    if version != 1 { return Err(Failure::UnknownOperation); }
+    if version != 1 && !((id=="pet.workReport"||id=="pet.reply")&&version==2) { return Err(Failure::UnknownOperation); }
+    // DATA validation only; no Operation/NAMES/catalog entry or Call exists.
+    #[cfg(target_os="linux")]if id=="system.inventory.observe"{return if crate::pet_host_inventory::validate(id,version,arguments){Ok(())}else{Err(Failure::InvalidArguments)};}
+    #[cfg(target_os="linux")]if matches!(id,"system.health.observe"|"system.health.baseline"){return if crate::pet_health::task::validate(id,version,arguments){Ok(())}else{Err(Failure::InvalidArguments)};}
+    #[cfg(target_os="linux")]if matches!(id,"system.sound.volume"|"system.sound.mute"){return crate::pet_audio::task::Action::parse(id,version,arguments).map(|_|()).map_err(|_|Failure::InvalidArguments);}
+    if id=="pet.resultReply"{return crate::pet_runtime::derived_result_plan::Arguments::parse_arguments(arguments).map(|_|()).map_err(|_|Failure::InvalidArguments);}
+    if id=="pet.workReport"{return if version==2{crate::pet_runtime::work_disclosure::Arguments::parse(arguments).map(|_|())}else{crate::pet_runtime::work_report::Arguments::parse(arguments).map(|_|())}.map_err(|_|Failure::InvalidArguments);}
+    if id=="pet.delegate"{return crate::pet_runtime::delegation::Arguments::parse(arguments).map(|_|()).map_err(|_|Failure::InvalidArguments);}
+    if id=="pet.reply"{return crate::pet_runtime::messages::ReplyArguments::parse(arguments).map(|_|()).map_err(|_|Failure::InvalidArguments);}
+    if id=="pet.message"{return crate::pet_runtime::messages::Arguments::parse(arguments).map(|_|()).map_err(|_|Failure::InvalidArguments);}
     let operation = NAMES.iter().filter_map(|name| Operation::named(name)).find(|op| op.descriptor().id == id).ok_or(Failure::UnknownOperation)?;
     input::parse(operation, arguments).map(|_| ())
 }

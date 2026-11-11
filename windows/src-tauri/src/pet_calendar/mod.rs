@@ -1,5 +1,6 @@
 //! Read-only context from an attached or explicitly enrolled selected ICS.
 //! This module cannot discover calendars, enroll sources, grant access or act.
+pub(crate) mod schedule;
 #[cfg(target_os = "linux")]
 mod process;
 #[cfg(all(test,target_os="linux"))]
@@ -9,6 +10,8 @@ pub(crate) mod day;
 pub(crate) mod wire;
 #[cfg(target_os = "linux")]
 pub(crate) mod helper;
+#[cfg(target_os = "linux")]
+pub(crate) mod goal;
 use serde_json::{json, Value};
 use crate::chat::{Chat, ChatContext, Turn};
 use std::path::Path;
@@ -166,8 +169,8 @@ mod linux {
     use super::*;
     use std::{fs::{File, Metadata, OpenOptions}, io::Read, os::unix::{fs::{MetadataExt, OpenOptionsExt}}};
 
-    #[derive(Debug, Eq, PartialEq)]
-    struct Stamp(u64, u64, u64, i64, i64, i64, i64, u64);
+    #[derive(Clone,Debug,Eq,PartialEq,serde::Serialize,serde::Deserialize)]
+    pub(super) struct Stamp(u64, u64, u64, i64, i64, i64, i64, u64);
     fn stamp(m: &Metadata) -> Stamp { Stamp(m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec(), m.ctime(), m.ctime_nsec(), m.nlink()) }
 
     #[derive(Clone)]
@@ -198,14 +201,16 @@ mod linux {
         }
     }
 
-    struct Source { file: File, stamp: Stamp, text: String }
+    pub(super) struct Source { file: File, stamp: Stamp, text: String }
     impl Source {
-        fn unchanged(&self, path: &str) -> bool {
+        pub(super)fn content_hash(&self)->String{sha(self.text.as_bytes())}
+        pub(super)fn identity(&self)->Stamp{self.stamp.clone()}
+        pub(super) fn unchanged(&self, path: &str) -> bool {
             self.file.metadata().is_ok_and(|m| m.is_file() && stamp(&m) == self.stamp)
                 && std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && stamp(&m) == self.stamp)
         }
     }
-    fn read(path: &str) -> Result<Source, &'static str> {
+    pub(super) fn read(path: &str) -> Result<Source, &'static str> {
         let file = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(path).map_err(|_| "sourceUnavailable")?;
         let metadata = file.metadata().map_err(|_| "sourceUnavailable")?;
@@ -251,7 +256,7 @@ mod linux {
         }
         // Explicitly enrolled sources supplement the attached set. Enrollment
         // and its per-owner consent remain independent from native drops.
-        if let Some(source)=crate::pet_sources::selected(&turn.provider,&origin.0)?{scopes.push(Captured{chat:chat.clone(),turn:turn.clone(),authority:Authority::Enrolled(source),origin});}
+        for source in crate::pet_sources::selected_many(&turn.provider,&origin.0)?{scopes.push(Captured{chat:chat.clone(),turn:turn.clone(),authority:Authority::Enrolled(source),origin:origin.clone()});}
         from_scopes(scopes)
     }
     fn from_scopes(mut scopes:Vec<Captured>)->Result<Note,String>{
@@ -268,16 +273,16 @@ mod linux {
             // One permission/config read for the attached collection on each
             // watch tick, rather than one read per selected calendar.
             if crate::pet_config::require_active_provider(&provider).is_err(){return false;}
-            let mut attachments=Vec::new();
+            let mut attachments=Vec::new();let mut enrolled=Vec::new();
             for(scope,source,_)in &watches{
                 if scope.chat.usage_origin(&scope.turn).as_ref()!=Some(&scope.origin)
                     ||!source.as_ref().is_none_or(|s|s.unchanged(scope.path())){return false;}
                 match &scope.authority{
                     Authority::Attachment(a)=>attachments.push(a.clone()),
-                    Authority::Enrolled(s)=>if s.validate(&provider,&origin.0).is_err(){return false;},
+                    Authority::Enrolled(s)=>enrolled.push(s),
                 }
             }
-            crate::pet_documents::validate_attachments(&attachments).is_ok()
+            crate::pet_sources::validate_group(&enrolled,&provider,&origin.0).is_ok()&&crate::pet_documents::validate_attachments(&attachments).is_ok()
         },cancel)?;
         let mut routes=Vec::new();let mut descriptors=Vec::new();
         for (scope,source,error) in sealed{
@@ -294,8 +299,12 @@ mod linux {
     }
     pub(super) fn enrolled(chat:&Chat,turn:&Turn)->Result<Option<Note>,String>{
         let Some(origin)=chat.usage_origin(turn)else{return Ok(None)};
-        let Some(source)=crate::pet_sources::selected(&turn.provider,&origin.0)?else{return Ok(None)};
-        from_scope(Captured{chat:chat.clone(),turn:turn.clone(),authority:Authority::Enrolled(source),origin}).map(Some)
+        let sources=crate::pet_sources::selected_many(&turn.provider,&origin.0)?;
+        enrolled_selected(chat,turn,origin,sources)
+    }
+    fn enrolled_selected(chat:&Chat,turn:&Turn,origin:(String,u64),sources:Vec<crate::pet_sources::Selected>)->Result<Option<Note>,String>{
+        if sources.is_empty(){return Ok(None);}
+        from_scopes(sources.into_iter().map(|source|Captured{chat:chat.clone(),turn:turn.clone(),authority:Authority::Enrolled(source),origin:origin.clone()}).collect()).map(Some)
     }
     fn from_scope(scope:Captured)->Result<Note,String>{
         scope.validate()?;
@@ -343,15 +352,23 @@ mod linux {
         scope.validate()?;
         let current = || !aborted.load(Ordering::Acquire) && !stopped.load(Ordering::Acquire)
             && scope.validate().is_ok() && source.unchanged(scope.path());
+        let value=query_source_using(source,scope.provenance(Some(source)),window,limit,&current,run);
+        scope.validate()?;value
+    }
+    /// Common sealed request/response path. A native caller supplies its own
+    /// immutable owner/authority check; the worker and parser stay identical.
+    pub(super)fn query_source(source:&Source,provenance:Value,window:Value,limit:usize,current:&dyn Fn()->bool)->Result<Value,String>{
+        query_source_using(source,provenance,window,limit,current,|request,current|super::process::run(request,current))
+    }
+    fn query_source_using(source:&Source,provenance:Value,window:Value,limit:usize,current:&dyn Fn()->bool,
+        run:impl FnOnce(&Value,&dyn Fn()->bool)->Result<Value,&'static str>)->Result<Value,String>{
         if !current() { return Err("A consulta de calendário foi interrompida.".into()); }
-        let provenance=scope.provenance(Some(source));
         let mut nonce = [0u8;16];
         use ring::rand::SecureRandom;
         if ring::rand::SystemRandom::new().fill(&mut nonce).is_err() { return Ok(unavailable("runtimeUnavailable")); }
         let request_id = sha(&nonce);
         let request = json!({"schemaVersion":1,"requestId":request_id,"source":provenance,"calendar":source.text,"window":window,"limit":limit});
-        let result = run(&request,&current);
-        scope.validate()?;
+        let result = run(&request,current);
         if !current() { return Err("O calendário mudou ou a consulta foi interrompida. O resultado foi descartado.".into()); }
         let mut value = match result {
             Ok(value) if query::bound_response(&value,&request) => value,
@@ -417,14 +434,23 @@ mod linux {
             let chat=Chat::default();let turn=chat.begin_cli(provider,Default::default()).unwrap();let origin=chat.usage_origin(&turn).unwrap();
             let mut enrollments=Vec::new();let mut scopes=Vec::new();
             // Isolated registries exercise the sealed-source primitive. The
-            // production registry still allows one enrolled source per owner;
-            // additional production sources come from captured attachments.
+            // the version1 production registry allows one source per owner;
+            // version2 collections use a single shared snapshot in newer tests.
             for name in ["First source","Second source"]{
                 let enrollment=crate::pet_sources::test_support::Enrollment::new(provider,&origin.0);
                 std::fs::write(&enrollment.source,format!("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Coucou Offline Multi//EN\r\nBEGIN:VEVENT\r\nUID:shared-uid\r\nDTSTAMP:20261022T000000Z\r\nDTSTART:20261101T090000Z\r\nDTEND:20261101T100000Z\r\nSUMMARY:{name}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")).unwrap();
                 scopes.push(Captured{chat:chat.clone(),turn:turn.clone(),origin:origin.clone(),authority:Authority::Enrolled(enrollment.selected())});enrollments.push(enrollment);
             }
             (enrollments,scopes)
+        }
+        #[test]
+        fn persistent_collection_uses_real_query_worker_exact_sources_shared_limits_and_revocation(){
+            let _serial=super::super::TEST_SERIAL.lock().unwrap();
+            let chat=Chat::default();let turn=chat.begin_cli("ollama",Default::default()).unwrap();let origin=chat.usage_origin(&turn).unwrap();let enrollment=crate::pet_sources::test_support::Enrollment::new("ollama",&origin.0);let selected=enrollment.collection();
+            let ids=selected.iter().cloned().map(|source|Captured{chat:chat.clone(),turn:turn.clone(),authority:Authority::Enrolled(source),origin:origin.clone()}.source_id()).collect::<Vec<_>>();let note=enrolled_selected(&chat,&turn,origin,selected).unwrap().unwrap();assert!(note.text.contains("BEGIN_CALENDAR_SOURCES")&&!note.text.contains("BEGIN_CALENDAR_DATA"));assert!(!note.text.contains(enrollment.root.to_str().unwrap()));let query=note.query().unwrap();
+            for(i,id)in ids.iter().enumerate(){let value:Value=serde_json::from_str(&query.execute_auto(json!({"sourceId":id,"date":"2026-10-23","timeZone":"UTC"}),&Default::default()).unwrap()).unwrap();assert_eq!(value["status"],"ready");assert_eq!(value["source"]["id"],*id);assert_eq!(value["events"][0]["summary"],if i==0{"Enrolled fixture 73"}else{"Other fixture 84"});assert_eq!(value["events"].as_array().unwrap().len(),1);}
+            for i in 0..6{let value:Value=serde_json::from_str(&query.execute_auto(json!({"sourceId":ids[i%2],"date":"2026-10-23","timeZone":"UTC"}),&Default::default()).unwrap()).unwrap();assert_eq!(value["status"],"ready");}let value:Value=serde_json::from_str(&query.execute_auto(json!({"sourceId":ids[0],"date":"2026-10-23","timeZone":"UTC"}),&Default::default()).unwrap()).unwrap();assert_eq!(value["errorCode"],"queryLimit");
+            enrollment.disable();assert!(validate(Some(&note)).is_err());assert!(turn.cancel.load(std::sync::atomic::Ordering::Acquire));
         }
         #[test]
         fn real_multi_source_worker_routes_exact_ids_without_default_events_or_uid_merging(){

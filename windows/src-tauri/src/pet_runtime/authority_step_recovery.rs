@@ -23,7 +23,7 @@ impl Evidence{
             Some(a)=>a.valid()&&a.phase==APhase::Started&&a.kind==crate::pet_runtime::effect_budget::Kind::Tool
                 &&a.request_id==self.scope.request_id&&a.input_hash==model::fingerprint(&self.scope).unwrap_or_default()
                 &&a.output_reserved==self.scope.max_output_bytes&&a.started_at.is_some_and(|n|n<=self.result.finished_at),
-            None=>self.result.observation.delivery==crate::spotify::goal::Delivery::NotDispatched&&!self.result.observation.effect_verified,
+            None=>self.result.observation.delivery==crate::pet_runtime::physical_target::Delivery::NotDispatched&&!self.result.observation.effect_verified,
         }
     }
 }

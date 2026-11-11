@@ -16,7 +16,6 @@ use x11rb::protocol::xproto::{self, AtomEnum, ConnectionExt as _};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
-use x11rb::wrapper::ConnectionExt as _;
 
 use super::logic::FlowKey;
 use super::KeyEvent;
@@ -172,33 +171,19 @@ pub fn wait_key_released(_key: FlowKey) {
 
 /// Ctrl+V (Ctrl+Shift+V for a terminal) in the app in front: through XTest on
 /// X11, through the RemoteDesktop portal on Wayland.
-pub fn send_paste(shift: bool) -> Result<(), String> {
-    if is_wayland() {
-        return super::wayland::send_paste(shift);
-    }
-    let (conn, screen) = x11rb::connect(None).map_err(|e| e.to_string())?;
-    let root = conn.setup().roots[screen].root;
-    let keymap = Keymap::read(&conn).ok_or("no keyboard map")?;
-    let ctrl = keymap.keycode(XK_CONTROL_L).ok_or("no Ctrl key")?;
-    let shift_code = keymap.keycode(XK_SHIFT_L).ok_or("no Shift key")?;
-    let v = keymap.keycode(XK_V).ok_or("no V key")?;
-    let press = |code: u8, down: bool| {
-        conn.xtest_fake_input(if down { xproto::KEY_PRESS_EVENT } else { xproto::KEY_RELEASE_EVENT }, code, 0, root, 0, 0, 0)
-    };
-    let mut seq = vec![(ctrl, true)];
-    if shift {
-        seq.push((shift_code, true));
-    }
-    seq.extend([(v, true), (v, false)]);
-    if shift {
-        seq.push((shift_code, false));
-    }
-    seq.push((ctrl, false));
-    for (code, down) in seq {
-        press(code, down).map_err(|e| e.to_string())?;
-    }
-    conn.sync().map_err(|e| e.to_string())?;
-    Ok(())
+pub fn send_paste(shift:bool,current:&dyn Fn()->bool)->super::paste::Dispatch{
+    use super::paste::{Dispatch,Key,KeyFailure};
+    if !current(){return Dispatch::NotSent;}
+    if is_wayland(){return super::wayland::send_paste(shift,current);}
+    let Ok((conn,screen))=x11rb::connect(None)else{return Dispatch::NotSent;};
+    if !current(){return Dispatch::NotSent;}
+    let root=conn.setup().roots[screen].root;
+    let Some(map)=Keymap::read(&conn)else{return Dispatch::NotSent;};
+    let (Some(ctrl),Some(sh),Some(v))=(map.keycode(XK_CONTROL_L),map.keycode(XK_SHIFT_L),map.keycode(XK_V))else{return Dispatch::NotSent;};
+    super::paste::sequence(shift,current,|key,down|{
+        let code=match key{Key::Control=>ctrl,Key::Shift=>sh,Key::V=>v};
+        conn.xtest_fake_input(if down{xproto::KEY_PRESS_EVENT}else{xproto::KEY_RELEASE_EVENT},code,0,root,0,0,0).map_err(|_|KeyFailure::Uncertain)?.check().map_err(|_|KeyFailure::Uncertain)
+    })
 }
 
 fn atom(conn: &RustConnection, name: &str) -> Option<u32> {

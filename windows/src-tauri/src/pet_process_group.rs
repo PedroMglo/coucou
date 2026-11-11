@@ -93,3 +93,14 @@ fn group_has_live_members(group: i32) -> io::Result<bool> {
         assert_eq!(stat_group(b"invalid"), None);
     }
 }
+
+/// Keep a mechanical lifetime in this exact trusted child's exec only. Parent
+/// descriptors remain CLOEXEC, so concurrent unrelated spawns cannot inherit it.
+pub(crate)fn inherit_file(command:&mut std::process::Command,file:std::sync::Arc<std::fs::File>){
+    use std::os::{fd::AsRawFd,unix::process::CommandExt};
+    unsafe{command.pre_exec(move||{
+        let fd=file.as_raw_fd();if fd<3{return Err(io::Error::other("invalid native lifetime descriptor"));}
+        let flags=libc::fcntl(fd,libc::F_GETFD);if flags<0{return Err(io::Error::last_os_error());}
+        if libc::fcntl(fd,libc::F_SETFD,flags&!libc::FD_CLOEXEC)<0{return Err(io::Error::last_os_error());}Ok(())
+    });}
+}

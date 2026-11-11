@@ -4,11 +4,12 @@ use super::*;
 use crate::pet_runtime::{criteria::{Verification,CompletionRef},model::{Record,State},lease_controller::recipe_controller::Observed};
 const MAX_VERIFICATION:usize=64*1024;
 #[derive(Serialize,Deserialize)]#[serde(deny_unknown_fields)]struct Envelope{body:Verification,tag:String}
-fn message(body:&Verification)->Result<Vec<u8>>{let mut v=b"coucou-native-goal-verification-v1\0".to_vec();v.extend(serde_json::to_vec(body).map_err(|_|Failure::Invalid)?);Ok(v)}
+fn message(body:&Verification)->Result<Vec<u8>>{let mut v=match body.schema_version{1=>b"coucou-native-goal-verification-v1\0".to_vec(),2=>b"coucou-native-system-sound-verification-v1\0".to_vec(),3=>b"coucou-native-deterministic-system-verification-v1\0".to_vec(),4=>b"coucou-native-system-health-verification-v1\0".to_vec(),_=>return Err(Failure::Invalid)};v.extend(serde_json::to_vec(body).map_err(|_|Failure::Invalid)?);Ok(v)}
 pub(in crate::pet_runtime)struct Certified<'a>{authority:&'a Authority,spec:AdmissionSpec,proof:ConsentProof,scope:RecipeScope,report:Verification}
 impl Authority{
     pub(in crate::pet_runtime)fn observe_completed_goal(&self,goal:&Record)->Result<()> {
         goal.validate().map_err(|_|Failure::Invalid)?;if goal.state!=State::Completed{return Err(Failure::Invalid);}
+        if goal.completion.as_ref().is_some_and(|c|c.source.is_some()){return self.observe_native_completed_goal(goal);}
         let _lock=self.lock_shared()?;let row=goal.admissions.last().ok_or(Failure::Missing)?;let proof=row.proof.as_ref().ok_or(Failure::Missing)?;
         let scope=self.recipe_load(&row.spec,proof,&goal.completion.as_ref().ok_or(Failure::Missing)?.plan_id)?.ok_or(Failure::Missing)?;
         let report=self.verification_load_unlocked(&row.spec,proof,&scope)?.ok_or(Failure::Missing)?;
@@ -57,21 +58,16 @@ impl Authority{
     }
     pub(in crate::pet_runtime)fn verify_completed_goal(&self,goal:&Record)->Result<()>{
         goal.validate().map_err(|_|Failure::Invalid)?;if goal.state!=State::Completed{return Err(Failure::Invalid);}
+        if goal.completion.as_ref().is_some_and(|c|c.source.is_some()){return self.observe_native_completed_goal(goal);}
         let row=goal.admissions.last().ok_or(Failure::Missing)?;let proof=row.proof.as_ref().ok_or(Failure::Missing)?;
         let scope=self.read_recipe(&row.spec,proof,&goal.completion.as_ref().ok_or(Failure::Missing)?.plan_id)?.ok_or(Failure::Missing)?;
         self.certify_completion(&row.spec,proof,&scope,goal).map(|_|())
     }
 }
 fn verify_goal_source(goal:&Record,report:&Verification)->Result<()>{
-    goal.validate().map_err(|_|Failure::Invalid)?;
-    let original=if goal.state==State::Completed{
-        if goal.completion.as_ref()!=Some(&report.reference){return Err(Failure::Invalid);}goal.source_before_completion(report.source_sequence,report.source_updated_at).map_err(|_|Failure::Invalid)?
-    }else{goal.clone()};
-    if original.state!=State::Leased||original.id!=report.reference.goal_id||original.spec.owner.pet_id!=report.reference.pet_id
-        ||original.revision!=report.reference.source_revision||original.sequence!=report.source_sequence||original.updated_at!=report.source_updated_at
-        ||model::fingerprint(&original).ok().as_ref()!=Some(&report.source_record_hash)||model::fingerprint(&original.spec).ok().as_ref()!=Some(&report.spec_hash)
-        ||original.spec.criteria.len()!=report.results.len()||original.spec.criteria.iter().zip(&report.results).any(|(text,r)|model::fingerprint(text).ok().as_ref()!=Some(&r.criterion_hash)){return Err(Failure::Invalid);}Ok(())
+ crate::pet_runtime::criteria::verify_source(goal,&report.reference,report.source_sequence,report.source_updated_at,&report.source_record_hash,&report.spec_hash,&report.results).map_err(|_|Failure::Invalid)
 }
+
 impl Certified<'_>{
     pub(in crate::pet_runtime)fn reference(&self)->&CompletionRef{&self.report.reference}
     pub(in crate::pet_runtime)fn current(&self,goal:&Record,now:u64)->Result<()>{
@@ -90,4 +86,9 @@ impl Authority{
         let dir=self.step_directory(false)?.ok_or(Failure::Missing)?;let(recipe,_)=dir.bytes(&format!("{slot}.recipe.json"),256*1024).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;
         let scope=self.retirement_recipe_scope(&recipe)?;if !e.body.valid_for(&scope){return Err(Failure::Invalid);}Ok((r.decision_id.clone(),slot))
     }
+}
+
+impl crate::pet_runtime::criteria::Certificate for Certified<'_>{
+ fn reference(&self)->&CompletionRef{Certified::reference(self)}
+ fn current(&self,goal:&Record,now:u64)->Result<()>{Certified::current(self,goal,now)}
 }

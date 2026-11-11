@@ -20,6 +20,7 @@ impl Authority {
             let canonical=name.strip_suffix(".json").filter(|s|model::token(s));
             let staged=name.strip_prefix(".grant-").is_some_and(model::token);
             if canonical.is_none()&&!staged{return Err(Failure::RecoveryRequired);}
+            if let Some((rule,_))=self.rule_record_data(&name)?{if canonical.is_some_and(|id|id!=rule.decision_id){return Err(Failure::Invalid);}continue;}
             let(raw,_)=self.dir.bytes(&name,MAX_GRANT_BYTES).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Changed)?;
             let envelope:GrantEnvelope=serde_json::from_slice(&raw).map_err(|_|Failure::Invalid)?;
             let body=envelope.body;

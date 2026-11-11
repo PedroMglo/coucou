@@ -23,7 +23,7 @@ pub(super)fn live(request:&PendingRequest)->bool{request.policy.live(request.exp
 enum DecisionTarget{Session(Target),#[cfg(target_os="linux")]Goal(crate::pet_runtime::recipe_decisions::Target)}
 impl PartialEq for DecisionTarget{fn eq(&self,other:&Self)->bool{match(self,other){(Self::Session(a),Self::Session(b))=>a==b,#[cfg(target_os="linux")](Self::Goal(a),Self::Goal(b))=>a==b,#[allow(unreachable_patterns)]_=>false}}}
 fn target(value:&Value)->Result<DecisionTarget,String>{
-    #[cfg(target_os="linux")]if value["origin"]=="goal"{let t:crate::pet_runtime::recipe_decisions::Target=serde_json::from_value(value.clone()).map_err(|_|"O destino do objetivo não é válido.".to_string())?;return if t.valid(){Ok(DecisionTarget::Goal(t))}else{Err("O destino do objetivo não é válido.".into())};}
+    #[cfg(target_os="linux")]if matches!(value["origin"].as_str(),Some("goal"|"goalPeerPlan"|"goalPeerData")){let t:crate::pet_runtime::recipe_decisions::Target=serde_json::from_value(value.clone()).map_err(|_|"O destino do objetivo não é válido.".to_string())?;return if t.valid(){Ok(DecisionTarget::Goal(t))}else{Err("O destino do objetivo não é válido.".into())};}
     let t:Target=serde_json::from_value(value.clone()).map_err(|_|"O destino do pedido não é válido.".to_string())?;
     if crate::pet_config::pet_id(&t.provider)!=Some(t.pet_id.as_str())||t.session_id.is_empty()||t.session_id.len()>512||t.session_id.chars().any(char::is_control){return Err("O destino não pertence ao pet e à sessão apresentados.".into());}
     match t.origin{
@@ -73,7 +73,7 @@ pub(super)fn register(requests:&Mutex<HashMap<String,PendingRequest>>,id:String,
     if let Some(choices)=&request.choices{
         if !matches!(&request.policy,RequestPolicy::Native{source:Some(source),..}if choices.matches(source))||request.request["nativeChoices"]!=choices.public(){return Err("As escolhas não pertencem à origem deste pedido.".into());}
     }
-    #[cfg(target_os="linux")]match &request.policy{RequestPolicy::GoalRecipe{source}=>{if !source.matches(&request.request)||request.native_form.is_some()||request.choices.is_some(){return Err("A revisão não pertence à origem nativa do objetivo.".into());}},_=>{if request.request.get("goalTarget").is_some()||request.request["target"]["origin"]=="goal"{return Err("Este pedido não tem uma origem nativa de objetivo.".into());}}}
+    #[cfg(target_os="linux")]match &request.policy{RequestPolicy::GoalRecipe{source}=>{if !source.matches(&request.request)||request.native_form.is_some()||request.choices.is_some(){return Err("A revisão não pertence à origem nativa do objetivo.".into());}},_=>{if request.request.get("goalTarget").is_some()||matches!(request.request["target"]["origin"].as_str(),Some("goal"|"goalPeerPlan"|"goalPeerData")){return Err("Este pedido não tem uma origem nativa de objetivo.".into());}}}
     target(request_target(&request))?;questions(&request.request)?;if request.request["id"]!=id{return Err("O identificador do pedido não corresponde ao registo.".into());}
     let review_limit=MAX_REVIEW;
     #[cfg(target_os="linux")]let review_limit=if matches!(&request.policy,RequestPolicy::GoalRecipe{..}){MAX_GOAL_REVIEW}else{review_limit};

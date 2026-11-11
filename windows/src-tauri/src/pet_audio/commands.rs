@@ -1,5 +1,5 @@
 //! Small PT/EN grammar for sound controls; never a general assistant prompt.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SoundCommand { Volume { input: bool, percent: f64 }, Mute { input: bool, muted: bool }, Status }
 pub fn parse(text: &str) -> Option<SoundCommand> {
     use SoundCommand::*;

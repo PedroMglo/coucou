@@ -76,7 +76,8 @@ fn nodes(cookie: &str, data: &Value, kind: Kind, default: &str) -> Result<Vec<No
             device_key: v[if kind == Kind::Playback { "sink" } else { "source" }].as_u64().map(|i| i.to_string()), monitor,
             controllable: !cookie.is_empty() && serial(v).is_some(), can_volume: volume.is_some() && v["has_volume"] != false && v["volume_writable"] != false,
             can_balance: stereo, active: v["state"] == "RUNNING" || kind.stream() && v["corked"] == false,
-            options: choices(v, kind), active_option, selector, index,
+            options: choices(v, kind), active_option, selector, index, native_serial:serial(v),
+            native_id:property(v,"object.id").as_u64().and_then(|n|u32::try_from(n).ok()).or_else(||property(v,"object.id").as_str()?.parse().ok()),
         })
     }).collect::<Option<Vec<_>>>().ok_or_else(|| "A lista de som está incompleta. Atualiza antes de alterar dispositivos.".into())
 }
@@ -107,6 +108,80 @@ pub async fn snapshot() -> Snapshot {
     if let Some((at, value)) = &cache.value { if at.elapsed() < Duration::from_millis(900) { return value.clone(); } }
     let value = read().await;
     cache.value = Some((Instant::now(), value.clone())); value
+}
+
+// Only output-device inventory is materialized for the per-pet Sound scope.
+// Each helper rechecks the captured grant after any resource wait.
+async fn read_outputs(check:std::sync::Arc<dyn Fn()->bool+Send+Sync>)->Snapshot{
+ let result=async{
+  let query=|args:&[&str]|{let args=[vec!["--format=json".to_string()],args.iter().map(|s|s.to_string()).collect()].concat();let check=check.clone();async move{
+   let bytes=run_checked("/usr/bin/pactl",&args,4,move||if check(){Ok(())}else{Err("A concessão original de Som deixou de estar ativa.".into())}).await?;
+   serde_json::from_slice::<Value>(&bytes).map_err(|_|"A lista de saídas de Som é inválida.".to_string())
+  }};
+  let info=query(&["info"]).await?;let list=query(&["list","sinks"]).await?;let after=query(&["info"]).await?;
+  if info["cookie"]!=after["cookie"]||!check(){return Err("O serviço ou a concessão de Som mudou durante a leitura.".into());}
+  let outputs=nodes(after["cookie"].as_str().unwrap_or(""),&list,Kind::Output,after["default_sink_name"].as_str().unwrap_or(""))?;
+  Ok(Snapshot{available:true,observed_at:Some(now()),outputs,..Snapshot::default()})
+ }.await;result.unwrap_or_else(|error|Snapshot{error:Some(error),..Snapshot::default()})
+}
+pub(super)async fn pet_outputs_snapshot(check:std::sync::Arc<dyn Fn()->bool+Send+Sync>)->Snapshot{read_outputs(check).await}
+pub(super)async fn pet_outputs_control(request:Request,check:std::sync::Arc<dyn Fn()->bool+Send+Sync>)->Result<Receipt,String>{
+ if !output_request_valid(&request){return Err("Esta concessão suporta apenas volume e silêncio das saídas indicadas.".into());}
+ control_for(request,Some(check),true,true).await
+}
+
+// The task adapter uses the same typed planner, identity reducer, physical lane
+// and helper supervisor. Synchronous supervision keeps the original borrowed
+// worker/debit fence alive until the actual child and its own group are reaped.
+pub(crate)fn task_read_outputs_with(io:&super::task::Io,current:&dyn Fn()->bool)->Result<Snapshot,String>{task_inventory_with(&|args|io.command(args),current).map(|(_,s)|s)}
+pub(super)fn task_inventory_with(command:&dyn Fn(&[String])->std::process::Command,current:&dyn Fn()->bool)->Result<(String,Snapshot),String>{
+ let query=|args:&[&str]|->Result<Value,String>{
+  let args=[vec!["--format=json".to_string()],args.iter().map(|s|s.to_string()).collect()].concat();
+  let session=Session::acquire(Lane::AudioRead,Duration::from_secs(4))?;
+  let bytes=session.run_sync_input(command(&args),None,LIMIT,Duration::from_secs(4),||validate_dispatch(Some(current),crate::settings::effect_allowed),current)?;
+  serde_json::from_slice(&bytes).map_err(|_|"A lista de saídas de Som é inválida.".into())
+ };
+ let info=query(&["info"])?;let list=query(&["list","sinks"])?;let after=query(&["info"])?;
+ if info["cookie"]!=after["cookie"]||!current(){return Err("O serviço ou a concessão original de Som mudou.".into());}
+ let cookie=after["cookie"].as_str().unwrap_or("").to_string();let outputs=nodes(&cookie,&list,Kind::Output,after["default_sink_name"].as_str().unwrap_or(""))?;
+ Ok((cookie,Snapshot{available:true,observed_at:Some(now()),outputs,..Snapshot::default()}))
+}
+pub(super)fn invalidate_output_cache(){tauri::async_runtime::block_on(cache().lock()).value=None;}
+pub(crate)fn task_control_with(io:&super::task::Io,request:Request,deadline:Instant,current:&dyn Fn()->bool,before_effect:impl FnOnce()->Result<(),String>)->super::task::Observation{
+ let mut observation=super::task::Observation{before:None,after:None,possible_effect:false,acknowledged:false,scope_current:false,verified:false};
+ let result=(||->Result<(),String>{
+  if !output_request_valid(&request)||Instant::now()>=deadline||!current(){return Err("O pedido original de Som terminou.".into());}
+  crate::settings::effect_allowed()?;
+  let effect_guard=super::effect_lock::acquire_at(&io.effect_runtime())?;
+  let effect=Session::acquire(Lane::AudioEffect,deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(60)))?.with_native_lifetime(effect_guard.file());
+  let mut cached=tauri::async_runtime::block_on(cache().lock());
+  let before=task_read_outputs_with(io,current)?;let operation=plan(&before,&request)?;
+  if before.outputs.iter().all(|n|n.key!=request.target_key){return Err(GONE.into());}
+  observation.before=Some(before);
+  let Operation::Pactl(args)=operation else{return Err("O plano de Som não é uma operação tipada de saída.".into());};
+  let remaining=deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(4));
+  let response=effect.run_sync_input(io.command(&args),None,LIMIT,remaining,||{
+   if !effect_guard.current(){return Err("A reserva física do Som mudou.".into());}
+   validate_dispatch(Some(current),crate::settings::effect_allowed)?;
+   before_effect()?;
+   validate_dispatch(Some(current),crate::settings::effect_allowed)?;
+   let fresh=task_read_outputs_with(io,current)?;
+   if !matches!(plan(&fresh,&request)?,Operation::Pactl(ref now)if now==&args){return Err(GONE.into());}
+   validate_dispatch(Some(current),crate::settings::effect_allowed)?;
+   observation.possible_effect=true;Ok(())
+  },current);
+  observation.acknowledged=response.is_ok();
+  if observation.possible_effect{cached.value=None;}
+  // A missing ACK never dispatches twice. Only an independently bounded read
+  // can add a postcondition; it does not erase an earlier uncertain dispatch.
+  observation.after=task_read_outputs_with(io,current).ok();
+  observation.scope_current=current()&&Instant::now()<deadline&&crate::settings::effect_allowed().is_ok();
+  observation.verified=observation.scope_current&&observation.after.as_ref().is_some_and(|s|confirmed(s,&request));
+  Ok(())
+ })();let _=result;observation
+}
+fn output_request_valid(request:&Request)->bool{
+ matches!(request.action,Action::Volume|Action::Mute)&&request.destination_key.is_none()&&request.option.is_none()&&match request.action{Action::Volume=>request.muted.is_none()&&request.value.is_some_and(|v|v.is_finite()&&(0.0..=100.0).contains(&v)),Action::Mute=>request.value.is_none()&&request.muted.is_some(),_=>false}
 }
 
 #[derive(Debug)] enum Operation { Pactl(Vec<String>), Input(String) }
@@ -160,27 +235,29 @@ fn confirmed(s: &Snapshot, r: &Request) -> bool {
         Action::Balance => n.balance.zip(r.value).is_some_and(|(a, b)| (a - b).abs() < 0.04),
     }
 }
-pub async fn control(request: Request) -> Result<Receipt, String> { control_for(request,None,false).await }
-pub(super) async fn control_with(request:Request,check:std::sync::Arc<dyn Fn()->bool+Send+Sync>)->Result<Receipt,String>{control_for(request,Some(check),false).await}
-pub(super) async fn system_control(request: Request, check: std::sync::Arc<dyn Fn()->bool+Send+Sync>) -> Result<Receipt, String> { control_for(request,Some(check),true).await }
-fn validate_dispatch(caller:Option<&(dyn Fn()->bool+Send+Sync)>,origin:impl FnOnce()->Result<(),String>)->Result<(),String>{
+pub async fn control(request: Request) -> Result<Receipt, String> { control_for(request,None,false,false).await }
+pub(super) async fn control_with(request:Request,check:std::sync::Arc<dyn Fn()->bool+Send+Sync>)->Result<Receipt,String>{control_for(request,Some(check),false,false).await}
+pub(super) async fn system_control(request: Request, check: std::sync::Arc<dyn Fn()->bool+Send+Sync>) -> Result<Receipt, String> { control_for(request,Some(check),true,false).await }
+fn validate_dispatch(caller:Option<&dyn Fn()->bool>,origin:impl FnOnce()->Result<(),String>)->Result<(),String>{
     // Caller validation may wait on native/settings locks. Check current IO
     // after it returns, immediately before spawn, not before that possible wait.
     if caller.is_some_and(|check|!check()){return Err("A autorização original do som mudou; nenhum novo helper foi iniciado.".into());}
     origin()
 }
-async fn control_for(request: Request, caller: Option<std::sync::Arc<dyn Fn()->bool+Send+Sync>>, devices_only:bool) -> Result<Receipt, String> {
+async fn control_for(request: Request, caller: Option<std::sync::Arc<dyn Fn()->bool+Send+Sync>>, devices_only:bool,outputs_only:bool) -> Result<Receipt, String> {
     crate::settings::effect_allowed()?;
     // Serialize requests from both surfaces and always reread identities before
     // mutation. IDs from a detached headset/closed app never select a new node.
-    let effect=Session::acquire(Lane::AudioEffect,Duration::from_secs(60))?;
+    let effect_guard=super::effect_lock::acquire()?;
+    let effect=Session::acquire(Lane::AudioEffect,Duration::from_secs(60))?.with_native_lifetime(effect_guard.file());
     let mut cache = cache().lock().await;
-    let before = read().await;
+    let before = if outputs_only{read_outputs(caller.clone().ok_or("Falta a concessão original de Som.")?).await}else{read().await};
     if devices_only&&caller.as_ref().is_some_and(|check|!super::system_policy::request_allowed(&before,&request,check.as_ref())){
         return Err("Escolhe um dispositivo de entrada, saída ou perfil nesta página. O som das aplicações pertence ao Spoty.".into());
     }
     let operation = plan(&before, &request)?;
-    let before_spawn=move||validate_dispatch(caller.as_deref(),crate::settings::effect_allowed);
+    let verify_caller=caller.clone();
+    let guard=effect_guard.clone();let before_spawn=move||{if !guard.current(){return Err("A reserva física do Som mudou.".into());}validate_dispatch(caller.as_deref().map(|c|c as &dyn Fn()->bool),crate::settings::effect_allowed)};
     let mut warning = None;
     match operation {
         Operation::Pactl(args) => { effect.run(crate::pet_helper::command("/usr/bin/pactl",&args),LIMIT,Duration::from_secs(4),before_spawn).await?; }
@@ -194,13 +271,13 @@ async fn control_for(request: Request, caller: Option<std::sync::Arc<dyn Fn()->b
             warning = result["warning"].as_str().map(|s| s.chars().filter(|c| !c.is_control()).take(400).collect());
         }
     }
-    let mut after = read().await;
+    let mut after = if outputs_only{read_outputs(verify_caller.clone().ok_or("Falta a concessão original de Som.")?).await}else{read().await};
     let mut accepted = confirmed(&after, &request);
     if !accepted {
         tokio::time::sleep(Duration::from_millis(120)).await;
-        after = read().await; accepted = confirmed(&after, &request);
+        after = if outputs_only{read_outputs(verify_caller.clone().ok_or("Falta a concessão original de Som.")?).await}else{read().await}; accepted = confirmed(&after, &request);
     }
-    cache.value = Some((Instant::now(), after.clone()));
+    cache.value = if outputs_only{None}else{Some((Instant::now(), after.clone()))};
     if crate::settings::effect_allowed().is_err(){warning=Some("A operação anterior foi enviada, mas a origem das preferências já não está confirmada. O estado observado foi conservado; não repitas a ação automaticamente.".into());}
     if !accepted && warning.is_none() { warning = Some("O pedido foi enviado, mas o estado ainda não o confirma. Atualiza antes de repetir.".into()); }
     Ok(Receipt { snapshot: after, confirmed: accepted, warning })
@@ -208,7 +285,9 @@ async fn control_for(request: Request, caller: Option<std::sync::Arc<dyn Fn()->b
 
 pub async fn spoken(command: super::commands::SoundCommand,check:std::sync::Arc<dyn Fn()->bool+Send+Sync>) -> Result<(String, bool), String> {
     use super::commands::SoundCommand;
+    if !check(){return Err("A origem ou a concessão original do pedido de Som terminou.".into());}
     let snapshot = snapshot().await;
+    if !check(){return Err("A origem ou a concessão original do pedido de Som terminou.".into());}
     if !snapshot.available { return Err(snapshot.error.unwrap_or_else(|| "O serviço de som está indisponível.".into())); }
     if command == SoundCommand::Status {
         let output = snapshot.outputs.iter().find(|n| n.is_default).ok_or("Não há uma saída de som predefinida.")?;
@@ -234,6 +313,13 @@ pub async fn spoken(command: super::commands::SoundCommand,check:std::sync::Arc<
 #[cfg(test)] mod tests {
     use super::*;
     use serde_json::json;
+    #[tokio::test]async fn system_access_audio_unsupported_or_malformed_requests_never_enter_the_native_executor(){
+        for(action,value,muted)in[(Action::Default,None,None),(Action::Route,None,None),(Action::Volume,Some(125.0),None),(Action::Volume,Some(151.0),None),(Action::Mute,Some(10.0),Some(false))]{
+            let request=Request{target_key:"audio-0123456789abcdef".into(),action,value,muted,destination_key:None,option:None};
+            assert!(pet_outputs_control(request,std::sync::Arc::new(||panic!("unsupported request must not reach helper admission"))).await.is_err());
+        }
+    }
+
     #[tokio::test]async fn system_io_audio_helper_checks_current_origin_when_the_future_is_polled(){
         let io=crate::settings::EffectFixture::new();let marker=io.root.join("must-not-spawn");let args=vec!["-I".into(),"-c".into(),"import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('effect');print('ok')".into(),marker.to_str().unwrap().into()];
         let probe=io.probe.clone();let pending=run_checked("/usr/bin/python3",&args,2,move||probe.check());io.external();assert!(pending.await.is_err());assert!(!marker.exists());

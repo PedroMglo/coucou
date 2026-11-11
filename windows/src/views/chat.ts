@@ -1,6 +1,7 @@
 import {refreshDocumentState,invalidateDocumentState} from '../core/document-state';
 import {attachmentControls} from './attachment-controls';
 import {buildManualMemory} from './manual-memory';
+import {buildCalendarSources} from './calendar-sources';
 import {petForChatProvider,petForTaskProvider,petRetired} from '../core/pet-factory';
 import {conversationPurge} from './conversation-purge';
 import {documentRetention} from './document-retention';
@@ -31,7 +32,7 @@ import {petCapabilities} from "../mochi/capabilities";
 import {dialogueId,rememberDialogue,resetDialogue,restoreDialogue} from "../core/chat-dialogue";
 import {SessionChat,sessionTargetKey,sessionOrigin,type SessionTarget} from "../core/session-chat";
 import {buildAgentRequests} from './agent-requests';
-import {approvalActions} from './approval-actions';
+import {approvalActions,goalVoiceHint} from './approval-actions';
 import {approvalQuestions} from './approval-questions';
 import {OllamaModelSelection} from '../core/ollama-selection';
 import {commandReview} from './command-review';
@@ -374,10 +375,10 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   }).finally(()=>{newConversation.disabled=false;onHeightChange();});});
 
   const body = h("div", { class: "chat-body" });
-  const memory=buildManualMemory({changed:onHeightChange});const preparingMemory=new Set<string>();
+  const calendars=buildCalendarSources({changed:onHeightChange});const memory=buildManualMemory({changed:onHeightChange});const preparingMemory=new Set<string>();
   input.addEventListener('input',()=>memory.invalidate());
   const memoryOwner=(provider:string)=>{const pet=petForTaskProvider(provider);return pet&&!petRetired(pet)&&providerForPill(pet)===provider?pet:null;};
-  function syncMemory(){const provider=State.chatProvider,pet=memoryOwner(provider),cid=dialogueId(provider)??null;memory.sync(pet?{petId:pet,provider,conversationId:cid}:null,JSON.stringify([provider,cid,activeModel({...State.settings,chatProvider:provider}),input.value.trim(),State.filesFor(provider)]));}
+  function syncMemory(){const provider=State.chatProvider,pet=memoryOwner(provider),cid=dialogueId(provider)??null;calendars.sync(pet&&cid&&State.view==='prompt'?{petId:pet,conversationId:cid}:null);memory.sync(pet?{petId:pet,provider,conversationId:cid}:null,JSON.stringify([provider,cid,activeModel({...State.settings,chatProvider:provider}),input.value.trim(),State.filesFor(provider)]));}
 
   const requests = h("div", { class: "cli-requests", style: "max-height:190px;overflow:auto" });
   const unavailable=h("p",{class:"pet-chat-unavailable"});unavailable.hidden=true;
@@ -423,7 +424,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   }
   document.addEventListener?.('visibilitychange',()=>{if(document.hidden)void inline.flush();else if(inline.target){inline.resource.hint(inline.key);void inline.refreshRecovery();}});
   window.addEventListener?.('pagehide',()=>{void inline.flush();});
-  body.append(chipRow, log, taskStatus.el,requests, picker.el,unavailable,prepared, modelRow,executionBadge,folderEditor,library,feedback,failedReview,draftControls.el,pendingPanel, bar,memory.el);
+  body.append(chipRow, log, taskStatus.el,requests, picker.el,unavailable,prepared, modelRow,executionBadge,folderEditor,library,feedback,failedReview,draftControls.el,pendingPanel, bar,memory.el,calendars.el);
 
   const requestCards = new Map<string, HTMLElement>();
   const endedRequests=new Set<string>();
@@ -433,7 +434,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
     const card = h("div", { class: "cli-request", style: "padding:10px;border:1px solid #F5A524;border-radius:10px;margin:6px 0" },
       h("strong", { text: t("{provider} needs your answer", { provider: isCliProvider(request.provider.toLowerCase())?providerDef(request.provider.toLowerCase()).name:request.provider }) }));
     card.append(h('p',{class:'session-origin',text:request.origin??'Mochi · conversa própria'}));
-    if(request.goalTarget&&request.voiceCode)card.append(h('p',{text:`Voz: rever receita ${request.voiceCode} · aprovar receita ${request.voiceCode} · recusar receita ${request.voiceCode}`}));
+    const voiceHint=goalVoiceHint(request);if(voiceHint)card.append(h('p',{text:voiceHint}));
     const questions=approvalQuestions(request.kind==='question'?request:{questions:[],detail:''});
     if (request.kind === "question") {
       card.append(questions.el);
@@ -782,8 +783,8 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
   const decisions=buildAgentRequests(()=>session.target,onHeightChange);
   const picker=buildPicker(()=>{body.classList.toggle('picking',picker.isOpen);onHeightChange();},(provider,model)=>{if(provider!=='ollama')session.chooseModel(model);},()=>session.target?.origin==='external',()=>session.model||session.snapshot?.model||'');
   const hint=h('p',{id:'session-composer-hint',class:'composer-hint',text:'Enter para enviar · Shift + Enter para mudar de linha'});
-  const memory=buildManualMemory({changed:onHeightChange});const preparingMemory=new Set<string>();let manualError='';
-  const body=h('div',{class:'chat-body'},attachments,log,taskStatus.el,decisions.el,picker.el,modelRow,executionBadge,feedback,failedReview,...(draftStatus?[draftStatus]:[]),h('div',{class:'chat-bar'},input,send),hint,memory.el);
+  const calendars=buildCalendarSources({changed:onHeightChange});const memory=buildManualMemory({changed:onHeightChange});const preparingMemory=new Set<string>();let manualError='';
+  const body=h('div',{class:'chat-body'},attachments,log,taskStatus.el,decisions.el,picker.el,modelRow,executionBadge,feedback,failedReview,...(draftStatus?[draftStatus]:[]),h('div',{class:'chat-bar'},input,send),hint,memory.el,calendars.el);
   modelButton.addEventListener('click',()=>{if(picker.isOpen)picker.close();else picker.open();});
   const el=h('div',{class:'view'},h('div',{class:'card wash chat-card'},body));
   (el.querySelector('.card') as HTMLElement).style.setProperty('--wash','rgba(99,102,241,0.5)');
@@ -878,6 +879,7 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
     modelButton.disabled=waiting||!snapshot?.capabilities.send||nativeModel;modelButton.title=`${nativeModel?'Modelo escolhido no terminal':'Modelo para o próximo pedido'} · ${model.textContent}`;modelButton.setAttribute('aria-label',modelButton.title);
     profiles.disabled=waiting;profiles.hidden=target?.origin==='external'||!profileProvider(provider);
     const memoryTarget=target?.origin==='mochi'&&!petRetired(target.petId)?{petId:target.petId,provider:target.provider,conversationId:target.sessionId}:null;
+    calendars.sync(memoryTarget?.conversationId?{petId:memoryTarget.petId,conversationId:memoryTarget.conversationId}:null);
     memory.sync(memoryTarget,JSON.stringify([key,input.value.trim(),target?.provider==='ollama'?activeModel({...State.settings,chatProvider:'ollama'}):session.model,target?activeModel({...State.settings,chatProvider:target.provider as typeof State.chatProvider}):'',snapshot?.attachments??[]]));
     if(!memoryTarget)manualError='';
     onHeightChange();

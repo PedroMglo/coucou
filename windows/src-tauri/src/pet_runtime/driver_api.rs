@@ -6,6 +6,22 @@ pub struct DriverInput {pub pet_id:String,pub goal_id:String,pub lease_id:String
 #[cfg(target_os="linux")]use super::{lease_controller::dispatcher::{Driver,Status},store::Store};
 #[cfg(target_os="linux")]use std::{collections::BTreeMap,sync::{Arc,Mutex,OnceLock}};
 #[cfg(target_os="linux")]fn drivers()->&'static Mutex<BTreeMap<String,Arc<Driver>>>{static DRIVERS:OnceLock<Mutex<BTreeMap<String,Arc<Driver>>>>=OnceLock::new();DRIVERS.get_or_init(||Mutex::new(BTreeMap::new()))}
+// Bounded observation cache only. It holds no owner, context writer or permit.
+#[cfg(target_os="linux")]fn finished()->&'static Mutex<BTreeMap<String,Status>>{static FINISHED:OnceLock<Mutex<BTreeMap<String,Status>>>=OnceLock::new();FINISHED.get_or_init(||Mutex::new(BTreeMap::new()))}
+/// A closed Driver still owns its context writer through Arc<Owned>. Retire
+/// only after original closure ACK, hold release and worker retirement, never
+/// from expiry, a signed Stop, or a serialized goal/status alone.
+#[cfg(target_os="linux")]pub(super)fn retire_completed_context(goal:&model::Record)->model::Result<()>{
+ let Some(lease)=goal.admissions.last().and_then(|r|r.lease.as_ref())else{return Ok(());};
+ let mut cache=drivers().lock().map_err(|_|model::Error::StorageUnavailable)?;
+ if let Some(driver)=cache.get(&lease.id){
+  let status=driver.status()?;if status.goal_id!=goal.id||status.pet_id!=goal.spec.owner.pet_id{return Err(model::Error::Conflict);}
+  if !driver.context_retirable(){return Ok(());}
+  let mut observations=finished().lock().map_err(|_|model::Error::StorageUnavailable)?;
+  if observations.len()>=64{if let Some(old)=observations.keys().next().cloned(){observations.remove(&old);}}
+  observations.insert(lease.id.clone(),status);cache.remove(&lease.id);
+ }Ok(())
+}
 fn check(window:&tauri::WebviewWindow)->model::Result<()>{if super::adapter::allowed(window.label()){Ok(())}else{Err(model::Error::InvalidInput)}}
 #[cfg(target_os="linux")]fn lookup(input:&DriverInput)->model::Result<Arc<Driver>>{
     let cache=drivers().lock().map_err(|_|model::Error::StorageUnavailable)?;
@@ -14,7 +30,9 @@ fn check(window:&tauri::WebviewWindow)->model::Result<()>{if super::adapter::all
 }
 #[cfg(target_os="linux")]#[tauri::command]
 pub async fn pet_runtime_start_driver(app:tauri::AppHandle,window:tauri::WebviewWindow,input:DriverInput)->model::Result<Status>{
-    check(&window)?;tauri::async_runtime::spawn_blocking(move||{
+    check(&window)?;tauri::async_runtime::spawn_blocking(move||start_for_app(&app,input)).await.map_err(|_|model::Error::StorageUnavailable)?
+}
+#[cfg(target_os="linux")]pub(super)fn start_for_app(app:&tauri::AppHandle,input:DriverInput)->model::Result<Status>{
         let retained=drivers().lock().map_err(|_|model::Error::StorageUnavailable)?.get(&input.lease_id).cloned();
         if let Some(driver)=retained{
             let status=driver.status()?;
@@ -26,14 +44,14 @@ pub async fn pet_runtime_start_driver(app:tauri::AppHandle,window:tauri::Webview
         let driver={let mut cache=drivers().lock().map_err(|_|model::Error::StorageUnavailable)?;
             if let Some(driver)=cache.get(&input.lease_id){driver.clone()}else {
                 cache.retain(|_,d|!d.removable());if cache.len()>=64{return Err(model::Error::LimitReached);}
-                let driver=Driver::for_app(owner,store,app)?;cache.insert(input.lease_id.clone(),driver.clone());driver
+                let driver=Driver::for_app(owner,store,app.clone())?;cache.insert(input.lease_id.clone(),driver.clone());driver
             }};
         let status=driver.status()?;if status.pet_id!=input.pet_id||status.goal_id!=input.goal_id{return Err(model::Error::Conflict);}
         if !status.active{driver.spawn()?;}driver.status()
-    }).await.map_err(|_|model::Error::StorageUnavailable)?
 }
+
 #[cfg(target_os="linux")]#[tauri::command]
-pub async fn pet_runtime_driver_status(window:tauri::WebviewWindow,input:DriverInput)->model::Result<Status>{check(&window)?;tauri::async_runtime::spawn_blocking(move||lookup(&input)?.status()).await.map_err(|_|model::Error::StorageUnavailable)?}
+pub async fn pet_runtime_driver_status(window:tauri::WebviewWindow,input:DriverInput)->model::Result<Status>{check(&window)?;tauri::async_runtime::spawn_blocking(move||match lookup(&input){Ok(driver)=>driver.status(),Err(model::Error::NotFound)=>{let status=finished().lock().map_err(|_|model::Error::StorageUnavailable)?.get(&input.lease_id).cloned().ok_or(model::Error::NotFound)?;if status.goal_id!=input.goal_id||status.pet_id!=input.pet_id{return Err(model::Error::Conflict);}Ok(status)},Err(error)=>Err(error)}).await.map_err(|_|model::Error::StorageUnavailable)?}
 #[cfg(not(target_os="linux"))]#[tauri::command]
 pub async fn pet_runtime_start_driver(app:tauri::AppHandle,window:tauri::WebviewWindow,input:DriverInput)->model::Result<serde_json::Value>{check(&window)?;let _=(app,input);Err(model::Error::UnsupportedPlatform)}
 #[cfg(not(target_os="linux"))]#[tauri::command]

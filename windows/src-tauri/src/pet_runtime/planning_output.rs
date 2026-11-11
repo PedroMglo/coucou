@@ -60,7 +60,7 @@ pub(super)fn read(authority:&Authority,spec:&AdmissionSpec,proof:&ConsentProof,a
     authority.verify_planning_output(spec,proof,&e)?;dir.check().map_err(|_|Failure::Changed)?;Ok(Some(e))
 }
 pub(super)fn receipt_fence(authority:&Authority,spec:&AdmissionSpec,attempts:&[String])->Result<Vec<(String,Option<String>)>>{
-    if spec.schema_version!=3{return Ok(vec![]);}let dir=directory(authority,spec,false)?;let mut rows=vec![];
+    if !spec.planning(){return Ok(vec![]);}let dir=directory(authority,spec,false)?;let mut rows=vec![];
     for id in attempts{if !model::token(id){return Err(Failure::Invalid);}let name=format!("{id}.json");let hash=match &dir{Some(d)=>d.bytes(&name,MAX_BYTES).map_err(|_|Failure::Unsafe)?.map(|(b,_)|model::hash(&b)),None=>None};rows.push((name,hash));}Ok(rows)
 }
 pub(super)fn publish(authority:&Authority,spec:&AdmissionSpec,proof:&ConsentProof,e:&Envelope)->Result<()> {

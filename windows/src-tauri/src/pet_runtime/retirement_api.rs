@@ -17,7 +17,10 @@ mod native{
     use super::*;use crate::pet_runtime::{retirement_controller::{Review,Approved,Acknowledged,Prepared},store::Store,model::Record};
     use std::{collections::BTreeMap,sync::{Arc,Mutex,OnceLock}};
     enum State{Review(Box<Review>),Approved(Box<Approved>),Acknowledged(Acknowledged),Ended}
-    pub(super)struct Pending{window:String,ticket:RetirementTicket,state:Mutex<State>}
+    #[derive(Clone)]pub(super)struct Origin{pub(super)window:String,pub(super)frame:crate::settings::review::Frame}
+    impl Origin{fn same(&self,other:&Self)->bool{self.window==other.window&&self.frame.same(&other.frame)&&self.frame.current()&&other.frame.current()}}
+    #[derive(Clone,Copy,PartialEq,Eq)]enum Kind{Review,CleanupOnly}
+    pub(super)struct Pending{origin:Origin,ticket:RetirementTicket,kind:Kind,state:Arc<Mutex<State>>}
     #[derive(Default)]pub(super)struct Reviews{pending:BTreeMap<String,Arc<Pending>>}
     fn retryable(error:Error)->bool{matches!(error,Error::Busy|Error::StorageUnavailable)}
     impl Pending{
@@ -25,7 +28,9 @@ mod native{
             let mut state=self.state.try_lock().map_err(|_|Error::Busy)?;
             if let State::Review(review)=&*state{
                 if !approve{*state=State::Ended;return Ok(RetirementConfirmed::Declined);}
+                if self.kind!=Kind::Review||!self.origin.frame.current(){*state=State::Ended;return Err(Error::Conflict);}
                 let decision=match review.decide(now){Ok(choice)=>choice,Err(error)=>{if !retryable(error){*state=State::Ended;}return Ok(RetirementConfirmed::Blocked{reason:error,retryable:retryable(error),retained:!matches!(*state,State::Ended)});}};
+                if !self.origin.frame.current(){*state=State::Ended;return Err(Error::Conflict);}
                 let State::Review(review)=std::mem::replace(&mut*state,State::Ended)else{return Err(Error::Conflict);};*state=State::Approved(Box::new(review.approve(decision)));
             }
             if !approve{
@@ -41,60 +46,75 @@ mod native{
         }
     }
     impl Reviews{
-        fn sweep(&mut self,now:u64){self.pending.retain(|_,pending|match pending.state.try_lock(){Ok(state)=>match &*state{State::Review(_)=>now<pending.ticket.proposal.expires_at,State::Approved(_)=>true,State::Acknowledged(_)=>now<pending.ticket.proposal.expires_at.saturating_add(300_000),State::Ended=>false},Err(_)=>true});}
-        fn find(&mut self,window:&str,input:&RetirementPrepareInput,goal:&Record,now:u64)->model::Result<Option<RetirementTicket>>{
-            self.sweep(now);
+        #[cfg(test)]fn origin_for_test(&self,window:&str)->Origin{self.pending.values().find(|p|p.origin.window==window).map(|p|p.origin.clone()).unwrap_or_else(||Origin{window:window.into(),frame:crate::settings::review::Frame::fixture()})}
+        fn sweep(&mut self,now:u64){self.pending.retain(|_,pending|match pending.state.try_lock(){Ok(state)=>match &*state{State::Review(_)=>pending.origin.frame.current()&&now<pending.ticket.proposal.expires_at,State::Approved(_)=>true,State::Acknowledged(_)=>pending.origin.frame.current()&&now<pending.ticket.proposal.expires_at.saturating_add(300_000),State::Ended=>false},Err(_)=>true});}
+        fn find(&mut self,origin:&Origin,input:&RetirementPrepareInput,goal:&Record,now:u64)->model::Result<Option<RetirementTicket>>{
+            if !origin.frame.current(){return Err(Error::Conflict);}self.sweep(now);let mut alias=None;
             for pending in self.pending.values(){let p=&pending.ticket.proposal;
-                if pending.window!=window||p.goal_id!=input.goal_id||p.pet_id!=input.pet_id||p.decision_id!=input.decision_id{continue;}
+                if pending.origin.window!=origin.window||p.goal_id!=input.goal_id||p.pet_id!=input.pet_id||p.decision_id!=input.decision_id{continue;}
                 let mut state=pending.state.try_lock().map_err(|_|Error::Busy)?;
-                if matches!(*state,State::Approved(_)){let mut ticket=pending.ticket.clone();ticket.proposal.approval_scope="confirmOriginalRetirement";return Ok(Some(ticket));}
+                if matches!(*state,State::Approved(_)){
+                    let mut ticket=pending.ticket.clone();ticket.proposal.approval_scope="confirmOriginalRetirement";
+                    if pending.origin.same(origin){return Ok(Some(ticket));}if pending.origin.frame.current(){return Err(Error::Conflict);}
+                    ticket.token=crate::pet_runtime::store::nonce()?;alias=Some((ticket,pending.state.clone()));break;
+                }
+                if !pending.origin.same(origin){return Err(Error::Conflict);}
                 if matches!(*state,State::Review(_)){
                     if p.revision!=goal.revision{*state=State::Ended;continue;}
                     return Ok(Some(pending.ticket.clone()));
                 }
+            }
+            if let Some((ticket,state))=alias{
+                if !origin.frame.current(){return Err(Error::Conflict);}
+                let pending=Arc::new(Pending{origin:origin.clone(),ticket:ticket.clone(),kind:Kind::CleanupOnly,state:state.clone()});
+                self.pending.retain(|_,p|!Arc::ptr_eq(&p.state,&state));self.pending.insert(ticket.token.clone(),pending);return Ok(Some(ticket));
             }Ok(None)
         }
-        fn insert(&mut self,window:&str,review:Review,now:u64)->model::Result<RetirementTicket>{
+        fn insert(&mut self,origin:&Origin,review:Review,now:u64)->model::Result<RetirementTicket>{
+            if !origin.frame.current(){return Err(Error::Conflict);}
             self.sweep(now);if self.pending.len()>=64{return Err(Error::LimitReached);}let ticket=RetirementTicket{token:crate::pet_runtime::store::nonce()?,proposal:review.proposal()};
             for existing in self.pending.values(){let p=&existing.ticket.proposal;
-                if existing.window==window&&p.goal_id==ticket.proposal.goal_id&&p.pet_id==ticket.proposal.pet_id&&p.decision_id==ticket.proposal.decision_id{
+                if existing.origin.window==origin.window&&p.goal_id==ticket.proposal.goal_id&&p.pet_id==ticket.proposal.pet_id&&p.decision_id==ticket.proposal.decision_id{
+                    if !existing.origin.same(origin){return Err(Error::Conflict);}
                     let state=existing.state.try_lock().map_err(|_|Error::Busy)?;
                     if matches!(*state,State::Review(_)|State::Approved(_)){return Ok(existing.ticket.clone());}
                 }
             }
-            self.pending.insert(ticket.token.clone(),Arc::new(Pending{window:window.into(),ticket:ticket.clone(),state:Mutex::new(State::Review(Box::new(review)))}));Ok(ticket)
+            self.pending.insert(ticket.token.clone(),Arc::new(Pending{origin:origin.clone(),ticket:ticket.clone(),kind:Kind::Review,state:Arc::new(Mutex::new(State::Review(Box::new(review))))}));Ok(ticket)
         }
-        fn lookup(&self,window:&str,input:&RetirementConfirmInput)->model::Result<Arc<Pending>>{
+        fn lookup(&self,origin:&Origin,input:&RetirementConfirmInput)->model::Result<Arc<Pending>>{
             let pending=self.pending.get(&input.token).ok_or(Error::NotFound)?;let p=&pending.ticket.proposal;
-            if pending.window!=window||p.goal_id!=input.goal_id||p.pet_id!=input.pet_id||p.revision!=input.revision||p.decision_id!=input.decision_id{return Err(Error::Conflict);}Ok(pending.clone())
+            if !pending.origin.same(origin)||p.goal_id!=input.goal_id||p.pet_id!=input.pet_id||p.revision!=input.revision||p.decision_id!=input.decision_id{return Err(Error::Conflict);}Ok(pending.clone())
         }
     }
+    pub(super)fn sweep_context(){if let Ok(mut cache)=reviews().lock(){cache.sweep(crate::assistant_memory::now());}}
     fn reviews()->&'static Mutex<Reviews>{static REVIEWS:OnceLock<Mutex<Reviews>>=OnceLock::new();REVIEWS.get_or_init(||Mutex::new(Reviews::default()))}
-    pub(super)fn prepare(window:&str,input:RetirementPrepareInput)->model::Result<RetirementPrepared>{
+    pub(super)fn prepare(origin:&Origin,input:RetirementPrepareInput)->model::Result<RetirementPrepared>{
         if !model::key(&input.request_id)||!model::token(&input.revision)||!model::token(&input.decision_id){return Err(Error::InvalidInput);}let now=crate::assistant_memory::now();
         let root=crate::settings::config_dir();let store=Store::existing_native(&root.join("pet-runtime-v1"))?.ok_or(Error::NotFound)?;let goal=store.read(&input.goal_id,&input.pet_id)?;
         if goal.revision!=input.revision{return Err(Error::Conflict);}
-        if let Some(ticket)=reviews().lock().map_err(|_|Error::StorageUnavailable)?.find(window,&input,&goal,now)?{return Ok(RetirementPrepared::Review{ticket});}
+        if let Some(ticket)=reviews().lock().map_err(|_|Error::StorageUnavailable)?.find(origin,&input,&goal,now)?{return Ok(RetirementPrepared::Review{ticket});}
         match store.prepare_retirement(&root.join("pet-runtime-consent-v1"),&input.goal_id,&input.pet_id,&input.revision,&input.decision_id,input.request_id,now){
-            Ok(Prepared::Review(review))=>reviews().lock().map_err(|_|Error::StorageUnavailable)?.insert(window,review,now).map(|ticket|RetirementPrepared::Review{ticket}),
+            Ok(Prepared::Review(review))=>reviews().lock().map_err(|_|Error::StorageUnavailable)?.insert(origin,review,now).map(|ticket|RetirementPrepared::Review{ticket}),
             Ok(Prepared::Retired(receipt))=>Ok(RetirementPrepared::Retired{receipt}),Err(reason)=>Ok(RetirementPrepared::Blocked{reason,retryable:retryable(reason)}),
         }
     }
-    pub(super)fn confirm(window:&str,input:RetirementConfirmInput)->model::Result<RetirementConfirmed>{
-        let pending=match reviews().lock().map_err(|_|Error::StorageUnavailable)?.lookup(window,&input){Ok(pending)=>pending,Err(reason)=>return Ok(RetirementConfirmed::Blocked{reason,retryable:false,retained:false})};
+    pub(super)fn confirm(origin:&Origin,input:RetirementConfirmInput)->model::Result<RetirementConfirmed>{
+        let pending=match reviews().lock().map_err(|_|Error::StorageUnavailable)?.lookup(origin,&input){Ok(pending)=>pending,Err(reason)=>return Ok(RetirementConfirmed::Blocked{reason,retryable:false,retained:false})};
         let root=crate::settings::config_dir();let store=Store::existing_native(&root.join("pet-runtime-v1"))?.ok_or(Error::NotFound)?;pending.confirm(&store,input.approve,crate::assistant_memory::now())
     }
     #[cfg(test)]mod tests{include!("retirement_cache_tests.rs");}
 }
+pub(super)fn sweep_context(){#[cfg(target_os="linux")]native::sweep_context();}
 #[tauri::command]
 pub async fn pet_runtime_prepare_retirement(window:tauri::WebviewWindow,input:RetirementPrepareInput)->model::Result<RetirementPrepared>{
     if !super::adapter::allowed(window.label()){return Err(Error::InvalidInput);}
-    #[cfg(target_os="linux")]{let origin=window.label().to_owned();tauri::async_runtime::spawn_blocking(move||native::prepare(&origin,input)).await.map_err(|_|Error::StorageUnavailable)?}
+    #[cfg(target_os="linux")]{let frame=match crate::settings::review::capture_window(&window).await{Ok(frame)=>frame,Err(_)=>return Ok(RetirementPrepared::Blocked{reason:Error::Conflict,retryable:false})};let origin=native::Origin{window:window.label().into(),frame};tauri::async_runtime::spawn_blocking(move||native::prepare(&origin,input)).await.map_err(|_|Error::StorageUnavailable)?}
     #[cfg(not(target_os="linux"))]{let _=input;Err(Error::UnsupportedPlatform)}
 }
 #[tauri::command]
 pub async fn pet_runtime_confirm_retirement(window:tauri::WebviewWindow,input:RetirementConfirmInput)->model::Result<RetirementConfirmed>{
     if !super::adapter::allowed(window.label()){return Err(Error::InvalidInput);}
-    #[cfg(target_os="linux")]{let origin=window.label().to_owned();tauri::async_runtime::spawn_blocking(move||native::confirm(&origin,input)).await.map_err(|_|Error::StorageUnavailable)?}
+    #[cfg(target_os="linux")]{let frame=match crate::settings::review::capture_window(&window).await{Ok(frame)=>frame,Err(_)=>return Ok(RetirementConfirmed::Blocked{reason:Error::Conflict,retryable:false,retained:false})};let origin=native::Origin{window:window.label().into(),frame};tauri::async_runtime::spawn_blocking(move||native::confirm(&origin,input)).await.map_err(|_|Error::StorageUnavailable)?}
     #[cfg(not(target_os="linux"))]{let _=input;Err(Error::UnsupportedPlatform)}
 }

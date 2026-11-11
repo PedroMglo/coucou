@@ -32,7 +32,7 @@ impl Authority {
     /// Pure check against the already authenticated grant. Safe under its lock;
     /// it must not re-enter a result lookup or a canonical Store read.
     pub(in crate::pet_runtime)fn generated_acknowledged(body:&Grant,spec:&AdmissionSpec,reference:&Reference)->Result<()> {
-        if spec.schema_version!=3||!reference.valid()||reference.decision_id!=spec.decision_id
+        if !spec.planning()||!reference.valid()||reference.decision_id!=spec.decision_id
             ||body.lease.as_ref().is_none_or(|l|!reference.source.matches(spec,l))
             ||!body.planning_usage.as_ref().is_some_and(|j|j.rounds.iter().any(|r|r.attempt_id==reference.output.attempt_id
                 &&r.publication.as_ref().is_some_and(|p|p.phase==PublicationPhase::Acknowledged&&p.reference==*reference))){return Err(Failure::Invalid);}
@@ -121,16 +121,16 @@ impl Authority {
             for name in self.dir.names().map_err(|_|Failure::Unavailable)? {
             if self.historical_file(&name){continue;}
                 let Some(decision)=name.strip_suffix(".json").filter(|s|model::token(s))else{continue;};
-                let (raw,_)=self.dir.bytes(&name,MAX_GRANT_BYTES).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Changed)?;
+                if self.rule_record_data(&name)?.is_some(){continue;}let (raw,_)=self.dir.bytes(&name,MAX_GRANT_BYTES).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Changed)?;
                 let envelope:GrantEnvelope=serde_json::from_slice(&raw).map_err(|_|Failure::Invalid)?;
                 let body=&envelope.body;
                 if !body.valid()||body.decision_id!=decision{return Err(Failure::Invalid);}
                 hmac::verify(&self.key,&grant_message(body)?,&decode(&envelope.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;
                 if body.goal_id==goal.id&&body.operation==Operation::GoalPlanning&&body.lease.is_some()
-                    &&!goal.admissions.iter().any(|row|row.spec.schema_version==3&&row.spec.decision_id==body.decision_id){return Err(Failure::Invalid);}
+                    &&!goal.admissions.iter().any(|row|row.spec.planning()&&row.spec.decision_id==body.decision_id){return Err(Failure::Invalid);}
             }
         }
-        for row in goal.admissions.iter().filter(|r|r.spec.schema_version==3) {
+        for row in goal.admissions.iter().filter(|r|r.spec.planning()) {
             let proof=row.proof.as_ref().ok_or(Failure::Missing)?;
             let body={let _lock=self.lock_shared()?;self.load(&row.spec,proof)?};
             let journal=body.planning_usage.as_ref().ok_or(Failure::Missing)?;
@@ -153,4 +153,12 @@ impl Authority {
         }
         self.fence()
     }
+}
+
+// Same native authority fence for every Store plan-publication source. This
+// implementation cannot be deserialized or manufactured by a provider.
+impl crate::pet_runtime::plan_publication::Certificate for PlanCertified<'_,'_> {
+    type Change=crate::pet_runtime::plan_publication::Generated;
+    fn change(&self)->Self::Change { Self::Change::new(self.reference.clone(),self.output.clone()) }
+    fn current(&self,goal:&Record,now:u64)->Result<()> { PlanCertified::current(self,goal,now) }
 }

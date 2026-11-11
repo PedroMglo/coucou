@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dbus::arg::{PropMap, RefArg, Variant};
-use dbus::blocking::{BlockingSender, Connection};
+use dbus::blocking::Connection;
+use dbus::channel::{MatchingReceiver,Token};
 use dbus::message::MatchRule;
 use dbus::Path;
 
@@ -88,136 +89,137 @@ const XK_CONTROL_L: i32 = 0xffe3;
 const XK_SHIFT_L: i32 = 0xffe1;
 const XK_V: i32 = 0x0076;
 
-struct Remote {
-    conn: Connection,
-    session: String,
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+enum Failure{Cancelled,Refused,Unknown}
+const BUS:&str="org.freedesktop.DBus";
+const BUS_PATH:&str="/org/freedesktop/DBus";
+struct Remote{conn:Connection,session:String,peer:String}
+impl Drop for Remote{fn drop(&mut self){let ack=close(&self.conn,&self.peer,&self.session,"org.freedesktop.portal.Session");crate::log::line(format!("flow: own RemoteDesktop close acknowledged={ack}"));}}
+static REMOTE:Mutex<Option<Remote>>=Mutex::new(None);
+static REFUSED:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+fn token_file()->std::path::PathBuf{super::store::Store::folder().join("remote-desktop-token")}
+fn variant<T:RefArg+'static>(v:T)->Variant<Box<dyn RefArg>>{Variant(Box::new(v))}
+fn method(peer:&str,path:&str,interface:&str,member:&str)->Result<dbus::Message,Failure>{dbus::Message::new_method_call(peer,path,interface,member).map_err(|_|Failure::Unknown)}
+
+/// Same D-Bus connection, serial and unique peer; no retry after dispatch.
+/// process() pumps signals too, so a Response arriving before its method ACK
+/// is retained by the exact request filter rather than lost.
+fn call(conn:&Connection,msg:dbus::Message,peer:&str,current:&dyn Fn()->bool,timeout:Duration)->Result<dbus::Message,Failure>{
+    call_tracked(conn,msg,peer,current,timeout,&std::cell::Cell::new(false))
 }
-
-/// The RemoteDesktop session, opened on the first paste and kept.
-static REMOTE: Mutex<Option<Remote>> = Mutex::new(None);
-/// Refused once: not asked again until Coucou restarts.
-static REFUSED: Mutex<bool> = Mutex::new(false);
-
-fn token_file() -> std::path::PathBuf {
-    super::store::Store::folder().join("remote-desktop-token")
-}
-
-fn variant<T: RefArg + 'static>(v: T) -> Variant<Box<dyn RefArg>> {
-    Variant(Box::new(v))
-}
-
-/// Calls `method` with a request token and waits for its Response (the user
-/// may have a dialog to answer). The results, or why there are none.
-fn request(conn: &Connection, method: &str, args: impl FnOnce(&str) -> dbus::Message, tokens: &mut u32) -> Result<PropMap, String> {
-    *tokens += 1;
-    let token = format!("coucoupaste{}_{}", std::process::id(), tokens);
-    let sender = conn.unique_name().to_string();
-    let path = portal::request_path(&sender, &token);
-    let answer: Arc<Mutex<Option<Result<PropMap, u32>>>> = Arc::new(Mutex::new(None));
-    let slot = answer.clone();
-    let rule = MatchRule::new_signal("org.freedesktop.portal.Request", "Response").with_path(Path::from(path.clone()));
-    let id = conn
-        .add_match(rule, move |(): (), _, msg| {
-            *slot.lock().unwrap() = Some(portal::parse_response(msg));
-            false
-        })
-        .map_err(|e| e.to_string())?;
-    let msg = args(&token);
-    conn.send_with_reply_and_block(msg, Duration::from_secs(10)).map_err(|e| format!("{method}: {e}"))?;
-    let until = Instant::now() + Duration::from_secs(120);
-    while answer.lock().unwrap().is_none() && Instant::now() < until {
-        conn.process(Duration::from_millis(200)).map_err(|e| e.to_string())?;
-    }
-    let _ = conn.remove_match(id);
-    let result = answer.lock().unwrap().take();
-    match result {
-        Some(Ok(results)) => Ok(results),
-        Some(Err(code)) => Err(format!("{method} refused ({code})")),
-        None => Err(format!("{method}: no answer")),
-    }
-}
-
-fn open() -> Result<Remote, String> {
-    let conn = Connection::new_session().map_err(|e| e.to_string())?;
-    let mut tokens = 0;
-    let call = |member: &str| dbus::Message::new_method_call(DEST, OBJECT, IFACE, member).map_err(|e| e.to_string());
-
-    let session_token = format!("coucoupastes{}", std::process::id());
-    let create = call("CreateSession")?;
-    let results = request(&conn, "CreateSession", |token| {
-        let mut options: PropMap = HashMap::new();
-        options.insert("handle_token".into(), variant(token.to_string()));
-        options.insert("session_handle_token".into(), variant(session_token.clone()));
-        create.append1(options)
-    }, &mut tokens)?;
-    let session = portal::session_from_results(&results).ok_or("no session")?;
-
-    let restore = std::fs::read_to_string(token_file()).ok().filter(|t| !t.trim().is_empty());
-    let select = call("SelectDevices")?;
-    request(&conn, "SelectDevices", |token| {
-        let mut options: PropMap = HashMap::new();
-        options.insert("handle_token".into(), variant(token.to_string()));
-        options.insert("types".into(), variant(1u32)); // keyboard
-        options.insert("persist_mode".into(), variant(2u32)); // until revoked
-        if let Some(restore) = &restore {
-            options.insert("restore_token".into(), variant(restore.trim().to_string()));
+fn call_tracked(conn:&Connection,msg:dbus::Message,peer:&str,current:&dyn Fn()->bool,timeout:Duration,sent:&std::cell::Cell<bool>)->Result<dbus::Message,Failure>{
+    if !current(){return Err(Failure::Cancelled);}
+    sent.set(true);
+    let serial=conn.channel().send(msg).map_err(|_|Failure::Unknown)?;
+    let answer=Arc::new(Mutex::new(None));let seen=answer.clone();
+    let mut rule=MatchRule::new();rule.sender=Some(peer.to_string().into());
+    let token=conn.start_receive(rule,Box::new(move|msg,_|{
+        if msg.get_reply_serial()==Some(serial){*seen.lock().unwrap()=Some(msg);}true
+    }));
+    let until=Instant::now()+timeout;
+    let result=loop{
+        if !current(){break Err(Failure::Cancelled);}
+        if let Some(mut reply)=answer.lock().unwrap().take(){
+            if reply.sender().as_deref()!=Some(peer)||reply.as_result().is_err(){break Err(Failure::Unknown);}
+            break Ok(reply);
         }
-        select.append2(Path::from(session.clone()), options)
-    }, &mut tokens)?;
-
-    let start = call("Start")?;
-    let results = request(&conn, "Start", |token| {
-        let mut options: PropMap = HashMap::new();
-        options.insert("handle_token".into(), variant(token.to_string()));
-        start.append3(Path::from(session.clone()), "", options)
-    }, &mut tokens)?;
-    if let Some(token) = results.get("restore_token").and_then(|v| v.0.as_str()) {
-        let _ = crate::platform::ensure_private_dir(&super::store::Store::folder());
-        let _ = std::fs::write(token_file(), token);
-    }
-    Ok(Remote { conn, session })
+        if Instant::now()>=until{break Err(Failure::Unknown);}
+        if conn.process(Duration::from_millis(20)).is_err(){break Err(Failure::Unknown);}
+    };
+    conn.stop_receive(token);result
 }
-
-fn key(remote: &Remote, keysym: i32, pressed: bool) -> Result<(), String> {
-    let msg = dbus::Message::new_method_call(DEST, OBJECT, IFACE, "NotifyKeyboardKeysym")
-        .map_err(|e| e.to_string())?
-        .append3(Path::from(remote.session.clone()), PropMap::new(), keysym)
-        .append1(pressed as u32);
-    remote.conn.send_with_reply_and_block(msg, Duration::from_secs(5)).map_err(|e| e.to_string())?;
-    Ok(())
+fn close(conn:&Connection,peer:&str,path:&str,interface:&str)->bool{
+    let Ok(msg)=method(peer,path,interface,"Close")else{return false;};
+    call(conn,msg,peer,&||true,Duration::from_millis(500)).is_ok()
 }
-
-/// Ctrl+V (Ctrl+Shift+V) through the RemoteDesktop portal.
-pub fn send_paste(shift: bool) -> Result<(), String> {
-    if *REFUSED.lock().unwrap() {
-        return Err("remote desktop refused".into());
-    }
-    let mut slot = REMOTE.lock().unwrap();
-    if slot.is_none() {
-        match open() {
-            Ok(r) => *slot = Some(r),
-            Err(err) => {
-                *REFUSED.lock().unwrap() = true;
-                return Err(err);
-            }
+struct Request<'a>{conn:&'a Connection,peer:&'a str,path:String,rule:String,filter:Token,answered:bool}
+impl Drop for Request<'_>{fn drop(&mut self){
+    self.conn.stop_receive(self.filter);
+    if let Ok(msg)=method(BUS,BUS_PATH,BUS,"RemoveMatch"){let _=call(self.conn,msg.append1(self.rule.clone()),BUS,&||true,Duration::from_millis(500));}
+    if !self.answered{let ack=close(self.conn,self.peer,&self.path,"org.freedesktop.portal.Request");crate::log::line(format!("flow: own paste request close acknowledged={ack}"));}
+}}
+fn request(conn:&Connection,peer:&str,_member:&str,args:impl FnOnce(&str)->Result<dbus::Message,Failure>,tokens:&mut u32,current:&dyn Fn()->bool)->Result<PropMap,Failure>{
+    if !current(){return Err(Failure::Cancelled);}
+    *tokens=tokens.checked_add(1).ok_or(Failure::Unknown)?;
+    let token=format!("coucoupaste{}_{}",std::process::id(),tokens);
+    let path=portal::request_path(&conn.unique_name().to_string(),&token);
+    let answer:Arc<Mutex<Option<Result<PropMap,u32>>>>=Arc::new(Mutex::new(None));let seen=answer.clone();
+    let expected_peer=peer.to_string();let expected_path=path.clone();
+    let rule=MatchRule::new_signal("org.freedesktop.portal.Request","Response").with_sender(peer.to_string()).with_path(Path::from(path.clone()));
+    let match_text=rule.match_str();
+    call(conn,method(BUS,BUS_PATH,BUS,"AddMatch")?.append1(match_text.clone()),BUS,current,Duration::from_secs(10))?;
+    let filter=conn.start_receive(rule,Box::new(move|msg,_|{
+        if msg.sender().as_deref()==Some(expected_peer.as_str())&&msg.path().as_deref()==Some(expected_path.as_str()){
+            let mut slot=seen.lock().unwrap();if slot.is_none(){*slot=Some(portal::parse_response(&msg));}
+        }true
+    }));
+    let mut guard=Request{conn,peer,path,rule:match_text,filter,answered:false};
+    let reply=call(conn,args(&token)?,peer,current,Duration::from_secs(10))?;
+    let actual:Path<'static>=reply.read1().map_err(|_|Failure::Unknown)?;
+    if actual.to_string()!=guard.path{return Err(Failure::Unknown);}
+    let until=Instant::now()+Duration::from_secs(120);
+    loop{
+        if !current(){return Err(Failure::Cancelled);}
+        if let Some(result)=answer.lock().unwrap().take(){
+            guard.answered=true;
+            return match result{Ok(results)=>Ok(results),Err(1)=>Err(Failure::Refused),Err(_)=>Err(Failure::Unknown)};
         }
+        if Instant::now()>=until{return Err(Failure::Unknown);}
+        if conn.process(Duration::from_millis(20)).is_err(){return Err(Failure::Unknown);}
     }
-    let remote = slot.as_ref().unwrap();
-    let mut seq = vec![(XK_CONTROL_L, true)];
-    if shift {
-        seq.push((XK_SHIFT_L, true));
-    }
-    seq.extend([(XK_V, true), (XK_V, false)]);
-    if shift {
-        seq.push((XK_SHIFT_L, false));
-    }
-    seq.push((XK_CONTROL_L, false));
-    for (sym, down) in seq {
-        if let Err(err) = key(remote, sym, down) {
-            // The session ended (the user revoked it): open a new one next time.
-            *slot = None;
-            return Err(err);
-        }
-    }
-    Ok(())
 }
+fn open(current:&dyn Fn()->bool)->Result<Remote,Failure>{open_at(current,&token_file())}
+fn open_at(current:&dyn Fn()->bool,token_path:&std::path::Path)->Result<Remote,Failure>{
+    if !current(){return Err(Failure::Cancelled);}
+    let conn=Connection::new_session().map_err(|_|Failure::Unknown)?;
+    let reply=call(&conn,method(BUS,BUS_PATH,BUS,"GetNameOwner")?.append1(DEST),BUS,current,Duration::from_secs(10))?;
+    let peer:String=reply.read1().map_err(|_|Failure::Unknown)?;
+    if !peer.starts_with(':')||dbus::strings::BusName::new(peer.clone()).is_err(){return Err(Failure::Unknown);}
+    static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
+    let id=NEXT.fetch_update(std::sync::atomic::Ordering::AcqRel,std::sync::atomic::Ordering::Acquire,|n|n.checked_add(1)).map_err(|_|Failure::Unknown)?;
+    let session_token=format!("coucoupastes{}_{}",std::process::id(),id);
+    let session=portal::session_path(&conn.unique_name().to_string(),&session_token);
+    // Own the predicted session before CreateSession can have an effect.
+    let remote=Remote{conn,session,peer};let mut tokens=0;
+    let results=request(&remote.conn,&remote.peer,"CreateSession",|token|{
+        let mut options:PropMap=HashMap::new();options.insert("handle_token".into(),variant(token.to_string()));options.insert("session_handle_token".into(),variant(session_token));
+        Ok(method(&remote.peer,OBJECT,IFACE,"CreateSession")?.append1(options))
+    },&mut tokens,current)?;
+    if portal::session_from_results(&results).as_deref()!=Some(remote.session.as_str()){return Err(Failure::Unknown);}
+    if !current(){return Err(Failure::Cancelled);}
+    let restore={use std::io::Read;let mut text=String::new();std::fs::File::open(token_path).ok().and_then(|file|file.take(4097).read_to_string(&mut text).ok()).and_then(|_|(text.len()<=4096&&!text.trim().is_empty()&&!text.chars().any(char::is_control)).then_some(text))};
+    request(&remote.conn,&remote.peer,"SelectDevices",|token|{
+        let mut options:PropMap=HashMap::new();options.insert("handle_token".into(),variant(token.to_string()));options.insert("types".into(),variant(1u32));options.insert("persist_mode".into(),variant(2u32));
+        if let Some(restore)=restore{options.insert("restore_token".into(),variant(restore.trim().to_string()));}
+        Ok(method(&remote.peer,OBJECT,IFACE,"SelectDevices")?.append2(Path::from(remote.session.clone()),options))
+    },&mut tokens,current)?;
+    let results=request(&remote.conn,&remote.peer,"Start",|token|{
+        let mut options:PropMap=HashMap::new();options.insert("handle_token".into(),variant(token.to_string()));
+        Ok(method(&remote.peer,OBJECT,IFACE,"Start")?.append3(Path::from(remote.session.clone()),"",options))
+    },&mut tokens,current)?;
+    if !current(){return Err(Failure::Cancelled);}
+    if let Some(token)=results.get("restore_token").and_then(|v|v.0.as_str()).filter(|t|t.len()<=4096&&!t.chars().any(char::is_control)){
+        if !current(){return Err(Failure::Cancelled);}
+        if let Some(folder)=token_path.parent(){if crate::platform::ensure_private_dir(folder).is_ok()&&current(){let _=std::fs::write(token_path,token);}}
+    }
+    if !current(){return Err(Failure::Cancelled);}Ok(remote)
+}
+fn key(remote:&Remote,sym:i32,down:bool,current:&dyn Fn()->bool)->Result<(),super::paste::KeyFailure>{
+    use super::paste::KeyFailure;
+    let msg=method(&remote.peer,OBJECT,IFACE,"NotifyKeyboardKeysym").map_err(|_|KeyFailure::NotSent)?.append3(Path::from(remote.session.clone()),PropMap::new(),sym).append1(down as u32);
+    let sent=std::cell::Cell::new(false);
+    call_tracked(&remote.conn,msg,&remote.peer,if down{current}else{&||true},Duration::from_secs(5),&sent).map(|_|()).map_err(|_|if sent.get(){KeyFailure::Uncertain}else{KeyFailure::NotSent})
+}
+
+pub fn send_paste(shift:bool,current:&dyn Fn()->bool)->super::paste::Dispatch{
+    use super::paste::{Dispatch,Key};use std::sync::atomic::Ordering;
+    if !current()||REFUSED.load(Ordering::Acquire){return Dispatch::NotSent;}
+    let mut slot=loop{if !current(){return Dispatch::NotSent;}match REMOTE.try_lock(){Ok(slot)=>break slot,Err(std::sync::TryLockError::WouldBlock)=>std::thread::sleep(Duration::from_millis(2)),Err(_)=>return Dispatch::NotSent}};
+    if !current(){return Dispatch::NotSent;}
+    if slot.is_none(){match open(current){Ok(remote)=>*slot=Some(remote),Err(Failure::Refused)=>{REFUSED.store(true,Ordering::Release);return Dispatch::NotSent;},Err(_)=>return Dispatch::NotSent}}
+    let remote=slot.as_ref().unwrap();
+    let result=super::paste::sequence(shift,current,|k,down|key(remote,match k{Key::Control=>XK_CONTROL_L,Key::Shift=>XK_SHIFT_L,Key::V=>XK_V},down,current));
+    if result==Dispatch::Uncertain{*slot=None;}result
+}
+
+#[cfg(test)]#[path="paste_portal_tests.rs"]mod paste_tests;

@@ -28,7 +28,7 @@ fn exact_native_step_debits_the_shared_budget_and_replay_only_recovers_the_same_
     let(f,a,g,_p,o,_)=setup_plan();let bus=Bus::new();let player=Player::new(&bus,"Private step player");let ready=grant(&a,&g,&o,&bus);
     let receipt=o.run_step(&g,&ready,&config()).unwrap();assert_eq!(receipt.phase,Phase::Finished);assert!(receipt.valid());
     let result=receipt.result.as_ref().unwrap();assert_eq!(result.observation.delivery,Delivery::Accepted);assert!(result.observation.effect_verified);assert!(!result.criteria_verified);assert!(!result.goal_complete);
-    assert_eq!(*player.calls.lock().unwrap(),vec![("Pause".into(),ready.scope.resource.owner.clone())]);assert_eq!(ledger(&f,&g)["attempts"][0]["kind"],"tool");assert_eq!(ledger(&f,&g)["attempts"][0]["phase"],"settled");
+    assert_eq!(*player.calls.lock().unwrap(),vec![("Pause".into(),ready.scope.resource.spotify().unwrap().owner.clone())]);assert_eq!(ledger(&f,&g)["attempts"][0]["kind"],"tool");assert_eq!(ledger(&f,&g)["attempts"][0]["phase"],"settled");
     signal_stop(o.lease());let again=o.run_step(&g,&ready,&config()).unwrap();assert_eq!(serde_json::to_value(&again).unwrap(),serde_json::to_value(&receipt).unwrap());assert_eq!(player.calls.lock().unwrap().len(),1);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),1);
     drop(o);let reopened=Authority::existing(&root(&f)).unwrap();assert_eq!(stored(&reopened,&g,&ready.scope).phase,Phase::Finished);
 }
@@ -157,6 +157,6 @@ fn competing_native_reviews_cannot_replace_the_first_retained_target(){
     use crate::pet_runtime::{step_api::Cache,lease_controller::step_controller::resource_key};
     let(_f,a,g,_p,o,_)=setup_plan();let bus=Bus::new();let _player=Player::new(&bus,"Private step player");let plan=&g.plans[0];let mut prepared=vec![];for _ in 0..2{prepared.push(o.review_step(&g,&plan.id,&plan.steps[0].id,Arc::new(Target::fixture_at(&bus.address).unwrap()),&config(),crate::assistant_memory::now()).unwrap());}
     let mut c=Cache::default();let(_approved,first)=prepared.pop().unwrap().approve(&o,&g,&config(),crate::assistant_memory::now()).unwrap();let scope=first.scope.clone();let(_approved,second)=prepared.pop().unwrap().approve(&o,&g,&config(),crate::assistant_memory::now()).unwrap();c.remember(first,crate::assistant_memory::now()).unwrap();assert!(c.remember(second,crate::assistant_memory::now()).is_err());
-    let mut renamed=scope.resource.clone();renamed.identity="Renamed reader".into();assert_eq!(resource_key(&scope.resource).unwrap(),resource_key(&renamed).unwrap());
+    let mut renamed=scope.resource.clone();if let crate::pet_runtime::physical_target::Binding::Spotify(b)=&mut renamed{b.identity="Renamed reader".into();}else{panic!("Expected preserved MPRIS binding");}assert_eq!(resource_key(&scope.resource).unwrap(),resource_key(&renamed).unwrap());
     c.forget(&scope);let ready=grant(&a,&g,&o,&bus);c.remember(ready,crate::assistant_memory::now()).unwrap();
 }

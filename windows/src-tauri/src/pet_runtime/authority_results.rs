@@ -9,13 +9,27 @@ impl Authority {
         Ok(self.dir.path.parent().ok_or(Failure::Unsafe)?.join("pet-runtime-results-v1"))
     }
     pub(in crate::pet_runtime) fn result_attempt(&self, spec: &AdmissionSpec, proof: &ConsentProof, request: &str) -> Result<(Option<Lease>, Option<Attempt>)> {
+        let _lock = self.lock_shared()?;self.result_attempt_unlocked(spec,proof,request)
+    }
+    pub(in crate::pet_runtime) fn result_attempt_unlocked(&self,spec:&AdmissionSpec,proof:&ConsentProof,request:&str)->Result<(Option<Lease>,Option<Attempt>)>{
         if !model::key(request) { return Err(Failure::Invalid); }
-        let _lock = self.lock_shared()?;
         let body = self.load(spec, proof)?;
+        self.model_attempt_from(body,request)
+    }
+    fn model_attempt_from(&self,body:Grant,request:&str)->Result<(Option<Lease>,Option<Attempt>)>{
         let attempt = body.budget_usage.as_ref().and_then(|l| l.attempts.iter().find(|a| a.request_id == request)).cloned();
         if attempt.as_ref().is_some_and(|a| a.kind != Kind::Model) { return Err(Failure::Invalid); }
         self.fence()?;
         Ok((body.lease, attempt))
+    }
+    pub(in crate::pet_runtime)fn result_attempt_for_user(&self,spec:&AdmissionSpec,proof:&ConsentProof,request:&str)->Result<(Option<Lease>,Option<Attempt>,Option<crate::pet_runtime::messages::HistoricalSource>)>{
+        let _lock=self.lock_shared()?;if !model::key(request){return Err(Failure::Invalid);}
+        let name=format!("{}.json",spec.decision_id);
+        let(body,historical)=if self.historical_file(&name){self.verify_proof(spec,proof)?;let(body,h)=super::restoration::message_snapshot_file(self,&name)?;(self.validate_grant_binding(spec,proof,body)?,Some(h))}else{(self.load(spec,proof)?,None)};
+        let(lease,attempt)=self.model_attempt_from(body,request)?;Ok((lease,attempt,historical))
+    }
+    pub(in crate::pet_runtime)fn verify_result_for_user(&self,spec:&AdmissionSpec,proof:&ConsentProof,envelope:&Envelope)->Result<()>{
+        let(lease,attempt,_)=self.result_attempt_for_user(spec,proof,&envelope.body.request_id)?;self.verify_model_observation(spec,envelope,lease,attempt)
     }
     #[allow(clippy::too_many_arguments)]
     pub(in crate::pet_runtime) fn seal_result(&self, spec: &AdmissionSpec, proof: &ConsentProof, lease: &Lease, attempt: &Attempt, text: &str, accepted: u64, now: u64) -> Result<Envelope> {
@@ -38,10 +52,15 @@ impl Authority {
         Ok(envelope)
     }
     pub(in crate::pet_runtime) fn verify_result(&self, spec: &AdmissionSpec, proof: &ConsentProof, envelope: &Envelope) -> Result<()> {
-        let r = &envelope.body;
-        if !r.valid() { return Err(Failure::Invalid); }
-        hmac::verify(&self.key, &message(r)?, &decode(&envelope.tag).ok_or(Failure::Invalid)?).map_err(|_| Failure::Invalid)?;
-        let (lease, attempt) = self.result_attempt(spec, proof, &r.request_id)?;
+        let _lock=self.lock_shared()?;self.verify_result_unlocked(spec,proof,envelope)
+    }
+    pub(in crate::pet_runtime) fn verify_result_unlocked(&self,spec:&AdmissionSpec,proof:&ConsentProof,envelope:&Envelope)->Result<()>{
+        let(lease,attempt)=self.result_attempt_unlocked(spec,proof,&envelope.body.request_id)?;self.verify_model_observation(spec,envelope,lease,attempt)
+    }
+    fn verify_model_observation(&self,spec:&AdmissionSpec,envelope:&Envelope,lease:Option<Lease>,attempt:Option<Attempt>)->Result<()>{
+        let r=&envelope.body;
+        if !r.valid(){return Err(Failure::Invalid);}
+        hmac::verify(&self.key,&message(r)?,&decode(&envelope.tag).ok_or(Failure::Invalid)?).map_err(|_|Failure::Invalid)?;
         let lease = lease.ok_or(Failure::Missing)?;
         let a = attempt.ok_or(Failure::Missing)?;
         if r.goal_id != spec.goal_id || r.pet_id != spec.owner.pet_id || r.provider != spec.owner.provider

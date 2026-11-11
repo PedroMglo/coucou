@@ -10,6 +10,12 @@ impl LostOwnerSource{
     pub(in crate::pet_runtime)fn matches(&self,hash:&str,revision:&str)->bool{self.grant_hash==hash&&self.grant_revision==revision}
 }
 impl Authority{
+    /// Authority writers may pass only a grant already loaded/authenticated
+    /// from the same directory. A preparation is not execution authority.
+    pub(in crate::pet_runtime::authority_store)fn prepared_owner_absence(&self,body:&Grant)->Result<native_owner::AbsentLease>{
+        let source=LostOwnerSource{lease:body.lease.clone().ok_or(Failure::Missing)?,owner:body.runtime_owner.clone().ok_or(Failure::Missing)?,grant_hash:model::fingerprint(body).map_err(|_|Failure::Invalid)?,grant_revision:body.revision.clone()};
+        native_owner::AbsentLease::capture(self,source).map_err(|e|match e{model::Error::Busy=>Failure::Busy,model::Error::StorageUnavailable=>Failure::Unavailable,_=>Failure::Changed})
+    }
     pub(in crate::pet_runtime)fn retained_absence(&self,spec:&AdmissionSpec,proof:&ConsentProof)->Result<native_owner::AbsentLease>{
         self.retained_absence_for(spec,proof,false)
     }

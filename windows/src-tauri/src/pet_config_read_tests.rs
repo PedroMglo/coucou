@@ -13,6 +13,21 @@ impl PrivateDir {
 impl Drop for PrivateDir { fn drop(&mut self) { std::fs::remove_dir_all(&self.0).unwrap(); } }
 
 #[test]
+fn pet_inference_legacy_editor_cannot_clear_binding_or_downgrade_format() {
+    let root=PrivateDir::new();let path=root.0.join("pets.json");let mut configured=defaults();configured.version=2;
+    let choice=crate::pet_inference::Choice{schema_version:1,backend:crate::pet_inference::Backend::Lmstudio,endpoint:"http://127.0.0.1:1234".into(),model:"synthetic/model".into(),credential:crate::pet_inference::CredentialReference::None};
+    configured.pets.get_mut("ai_ollama").unwrap().inference=Some(choice.clone());configured.pets.get_mut("ai_ollama").unwrap().inference_revision=Some("a".repeat(32));write(&path,&configured).unwrap();
+    let doc=read_at_policy(&path,false).unwrap();let before=std::fs::read(&path).unwrap();
+    let mut old=doc.config.clone();old.version=1;old.pets.get_mut("ai_ollama").unwrap().inference=None;old.pets.get_mut("ai_ollama").unwrap().inference_revision=None;
+    old.pets.get_mut("ai_ollama").unwrap().name="Synthetic owner".into();
+    assert!(save_at(&path,&old,"stale-revision").is_err());assert_eq!(std::fs::read(&path).unwrap(),before);
+    let saved=save_at(&path,&old,&doc.revision).unwrap();assert_eq!(saved.config.version,2);
+    assert_eq!(saved.config.pets["ai_ollama"].inference,Some(choice));assert_eq!(saved.config.pets["ai_ollama"].name,"Synthetic owner");
+    assert_eq!(saved.config.pets["ai_ollama"].inference_revision,Some("a".repeat(32)));
+    assert_eq!(read_at_policy(&path,false).unwrap().revision,saved.revision);
+}
+
+#[test]
 fn read_only_missing_config_cannot_create_defaults_or_parent_directories() {
     let root = PrivateDir::new(); let path = root.0.join("missing/config/pets.json");
     assert!(read_at_policy(&path, false).is_err());

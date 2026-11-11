@@ -89,6 +89,8 @@ interface HookPayload {
   /** App-owned mapping for an exact live native session, never set by the relay. */
   coucou_pet_provider?: string;
   coucou_assistant_gate?: boolean;
+  /** Backend-only observation: the external terminal retains its prompt. */
+  coucou_decision_in_terminal?: boolean;
   /** Hermes: where the session runs (telegram, discord…; "cli" in a terminal). */
   platform?: string;
   /** "cursor" when Claude Code runs in Cursor's terminal (set by the relay). */
@@ -512,6 +514,10 @@ function handleHook(island: Island, payload: HookPayload) {
       break;
 
     case "PermissionRequest": {
+      if(payload.coucou_decision_in_terminal===true){
+        if(session){session.state='approval';session.decisionInTerminal=true;}
+        break;
+      }
       // Only Claude Code and the agents the relay can answer for (Codex, Copilot
       // CLI, Muse Code — same as the Mac) get a card. Anyone else's request is
       // declined at once, so the agent asks in its own terminal.

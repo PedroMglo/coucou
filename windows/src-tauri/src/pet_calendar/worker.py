@@ -315,6 +315,68 @@ def resolve_day(request: object) -> dict:
         return {"schemaVersion": 1, "kind": "calendarDayWindow", "status": "unavailable", "errorCode": "invalidWindow"}
 
 
+
+def resolve_schedule(request: object) -> dict:
+    """Source-free civil slots for native rule review; no scheduling authority."""
+    try:
+        request = exact(request, {"schemaVersion", "kind", "requestId", "schedule"})
+        require(type(request["schemaVersion"]) is int and request["schemaVersion"] == 1)
+        require(request["kind"] == "petRuleSchedule" and identifier(request["requestId"]))
+        spec = exact(request["schedule"], {"kind", "firstDate", "days", "localTime", "timeZone", "weekdays", "overlap", "gap"})
+        require(spec["kind"] == "daily" and type(spec["days"]) is int and 1 <= spec["days"] <= 64, "invalidSchedule")
+        require(type(spec["firstDate"]) is str and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", spec["firstDate"]) is not None, "invalidSchedule")
+        require(type(spec["localTime"]) is str and re.fullmatch(r"[0-9]{2}:[0-9]{2}", spec["localTime"]) is not None, "invalidSchedule")
+        require(spec["overlap"] in {"earlier", "later", "skip", "decision"} and spec["gap"] in {"skip", "decision"}, "invalidSchedule")
+        weekdays = spec["weekdays"]
+        require(type(weekdays) is list and 1 <= len(weekdays) <= 7 and all(type(n) is int and 1 <= n <= 7 for n in weekdays) and weekdays == sorted(set(weekdays)), "invalidSchedule")
+        zone_name = spec["timeZone"]
+        require(text(zone_name, 128) and bool(zone_name), "invalidSchedule")
+        try:
+            zone = ZoneInfo(zone_name)
+        except (KeyError, ValueError):
+            raise ContextError("unknownTimeZone") from None
+        first = dt.date.fromisoformat(spec["firstDate"])
+        clock = dt.time.fromisoformat(spec["localTime"])
+        rows = []
+        for day in range(spec["days"]):
+            date = first + dt.timedelta(days=day)
+            if date.isoweekday() not in weekdays:
+                continue
+            civil = dt.datetime.combine(date, clock)
+            # Round-trip both folds. A gap has no valid candidates; an ordinary
+            # wall time collapses to one instant. Repeated times remain two.
+            candidates = {}
+            for fold in (0, 1):
+                local = civil.replace(tzinfo=zone, fold=fold)
+                utc = local.astimezone(UTC)
+                if utc.astimezone(zone).replace(tzinfo=None) == civil:
+                    candidates[utc] = int(local.utcoffset().total_seconds())
+            choices = sorted(candidates)
+            status = "ordinary"
+            chosen = None
+            if len(choices) == 1:
+                chosen = choices[0]
+            elif not choices:
+                status = "skippedGap" if spec["gap"] == "skip" else "decisionGap"
+            elif spec["overlap"] in {"earlier", "later"}:
+                status = spec["overlap"]
+                chosen = choices[0] if status == "earlier" else choices[-1]
+            else:
+                status = "skippedOverlap" if spec["overlap"] == "skip" else "decisionOverlap"
+            # Integer arithmetic preserves UTC milliseconds independently of
+            # floating-point timestamp conversion and the host's local zone.
+            at = None if chosen is None else (chosen - dt.datetime(1970, 1, 1, tzinfo=UTC)) // dt.timedelta(milliseconds=1)
+            rows.append({"localDateTime": civil.isoformat(timespec="seconds"), "resolution": status,
+                         "at": at, "offsetSeconds": None if chosen is None else candidates[chosen]})
+        import tzdata
+        return {"schemaVersion": 1, "kind": "petRuleSchedule", "status": "ready", "requestId": request["requestId"],
+                "schedule": spec, "timeZoneDataVersion": tzdata.IANA_VERSION, "slots": rows}
+    except ContextError as error:
+        return {"schemaVersion": 1, "kind": "petRuleSchedule", "status": "unavailable", "errorCode": error.code}
+    except (ValueError, OverflowError, TypeError):
+        return {"schemaVersion": 1, "kind": "petRuleSchedule", "status": "unavailable", "errorCode": "invalidSchedule"}
+
+
 def unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -341,7 +403,10 @@ def main() -> None:
         require(len(raw) <= MAX_REQUEST_BYTES, "requestLimit")
         request = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object,
                              parse_constant=lambda _: (_ for _ in ()).throw(ContextError("invalidRequest")))
-        result = resolve_day(request) if type(request) is dict and request.get("kind") == "calendarDayWindow" else query(request)
+        if type(request) is dict and request.get("kind") == "petRuleSchedule":
+            result = resolve_schedule(request)
+        else:
+            result = resolve_day(request) if type(request) is dict and request.get("kind") == "calendarDayWindow" else query(request)
     except ContextError as error:
         result = unavailable(error.code)
     except Exception:

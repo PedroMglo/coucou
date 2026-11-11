@@ -11,7 +11,7 @@ pub const MAX_BYTES:u64=128*1024*1024;
 pub const MAX_ARCHIVES:usize=100;
 pub const MAX_CONTEXT_MESSAGES:usize=80;
 pub const MAX_CONTEXT_BYTES:usize=256*1024;
-pub fn supported(provider:&str)->bool {crate::pet_config::service(provider) || matches!(provider,"codex"|"copilot"|"antigravity"|"gemini-cli"|"claude-cli"|"ollama"|"lmstudio"|"custom"|"anthropic"|"openai"|"google"|"openrouter")}
+pub fn supported(provider:&str)->bool {crate::pet_config::service(provider) || crate::pet_config::blueprints().any(|b|b.runtime.kind==crate::pet_config::RuntimeKind::Llm&&b.runtime.adapter.is_none()&&b.routing.task_provider.as_deref()==Some(provider)) || matches!(provider,"codex"|"copilot"|"antigravity"|"gemini-cli"|"claude-cli"|"ollama"|"lmstudio"|"custom"|"anthropic"|"openai"|"google"|"openrouter")}
 #[derive(Default,Clone,Serialize,Deserialize)]
 pub struct Library {
     pub pets:HashMap<String,SavedConversation>,
@@ -117,6 +117,9 @@ fn validate_request_history(library:&Library)->std::io::Result<()> {
 pub fn load(path:&Path)->std::io::Result<Library>{load_scoped(path,None)}
 /// Read-only native restoration inspection; exactly the public archive codec.
 pub(crate)fn inspect_history_bytes(bytes:&[u8])->std::io::Result<Library>{if bytes.len()as u64>MAX_BYTES{return Err(std::io::Error::other("memory too large"));}retained::decode(bytes,None)}
+/// Same strict goal codec, over bytes already read through the runtime Dir.
+/// Observation never creates a missing journal or enables a model context.
+pub(crate)fn inspect_goal_bytes(bytes:&[u8],provider:&str,cid:&str)->std::io::Result<Library>{if bytes.len()as u64>MAX_BYTES{return Err(std::io::Error::other("memory too large"));}retained::decode(bytes,Some((provider,cid)))}
 pub(crate) fn load_goal(path:&Path,provider:&str,cid:&str)->std::io::Result<Library>{load_scoped(path,Some((provider,cid)))}
 fn load_scoped(path:&Path,goal:Option<(&str,&str)>)->std::io::Result<Library> {
     let result=(||->std::io::Result<_>{
