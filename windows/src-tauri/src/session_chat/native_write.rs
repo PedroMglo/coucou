@@ -1,7 +1,9 @@
 //! The WebSocket sink and reader share tungstenite's output buffer. Guard the
 //! underlying Unix writes too, so a reader-side flush cannot send an old frame.
 use super::*;
+#[cfg(unix)]
 use std::{pin::Pin,task::{Context,Poll}};
+#[cfg(unix)]
 use tokio::io::{AsyncRead,AsyncWrite,ReadBuf};
 pub(super)struct Scope{pub gate:crate::pet_native_write::Guard,retired:AtomicBool}
 impl Scope{
@@ -9,12 +11,17 @@ impl Scope{
     pub(super)fn expired(&self)->bool{self.retired.load(Ordering::Acquire)||self.gate.write_reason().is_some()}
     pub(super)fn retire(&self){self.retired.store(true,Ordering::Release);}
 }
+#[cfg(unix)]
 pub(super)type Slot=Arc<Mutex<Option<Arc<Scope>>>>;
+#[cfg(unix)]
 pub(super)struct Socket{inner:UnixStream,slot:Slot}
+#[cfg(unix)]
 impl Socket{pub(super)fn new(inner:UnixStream,slot:Slot)->Self{Self{inner,slot}}
     fn allowed(&self)->bool{self.slot.lock().is_ok_and(|s|s.as_ref().is_none_or(|s|!s.expired()))}
 }
+#[cfg(unix)]
 impl AsyncRead for Socket{fn poll_read(self:Pin<&mut Self>,cx:&mut Context<'_>,buf:&mut ReadBuf<'_>)->Poll<std::io::Result<()>>{Pin::new(&mut self.get_mut().inner).poll_read(cx,buf)}}
+#[cfg(unix)]
 impl AsyncWrite for Socket{
     fn poll_write(self:Pin<&mut Self>,cx:&mut Context<'_>,bytes:&[u8])->Poll<std::io::Result<usize>>{
         if !self.allowed(){return Poll::Ready(Err(std::io::ErrorKind::PermissionDenied.into()));}
@@ -25,7 +32,7 @@ impl AsyncWrite for Socket{
 }
 pub(super)struct Caller(pub Arc<AtomicBool>);
 impl Drop for Caller{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
-#[cfg(test)]mod tests{
+#[cfg(all(test,unix))]mod tests{
     use super::*;use tokio::io::AsyncWriteExt;use crate::{pet_config::Adapter,pet_native_decisions::{Endpoint,Transport,Capture,PolicyBinding}};
     #[cfg(target_os="linux")]
     fn assert_no_kernel_bytes(peer:&UnixStream){

@@ -58,7 +58,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-layer-shell-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libdbus-1-dev libasound2-dev libpipewire-0.3-dev patchelf \
+            librsvg2-dev libssl-dev libdbus-1-dev libasound2-dev libpipewire-0.3-dev patchelf poppler-utils \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good
 
       - uses: actions/setup-node@v7
@@ -104,9 +104,12 @@ jobs:
       # The app bundles target/release/coucou-hook as a resource, and its build
       # script refuses to run until that file exists.
       - name: Test
+        env:
+          # Give debug test threads the same stack as the native goal driver.
+          RUST_MIN_STACK: '4194304'
         run: |
           cargo build --release -p coucou-hook
-          cargo test --workspace
+          cargo test --workspace --locked
 
       # linuxdeploy is itself an AppImage; runners have no FUSE, so it unpacks
       # itself instead of mounting.

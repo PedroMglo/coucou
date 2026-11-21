@@ -72,11 +72,11 @@ jobs:
             windows/target
           key: phone-link-linux-${{ hashFiles('windows/Cargo.lock') }}
           restore-keys: phone-link-linux-
-      - name: Rust tests (Linux)
+      - name: Rust phone-link tests (Linux)
         working-directory: windows
         run: |
           cargo build --release -p coucou-hook
-          cargo test --workspace --locked
+          cargo test -p coucou --lib --locked phone_link::
       - uses: actions/setup-java@v6
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v5

@@ -37,7 +37,12 @@ impl Report{
   if self.expected_messages as usize!=steps.len()||self.receipts.len()!=steps.len()||steps.iter().any(|(p,s)|s.operation.as_ref().is_none_or(|op|super::messages::Input::parse(op).is_err()||!self.receipts.iter().any(|r|r.plan_id==p.id&&r.step_id==s.id&&super::messages::Input::parse(op).is_ok_and(|a|a.to_pet()==r.recipient_pet_id)))){return Err(model::Error::Conflict);}Ok(())
  }
  pub(super)fn observe(goal:&Record,spec:&AdmissionSpec,body:&Grant,id:String,target:String,now:u64)->model::Result<Self>{
-  if spec.peer_planning(){return Self::observe_planned(goal,spec,body,id,target,now);}
+  if spec.peer_planning(){
+   #[cfg(target_os="linux")]
+   return Self::observe_planned(goal,spec,body,id,target,now);
+   #[cfg(not(target_os="linux"))]
+   return Err(model::Error::StorageUnavailable);
+  }
   let binding=spec.native_verification.clone().filter(|b|matches!(spec.schema_version,5|6|7|8|9|10|11|14|16|17|18|20)&&b.schema_version==2&&b.matches(goal)).ok_or(model::Error::InvalidInput)?;
   if !super::plans::matches(goal,spec)||!super::deterministic::plan(goal){return Err(model::Error::Conflict);}let mut receipts=vec![];let mut expected=0;
   for p in &goal.plans{for s in &p.steps{expected+=1;

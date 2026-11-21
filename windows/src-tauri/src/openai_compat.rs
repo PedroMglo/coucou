@@ -328,7 +328,11 @@ fn is_free(m: &Value, id: &str) -> bool {
 /// Images → image_url data URL, text/code → inline text. PDFs and other binary
 /// files go by name only (there is no portable document part).
 fn file_part(path: &str) -> Option<Part> {
-    if crate::pet_documents::policy::format(path,false)==crate::pet_documents::policy::Format::Binary{return None;}
+    use crate::pet_documents::policy::{format, Format};
+
+    if matches!(format(path, false), Format::Binary | Format::Pdf) {
+        return None;
+    }
     let ext = std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())

@@ -1214,13 +1214,14 @@ mod tests {
             assert!(cmd.ends_with(&format!("--agent antigravity {event}")), "{cmd}");
             if cfg!(target_os="linux") && *event=="PreToolUse" {assert!(cmd.contains("--gravity-pre-tool --relay"));assert_eq!(ours[event][0]["hooks"][0]["timeout"],115);assert!(!cmd.contains("dangerously-skip-permissions"));}
         }
-        // PreToolUse may wait for a click on the island's card (agy_approvals.rs).
-        assert_eq!(ours["PreToolUse"][0]["hooks"][0]["timeout"], 120);
+        // Linux uses the scoped Gravity relay. Windows uses the island card.
+        let pre_tool_timeout = if cfg!(target_os = "linux") { 115 } else { 120 };
+        assert_eq!(ours["PreToolUse"][0]["hooks"][0]["timeout"], pre_tool_timeout);
         assert_eq!(ours["PostToolUse"][0]["hooks"][0]["timeout"], 10);
         // And Settings reads it back as hooks that can wait.
         let file = Agent::Antigravity.files(&home)[0].clone();
         std::fs::write(&file, installed.to_string()).unwrap();
-        assert_eq!(crate::agy_approvals::pre_tool_timeout(&home), Some(120));
+        assert_eq!(crate::agy_approvals::pre_tool_timeout(&home), Some(pre_tool_timeout));
         for event in ANTIGRAVITY_LIFECYCLE_EVENTS {
             assert_eq!(ours[event][0]["timeout"], 10);
             assert!(ours[event][0]["command"].as_str().unwrap().contains(MARKER));
