@@ -21,11 +21,11 @@ pub(super)fn policy_revision(config:&Configuration,settings:&Settings,goal:&Reco
 pub(super)fn inference_policy_revision(config:&Configuration,settings:&Settings,owner:&super::model::Owner)->model::Result<String>{
  let pet=config.pets.get(&owner.pet_id).ok_or(model::Error::Conflict)?;
  if let Some(target)=crate::pet_inference::Target::configured(config,&owner.pet_id).map_err(|_|model::Error::Conflict)?{
-  let credential=if target.choice.credential==crate::pet_inference::CredentialReference::ConfiguredLmstudioEndpoint{Some(crate::local_chat::lmstudio_key_generation())}else{None};
-  return model::fingerprint(&(pet,credential));
+  let credential=match target.choice.credential{crate::pet_inference::CredentialReference::ConfiguredLmstudioEndpoint=>Some(crate::local_chat::lmstudio_key_generation()),crate::pet_inference::CredentialReference::ConfiguredCustomEndpoint=>Some(crate::local_chat::custom_key_generation()),crate::pet_inference::CredentialReference::None=>None};
+  return if owner.adapter=="ollama"{model::fingerprint(&(pet,credential,crate::local_chat::ollama_runtime_contract()))}else{model::fingerprint(&(pet,credential))};
  }
  if owner.adapter=="lmstudio"{return model::fingerprint(&(pet,settings.chat_models.get(&owner.provider),(&settings.lmstudio_url,crate::local_chat::lmstudio_key_generation()))); }
- model::fingerprint(&(pet,settings.chat_models.get(&owner.provider),if owner.adapter=="ollama"{Some(&settings.ollama_url)}else{None}))
+ if owner.adapter=="ollama"{model::fingerprint(&(pet,settings.chat_models.get(&owner.provider),Some(&settings.ollama_url),crate::local_chat::ollama_runtime_contract()))}else{model::fingerprint(&(pet,settings.chat_models.get(&owner.provider),Option::<&String>::None))}
 }
 pub(super)fn policy(goal:&Record,lease:&Lease,descriptor:&Descriptor,revision:&str,now:u64)->Validity{
  let Some(row)=goal.admissions.last()else{return Validity::Changed;};

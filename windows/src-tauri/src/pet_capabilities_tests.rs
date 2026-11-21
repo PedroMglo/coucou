@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]fn domain_policy_blocks_service_models_even_with_legacy_codex_profiles_or_missing_configuration(){
+ let mut f=Fixture::new();let before=serde_json::to_vec(&f.config).unwrap();
+ for configured in [true,false]{let s=f.registry.snapshot_with_io(&f.settings,configured.then_some(&f.config),true,&BTreeSet::new(),100_000,true).unwrap();
+  for id in crate::pet_config::service_ids(){
+   for name in ["conversation.respond","conversation.stream","models.list","models.select"]{assert_eq!(capability(&s,id,name).support,Support::Unsupported,"{id}:{name}");}
+   assert!(descriptor(&s,id).binding.model.is_none());
+  }
+ }
+ let s=f.snapshot(100_001);assert_eq!(capability(&s,"agent_codex","conversation.respond").support,Support::Supported);assert_eq!(capability(&s,"integration_n8n","history.read").support,Support::Supported);
+ assert_eq!(serde_json::to_vec(&f.config).unwrap(),before);
+}
+
 #[test]fn guardian_health_capability_is_inference_independent_and_cannot_project_a_sound_grant(){
  use crate::pet_config::system_access::{Grant,Operation,Policy,Resource,Subplugin};
  let mut f=Fixture::new();f.settings.active_integrations.push("agent_system_guardian".into());f.config.version=2;
@@ -60,10 +72,10 @@ fn capability<'a>(s:&'a Snapshot,id:&str,cap:&str)->&'a Capability{descriptor(s,
  assert_ne!(before.revision,blocked.revision);let ready=f.snapshot(100_001);assert_ne!(blocked.revision,ready.revision);
  assert_eq!(capability(&ready,"ai_ollama","conversation.respond").reason,capability(&before,"ai_ollama","conversation.respond").reason);
 }
-#[test]fn configured_service_assistant_keeps_logical_identity_and_native_audio_capabilities(){
+#[test]fn legacy_service_assistant_stays_inactive_and_keeps_native_audio_capabilities(){
     let mut f=Fixture::new();f.config.pets.get_mut("integration_spotify").unwrap().provider="codex".into();let s=f.snapshot(100_000);
-    let d=descriptor(&s,"integration_spotify");assert_eq!(d.binding.adapter,Some("codex"));assert_eq!(d.binding.provider.as_deref(),Some("integration_spotify"));
-    assert_eq!(capability(&s,"integration_spotify","conversation.respond").support,Support::Supported);
+    let d=descriptor(&s,"integration_spotify");assert_eq!(d.binding.adapter,Some("spotify"));assert_eq!(d.binding.provider.as_deref(),Some("integration_spotify"));
+    assert_eq!(capability(&s,"integration_spotify","conversation.respond").support,Support::Unsupported);
     for cap in ["service.musicControl","service.audioControl"]{let c=capability(&s,"integration_spotify",cap);assert_eq!(c.support,Support::Supported);assert!(c.limitations.contains(&"notSystemPluginGrant"));}
     assert_eq!(capability(&s,"integration_spotify","system.audio").support,Support::Unsupported);
     f.config.pets.get_mut("integration_spotify").unwrap().permissions.as_mut().unwrap().music=false;let s=f.snapshot(100_001);assert_eq!(capability(&s,"integration_spotify","service.audioControl").reason,Some(Reason::PermissionDenied));
@@ -91,7 +103,7 @@ fn capability<'a>(s:&'a Snapshot,id:&str,cap:&str)->&'a Capability{descriptor(s,
 #[test]fn configured_global_api_models_do_not_bind_an_empty_pet_provider_to_codex(){
     let mut f=Fixture::new();f.settings.chat_models.insert("openai".into(),"synthetic-api-model".into());f.settings.lmstudio_url="http://127.0.0.1:1234".into();let s=f.snapshot(100_000);
     for id in ["ai_lmstudio","ai_openai","ai_anthropic","ai_google"]{let p=descriptor(&s,id);assert!(p.binding.adapter.is_none());assert!(p.binding.provider.is_none());assert_eq!(capability(&s,id,"conversation.respond").reason,Some(Reason::NotConfigured));assert_ne!(capability(&s,id,"conversation.respond").availability,Availability::Ready);}
-    assert_eq!(descriptor(&s,"integration_notion").binding.adapter,Some("codex"));assert_eq!(descriptor(&s,"integration_notion").binding.provider.as_deref(),Some("integration_notion"));
+    assert!(descriptor(&s,"integration_notion").binding.adapter.is_none());assert!(descriptor(&s,"integration_notion").binding.provider.is_none());
 }
 #[test]fn exact_ollama_model_observation_can_confirm_tools_without_minting_execution_permission(){
     let mut f=Fixture::new();f.model(json!({"capabilities":["completion","tools","thinking"]}),100_000);let s=f.snapshot(100_001);let c=capability(&s,"ai_ollama","tools.exactCommand");assert_eq!(c.support,Support::Supported);assert_eq!(c.availability,Availability::Ready);assert_eq!(c.decision,Decision::ExactCommandApproval);assert_eq!(c.model_binding.as_deref(),Some("synthetic-model"));assert_eq!(c.observed_at,Some(100_000));assert_eq!(c.expires_at,Some(160_000));assert_eq!(c.limits.max_calls,Some(8));assert!(c.limitations.contains(&"desktopUserNotFilesystemSandbox"));assert_eq!(capability(&s,"ai_ollama","models.reasoning").support,Support::Supported);
@@ -271,7 +283,7 @@ fn capability<'a>(s:&'a Snapshot,id:&str,cap:&str)->&'a Capability{descriptor(s,
 }
 
 #[test]fn native_system_admission_stays_native_user_only_and_task_effects_require_original_scope(){
- let mut f=Fixture::new();let snapshot=f.snapshot(100_000);let c=capability(&snapshot,"ai_ollama","goals.systemAdmission");assert_eq!(c.support,Support::Supported);assert_eq!(c.callers,vec![Caller::NativeUser]);assert_eq!(c.availability,Availability::Unknown);assert!(c.model_binding.is_none());assert!(c.limitations.contains(&"admissionOnlyNoAutomaticSystemDispatch"));assert!(!c.limitations.contains(&"nativeLiteralPeerDataOnly"));for id in["system.sound.volume","system.sound.mute"]{let c=capability(&snapshot,"ai_ollama",id);assert_eq!(c.callers,vec![Caller::NativeUser,Caller::TaskRuntime]);assert!(c.limitations.contains(&"taskRequiresOriginalDeterministicSystemAdmissionAndLiveOwner"));assert!(!c.callers.contains(&Caller::ProviderModel));}for id in["system.access.manage","system.sound.observe"]{assert_eq!(capability(&snapshot,"ai_ollama",id).callers,vec![Caller::NativeUser]);}
+ let mut f=Fixture::new();let snapshot=f.snapshot(100_000);let c=capability(&snapshot,"ai_ollama","goals.systemAdmission");assert_eq!(c.support,Support::Supported);assert_eq!(c.callers,vec![Caller::NativeUser]);assert_eq!(c.availability,Availability::Unknown);assert!(c.model_binding.is_none());assert!(c.limitations.contains(&"manualOrExplicitSignedFiniteSystemStartOnCommonDriver"));assert!(c.limitations.contains(&"exactNativeSystemTargetAndOwnGrantBeforeReview"));assert!(c.limitations.contains(&"noModelGeneratedPlanOrAdditionalGrant"));assert!(!c.limitations.contains(&"nativeLiteralPeerDataOnly"));for id in["system.sound.volume","system.sound.mute"]{let c=capability(&snapshot,"ai_ollama",id);assert_eq!(c.callers,vec![Caller::NativeUser,Caller::TaskRuntime]);assert!(c.limitations.contains(&"taskRequiresOriginalDeterministicSystemAdmissionAndLiveOwner"));assert!(!c.callers.contains(&Caller::ProviderModel));}for id in["system.access.manage","system.sound.observe"]{assert_eq!(capability(&snapshot,"ai_ollama",id).callers,vec![Caller::NativeUser]);}
 }
 
 #[test]fn host_inventory_capability_is_passive_scoped_runtime_and_health_is_not_authority(){
@@ -306,4 +318,12 @@ fn capability<'a>(s:&'a Snapshot,id:&str,cap:&str)->&'a Capability{descriptor(s,
  let mut other=key.clone();other.model=Some("other-model".into());assert!(!cache.fresh_installed_local_model(&other,100_002));other=key.clone();other.endpoint="http://127.0.0.1:11435".into();assert!(!cache.fresh_installed_local_model(&other,100_002));
  for data in [serde_json::json!({"capabilities":["completion"]}),serde_json::json!({"model_info":{},"capabilities":["completion"]}),serde_json::json!({"model_info":{"x":1},"capabilities":["completion"],"remote_host":"host.invalid"})]{let t=cache.begin(key.clone(),100_010).unwrap();assert!(!cache.fresh_installed_local_model(&key,100_010));cache.finish(t,cache::model_evidence(&data),100_011);assert!(!cache.fresh_installed_local_model(&key,100_012));}
  let t=cache.begin(key.clone(),100_020).unwrap();cache.finish(t,cache::model_evidence(&valid),100_021);assert!(cache.fresh_installed_local_model(&key,100_022));let _pending=cache.begin(key.clone(),100_023).unwrap();assert!(!cache.fresh_installed_local_model(&key,100_024));
+}
+
+#[test]fn custom_binding_preserves_manual_conversation_without_promoting_metadata_tools_or_autonomous_calls(){
+ let mut f=Fixture::new();f.model(json!({"capabilities":["completion","tools"]}),100_000);f.config.version=2;
+ let p=f.config.pets.get_mut("ai_ollama").unwrap();p.inference=Some(crate::pet_inference::Choice{schema_version:1,backend:crate::pet_inference::Backend::Custom,endpoint:"https://models.example.invalid/v1".into(),model:"qa-custom".into(),credential:crate::pet_inference::CredentialReference::None});p.inference_revision=Some("a".repeat(32));
+ let s=f.snapshot(100_001);assert_eq!(descriptor(&s,"ai_ollama").binding.adapter,Some("custom"));
+ let c=capability(&s,"ai_ollama","conversation.respond");assert_eq!(c.support,Support::Supported);assert_eq!(c.callers,vec![Caller::NativeUser]);assert_eq!(c.availability,Availability::Unknown);
+ assert_eq!(capability(&s,"ai_ollama","models.tools").support,Support::Unknown);assert_eq!(capability(&s,"ai_ollama","tools.exactCommand").support,Support::Unsupported);assert_eq!(capability(&s,"ai_ollama","goals.requestedExecution").support,Support::Unsupported);let voice=capability(&s,"ai_ollama","voice.respond");assert_eq!(voice.support,Support::Unknown);assert_eq!(voice.availability,Availability::Unavailable);assert_eq!(voice.reason,Some(Reason::NotImplemented));
 }

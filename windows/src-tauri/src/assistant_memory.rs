@@ -149,7 +149,9 @@ fn disk(library:&Library)->std::io::Result<Disk>{
     validate_request_history(library)?;
     let normalized=retained::normalize(library)?;validate_request_history(&normalized)?;
     let delivered=normalized.pets.values().chain(normalized.archives.values().flatten()).any(|c|c.native_memory_context.is_some());
-    let version=if delivered{7}else if !normalized.retained.is_empty(){6}else if crate::attachment_history::has_records(&normalized){5}else{4};
+    let prepared=normalized.pets.values().chain(normalized.archives.values().flatten()).any(|c|
+        c.attachment_history.iter().any(|record| !record.preparation.is_empty()));
+    let version=if prepared{8}else if delivered{7}else if !normalized.retained.is_empty(){6}else if crate::attachment_history::has_records(&normalized){5}else{4};
     let unavailable_history=if normalized.retained.is_empty(){None}else{Some(normalized.retained)};
     Ok(Disk{version,pets:normalized.pets,archives:normalized.archives,unavailable_history})
 }

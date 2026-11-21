@@ -1,5 +1,59 @@
 use super::*;
 
+#[cfg(target_os="linux")]
+fn roster_input(f:&crate::settings::EffectFixture)->Input{
+    f.update(|s|s.active_integrations.push("ai_ollama".into()));
+    let owner=f.current.lock().unwrap();
+    Input::prepare_with_origin(owner.clone(),crate::pet_config::defaults(),String::new(),std::sync::Arc::new(crate::settings::capture_origin(&owner))).unwrap()
+}
+
+#[cfg(target_os="linux")]
+#[test]
+fn own_voice_roster_cas_advances_only_its_turn_and_preserves_frozen_inputs(){
+    let f=crate::settings::EffectFixture::new();let input=roster_input(&f);let playback=input.clone();
+    let frozen=serde_json::to_value(&input.settings).unwrap();let old=crate::settings::capture_origin(&f.current.lock().unwrap());
+    input.change_roster_with(&f.current,"ai_ollama",crate::pet_roster_settings::Request::SetMain{id:"agent_codex".into()},
+        ||f.current.try_lock().is_ok(),|next|{assert!(f.current.try_lock().is_err());f.persist(next)},|_|{}).unwrap();
+    assert_eq!(f.current.lock().unwrap().main_pill,"agent_codex");assert!(old.operation("voice").is_err());
+    assert!(input.source_current().is_ok());assert!(playback.source_current().is_ok());
+    assert_eq!(serde_json::to_value(&input.settings).unwrap(),frozen);
+    f.save();assert!(input.source_current().is_err());assert!(playback.source_current().is_err());
+}
+
+#[cfg(target_os="linux")]
+#[test]
+fn unrelated_commit_replaced_owner_and_external_edit_cannot_borrow_roster_continuation(){
+    for kind in 0..3{
+        let f=crate::settings::EffectFixture::new();let input=roster_input(&f);
+        match kind{0=>f.save(),1=>*f.current.lock().unwrap()=crate::settings::load_from(&f.path),_=>f.external()}
+        let bytes=std::fs::read(&f.path).unwrap();
+        assert!(input.change_roster_with(&f.current,"ai_ollama",crate::pet_roster_settings::Request::SetMain{id:"agent_codex".into()},||true,|_|panic!("retired origin reached persistence"),|_|panic!("retired origin published")).is_err());
+        assert_eq!(std::fs::read(&f.path).unwrap(),bytes);assert!(input.source_current().is_err());
+    }
+}
+
+#[cfg(target_os="linux")]
+#[test]
+fn cancelled_invalid_and_failed_voice_roster_changes_never_mint_a_new_origin(){
+    for kind in 0..3{
+        let f=crate::settings::EffectFixture::new();let input=roster_input(&f);let bytes=std::fs::read(&f.path).unwrap();
+        let id=if kind==1{"integration_github"}else{"agent_codex"};
+        assert!(input.change_roster_with(&f.current,"ai_ollama",crate::pet_roster_settings::Request::SetMain{id:id.into()},||kind!=0,|_|{
+            assert_eq!(kind,2);Err(std::io::Error::other("synthetic disk failure"))
+        },|_|panic!("failed change published")).is_err());
+        assert_eq!(std::fs::read(&f.path).unwrap(),bytes);assert!(input.roster_origin.lock().unwrap().is_none());assert!(input.source_current().is_ok());
+    }
+}
+
+#[cfg(target_os="linux")]
+#[test]
+fn removing_the_voice_pet_commits_without_authorizing_further_voice_io(){
+    let f=crate::settings::EffectFixture::new();let input=roster_input(&f);
+    input.change_roster_with(&f.current,"ai_ollama",crate::pet_roster_settings::Request::SetActive{id:"ai_ollama".into(),enabled:false},||true,|next|f.persist(next),|_|{}).unwrap();
+    assert!(!f.current.lock().unwrap().active_integrations.contains(&"ai_ollama".into()));
+    assert!(input.roster_origin.lock().unwrap().is_none());assert!(input.source_current().is_err());
+}
+
 fn configured() -> Settings {
     let mut s=Settings::default();s.chat_provider="codex".into();
     s.voice_asr_engine="whisper".into();s.voice_asr_python="/fixture/python".into();s.voice_asr_model="/fixture/whisper".into();
@@ -94,7 +148,10 @@ fn malformed_or_incomplete_asr_selection_does_not_choose_defaults(){
 fn completing_an_old_hotword_worker_does_not_clear_its_replacement(){
     let previous=std::sync::Arc::new(AtomicBool::new(false));
     let replacement=std::sync::Arc::new(AtomicBool::new(false));
-    let mut running=Some(super::super::Running{stop:replacement.clone()});
+    let mut running = Some(super::super::Running {
+        stop: replacement.clone(),
+        capture: super::super::HotwordCapture::Starting,
+    });
     super::super::release_running(&mut running,&previous);
     assert!(running.as_ref().is_some_and(|r|std::sync::Arc::ptr_eq(&r.stop,&replacement)));
     super::super::release_running(&mut running,&replacement);

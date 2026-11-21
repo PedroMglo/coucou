@@ -25,8 +25,11 @@
     "catalogRevision": 1
   },
   "molds": {
-    "llm": {},
+    "llm": {
+      "features": {"inference": true}
+    },
     "application": {
+      "features": {"inference": false},
       "presentation": {
         "profiles": false,
         "sessions": false,
@@ -528,7 +531,8 @@
         "adapter": "ollama",
         "inferenceAdapters": [
           "ollama",
-          "lmstudio"
+          "lmstudio",
+          "custom"
         ]
       }
     },
@@ -561,7 +565,8 @@
         "adapter": "lmstudio",
         "inferenceAdapters": [
           "ollama",
-          "lmstudio"
+          "lmstudio",
+          "custom"
         ]
       },
       "presentation": {

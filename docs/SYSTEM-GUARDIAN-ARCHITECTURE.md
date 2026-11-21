@@ -97,6 +97,25 @@ Cada incremento atravessa contrato, backend, controlo funcional mínimo, teste, 
 
 Os 43 IDs anteriores conservam todos os critérios. A [auditoria rastreável](PETS-REQUIREMENTS-AUDIT-2026-10-25.md) discrimina estado, código, provas, limites e próxima aceitação dos 49 requisitos.
 
+## Prova no RPM .63 — 21/11/2026
+
+Num perfil privado sem motor nem concessão inicial, a interface
+recusou Saúde e Inventário. Conceder Inventário ao Guardian
+permitiu consultar distribuição e kernel, sem autorizar Saúde
+ou a leitura por outro pet. O Guardian concluiu um objetivo
+finito de inventário pelo runtime comum. A repetição da receita
+foi recusada e o resultado permaneceu após reiniciar.
+
+A concessão Saúde própria permitiu medir CPU e memória durante
+pelo menos um segundo. Revogar Inventário manteve Saúde e a
+concessão do Ollama independentes, inclusive após reinício. O
+perfil da sessão operacional ficou fora deste ensaio. Os
+findings de segurança, o adaptador sysworkspace, a remediação,
+a proatividade e a cooperação integral conservam os critérios
+em aberto. [Recibo nativo](../.build/pet-goal-execution-next-r1/guardian-current-20261121/VERIFIED-63.json).
+
+O mesmo percurso passou no próprio RPM privado .66.
+[Recibo .66](../.build/pet-goal-execution-next-r1/guardian-current-20261121/VERIFIED-66.json).
 
 ## 11. Integração de Sistema revista em 07/11/2026
 

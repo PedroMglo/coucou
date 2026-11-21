@@ -11,8 +11,8 @@ const source=JSON.parse(readFileSync(new URL('../src-tauri/pets.factory.json',im
 const legacy=JSON.parse(readFileSync(new URL('../src-tauri/pets.default.json',import.meta.url),'utf8'));
 test('retired GitHub keeps preferences/history identity while new routes are disabled',()=>{
  const pet=PetFactory.get('integration_github');assert.equal(pet.retired,true);assert.deepEqual(pet.preferences,legacy.pets.integration_github);
- assert.equal(pet.routing.chat,'integration_github');assert.equal(pet.routing.voice,'integration_github');assert.equal(pet.routing.execute,false);
- assert.equal(providerForPill('integration_github'),'integration_github');assert.equal(petCapabilities('integration_github').chat,null);assert.equal(delegatedRequest('integration_github'),null);assert.equal(petForTaskProvider('integration_github'),'integration_github');
+ assert.equal(pet.routing.chat,null);assert.equal(pet.routing.voice,null);assert.equal(pet.routing.execute,false);
+ assert.equal(providerForPill('integration_github'),null);assert.equal(petCapabilities('integration_github').chat,null);assert.equal(delegatedRequest('integration_github'),null);assert.equal(petForTaskProvider('integration_github'),'integration_github');
  assert.equal(isServiceProvider('integration_github'),true);assert.equal(factoryProfileProvider('integration_github'),false);
  assert.deepEqual(PetFactory.configuration(),legacy);
  for(const id of ['agent_codex','agent_copilot','agent_antigravity','ai_ollama','integration_notion'])assert.equal(petRetired(id),false);
@@ -33,5 +33,6 @@ test('retirement is instance-only typed metadata and cannot alter stored prefere
   const bad=structuredClone(source);let recipe=bad;for(const part of target)recipe=recipe[part];recipe.retired=true;assert.throws(()=>createPetFactory(bad),/invalid bundled/i);
  }
  const restored=structuredClone(source);restored.pets.integration_github.retired=false;const factory=createPetFactory(restored);
- assert.equal(factory.get('integration_github').routing.chat,'integration_github');assert.deepEqual(factory.configuration(),legacy);
+ assert.equal(factory.get('integration_github').retired,false);
+ assert.equal(factory.get('integration_github').routing.chat,null);assert.deepEqual(factory.configuration(),legacy);
 });

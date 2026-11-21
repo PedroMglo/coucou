@@ -16,7 +16,7 @@ impl RuleGrant{
   self.intent_retirements.len()<=64&&self.intent_retirements.iter().map(|r|r.intents.len()).sum::<usize>()<=128&&(self.intent_retirements.is_empty()||self.phase==RulePhase::Revoked)&&self.intent_retirements.iter().all(|r|{
    let valid=r.schema_version==1&&model::token(&r.native_decision_id)&&ids.insert(&r.native_decision_id)
     &&[&r.canonical_hash,&r.inventory_hash,&r.merged_ledger_hash].iter().all(|h|h.len()==64&&super::super::authority::decode(h).is_some())
-    &&(1..=7).contains(&r.source_schema_version)&&r.source_updated_at>=previous&&r.source_updated_at<=r.approved_at&&r.approved_at<=self.updated_at
+    &&(1..=10).contains(&r.source_schema_version)&&r.source_updated_at>=previous&&r.source_updated_at<=r.approved_at&&r.approved_at<=self.updated_at
     &&!r.intents.is_empty()&&r.intents.len()<=32&&r.intents.windows(2).all(|p|p[0].name<p[1].name)
     &&r.intents.iter().all(|i|i.name.strip_prefix(".grant-").is_some_and(model::token)&&i.body_hash.len()==64&&super::super::authority::decode(&i.body_hash).is_some())
     &&model::fingerprint(&r.intents).ok().as_ref()==Some(&r.inventory_hash);

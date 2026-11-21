@@ -20,7 +20,7 @@ const identity = (id) => ({ id, name: id, color: "#2dd4bf", state: "idle", atten
 test("inference adapters are explicit per pet and grant no inherited selection",()=>{
   const factory=factoryModule.createPetFactory(source);
   for(const id of ["ai_ollama","ai_lmstudio"]){
-    assert.deepEqual(factory.get(id).runtime.inferenceAdapters,["ollama","lmstudio"]);
+    assert.deepEqual(factory.get(id).runtime.inferenceAdapters,["ollama","lmstudio","custom"]);
     assert.equal(factory.get(id).preferences.inference,undefined);
   }
   assert.deepEqual(factory.configuration(),legacy);
@@ -43,17 +43,17 @@ test("templates cannot distribute inference destinations to other pets",()=>{
 test("a declared local LLM owner needs no borrowed account or inherited grant",()=>{
   const s=clone(source),row=clone(s.pets.ai_lmstudio);row.runtime.adapter=null;row.preferences.name='Local worker fixture';row.preferences.aliases=['local worker fixture'];row.preferences.permissions={documents:false,emailDrafts:false,music:false,openApps:false};
   for(const key of ['chat','taskProvider'])row.routing[key]='agent_local_fixture';s.pets.agent_local_fixture=row;
-  const factory=factoryModule.createPetFactory(s),pet=factory.get('agent_local_fixture');assert.equal(pet.runtime.adapter,null);assert.deepEqual(pet.runtime.inferenceAdapters,['ollama','lmstudio']);assert.equal(pet.preferences.provider,'');assert.equal(pet.preferences.inference,undefined);assert.equal(pet.routing.execute,false);assert.deepEqual(pet.preferences.permissions,row.preferences.permissions);assert.equal(factory.forTaskProvider('agent_local_fixture'),'agent_local_fixture');assert.deepEqual(factory.get('ai_lmstudio').preferences,legacy.pets.ai_lmstudio);
+  const factory=factoryModule.createPetFactory(s),pet=factory.get('agent_local_fixture');assert.equal(pet.runtime.adapter,null);assert.deepEqual(pet.runtime.inferenceAdapters,['ollama','lmstudio','custom']);assert.equal(pet.preferences.provider,'');assert.equal(pet.preferences.inference,undefined);assert.equal(pet.routing.execute,false);assert.deepEqual(pet.preferences.permissions,row.preferences.permissions);assert.equal(factory.forTaskProvider('agent_local_fixture'),'agent_local_fixture');assert.deepEqual(factory.get('ai_lmstudio').preferences,legacy.pets.ai_lmstudio);
 });
 
-test("native services may declare an optional assistant without changing user defaults", () => {
+test("native service domain disables a legacy assistant without changing user defaults", () => {
   const s=clone(source), row=clone(s.pets.integration_spotify);
   row.preferences.name="Audio fixture"; row.preferences.aliases=["audio fixture"];
   for(const key of ["chat","voice","taskProvider"]) row.routing[key]="integration_audio_fixture";
   s.pets.integration_audio_fixture=row;
   const factory=factoryModule.createPetFactory(s), native=factory.get("integration_audio_fixture");
   assert.equal(native.runtime.adapter,"spotify"); assert.equal(native.runtime.assistantAdapter,"codex");
-  assert.equal(native.preferences.provider,""); assert.equal(native.routing.chat,"integration_audio_fixture");
+  assert.equal(native.preferences.provider,""); assert.equal(native.routing.chat,null);
   assert.equal(factory.get("agent_codex").routing.chat,"codex");
 });
 
@@ -132,7 +132,7 @@ test("mold edits flow only to members of that mold and instance values win", () 
   assert.equal(moldFactory.get("integration_github").preferences.mode, "auto");
 });
 
-test("extensions apply to application services without changing their mold or service identity", () => {
+test("domain rules take precedence over account extensions while preserving stored defaults", () => {
   const { createPetFactory } = factoryModule;
   const factory = createPetFactory(source);
   for (const id of ["integration_github", "integration_resend"]) {
@@ -141,14 +141,14 @@ test("extensions apply to application services without changing their mold or se
     assert.equal(pet.service, true);
     assert.equal(pet.preferences.provider, "codex");
     assert.equal(pet.preferences.fast.model, "gpt-6-luna");
-    assert.equal(pet.presentation.profiles, true);
+    assert.equal(pet.presentation.profiles, false);
   }
   const spoty = factory.get("integration_spotify");
   assert.equal(spoty.mold, "application");
-  assert.equal(spoty.presentation.profiles, true);
+  assert.equal(spoty.presentation.profiles, false);
   assert.equal(spoty.preferences.provider, "");
-  assert.equal(spoty.routing.chat, "integration_spotify");
-  assert.equal(spoty.routing.execute, true);
+  assert.equal(spoty.routing.chat, null);
+  assert.equal(spoty.routing.execute, false);
   assert.equal(spoty.runtime.assistantAdapter, "codex");
 });
 
@@ -262,12 +262,24 @@ test("gallery context actions keep the latest exact pet identity for sessions an
   gallery.sync(latest);
 
   cards.forEach((card) => card.oncontextmenu({ preventDefault() {} }));
-  assert.deepEqual(sessions, latest.slice(0, 4));
+  assert.deepEqual(sessions, latest.slice(0, 3));
   assert.equal(sessions[0], latest[0]);
   assert.equal(sessions[1], latest[1]);
   assert.equal(sessions[2], latest[2]);
-  assert.equal(sessions[3], latest[3]);
-  assert.deepEqual(opened, [latest[4]]);
+  assert.deepEqual(opened, latest.slice(3));
 });
 
 test('System access cannot be granted by shared factory recipes or bundled pet defaults',()=>{for(const place of ['base','mold','pet']){const value=clone(source);const target=place==='base'?value.base.preferences:place==='mold'?(value.molds.llm.preferences??={}):value.pets.ai_ollama.preferences;target.systemAccess={schemaVersion:1,revision:'a'.repeat(32),grants:[]};assert.throws(()=>factoryModule.createPetFactory(value));}});
+
+
+test('service domain keeps native identities without chat, models or an inferred LLM',()=>{
+ const f=factoryModule.createPetFactory(source);
+ for(const id of f.services){const b=f.get(id);assert.equal(b.features.inference,false);assert.equal(b.routing.chat,null);assert.equal(b.routing.execute,false);assert.equal(b.presentation.profiles,false);assert.equal(b.presentation.sessions,false);assert.equal(f.forTaskProvider(id),id);assert.equal(f.forChatProvider(id),null);assert.deepEqual(b.preferences,legacy.pets[id]);}
+ for(const id of ['agent_codex','agent_copilot','agent_antigravity','ai_ollama']){const b=f.get(id);assert.equal(b.features.inference,true);assert.ok(b.routing.chat);assert.equal(b.presentation.profiles,true);}
+ assert.equal(f.get('integration_spotify').routing.voice,'integration_spotify');
+});
+
+test('domain features cannot be injected into the common base, account extensions or individual pets',()=>{
+ for(const target of [s=>s.base,s=>s.extensions['codex-account'],s=>s.pets.integration_n8n]){const s=clone(source);target(s).features={inference:true};assert.throws(()=>factoryModule.createPetFactory(s));}
+ for(const value of [undefined,null,{inference:true},{}, {inference:'true'},{inference:false,grants:true}]){const s=clone(source);s.molds.application.features=value;assert.throws(()=>factoryModule.createPetFactory(s));}
+});

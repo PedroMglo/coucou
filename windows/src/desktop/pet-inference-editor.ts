@@ -1,5 +1,6 @@
 import {Bridge} from '../core/bridge';
 import {petBlueprint} from '../core/pet-factory';
+import {urlExposure} from '../core/providers';
 import type {InferenceChoice,InferenceUpdate,PetDocument} from '../mochi/pet-preferences';
 const el=<K extends keyof HTMLElementTagNameMap>(tag:K,text?:string)=>{const n=document.createElement(tag);if(text)n.textContent=text;return n;};
 type Draft={backend:string;endpoint:string;model:string;credential:string};
@@ -18,7 +19,7 @@ export class PetInferenceEditor{
   this.el.hidden=true;this.el.append(el('legend','Motor de inferência deste pet'));
   const field=(label:string,input:HTMLElement)=>{const row=el('label');row.append(el('span',label),input);this.el.append(row);input.setAttribute('aria-label',label);};
   this.endpoint.type='url';this.endpoint.maxLength=4096;this.endpoint.placeholder='http://127.0.0.1:11434';this.endpoint.autocomplete='off';this.model.maxLength=256;this.model.autocomplete='off';
-  for(const[value,label]of [['','Escolher referência de credencial'],['none','Sem credencial'],['configuredLmstudioEndpoint','Credencial LM Studio deste endereço exato']]){const o=el('option',label);o.value=value;this.credential.append(o);}
+  for(const[value,label]of [['','Escolher referência de credencial'],['none','Sem credencial'],['configuredLmstudioEndpoint','Credencial LM Studio deste endereço exato'],['configuredCustomEndpoint','Credencial OpenAI-compatible deste endereço exato']]){const o=el('option',label);o.value=value;this.credential.append(o);}
   field('Motor',this.backend);field('Servidor explícito',this.endpoint);field('Modelo concreto',this.model);field('Credencial',this.credential);
   this.el.append(el('p','A escolha pertence apenas a este pet. Guardar não inicia inferência ou tarefas e não concede acessos. O suporte e a disponibilidade do modelo são verificados ao utilizá-lo.'));
   const actions=el('div');actions.className='pet-profile-actions';this.reviewButton.type=this.clearButton.type=this.confirm.type='button';
@@ -39,7 +40,7 @@ export class PetInferenceEditor{
  show(doc:PetDocument,id:string){
   this.remember();this.invalidate();this.doc=structuredClone(doc);this.id=id;const adapters=petBlueprint(id)?.runtime.inferenceAdapters??[];
   this.el.hidden=adapters.length===0;if(this.el.hidden)return;
-  this.backend.replaceChildren();for(const[value,label]of [['','Escolher motor'],...adapters.map(a=>[a,a==='ollama'?'Ollama':'LM Studio'])]){const option=el('option',label);option.value=value;this.backend.append(option);}
+  this.backend.replaceChildren();for(const[value,label]of [['','Escolher motor'],...adapters.map(a=>[a,a==='ollama'?'Ollama':a==='lmstudio'?'LM Studio':'OpenAI-compatible'])]){const option=el('option',label);option.value=value;this.backend.append(option);}
   const draft=this.drafts.get(id)??fromChoice(doc.config.pets[id]?.inference);this.backend.value=draft.backend;this.endpoint.value=draft.endpoint;this.model.value=draft.model;this.credential.value=draft.credential;
   this.status.textContent=this.drafts.has(id)?'Motor com alterações por guardar':doc.config.pets[id]?.inference?'Escolha explícita guardada':'Configuração anterior preservada';this.sync();
  }
@@ -49,13 +50,13 @@ export class PetInferenceEditor{
   this.remember();const d=this.fields();let update:InferenceUpdate;
   if(clear){if(!this.doc.config.pets[this.id]?.inference)return;update={kind:'clear'};}
   else{
-   if(!(petBlueprint(this.id)?.runtime.inferenceAdapters??[]).some(a=>a===d.backend)||!d.endpoint.trim()||!d.model.trim()||!['none','configuredLmstudioEndpoint'].includes(d.credential)){
+   if(!(petBlueprint(this.id)?.runtime.inferenceAdapters??[]).some(a=>a===d.backend)||!d.endpoint.trim()||!d.model.trim()||!(d.credential==='none'||d.backend==='lmstudio'&&d.credential==='configuredLmstudioEndpoint'||d.backend==='custom'&&d.credential==='configuredCustomEndpoint')){
     this.status.textContent='Escolhe explicitamente motor, servidor, modelo e referência de credencial.';return;
    }
    update={kind:'set',choice:{schemaVersion:1,backend:d.backend as InferenceChoice['backend'],endpoint:d.endpoint.trim(),model:d.model.trim(),credential:d.credential as InferenceChoice['credential']}};
   }
   this.review={petId:this.id,revision:this.doc.revision,update,fields:key(d),intent:this.intent};
-  const format=(c?:InferenceChoice)=>c?`${c.backend}\nServidor: ${c.endpoint}\nModelo: ${c.model}\nCredencial: ${c.credential==='none'?'sem credencial':'LM Studio, vinculada ao endereço exato'}`:'configuração anterior do pet';
+  const format=(c?:InferenceChoice)=>c?`${c.backend}\nServidor: ${c.endpoint}\nModelo: ${c.model}\nCredencial: ${c.credential==='none'?'sem credencial':c.credential==='configuredCustomEndpoint'?'OpenAI-compatible, vinculada ao endereço exato':'LM Studio, vinculada ao endereço exato'}${urlExposure(c.endpoint)==='remote-http'?'\nOs dados serão enviados para outro computador por HTTP sem encriptação.':urlExposure(c.endpoint)==='remote'?'\nOs dados serão enviados para outro computador por HTTPS.':''}${c.backend==='custom'?'\nSuporta conversas. As tarefas autónomas e ferramentas deste servidor ainda não estão verificadas.':''}`:'configuração anterior do pet';
   this.details.textContent=`Pet: ${this.doc.config.pets[this.id].name} (${this.id})\n\nAtual: ${format(this.doc.config.pets[this.id].inference)}\n\nDepois: ${format(update.kind==='set'?update.choice:undefined)}\n\nRevisões antigas deixam de iniciar novos envios. A alteração não desfaz envios anteriores. As permissões mantêm-se próprias do pet.`;
   this.reviewPanel.hidden=false;this.status.textContent='Revê o pet, destino, modelo e credencial antes de confirmar.';this.sync();
  }

@@ -3,7 +3,8 @@
 // The rest of the app calls `platform::…` and never touches Win32 or a Linux
 // API directly. Each OS file exposes the same functions; the compiler picks one.
 
-use std::path::PathBuf;
+use std::io::{self, ErrorKind, Write};
+use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 mod windows;
@@ -14,11 +15,15 @@ pub use self::windows::*;
 mod linux;
 #[cfg(target_os = "linux")]
 pub use self::linux::*;
-// "Open terminal" on Linux: the process tree from /proc, then KWin, EWMH, kitty.
+#[cfg(target_os = "linux")]
+mod hyprland;
+// "Open terminal" on Linux: the process tree from /proc and compositor or terminal focus.
 #[cfg(target_os = "linux")]
 mod linux_focus;
 #[cfg(target_os = "linux")]
 pub use self::linux_focus::{focus_session_window, process_ancestors, window_owners};
+#[cfg(target_os = "linux")]
+pub use self::linux_focus::RelayOrigin;
 
 /// Wall-clock time in the user's time zone, for log lines and backup names.
 pub struct LocalTime {
@@ -35,6 +40,28 @@ pub fn home_dir() -> PathBuf {
     std::env::var_os(HOME_VAR)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Writes an export under a unique name, keeping any existing file intact.
+pub(crate) fn write_unique_export(dir: &Path, stem: &str, extension: &str, bytes: &[u8]) -> io::Result<PathBuf> {
+    for n in 1..1000 {
+        let name = if n == 1 { format!("{stem}.{extension}") } else { format!("{stem} ({n}).{extension}") };
+        let path = dir.join(name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                let written = file.write_all(bytes).and_then(|()| file.sync_all());
+                drop(file);
+                if let Err(err) = written {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(err);
+                }
+                return Ok(path);
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::new(ErrorKind::AlreadyExists, "too many exports with this name"))
 }
 
 /// How the desktop Mochi's window can be placed and clicked on this system.

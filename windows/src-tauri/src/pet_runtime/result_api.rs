@@ -8,7 +8,7 @@ pub struct ResultInput { pub pet_id: String, pub goal_id: String, pub decision_i
 #[cfg(target_os="linux")]
 #[tauri::command]
 pub async fn pet_runtime_result(window: tauri::WebviewWindow, input: ResultInput) -> Result<super::results::View, String> {
-    if !super::adapter::allowed(window.label()) { return Err("InvalidInput".into()); }
+    super::adapter::read_window_check(&window,Some(&input.pet_id)).map_err(|_|"InvalidInput".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         use super::{authority::Authority, store::Store, results};
         let store = Store::existing_native(&crate::settings::config_dir().join("pet-runtime-v1")).map_err(|e| format!("{e:?}"))?.ok_or("NotFound")?;
@@ -22,7 +22,7 @@ pub async fn pet_runtime_result(window: tauri::WebviewWindow, input: ResultInput
 #[cfg(not(target_os="linux"))]
 #[tauri::command]
 pub async fn pet_runtime_result(window: tauri::WebviewWindow, input: ResultInput) -> Result<serde_json::Value, String> {
-    if !super::adapter::allowed(window.label()) { return Err("InvalidInput".into()); }
+    super::adapter::read_window_check(&window,Some(&input.pet_id)).map_err(|_|"InvalidInput".to_string())?;
     let _ = input;
     Err("UnsupportedPlatform".into())
 }

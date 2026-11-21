@@ -20,7 +20,7 @@ pub async fn pet_runtime_reconcile(window:tauri::WebviewWindow,input:ReconcileIn
 #[tauri::command]
 pub async fn pet_runtime_history(window:tauri::WebviewWindow,input:ReconcileInput)->super::model::Result<super::history::Snapshot>{
     use super::model::Error;
-    if !super::adapter::allowed(window.label()){return Err(Error::InvalidInput);}
+    super::adapter::read_window_check(&window,Some(&input.pet_id))?;
     #[cfg(not(target_os="linux"))]{let _=input;Err(Error::UnsupportedPlatform)}
     #[cfg(target_os="linux")]
     tauri::async_runtime::spawn_blocking(move||{

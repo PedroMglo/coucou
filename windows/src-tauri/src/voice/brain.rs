@@ -95,7 +95,7 @@ impl Brain {
             }
             let activity = crate::pet_activity::Reporter::new(app, provider, stop.clone());
             activity.update("working", "");
-            let reply = self.local.respond(app, settings, &input.configuration, ||input.check(), transcript, stop.as_deref().unwrap_or(&not_stopped));
+            let reply = self.local.respond(app, settings, &input.configuration, input, transcript, stop.as_deref().unwrap_or(&not_stopped));
             if let Some(reply) = &reply { activity.finish("done", &reply.text); }
             return reply;
         }
@@ -174,7 +174,7 @@ impl Brain {
             let mut results = Vec::new();
             for u in uses {
                 if stop.as_ref().is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed)) { self.repair(); return None; }
-                let (result, did) = super::run_tool_for(app,"ai_anthropic",u["name"].as_str().unwrap_or(""),&u["input"],||input.check().is_ok()&&!stop.as_ref().is_some_and(|s|s.load(std::sync::atomic::Ordering::Acquire)));
+                let (result, did) = super::run_tool_for(app,"ai_anthropic",u["name"].as_str().unwrap_or(""),&u["input"],input,||input.check().is_ok()&&!stop.as_ref().is_some_and(|s|s.load(std::sync::atomic::Ordering::Acquire)));
                 acted |= did;
                 results.push(json!({ "type": "tool_result", "tool_use_id": u["id"], "content": result }));
             }

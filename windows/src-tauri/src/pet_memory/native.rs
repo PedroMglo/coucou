@@ -31,7 +31,7 @@ impl Binding{
    }
   }
   if references.is_empty()||references.len()>MAX_SELECTED{return Err("nativeMemoryContextLimit");}
-  let capture=Capture::at_references(path,&pet,cid,&references,now)?;
+  let capture=Capture::at_native_references(path,&pet,cid,&references,now)?;
   Ok(Self{provider,pet,cid:cid.into(),session:Mutex::new(session(&destination).map(str::to_string)),destination,previous:previous.cloned(),capture:Arc::new(capture),published:AtomicBool::new(false),claimed:AtomicBool::new(false),possible_at:previous.map(|p|p.possibly_delivered_at).unwrap_or(now)})
  }
  pub(crate)fn destination(&self)->&Destination{&self.destination}
@@ -40,7 +40,7 @@ impl Binding{
  pub(crate)fn verify_owner(&self,provider:&str,cid:&str,now:u64)->Result<()>{if provider!=self.provider||cid!=self.cid||crate::pet_config::retired(&self.pet){return Err("nativeMemoryOwnerChanged");}self.capture.verify(now)}
  pub(crate)fn metadata(&self)->Result<NativeContext>{
   let mut destination=self.destination.clone();if let Destination::NativeSession{session_id,..}=&mut destination{*session_id=self.session.lock().map_err(|_|"nativeMemoryUnavailable")?.clone();}
-  Ok(NativeContext{schema_version:1,pet_id:self.pet.clone(),provider:self.provider.clone(),conversation_id:self.cid.clone(),destination,references:self.capture.references().to_vec(),possibly_delivered_at:self.possible_at,revoked:false})
+  Ok(NativeContext{schema_version:if self.capture.references().iter().any(|r|r.project_revision.is_some()){2}else{1},pet_id:self.pet.clone(),provider:self.provider.clone(),conversation_id:self.cid.clone(),destination,references:self.capture.references().to_vec(),possibly_delivered_at:self.possible_at,revoked:false})
  }
  pub(crate)fn mark_published(&self){self.published.store(true,Ordering::Release);}
  pub(crate)fn before_prompt(&self,actual:&Destination,now:u64)->Result<()>{

@@ -14,6 +14,17 @@ impl From<&crate::pet_documents::Attachment> for Reference{
 #[serde(rename_all="lowercase")]
 pub enum Phase{Pending,Done,Failed,Stopped,Interrupted}
 impl Phase{pub fn terminal(value:&str)->Option<Self>{match value{"done"=>Some(Self::Done),"failed"=>Some(Self::Failed),"stopped"=>Some(Self::Stopped),"interrupted"=>Some(Self::Interrupted),_=>None}}}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Coverage { Full, Partial, Encoded, Unavailable }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preparation {
+    pub id: String,
+    pub coverage: Coverage,
+}
+
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Record{
@@ -21,6 +32,8 @@ pub struct Record{
     #[serde(default,skip_serializing_if="Option::is_none")]pub task_id:Option<String>,
     pub started:u64,pub updated:u64,pub message_index:usize,pub messages_added:usize,
     pub phase:Phase,pub attachments:Vec<Reference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preparation: Vec<Preparation>,
 }
 pub fn references_valid(values:&[Reference])->bool{
     let mut ids=HashSet::new();let mut size=0u64;
@@ -35,7 +48,13 @@ impl Record{
     pub fn captured(provider:&str,cid:&str,index:usize,attachments:Vec<Reference>)->Result<Self,String>{
         let pet=crate::pet_config::integration_pet(provider).ok_or("Este pet não tem identidade para os anexos.")?;
         if !valid_id(cid)||!references_valid(&attachments){return Err("O conjunto de anexos não pode ser registado neste pedido.".into());}
-        let now=crate::assistant_memory::now();Ok(Self{id:crate::assistant_memory::new_id(),provider:provider.into(),pet_id:pet.into(),conversation_id:cid.into(),task_id:None,started:now,updated:now,message_index:index,messages_added:0,phase:Phase::Pending,attachments})
+        let now=crate::assistant_memory::now();Ok(Self{id:crate::assistant_memory::new_id(),provider:provider.into(),pet_id:pet.into(),conversation_id:cid.into(),task_id:None,started:now,updated:now,message_index:index,messages_added:0,phase:Phase::Pending,attachments,preparation:vec![]})
+    }
+    pub(crate) fn preparation_valid(&self, items: &[Preparation]) -> bool {
+        let mut seen = HashSet::new();
+        items.len() <= self.attachments.len() && items.iter().all(|item| {
+            seen.insert(&item.id) && self.attachments.iter().any(|file| file.id == item.id)
+        })
     }
     pub fn recover(&mut self){if self.phase==Phase::Pending{self.phase=Phase::Interrupted;self.updated=crate::assistant_memory::now().max(self.started);}}
     pub fn finish(&mut self,phase:Phase,added:Option<usize>){self.phase=phase;self.updated=crate::assistant_memory::now().max(self.started);if let Some(count)=added{self.messages_added=count;}}
@@ -49,7 +68,7 @@ pub fn validate(library:&Library)->std::io::Result<()>{
                 &&(r.messages_added==0||(c.messages[r.message_index]["role"]=="user"&&c.messages[r.message_index+1]["role"]=="assistant"));
             if !valid_id(&r.id)||!ids.insert(&r.id)||r.provider!=*provider||r.conversation_id!=c.id||!valid_id(&c.id)
                 ||crate::pet_config::integration_pet(provider)!=Some(r.pet_id.as_str())||r.updated<r.started||!span||r.message_index<previous||r.message_index<occupied
-                ||r.phase==Phase::Pending&&r.messages_added!=0||!references_valid(&r.attachments)
+                ||r.phase==Phase::Pending&&r.messages_added!=0||!references_valid(&r.attachments)||!r.preparation_valid(&r.preparation)
                 ||r.task_id.as_ref().is_some_and(|id|!valid_id(id)||!c.request_history.iter().any(|q|q.task_id==*id&&q.provider==r.provider&&q.conversation_id==r.conversation_id&&q.message_index==Some(r.message_index)&&q.messages_added==Some(r.messages_added))) {return Err(invalid());}
             previous=r.message_index;if r.messages_added==2{occupied=r.message_index+2;}
         }
@@ -81,13 +100,14 @@ mod tests{
         let c=Chat::persistent(d.path());assert_eq!(c.conversation("integration_github").unwrap().attachment_history.len(),1);assert!(c.begin_cli("integration_github",Arc::default()).is_err());
     }
     #[test]
-    fn all_llm_families_capture_their_own_complete_set_without_provider_calls(){
-        for provider in ["codex","copilot","antigravity","anthropic","openai","google","ollama","lmstudio","integration_spotify"]{
+    fn llm_pets_capture_their_own_complete_set_without_provider_calls(){
+        for provider in ["codex","copilot","antigravity","anthropic","openai","google","ollama","lmstudio"]{
             let dir=Temp::new();let chat=Chat::persistent(dir.path());let turn=chat.begin_cli(provider,Arc::default()).unwrap();let lease=chat.lease(&turn);let cid=chat.conversation_id(provider).unwrap();
             let files=vec![file("a"),file("b")];chat.capture_attachment_history(&turn,files.clone()).unwrap();answer(&chat,&turn);drop(lease);
             let loaded=crate::assistant_memory::load(&dir.path()).unwrap();let r=&loaded.pets[provider].attachment_history[0];assert_eq!(r.attachments,files);assert_eq!(r.provider,provider);assert_eq!(r.pet_id,crate::pet_config::integration_pet(provider).unwrap());assert_eq!(r.conversation_id,cid);assert_eq!(r.phase,Phase::Done);assert_eq!(r.message_index,0);assert_eq!(r.messages_added,2);
             let value=serde_json::to_value(chat.conversation(provider).unwrap()).unwrap();assert_eq!(value["attachmentHistory"][0]["attachments"].as_array().unwrap().len(),2);assert!(value["attachmentHistory"][0].get("taskId").is_none());
         }
+        assert!(Chat::default().begin_cli("integration_spotify",Arc::default()).is_err());
     }
     #[test]
     fn same_turn_cannot_change_membership_but_repeated_identical_capture_is_idempotent(){
@@ -150,7 +170,78 @@ mod tests{
         let mut legacy=c;legacy.pets.get_mut("codex").unwrap().attachment_history.clear();crate::assistant_memory::save(&d.path(),&legacy).unwrap();let saved:serde_json::Value=serde_json::from_slice(&std::fs::read(d.path()).unwrap()).unwrap();assert_eq!(saved["version"],4);assert!(crate::assistant_memory::load(&d.path()).unwrap().pets["codex"].attachment_history.is_empty());
     }
     #[test]
+    fn preparation_persists_for_the_exact_turn_and_never_changes_older_records() {
+        let dir = Temp::new();
+        let chat = Chat::persistent(dir.path());
+        let old = chat.begin_cli("ollama", Arc::default()).unwrap();
+        let lease = chat.lease(&old);
+        chat.capture_attachment_history(&old, vec![file("a")]).unwrap();
+        answer(&chat, &old);
+        drop(lease);
+        let turn = chat.begin_cli("ollama", Arc::default()).unwrap();
+        let lease = chat.lease(&turn);
+        chat.capture_attachment_history(&turn, vec![file("a"), file("b")]).unwrap();
+
+        let item = |id: &str, coverage| Preparation { id: id.into(), coverage };
+        let preparation = vec![item("b", Coverage::Partial), item("a", Coverage::Full)];
+        let before = std::fs::read(dir.path()).unwrap();
+        assert!(chat.record_attachment_preparation(&turn, vec![item("foreign", Coverage::Full)]).is_err());
+        assert!(chat.record_attachment_preparation(&turn, vec![item("a", Coverage::Full); 2]).is_err());
+        assert!(chat.record_attachment_preparation(&old, preparation.clone()).is_err());
+        assert_eq!(std::fs::read(dir.path()).unwrap(), before);
+        chat.record_attachment_preparation(&turn, preparation.clone()).unwrap();
+        assert!(chat.record_attachment_preparation(&turn, vec![item("a", Coverage::Partial)]).is_err());
+        answer(&chat, &turn);
+        drop(lease);
+        drop(chat);
+
+        let restored = Chat::persistent(dir.path());
+        let view = restored.conversation("ollama").unwrap();
+        assert!(view.attachment_history[0].preparation.is_empty());
+        assert_eq!(view.attachment_history[1].preparation, preparation);
+        assert_eq!(view.attachment_history[1].message_index, 2);
+        let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.path()).unwrap()).unwrap();
+        assert_eq!(value["version"], 8);
+        value["version"] = json!(7);
+        std::fs::write(dir.path(), serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(crate::assistant_memory::load(&dir.path()).is_err());
+    }
+    #[test]
     fn completed_attachment_turn_cannot_be_committed_twice(){
         let d=Temp::new();let c=Chat::persistent(d.path());let t=c.begin_cli("codex",Arc::default()).unwrap();let lease=c.lease(&t);c.capture_attachment_history(&t,vec![file("a")]).unwrap();answer(&c,&t);assert!(c.commit_reply(&t,json!({}),json!({}),"repeat","repeat").is_err());assert_eq!(c.history("codex").len(),2);drop(lease);
+    }
+    #[test]
+    fn completed_attachment_turn_keeps_public_dialogue_but_never_reuses_prepared_content() {
+        let chat = Chat::default();
+        let first = chat.begin_cli("openai", Arc::default()).unwrap();
+        let lease = chat.lease(&first);
+        let reply = json!({"role":"assistant","content":"Public result"});
+        chat.commit_reply(&first, json!({"role":"user","content":"Ordinary native prompt"}), reply.clone(),
+            "Ordinary public question", "Public result").unwrap();
+        drop(lease);
+
+        let attached = chat.begin_cli("openai", Arc::default()).unwrap();
+        let lease = chat.lease(&attached);
+        chat.capture_attachment_history(&attached, vec![file("a"), file("b")]).unwrap();
+        let prepared = json!({"role":"user","content":[
+            {"type":"text","text":"Prepared document text"},
+            {"type":"image_url","image_url":{"url":"data:image/png;base64,SYNTHETIC"}}
+        ]});
+        let public = "Files: same.txt, same.txt\n\nReview both";
+        chat.commit_reply(&attached, prepared, reply.clone(), public, "Public result").unwrap();
+        drop(lease);
+
+        let next = chat.begin_cli("openai", Arc::default()).unwrap();
+        let _lease = chat.lease(&next);
+        assert_eq!(next.history, [
+            json!({"role":"user","content":"Ordinary native prompt"}),
+            reply.clone(),
+            json!({"role":"user","content":public}),
+            reply,
+        ]);
+        let view = chat.conversation("openai").unwrap();
+        assert_eq!(view.attachment_history[0].message_index, 2);
+        assert_eq!(view.attachment_history[0].messages_added, 2);
+        assert_eq!(view.messages[2]["content"], public);
     }
 }

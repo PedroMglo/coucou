@@ -68,7 +68,7 @@ fn binding(settings:&Settings,id:&str,p:&Pet,configured:bool)->Binding{
     if !configured{return Binding{engine_binding:None,adapter:None,provider:None,model:None,profile:None};}
     let declared=crate::pet_config::blueprint(id);
     if let Some(choice)=&p.inference{return Binding{engine_binding:None,adapter:Some(choice.backend.key()),provider:declared.and_then(|b|b.routing.task_provider.clone()),model:Some(choice.model.clone()),profile:Some("binding".into())};}
-    let adapter=declared.and_then(|b|b.configured_adapter(&p.provider)).map(|a|a.key());
+    let adapter=declared.and_then(|b|if b.features.inference{b.configured_adapter(&p.provider)}else{b.runtime.adapter.filter(|a|*a==crate::pet_config::Adapter::Spotify)}).map(|a|a.key());
     if adapter==Some("spotify"){return Binding{engine_binding:None,adapter,provider:Some(id.into()),model:None,profile:None};}
     let provider=if crate::pet_config::service(id){id}else{p.provider.as_str()};
 
@@ -85,7 +85,11 @@ fn key(settings:&Settings,b:&Binding,p:&Pet,model:Option<String>)->Option<Key>{
             crate::pet_inference::Backend::Lmstudio=>crate::local_chat::lmstudio::endpoint_key_for(&choice.endpoint,match choice.credential{
                 crate::pet_inference::CredentialReference::None=>crate::local_chat::lmstudio::MetadataAuth::Anonymous,
                 crate::pet_inference::CredentialReference::ConfiguredLmstudioEndpoint=>crate::local_chat::lmstudio::MetadataAuth::Configured(crate::local_chat::lmstudio_key_generation()),
+                crate::pet_inference::CredentialReference::ConfiguredCustomEndpoint=>return None,
             })?,
+            // OpenAI-compatible chat says nothing about model/tool/context
+            // capabilities. Never promote it to an Ollama/LM Studio catalog.
+            crate::pet_inference::Backend::Custom=>return None,
         };return Some(Key{provider:choice.backend.key().into(),endpoint,model});
     }
     let provider=b.provider.as_ref()?;let endpoint=match b.adapter?{"ollama"=>cache::endpoint(&settings.ollama_url)?,"lmstudio"=>crate::local_chat::lmstudio::endpoint_key(&settings.lmstudio_url,crate::local_chat::lmstudio_key_generation())?,"spotify"=>return None,_=>String::new()};Some(Key{provider:provider.clone(),endpoint,model})
@@ -105,13 +109,14 @@ fn gate(c:&mut Capability,d:&Descriptor,configured:bool,healthy:bool,busy:bool,p
 }
 fn base(id:&'static str)->Capability{let mut c=Capability::unsupported(id);c.support=Support::Supported;c.availability=Availability::Unknown;c.reason=Some(Reason::Unknown);c}
 fn build(d:&mut Descriptor,p:&Pet,configured:bool,healthy:bool,busy:bool,catalog:Option<&Observation>,model:Option<&Observation>){
-    let adapter=d.binding.adapter;let llm=matches!(adapter,Some("codex"|"copilot"|"antigravity"|"ollama"|"lmstudio"))||(!configured&&crate::pet_config::blueprint(&d.pet_id).and_then(|p|p.runtime.adapter).is_some_and(|a|a!=crate::pet_config::Adapter::Spotify));let permissions=p.permissions.clone().unwrap_or_default();
+    let adapter=d.binding.adapter;let llm=crate::pet_config::blueprint(&d.pet_id).is_some_and(|b|b.features.inference)&&(matches!(adapter,Some("codex"|"copilot"|"antigravity"|"ollama"|"lmstudio"|"custom"))||(!configured&&crate::pet_config::blueprint(&d.pet_id).and_then(|p|p.runtime.adapter).is_some_and(|a|a!=crate::pet_config::Adapter::Spotify)));let permissions=p.permissions.clone().unwrap_or_default();
     let mut caps=vec![];
     let history_owner=crate::pet_config::blueprint(&d.pet_id).is_some_and(|p|p.history_owner());
     let mut history=if history_owner{base("history.read")}else{Capability::unsupported("history.read")};history.callers=vec![Caller::NativeUser];if history_owner{history.availability=if healthy{Availability::Ready}else{Availability::Unavailable};history.reason=(!healthy).then_some(Reason::LibraryUnavailable);}caps.push(history);
     for id in ["conversation.respond","conversation.stream","conversation.cancel","conversation.archive","conversation.restore","models.list","models.select"]{
+        if crate::pet_config::blueprint(&d.pet_id).is_some_and(|b|!b.features.inference){let mut c=Capability::unsupported(id);c.reason=Some(if d.lifecycle==Lifecycle::Retired{Reason::RetiredPet}else{Reason::PolicyDenied});caps.push(c);continue;}
         let mut c=if llm{base(id)}else{Capability::unsupported(id)};if !llm&&d.kind==Kind::Llm{c.support=Support::Unknown;c.availability=Availability::Unknown;c.reason=Some(Reason::NotConfigured);}
-        if matches!(id,"conversation.respond"|"conversation.stream"){c.callers=vec![Caller::NativeUser,Caller::TaskRuntime];c.model_binding=d.binding.model.clone();
+        if matches!(id,"conversation.respond"|"conversation.stream"){c.callers=if adapter==Some("custom"){vec![Caller::NativeUser]}else{vec![Caller::NativeUser,Caller::TaskRuntime]};c.model_binding=d.binding.model.clone();
             if matches!(adapter,Some("ollama"|"lmstudio")){
                 observed(&mut c,model);match model.and_then(|o|o.evidence.as_ref()){
                     Some(Evidence::Model{completion:Some(true),remote:false,..})=>{c.availability=Availability::Ready;c.reason=None;},
@@ -410,6 +415,11 @@ pub(crate)fn fresh_installed_local_model(endpoint:&str,model:&str,now:u64)->bool
  let Some(endpoint)=cache::endpoint(endpoint)else{return false;};if !cache::model_id(model){return false;}
  registry().ok().and_then(|r|r.lock().ok().map(|r|r.cache.fresh_installed_local_model(&Key{provider:"ollama".into(),endpoint,model:Some(model.into())},now))).unwrap_or(false)
 }
+pub(crate)fn local_runtime_context_limit(endpoint:&str,model:&str,now:u64)->Option<u64>{
+ let endpoint=cache::endpoint(endpoint)?;
+ registry().ok()?.lock().ok()?.cache.local_context_limit(&Key{provider:"ollama".into(),endpoint,model:Some(model.into())},now)
+}
+
 fn allowed(label:&str)->bool{[crate::island::WINDOW_LABEL,crate::HUB_LABEL,"settings",crate::companions::LABEL,crate::pet_chat::LABEL,crate::pet_control::LABEL,crate::pet_panel::LABEL].contains(&label)}
 fn native_registry()->Result<&'static Mutex<native::Store>,String>{
     static NATIVE:OnceLock<Result<Mutex<native::Store>,String>>=OnceLock::new();

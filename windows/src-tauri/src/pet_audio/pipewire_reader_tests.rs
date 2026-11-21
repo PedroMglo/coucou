@@ -4,7 +4,6 @@ use super::*;
  assert!(parse(json!({"id":1,"serial":"12","volumePercent":50.0,"muted":false})).unwrap().valid());
  for v in [json!({"id":0,"serial":"12","volumePercent":0.0,"muted":false}),json!({"id":1,"serial":"../../x","volumePercent":0.0,"muted":false}),json!({"id":1,"serial":"12","volumePercent":151.0,"muted":false})]{assert!(!parse(v).unwrap().valid());}
  assert!(parse(json!({"id":1,"serial":"12","volumePercent":50.0,"muted":false,"provider":"other"})).is_err());
- assert!(!crate::pet_audio::task::native_dispatch_available());
 }
 #[test]#[ignore="Requires installed Quickshell and the real user PipeWire service; read-only native observation"]
 fn native_readonly_retains_one_output_object_without_changing_audio(){

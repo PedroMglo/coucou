@@ -8,6 +8,22 @@ Status: the Android client, `android/tools/dev-desktop.mjs` (a stand-in desktop 
 real desktop server of the Windows/Linux app (`windows/src-tauri/src/phone_link/`) implement this.
 The Mac app is left to its author.
 
+## Android client against RPM .64
+
+The checked-in Kotlin link and diff assembler were compiled unchanged
+for JVM 17. All 74 selected protocol, pairing and diff tests passed.
+The same client then rejected a mismatched certificate pin and negotiated
+session details and diffs with the exact Linux RPM .64. A synthetic Codex
+Edit sent through the native relay appeared as file ID 0, with the old and
+new lines assembled on the client. Revoking diff sharing in the desktop
+settings forced reconnection without the capability. The old client
+request was refused, and turning off the link closed the listener.
+
+The test used a generated profile, private Wayland and an isolated local
+network. The JVM run covers the Android transport code. APK build, on-device
+UI, camera, biometrics and physical networking remain open.
+[Compile and native test receipt](../.build/android-client-20261121/VERIFIED.json).
+
 ## Transport
 
 - TCP, then TLS 1.2 or 1.3. The desktop uses a self-signed certificate it generates once.
@@ -105,6 +121,14 @@ and re-reads that switch for every message. The user also chooses which provider
 - `reason` is one of `off not_allowed busy rate too_long empty no_key unreachable auth provider canceled internal`.
   `message` is a fixed English sentence written by the computer; a provider's own error text is never sent
   (some providers echo part of a key in an error).
+  For local chat, an actual HTTP response keeps its status through classification: 401/403 means `auth`;
+  other 4xx/5xx responses, including a missing model (404), mean `provider`. A number inside the provider's
+  private error body cannot override that status. The phone receives neither that body nor a replacement
+  model, account or endpoint. Connection failures remain `unreachable`; this distinction does not imply a retry.
+  Native resource or captured-inference contention uses the existing `busy` code and a fixed temporary-busy
+  message. A changed captured target is an internal refusal, not evidence that the provider is unreachable.
+  The interactive local chat may wait for read validation with Stop and a finite deadline before sending;
+  it never retries a dispatch, changes the selected destination or grants authority during that wait.
 - One answer runs at a time (`busy`), at most 12 sends per 10 minutes (`rate`). An answer stops when its phone leaves,
   when the user turns the switch or the link off, or on `chatCancel`. Stopping cannot undo what a provider already started.
 - A `chatSend` whose id is not valid is ignored (there is nothing to answer to). A phone that did not negotiate `chat` is
@@ -386,3 +410,35 @@ What actually happens when the screen is off, as found and fixed (Galaxy A12s, A
   report names the checks and what they found, and never contains the pairing code, the certificate fingerprint, the computer's name or
   the full address.
 
+
+<a id="phone-chat-normal50"></a>
+
+## Chat do telefone no RPM50 —17/11/2026
+
+O próprio executável normal50, SHA256 `046989dd…`, passou dois percursos nativos
+em perfis gerados, com TLS e pin do certificado, D-Bus/Secret Service privados e
+namespace de rede só com loopback. As duas imagens de configuração/modelo foram
+observadas antes de libertar cada gate de QA. Não é aceitação humana ou Android
+físico. O único modelo permitido foi `ollama/fixture-free`, servido pela fixture;
+não houve quota ou inferência de modelo real, nem alteração da instalação44.
+
+| Comparação delimitada | Oficial0.5.0 e composição atual |
+| --- | --- |
+| Escolha/permissão e conversa | O oficial identificado `841a81ce` tem prova nativa anterior de sete pedidos.50 passou modelos vazios/não permitidos, continuação/reset, cancelamento/busy, retirada de permissão/modelo e reinício sem pedido automático ou resposta tardia. |
+| Erro HTTP503 | O oficial classificou-o como `unreachable`;50 apresentou `provider`, sem divulgar o corpo com401/segredo sintético. É uma correção anterior do fork agora verificada também neste pacote. |
+| Isolamento da conversa | Em50, a conversa desktop manteve mensagens/stream vazios antes e depois do reinício. O oficial não expõe a API de inspeção usada; o seu sinalizador falso não prova mistura de conversas. |
+| Recusas pré-HTTP antigas | Source22 e diagnóstico82 conservam a falha no segundo pedido;82 registou `native=other`. O texto nativo exato não ficou disponível. Na50, o probe de sete pedidos sob624 consultas readonly e o ciclo completo sob128 consultas passaram. A causa histórica continua não demonstrada; sucesso atual não a identifica. |
+
+São14 POSTs de chat sintéticos nesta unidade: sete no probe e sete no ciclo,
+incluindo erro503 e pedidos cancelados/interrompidos. Não são14 respostas úteis
+reais nem uma medição de fiabilidade prolongada. Não foi demonstrada uma nova
+correção de produto nesta unidade; código/versão/pacote50 permanecem iguais.
+Os perfis, processos e rede são privados; os namespaces terminaram sem processos.
+O campo `scope` do recibo completo herdou o rótulo37/45 do template: a identificação
+IPC/version50 e os hashes do executável do RPM foram conferidos independentemente.
+As qualificações conservam esse metadado original sem repetir o ensaio para o alterar.
+
+[Provas atuais e comparação](../.build/phone-parity-current50-20261117/VERIFIED.json),
+[limites e brutos preservados](../.build/phone-parity-current50-20261117/QUALIFICATIONS.json).
+Não encerra Android físico/biometria, Wayland operacional, instalada/humano,
+causa das recusas antigas, todos os providers ou paridade integral.

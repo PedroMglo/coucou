@@ -90,7 +90,7 @@ pub fn description(id: &str) -> &'static str {
         "nextPill" => n_("Next pill"),
         "prevPill" => n_("Previous pill"),
         "muteToggle" => n_("Mute or unmute Mochi"),
-        "desktopToggle" => n_("Send Mochi to the desktop"),
+        "desktopToggle" => n_("Show or hide desktop pets"),
         "wardrobeToggle" => n_("Open the wardrobe"),
         _ => "Coucou",
     }

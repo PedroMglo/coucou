@@ -78,6 +78,13 @@ impl Owned{
   }else{memory};
   let mut request=crate::local_chat::prepare_runtime_request(&channel,server,&self.live.lease.model,goal.spec.intent.clone(),query,&self.live.spec.owner.provider,memory,config)?;
   if let Some(data)=&peer_data{if data.canonical_history().is_some()||own_memory.is_some(){request.select_peer_context(data.canonical_history(),own_memory)?;}}
+  if self.live.spec.schema_version==30&&request.server().id=="ollama"{let count=Authority::existing(&self.live.authority_path).and_then(|a|a.rule_calendar_priority_count(&self.live.spec)).map_err(|_|"O contrato de quantidade da ocorrência não corresponde à autoridade original.")?;request.select_calendar_brief(goal.execution_context.as_ref().and_then(|c|c.calendars.as_ref()).ok_or("Faltam os calendários próprios selados da rotina.")?,count)?;}
+  // Bound the complete actual body, including identity and all selected DATA,
+  // before creating a model worker or reserving/hash-binding an Attempt.
+  if let Some(data)=&self.live.spec.memory_data{
+   let destination=crate::pet_runtime::memory_review::destination_for(&self.live.spec.owner,request.server(),&self.live.lease.model).map_err(|_|"O destino revisto dos dados mudou.")?;
+   if destination!=data.destination||!data.valid(request.server().id,&self.live.lease.model)||serde_json::to_vec(request.body()).map_err(|_|"Pedido inválido.")?.len()>data.max_input_bytes{return Err("O corpo real mudou ou excedeu o limite revisto; nenhuma tentativa foi reservada.".into());}
+  }
   if !preparation_current(){return Err("O objetivo mudou durante a preparação do pedido.".into());}
   Ok(PreparedCall{peer_data,goal_hash,request,reservation,planning})
  }
@@ -88,6 +95,7 @@ impl Owned{
   match(&prepared.peer_data,&approved){(None,None)=>{},(Some(data),Some(a))if a.reference().source==*data.reference()&&a.matches_request(self,goal,&prepared.request,&a.observe_for_writer(),now)=>{},_=>return Err(model::Error::Conflict)}
   if prepared.goal_hash!=model::fingerprint(goal)?{return Err(model::Error::Conflict);}
   let PreparedCall{peer_data:_,goal_hash:_,request,reservation,planning}=prepared;
+  request.validate_runtime_context().map_err(|_|model::Error::Conflict)?;
   let(planning,output_limit)=if let Some(mut context)=planning{
    if !context.request.matches(&self.live.spec,&self.live.lease)||context.request.request_id!=request_id||context.request.source.record_hash!=model::fingerprint(goal)?{return Err(model::Error::Conflict);}
    if let Some(approved)=approved{context.request.bind_peer_data(approved)?;}
@@ -263,6 +271,7 @@ impl RuntimeFence for ModelCall{
  }
  fn before_send_to(&self,server:&crate::local_chat::Server,model:&str,body:&serde_json::Value)->Result<(),String>{
   if server.id!=self.worker.live.spec.owner.adapter{return Err("O adaptador não corresponde ao objetivo revisto.".into());}
+  if server.id=="ollama"{crate::local_chat::validate_runtime_body(server,model,body)?;}
   if self.planning.as_ref().and_then(|p|p.peer_data.as_ref()).is_some_and(|d|!d.matches_dispatch(server,model,body,crate::assistant_memory::now())){return Err("Os dados, corpo ou destino da ronda mudaram; nenhum novo envio foi autorizado.".into());}
   if let Some(captured)=self.worker.live.hold.captured(){
    captured.check()?;

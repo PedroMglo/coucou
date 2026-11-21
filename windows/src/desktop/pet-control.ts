@@ -3,6 +3,7 @@ import type {Route,ControlOpenedEvent} from '../core/control-contract';
 import {PetObservability} from '../core/pet-observability-resource';
 import {petObservation} from '../core/pet-observability';
 import {scopedSessionSummary} from '../core/scoped-session-summary';
+import {petBlueprint} from '../core/pet-factory';
 import {PetPreferences} from '../mochi/pet-preferences';
 import '../style.css';import './pet-control.css';
 import {Bridge,onEvent,emitToWindow} from '../core/bridge';
@@ -25,10 +26,11 @@ const controlNavigation=new ControlNavigation({context:()=>Bridge.petControlNavi
 const surface=document.getElementById('pet-control')!,residents=document.getElementById('residents')!,compact=document.getElementById('compact')!,grid=document.getElementById('compact-pets')!,manager=document.getElementById('manager')!;
 const buttons=new Map<string,HTMLButtonElement>(),minis=new Map<string,HTMLElement>();let pets:PetIdentity[]=[],moving=false,enabled=false,petsEnabled=false,systemEnabled=false,lastShape='',ctx:HubContext|undefined,current:Context|undefined;
 function residentInfo(p:PetIdentity,b:HTMLButtonElement){
+ const blueprint=petBlueprint(p.id),presentation=blueprint?.presentation;
  const info=scopedSessionSummary(p.id==='integration_spotify'?null:petObservation(PetObservability.snapshot,p.id),!!PetObservability.error,PetPreferences.config?.pets[p.id]?.provider),count=b.querySelector<HTMLElement>('.count')!;
- count.textContent=info.badge;count.hidden=!info.badge||p.id==='integration_spotify';count.dataset.stale=String(info.stale);
- const state=p.attention?'Precisa de atenção':p.busy?'A trabalhar':p.state==='sleeping'?'Em descanso':'Disponível',description=p.id==='integration_spotify'?'Música e som do PC':info.detail;
- b.title=`${p.name} · ${state} · ${description}\nClique: selecionar pet · botão direito: sessões`;b.setAttribute('aria-label',`${p.name} · ${state} · ${description}`);
+ count.textContent=info.badge;count.hidden=!info.badge||presentation?.metrics===false;count.dataset.stale=String(info.stale);
+ const state=p.attention?'Precisa de atenção':p.busy?'A trabalhar':p.state==='sleeping'?'Em descanso':'Disponível',description=p.id==='integration_spotify'?'Música e som do PC':blueprint?.runtime.kind==='service'?'Dados e estado do serviço ligado':info.detail;
+ b.title=`${p.name} · ${state} · ${description}\nClique: selecionar pet · botão direito: ${presentation?.contextAction==='open'?'abrir pet':'sessões'}`;b.setAttribute('aria-label',`${p.name} · ${state} · ${description}`);
 }
 PetObservability.subscribe(()=>{for(const p of pets){const button=buttons.get(p.id);if(button)residentInfo(p,button);}});
 let nativeHome:Awaited<ReturnType<typeof createControlHome>>|undefined,managementOpen=false,detailOpen=false,systemPage=false,explicitOpen=false;
@@ -58,6 +60,7 @@ surface.insertBefore(navigation,document.getElementById('control-header'));selec
 const pages=document.createElement('nav');pages.id='center-pages';pages.setAttribute('aria-label','Páginas da ilha');
 const petPage=document.createElement('button'),systemPageButton=document.createElement('button');petPage.type=systemPageButton.type='button';petPage.dataset.page='pets';systemPageButton.dataset.page='system';petPage.textContent='Pets';systemPageButton.textContent='Sistema';petPage.onclick=()=>showPage(false);systemPageButton.onclick=()=>showPage(true);pages.append(petPage,systemPageButton);surface.prepend(pages);
 const appSettings=document.createElement('button');appSettings.id='center-app-settings';appSettings.type='button';appSettings.title='Definições da aplicação';appSettings.setAttribute('aria-label',appSettings.title);appSettings.textContent='⚙';appSettings.onclick=()=>void Bridge.openSettingsWindow();pages.append(appSettings);
+const flowButton=document.createElement('button');flowButton.type='button';flowButton.textContent='Flow';flowButton.title='Ditado e notas de chamadas';flowButton.setAttribute('aria-label',flowButton.title);flowButton.onclick=()=>void Bridge.openSettingsWindow('dictation');pages.insertBefore(flowButton,appSettings);
 const systemDisabled=document.createElement('section');systemDisabled.id='system-disabled';systemDisabled.hidden=true;
 const disabledTitle=document.createElement('h2'),disabledText=document.createElement('p'),disabledSettings=document.createElement('button');disabledTitle.textContent='Centro do sistema desativado';disabledText.textContent='Esta página não está ativa nesta configuração. Os controlos nativos do sistema continuam disponíveis.';disabledSettings.textContent='Abrir definições da aplicação';disabledSettings.onclick=()=>void Bridge.openSettingsWindow();systemDisabled.append(disabledTitle,disabledText,disabledSettings);surface.append(systemDisabled);
 function showPage(system:boolean,accepted=false){if(!accepted){void navigateTo(system?'system':'home',()=>showPage(system,true));return;}if(pages.contains(document.activeElement))(system?systemPageButton:petPage).focus();systemPage=system;revealCenter();expandGeometry();void emitToWindow('pet-control','pet-control-visible',!system&&managementOpen);if(!matchMedia('(prefers-reduced-motion: reduce)').matches)requestAnimationFrame(()=>{const pane=system?surface.querySelector('.system-center-actions'):managementOpen?manager:detailOpen?nativeHome?.el:gallery.el;pane?.animate?.([{opacity:.5,transform:`translateX(${system?14:-14}px)`},{opacity:1,transform:'translateX(0)'}],{duration:200,easing:'ease-out'});});}
@@ -212,7 +215,7 @@ await onEvent<CompanionsSnapshot>(PET_EVENTS.state,s=>{
    b=document.createElement('button');b.dataset.petId=p.id;b.append(createMiniBot(task(p),16,()=>pets.some(v=>v.id===p.id&&v.dancing)));
    const name=document.createElement('span');name.className='name';const count=document.createElement('span');count.className='count';const status=document.createElement('span');status.className='status';b.append(name,count,status);
    b.onclick=()=>{if(managementOpen)void management({section:current?.section??'sessions',pet:p.id});else selectPet(p.id);};
-   b.oncontextmenu=e=>{e.preventDefault();void management({pet:p.id,section:'sessions'});};buttons.set(p.id,b);
+   b.oncontextmenu=e=>{e.preventDefault();if(petBlueprint(p.id)?.presentation.contextAction==='open')selectPet(p.id);else void management({pet:p.id,section:'sessions'});};buttons.set(p.id,b);
    const mini=createMiniBot(task(p),14,()=>pets.some(v=>v.id===p.id&&v.dancing));minis.set(p.id,mini);grid.append(mini);
   }
   b.querySelector('.name')!.textContent=p.name;residentInfo(p,b);

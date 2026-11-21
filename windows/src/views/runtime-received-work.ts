@@ -1,6 +1,7 @@
 import {Bridge,type RuntimeGoal,type RuntimeReceivedWork} from '../core/bridge';
 import {h} from './dom';
 const labels:Record<RuntimeReceivedWork['state'],string>={proposed:'Proposta própria, ainda sem trabalho autorizado',acceptedQueued:'Trabalho próprio autorizado na fila',sessionReserved:'Sessão reservada, sem prova de tentativa em curso',attemptInFlight:'Tentativa própria em curso',waiting:'Trabalho à espera',awaitingVerification:'Resposta ou efeito registado; conclusão ainda por verificar',stopping:'Trabalho a interromper',paused:'Objetivo próprio pausado',cancelled:'Objetivo próprio cancelado; efeitos anteriores mantêm-se',completed:'Conclusão própria verificada pelo runtime',recoveryRequired:'Estado ou efeitos exigem recuperação',deadlineElapsed:'Prazo do trabalho expirado',historical:'Histórico restaurado; estado posterior desconhecido',unavailable:'Prova atual indisponível ou inconsistente'};
+export function runtimeWorkStateLabel(state:RuntimeReceivedWork['state']):string{return labels[state]??'Estado desconhecido';}
 /** Explicit native observation. Updating the view does no IO and never grants
  * the sender, recipient or a model any authority. Stop has a separate path. */
 export function buildRuntimeReceivedWork(transport:Pick<typeof Bridge,'petRuntimeReceivedWork'>=Bridge){
@@ -8,7 +9,7 @@ export function buildRuntimeReceivedWork(transport:Pick<typeof Bridge,'petRuntim
  const status=h('p',{role:'status'}),facts=h('div');
  const load=h('button',{type:'button',text:'Consultar estado do trabalho recebido',onclick:()=>void read()})as HTMLButtonElement;
  const el=h('details',{'aria-label':'Estado próprio ligado ao pedido'},h('summary',{text:'Acompanhar trabalho do pedido recebido'}),h('p',{text:'Consulta do utilizador sobre este objetivo próprio. Receber ou criar um rascunho não aceita trabalho. Esta consulta não publica um estado para outro pet nem concede execução.'}),load,status,facts);
- function draw(){el.hidden=!goal?.spec.receivedFrom;load.disabled=working||el.hidden;if(!answer)return;status.textContent=labels[answer.state]+(answer.goalRevision!==goal?.revision?' · Observação de uma revisão anterior; consulta novamente.':'');}
+ function draw(){el.hidden=!goal?.spec.receivedFrom;load.disabled=working||el.hidden;if(!answer)return;status.textContent=runtimeWorkStateLabel(answer.state)+(answer.goalRevision!==goal?.revision?' · Observação de uma revisão anterior; consulta novamente.':'');}
  async function read(){
   if(!alive||working||!goal?.spec.receivedFrom)return;
   const original=structuredClone(goal),origin=original.spec.receivedFrom!,source=structuredClone(origin.body.source.reference),ticket=epoch;working=true;status.textContent='A consultar factos persistidos…';draw();

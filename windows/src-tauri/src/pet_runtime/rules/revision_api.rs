@@ -8,11 +8,11 @@ use super::*;
 pub enum Consent{ReviseRuleWithinRemainingAllocationAndDeadline,RenewRuleWithReviewedFiniteAllocation}
 impl Consent{fn of(mode:RuleRevisionMode)->Self{match mode{RuleRevisionMode::CarryRemaining=>Self::ReviseRuleWithinRemainingAllocationAndDeadline,RuleRevisionMode::RenewFiniteAllocation=>Self::RenewRuleWithReviewedFiniteAllocation}}}
 #[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct Prepare{pub pet_id:String,pub rule_id:String,pub revision:u64,pub mode:RuleRevisionMode,#[serde(default)]pub automatic:bool}
+pub struct Prepare{pub pet_id:String,pub rule_id:String,pub revision:u64,pub mode:RuleRevisionMode,#[serde(default)]pub automatic:bool,#[serde(default)]pub calendar_count:CalendarCountUpdate,pub notify_result:Option<bool>}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
-pub struct Ticket{pub token:String,pub proposal:serde_json::Value,pub expires_at:u64,pub approval_scope:Consent,pub execution_authority_granted:bool}
+pub struct Ticket{#[cfg(target_os="linux")]#[serde(skip_serializing_if="Option::is_none")]pub project_progress:Option<super::super::project_goal_observation::Snapshot>,#[serde(skip_serializing_if="Option::is_none")]pub project_records:Option<Vec<crate::pet_memory::Entry>>,pub token:String,pub proposal:serde_json::Value,pub expires_at:u64,pub approval_scope:Consent,pub execution_authority_granted:bool,#[serde(skip_serializing_if="Option::is_none")]pub response_contract:Option<&'static str>}
 #[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct Confirm{pub mode:RuleRevisionMode,pub pet_id:String,pub rule_id:String,pub revision:u64,pub token:String,pub approve:bool,pub consent:Option<Consent>}
+pub struct Confirm{pub mode:RuleRevisionMode,pub pet_id:String,pub rule_id:String,pub revision:u64,pub token:String,pub approve:bool,pub consent:Option<Consent>,pub project_consent:Option<ProjectConsent>,pub calendar_consent:Option<CalendarConsent>,pub notification_consent:Option<NotificationConsent>,pub response_contract:Option<String>}
 #[derive(Serialize)]#[serde(tag="status",rename_all="camelCase")]
 pub enum Confirmation{Declined,Recorded{authority:RuleAuthorityStatus}}
 #[cfg(target_os="linux")]
@@ -33,12 +33,12 @@ pub async fn pet_runtime_rule_revision_prepare(app:tauri::AppHandle,window:tauri
   let rule=read_rule_at(&path(),&input.pet_id,&input.rule_id,input.revision).map_err(error)?;
   let a=Authority::existing(&super::super::admission_review::authority_root()).map_err(|_|"ruleAuthorityUnavailable")?;
   let policy=authority_api::prepare_policy(&app,rule.clone(),input.automatic,||frame.current()&&authority_api::epoch_current(&input.pet_id,&input.rule_id,epoch)&&read_rule_at(&path(),&input.pet_id,&input.rule_id,input.revision).is_ok_and(|same|same==rule))?;
-  let source=a.prepare_rule_revision(&policy,input.mode,crate::assistant_memory::now()).map_err(|e|format!("ruleRevisionSource:{e:?}; requer autoridade anterior revogada e revisão própria de política/orçamento"))?;
+  let source=a.prepare_rule_revision_options(&policy,input.mode,input.calendar_count,input.notify_result,crate::assistant_memory::now()).map_err(|e|format!("ruleRevisionSource:{e:?}; requer autoridade anterior revogada e revisão própria de política/orçamento"))?;
   if source.rule()!=&rule||!frame.current()||!authority_api::epoch_current(&input.pet_id,&input.rule_id,epoch)||!authority_api::current(&app,source.policy()){return Err("ruleRevisionReviewChanged".into());}
   let proposal=source.revision_preview();let now=crate::assistant_memory::now();let expires=now.checked_add(120_000).ok_or("ruleRevisionReviewUnavailable")?;let token=nonce().map_err(|_|"ruleRevisionReviewUnavailable")?;
-  let review=Review{mode:input.mode,epoch,window:label,frame,rule,source:Arc::new(source),expires,decision:nonce().map_err(|_|"ruleRevisionReviewUnavailable")?,choice:None,candidate:None,cancelled:Arc::new(AtomicBool::new(false))};
+  let project_records=source.policy().project_records()?;let project_progress=source.policy().project_observation()?;let response_contract=authority_api::response_contract(source.policy());let review=Review{mode:input.mode,epoch,window:label,frame,rule,source:Arc::new(source),expires,decision:nonce().map_err(|_|"ruleRevisionReviewUnavailable")?,choice:None,candidate:None,cancelled:Arc::new(AtomicBool::new(false))};
   expire_reviews();let mut c=cache().lock().map_err(|_|"ruleRevisionReviewUnavailable")?;if c.len()>=32{return Err("ruleRevisionReviewCapacity".into());}c.insert(token.clone(),Arc::new(Mutex::new(review)));
-  Ok(Ticket{token,proposal,expires_at:expires,approval_scope:Consent::of(input.mode),execution_authority_granted:false})
+  Ok(Ticket{project_progress,project_records,token,proposal,response_contract,expires_at:expires,approval_scope:Consent::of(input.mode),execution_authority_granted:false})
  }).await.map_err(|_|"ruleRevisionReviewUnavailable".to_string())?}
 }
 #[tauri::command]
@@ -49,6 +49,7 @@ pub async fn pet_runtime_rule_revision_confirm(app:tauri::AppHandle,window:tauri
   let retained=cache().lock().map_err(|_|"ruleRevisionReviewUnavailable")?.get(&input.token).cloned().ok_or("ruleRevisionReviewMissing")?;
   let(source,frame,rule,candidate,cancelled,expires,epoch)={let mut r=retained.lock().map_err(|_|"ruleRevisionReviewUnavailable")?;let now=crate::assistant_memory::now();
    if r.mode!=input.mode||r.window!=label||r.cancelled.load(Ordering::Acquire)||!r.frame.current()||now>=r.expires||r.rule.id!=input.rule_id||r.rule.owner.pet_id!=input.pet_id||r.rule.revision!=input.revision||!authority_api::epoch_current(&input.pet_id,&input.rule_id,r.epoch){return Err("ruleRevisionReviewChangedOrExpired".into());}
+   if input.approve{if input.project_consent!=r.source.policy().project_consent(){return Err("ruleOwnProjectConsentRequired".into());}authority_api::calendar_consents(r.source.policy(),input.calendar_consent,input.notification_consent,input.response_contract.as_deref()).map_err(str::to_owned)?;}else if input.project_consent.is_some()||input.calendar_consent.is_some()||input.notification_consent.is_some()||input.response_contract.is_some(){return Err("ruleRevisionOwnConsentRequired".into());}
    if r.choice.is_some_and(|choice|choice!=input.approve){return Err("ruleRevisionOriginalChoiceReceived".into());}r.choice=Some(input.approve);if !input.approve{r.cancelled.store(true,Ordering::Release);return Ok(Confirmation::Declined);}
    if r.candidate.is_none(){r.candidate=Some(r.source.candidate(&r.decision,now).map_err(|_|"ruleRevisionCandidateUnavailable")?);}
    (r.source.clone(),r.frame.clone(),r.rule.clone(),r.candidate.clone().unwrap(),r.cancelled.clone(),r.expires,r.epoch)

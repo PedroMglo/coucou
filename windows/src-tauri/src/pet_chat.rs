@@ -14,7 +14,30 @@ pub struct Session {pub id:String,pub backend:String,pub title:String,pub cwd:St
 pub struct Context {pub pet:String,pub name:String,pub provider:String,pub session:Option<Session>,pub conversation_id:Option<String>,pub show_sessions:bool,pub target:Option<Target>}
 #[derive(Default)]struct ChatWindow {context:Mutex<Context>,rect:Mutex<Option<Rect>>,opening:AtomicU64,open_gate:tokio::sync::Mutex<()>}
 fn logical_provider(pet:&str,configured:&str)->String {
- if crate::pet_config::service(pet){pet.into()}else{configured.into()}
+ if crate::pet_config::service(pet){return pet.into();}
+ if !configured.is_empty(){return configured.into();}
+ // API chats have a declared conversation owner and their own key. The
+ // serialized provider field still describes a configured runtime account.
+ crate::pet_config::blueprint(pet)
+  .filter(|b|b.features.inference && !b.retired)
+  .and_then(|b|b.routing.chat.as_deref())
+  .filter(|route|*route==crate::chat::ANTHROPIC||crate::openai_compat::provider(route).is_some())
+  .unwrap_or_default().into()
+}
+
+#[cfg(test)]
+#[test]
+fn declared_api_chats_open_their_own_namespace_with_no_runtime_account() {
+    let factory = crate::pet_config::defaults();
+    for (pet, route) in [("ai_anthropic", "anthropic"), ("ai_openai", "openai"), ("ai_google", "google")] {
+        let configured = &factory.pets[pet].provider;
+        assert!(configured.is_empty());
+        assert_eq!(logical_provider(pet, configured), route);
+    }
+    assert_eq!(logical_provider("ai_ollama", "ollama"), "ollama");
+    assert_eq!(logical_provider("integration_n8n", ""), "integration_n8n");
+    assert_eq!(logical_provider("agent_system_guardian", ""), "");
+    assert_eq!(logical_provider("ai_lmstudio", ""), "");
 }
 /// Opening an exact destination reads its identity; it never restores, resumes
 /// or creates a conversation as a side effect of following a help request.
@@ -48,18 +71,23 @@ fn selected_conversation(pet:&str,provider:&str,session:Option<&Session>,target:
   }
  }
 }
-pub fn create(app:&AppHandle){
- app.manage(ChatWindow::default());
+pub fn setup(app:&AppHandle){app.manage(ChatWindow::default());}
+// Called on GTK only, after an explicitly selected destination has passed the
+// existing open checks. Context bootstrap already subscribes before its read,
+// so the first page cannot lose an open event while it is loading.
+fn create(app:&AppHandle)->Result<tauri::WebviewWindow,String>{
+ if let Some(win)=app.get_webview_window(LABEL){return Ok(win);}
  #[allow(unused_mut)]let mut url=WebviewUrl::App("pet-chat.html".into());
  #[cfg(dev)]if let Some(mut base)=app.config().build.dev_url.clone(){base.set_path("/pet-chat.html");url=WebviewUrl::External(base);}
  match WebviewWindowBuilder::new(app,LABEL,url).additional_browser_args(crate::BROWSER_ARGS).title("Pets · Conversa")
   .inner_size(760.0,620.0).min_inner_size(320.0,280.0).decorations(false).transparent(true).shadow(false)
   .always_on_top(true).skip_taskbar(true).visible_on_all_workspaces(true).focused(false).visible(false).disable_drag_drop_handler().build(){
   Ok(win)=>{
-   #[cfg(target_os="linux")]if !crate::platform::prepare_pet_chat(&win){let _=win.destroy();return;}
+   #[cfg(target_os="linux")]if !crate::platform::prepare_pet_chat(&win){let _=win.destroy();return Err("A conversa flutuante não está disponível nesta sessão.".into());}
    #[cfg(target_os="linux")]if let Err(error)=crate::linux_documents::install(&win){crate::log::line(format!("pet chat drop: {error}"));}
    let app=app.clone();win.on_window_event(move|event|if let tauri::WindowEvent::CloseRequested{api,..}=event{api.prevent_close();pet_chat_hide(app.clone());});
-  },Err(e)=>crate::log::line(format!("pet floating chat: {e}")),
+   Ok(win)
+  },Err(e)=>{crate::log::line(format!("pet floating chat: {e}"));Err("Não foi possível criar a conversa flutuante.".into())},
  }
 }
 #[tauri::command]pub fn pet_chat_context(app:AppHandle)->Context{app.state::<ChatWindow>().context.lock().unwrap().clone()}
@@ -78,13 +106,15 @@ fn fit(r:Rect,width:f64,height:f64)->Rect {
 async fn layout(app:&AppHandle,r:Rect)->Result<Rect,String>{
  if ![r.x,r.y,r.width,r.height].iter().all(|v|v.is_finite()){return Err("Posição inválida.".into());}
  let pref=app.state::<crate::Shared>().settings.lock().unwrap().screen.clone();let s=crate::island::screen_info(app,&pref);let r=fit(r,s.width,s.height);
- let win=app.get_webview_window(LABEL).ok_or("A conversa flutuante não está disponível.")?;let other=app.clone();let(tx,rx)=tokio::sync::oneshot::channel();
- app.run_on_main_thread(move||{let _=win.set_size(LogicalSize::new(r.width,r.height));
+ let other=app.clone();let(tx,rx)=tokio::sync::oneshot::channel();
+ app.run_on_main_thread(move||{let result=(||{
+  let win=create(&other)?;let _=win.set_size(LogicalSize::new(r.width,r.height));
   #[cfg(target_os="linux")]if crate::platform::pet_chat_normal_window(){crate::platform::place_pet_chat(s.x+r.x,s.y+r.y,r.width,r.height);}else{crate::platform::place_pet_panel(&other,&win,r.x,r.y);}
   #[cfg(not(target_os="linux"))]let _=win.set_position(tauri::LogicalPosition::new(s.x+r.x,s.y+r.y));
-  let _=tx.send(r);
+  Ok::<_,String>(r)
+ })();let _=tx.send(result);
  }).map_err(|_|"Não foi possível posicionar a conversa.")?;
- let fitted=rx.await.map_err(|_|"A conversa não respondeu.")?;*app.state::<ChatWindow>().rect.lock().unwrap()=Some(fitted);Ok(fitted)
+ let fitted=rx.await.map_err(|_|"A conversa não respondeu.")??;*app.state::<ChatWindow>().rect.lock().unwrap()=Some(fitted);Ok(fitted)
 }
 #[tauri::command]pub async fn pet_chat_layout(app:AppHandle,window:tauri::WebviewWindow,rect:Rect)->Result<Rect,String>{if window.label()!=LABEL{return Err("Abre a conversa para a mover.".into());}layout(&app,rect).await}
 #[tauri::command]pub fn pet_chat_rect(app:AppHandle)->Option<Rect>{*app.state::<ChatWindow>().rect.lock().unwrap()}
@@ -125,6 +155,7 @@ fn help_is_live(app:&AppHandle,request_id:Option<&str>,target:Option<&Target>)->
 }
 #[tauri::command]pub async fn pet_chat_open(app:AppHandle,request:Request)->Result<bool,String>{
  if request.pet=="integration_spotify"{return Err("O Spoty controla música e som. Abre os seus controlos na ilha.".into());}
+ if crate::pet_config::blueprint(&request.pet).is_some_and(|b|!b.features.inference){return Err("Este pet representa uma aplicação ou serviço. Abre as suas funções próprias, sem conversa de IA.".into());}
  validate_help(request.request_id.as_deref(),request.target.as_ref())?;
  let config=crate::pet_config::read()?;let p=config.pets.get(&request.pet).ok_or("Pet desconhecido.")?;
  {let shared=app.state::<crate::Shared>();let s=shared.settings.lock().unwrap();if request.pet!=s.main_pill&&!s.active_integrations.contains(&request.pet){return Err("Este pet não está configurado.".into());}}

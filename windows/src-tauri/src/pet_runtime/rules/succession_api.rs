@@ -7,9 +7,9 @@ use super::*;
 #[derive(Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
 pub enum Consent{ContinueRevokedRuleWithOriginalRemainingAllocationAndDeadline}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
-pub struct Ticket{pub token:String,pub proposal:serde_json::Value,pub expires_at:u64,pub approval_scope:Consent,pub execution_authority_granted:bool}
+pub struct Ticket{#[cfg(target_os="linux")]#[serde(skip_serializing_if="Option::is_none")]pub project_progress:Option<super::super::project_goal_observation::Snapshot>,#[serde(skip_serializing_if="Option::is_none")]pub project_records:Option<Vec<crate::pet_memory::Entry>>,pub token:String,pub proposal:serde_json::Value,pub expires_at:u64,pub approval_scope:Consent,pub execution_authority_granted:bool,#[serde(skip_serializing_if="Option::is_none")]pub response_contract:Option<&'static str>}
 #[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct Confirm{pub pet_id:String,pub rule_id:String,pub revision:u64,pub token:String,pub approve:bool,pub consent:Option<Consent>}
+pub struct Confirm{pub pet_id:String,pub rule_id:String,pub revision:u64,pub token:String,pub approve:bool,pub consent:Option<Consent>,pub project_consent:Option<ProjectConsent>,pub calendar_consent:Option<CalendarConsent>,pub notification_consent:Option<NotificationConsent>,pub response_contract:Option<String>}
 #[derive(Serialize)]#[serde(tag="status",rename_all="camelCase")]
 pub enum Confirmation{Declined,Recorded{authority:RuleAuthorityStatus}}
 #[cfg(target_os="linux")]
@@ -32,9 +32,9 @@ pub async fn pet_runtime_rule_succession_prepare(app:tauri::AppHandle,window:tau
   let source=a.prepare_rule_succession(&input.pet_id,&input.rule_id,crate::assistant_memory::now()).map_err(|e|format!("ruleSuccessionSource:{e:?}; requer concessão revogada atual, saldo original e nenhuma intenção por resolver"))?;
   if source.rule()!=&rule||!frame.current()||!authority_api::epoch_current(&input.pet_id,&input.rule_id,epoch)||!authority_api::current(&app,source.policy()){return Err("ruleSuccessionReviewChanged".into());}
   let proposal=source.preview();let now=crate::assistant_memory::now();let expires=now.checked_add(120_000).ok_or("ruleSuccessionReviewUnavailable")?;let token=nonce().map_err(|_|"ruleSuccessionReviewUnavailable")?;
-  let review=Review{epoch,window:label,frame,rule,source:Arc::new(source),expires,decision:nonce().map_err(|_|"ruleSuccessionReviewUnavailable")?,choice:None,candidate:None,cancelled:Arc::new(AtomicBool::new(false))};
+  let project_records=source.policy().project_records()?;let project_progress=source.policy().project_observation()?;let response_contract=authority_api::response_contract(source.policy());let review=Review{epoch,window:label,frame,rule,source:Arc::new(source),expires,decision:nonce().map_err(|_|"ruleSuccessionReviewUnavailable")?,choice:None,candidate:None,cancelled:Arc::new(AtomicBool::new(false))};
   expire_reviews();let mut c=cache().lock().map_err(|_|"ruleSuccessionReviewUnavailable")?;if c.len()>=32{return Err("ruleSuccessionReviewCapacity".into());}c.insert(token.clone(),Arc::new(Mutex::new(review)));
-  Ok(Ticket{token,proposal,expires_at:expires,approval_scope:Consent::ContinueRevokedRuleWithOriginalRemainingAllocationAndDeadline,execution_authority_granted:false})
+  Ok(Ticket{project_progress,project_records,token,proposal,response_contract,expires_at:expires,approval_scope:Consent::ContinueRevokedRuleWithOriginalRemainingAllocationAndDeadline,execution_authority_granted:false})
  }).await.map_err(|_|"ruleSuccessionReviewUnavailable".to_string())?}
 }
 #[tauri::command]
@@ -45,6 +45,7 @@ pub async fn pet_runtime_rule_succession_confirm(app:tauri::AppHandle,window:tau
   let retained=cache().lock().map_err(|_|"ruleSuccessionReviewUnavailable")?.get(&input.token).cloned().ok_or("ruleSuccessionReviewMissing")?;
   let(source,frame,rule,candidate,cancelled,expires,epoch)={let mut r=retained.lock().map_err(|_|"ruleSuccessionReviewUnavailable")?;let now=crate::assistant_memory::now();
    if r.window!=label||r.cancelled.load(Ordering::Acquire)||!r.frame.current()||now>=r.expires||r.rule.id!=input.rule_id||r.rule.owner.pet_id!=input.pet_id||r.rule.revision!=input.revision||!authority_api::epoch_current(&input.pet_id,&input.rule_id,r.epoch){return Err("ruleSuccessionReviewChangedOrExpired".into());}
+   if input.approve{if input.project_consent!=r.source.policy().project_consent(){return Err("ruleOwnProjectConsentRequired".into());}authority_api::calendar_consents(r.source.policy(),input.calendar_consent,input.notification_consent,input.response_contract.as_deref()).map_err(str::to_owned)?;}else if input.project_consent.is_some()||input.calendar_consent.is_some()||input.notification_consent.is_some()||input.response_contract.is_some(){return Err("ruleSuccessionOwnConsentRequired".into());}
    if r.choice.is_some_and(|choice|choice!=input.approve){return Err("ruleSuccessionOriginalChoiceReceived".into());}r.choice=Some(input.approve);if !input.approve{r.cancelled.store(true,Ordering::Release);return Ok(Confirmation::Declined);}
    if r.candidate.is_none(){r.candidate=Some(r.source.candidate(&r.decision,now).map_err(|_|"ruleSuccessionCandidateUnavailable")?);}
    (r.source.clone(),r.frame.clone(),r.rule.clone(),r.candidate.clone().unwrap(),r.cancelled.clone(),r.expires,r.epoch)

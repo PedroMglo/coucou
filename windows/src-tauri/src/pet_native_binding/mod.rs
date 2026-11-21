@@ -78,6 +78,17 @@ pub(crate) async fn hint(win:&WebviewWindow,hint:Hint)->Result<(),Failure>{
 pub(crate) fn begin_trusted(app:&AppHandle,target:Mode)->Result<Plan,Failure>{
     let core=manager(app)?.current()?;let(plan,context)=core.begin_trusted(target)?;emit_context(app,&context);Ok(plan)
 }
+pub(crate) fn begin_compact_configuration(
+    app: &AppHandle,
+    enabled: bool,
+) -> Result<(Option<Plan>, Context), Failure> {
+    let core = manager(app)?.current()?;
+    let (plan, context) = core.begin_compact_configuration(enabled)?;
+    if plan.is_some() {
+        emit_context(app, &context);
+    }
+    Ok((plan, context))
+}
 #[derive(Clone,Copy)]
 pub(crate) struct Placement {pub(crate) x:f64,pub(crate) y:f64,pub(crate) screen_width:f64,pub(crate) width:f64,pub(crate) height:f64,pub(crate) top:f64}
 pub(crate) async fn apply(win:&WebviewWindow,plan:Plan,placement:Option<Placement>)->Result<NavigationReceipt,Failure>{

@@ -9,7 +9,7 @@ pub(super)const MAX_ITEMS:usize=256;
 pub(crate)struct Owner{pub pet_id:String,pub scope:Scope}
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(tag="kind",rename_all="camelCase",rename_all_fields="camelCase",deny_unknown_fields)]
-pub(crate)enum Scope{Pet{},Conversation{conversation_id:String}}
+pub(crate)enum Scope{Pet{},Conversation{conversation_id:String},Project{project_id:String}}
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
 pub(crate)enum Kind{Preference,Note}
@@ -31,7 +31,10 @@ pub(crate)struct Entry{
 }
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub(super)struct Registry{pub version:u32,pub generation:u64,pub items:Vec<Entry>}
+pub(super)struct Registry{
+ pub version:u32,pub generation:u64,pub items:Vec<Entry>,
+ #[serde(default,skip_serializing_if="Vec::is_empty")]pub projects:Vec<super::projects::Project>,
+}
 #[derive(Clone,Debug,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate)struct Input{pub kind:Kind,pub title:String,pub content:String,pub sensitivity:Sensitivity,pub expires_at:Option<u64>}
@@ -47,11 +50,11 @@ pub(crate)struct View{pub entry:Entry,pub available:bool}
 pub(crate)struct Page{pub schema_version:u32,pub owner:Owner,pub revision:String,pub items:Vec<View>,pub has_more:bool,pub next_offset:Option<u16>}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub(crate)struct Receipt{pub schema_version:u32,pub owner:Owner,pub revision:String,pub id:String,pub item:Option<Entry>}
-fn text(value:&str,max:usize,multiline:bool)->bool{!value.trim().is_empty()&&value.len()<=max&&!value.chars().any(|c|c.is_control()&&!(multiline&&matches!(c,'\n'|'\t')))}
+pub(super)fn text(value:&str,max:usize,multiline:bool)->bool{!value.trim().is_empty()&&value.len()<=max&&!value.chars().any(|c|c.is_control()&&!(multiline&&matches!(c,'\n'|'\t')))}
 impl Owner{
  pub(super)fn valid(&self)->bool{
   !self.pet_id.is_empty()&&self.pet_id.len()<=64&&self.pet_id.bytes().all(|b|b.is_ascii_alphanumeric()||b"_-".contains(&b))
-   &&match &self.scope{Scope::Pet{}=>true,Scope::Conversation{conversation_id}=>crate::assistant_memory::valid_id(conversation_id)}
+   &&match &self.scope{Scope::Pet{}=>true,Scope::Conversation{conversation_id}=>crate::assistant_memory::valid_id(conversation_id),Scope::Project{project_id}=>crate::assistant_memory::valid_id(project_id)}
  }
 }
 impl Input{
@@ -62,13 +65,23 @@ impl Entry{
  fn valid(&self)->bool{crate::assistant_memory::valid_id(&self.id)&&self.revision>0&&self.owner.valid()&&text(&self.title,160,false)&&text(&self.content,8192,true)&&self.created_at>0&&self.updated_at>=self.created_at&&self.observed_at==self.updated_at&&self.expires_at.is_none_or(|at|at>self.created_at)}
 }
 impl Registry{
- pub(super)fn empty()->Self{Self{version:1,generation:0,items:vec![]}}
+ pub(super)fn empty()->Self{Self{version:1,generation:0,items:vec![],projects:vec![]}}
+ pub(super)fn accepts_owner(&self,owner:&Owner)->bool{match &owner.scope{Scope::Project{project_id}=>self.projects.iter().any(|p|p.id==*project_id&&p.pet_id==owner.pet_id),_=>true}}
  pub(super)fn validate(&self)->Result<(),&'static str>{
   let mut ids=BTreeSet::new();
-  if self.version!=1||self.items.len()>MAX_ITEMS||self.items.iter().any(|e|!e.valid()||!ids.insert(&e.id)){return Err("invalidMemory");}Ok(())
+  if !matches!(self.version,1|2)||(self.version==1)!=self.projects.is_empty()||self.projects.len()>64||self.items.len()>MAX_ITEMS{return Err("invalidMemory");}
+  for project in &self.projects{if !project.valid()||!ids.insert(&project.id){return Err("invalidMemoryProject");}}
+  if self.items.iter().any(|e|!e.valid()||!self.accepts_owner(&e.owner)||!ids.insert(&e.id)){return Err("invalidMemory");}Ok(())
  }
  pub(super)fn next(mut self,old:&Self)->Result<Self,&'static str>{
   if self.generation!=old.generation{return Err("registryConflict");}
+  if self.version<old.version{return Err("registryFormatDowngrade");}
+  for project in &self.projects{
+   match old.projects.iter().find(|p|p.id==project.id){
+    Some(before)if project!=before=>if project.pet_id!=before.pet_id||project.creation_request_id!=before.creation_request_id||project.created_at!=before.created_at||project.revision!=before.revision.checked_add(1).ok_or("revisionLimit")?{return Err("projectRevisionConflict");},
+    None if project.revision!=1=>return Err("projectRevisionConflict"),_=>{},
+   }
+  }
   for item in &self.items{
    match old.items.iter().find(|e|e.id==item.id){
     Some(before)if item!=before=>if item.owner!=before.owner||item.created_at!=before.created_at||item.revision!=before.revision.checked_add(1).ok_or("revisionLimit")?{return Err("memoryRevisionConflict");},
@@ -78,7 +91,7 @@ impl Registry{
   self.generation=old.generation.checked_add(1).ok_or("revisionLimit")?;self.validate()?;Ok(self)
  }
  pub(super)fn apply(&self,owner:&Owner,mutation:Mutation,now:u64)->Result<(Self,String),&'static str>{
-  if !owner.valid()||now==0{return Err("invalidOwner");}self.validate()?;let mut next=self.clone();
+  if !owner.valid()||!self.accepts_owner(owner)||now==0{return Err("invalidOwner");}self.validate()?;let mut next=self.clone();
   let id=match mutation{
    Mutation::Create{input}=>{
     if !input.valid(now){return Err("invalidMemoryInput");}if next.items.len()>=MAX_ITEMS{return Err("registryLimit");}
@@ -99,7 +112,7 @@ impl Registry{
  }
  pub(super)fn page(&self,query:&Query,revision:String,now:u64)->Result<Page,&'static str>{
   self.validate()?;
-  if !query.owner.valid()||query.query.len()>256||query.query.chars().any(char::is_control)||!(1..=50).contains(&query.limit)||query.offset as usize>MAX_ITEMS{return Err("invalidMemoryQuery");}
+  if !query.owner.valid()||!self.accepts_owner(&query.owner)||query.query.len()>256||query.query.chars().any(char::is_control)||!(1..=50).contains(&query.limit)||query.offset as usize>MAX_ITEMS{return Err("invalidMemoryQuery");}
   if query.expected_revision.as_ref().is_some_and(|r|*r!=revision)||query.offset>0&&query.expected_revision.is_none(){return Err("registryConflict");}
   let lower=query.query.to_lowercase();let terms:Vec<_>=lower.split_whitespace().collect();if terms.len()>8{return Err("invalidMemoryQuery");}
   let mut matches:Vec<_>=self.items.iter().filter(|e|e.owner==query.owner&&(query.include_expired||e.available(now))).filter_map(|e|{

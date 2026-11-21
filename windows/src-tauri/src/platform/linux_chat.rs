@@ -2,7 +2,8 @@
 //! shell layer. Hyprland retains the last normal window while a layer has the
 //! keyboard; clicking that same window can leave input attached to the layer.
 //! Only our own chat may be positioned through the local compositor socket.
-use std::{io::{Read, Write}, os::unix::{net::UnixStream, fs::{FileTypeExt, MetadataExt}}, path::PathBuf, sync::{Mutex, OnceLock, mpsc}, time::Duration};
+use std::{sync::{Mutex, OnceLock, mpsc}, time::Duration};
+use crate::platform::hyprland;
 use gtk::prelude::*;
 use serde_json::Value;
 use tauri::WebviewWindow;
@@ -10,31 +11,10 @@ use tauri::WebviewWindow;
 const TITLE: &str = "Pets · Conversa";
 static POSITION: Mutex<Option<(i32, i32, i32, i32)>> = Mutex::new(None);
 
-fn socket_path() -> Result<PathBuf, String> {
-    let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").map_err(|_| "Hyprland indisponível")?;
-    if signature.is_empty() || signature.len() > 256 || !signature.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b)) {
-        return Err("Identidade do compositor inválida".into());
-    }
-    let path = PathBuf::from(format!("/run/user/{}/hypr/{signature}/.socket.sock", unsafe { libc::geteuid() }));
-    let meta = std::fs::symlink_metadata(&path).map_err(|_| "Socket do compositor indisponível")?;
-    if !meta.file_type().is_socket() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o022 != 0 {
-        return Err("Socket do compositor não pertence à sessão".into());
-    }
-    Ok(path)
-}
-
-pub(super) fn supported() -> bool { socket_path().is_ok() }
+pub(super) fn supported() -> bool { hyprland::socket_path().is_ok() }
 
 fn request(command: &str) -> Result<Vec<u8>, String> {
-    let mut stream = UnixStream::connect(socket_path()?).map_err(|_| "Compositor indisponível")?;
-    let timeout = Some(Duration::from_millis(100));
-    stream.set_read_timeout(timeout).map_err(|_| "Prazo de leitura indisponível")?;
-    stream.set_write_timeout(timeout).map_err(|_| "Prazo de escrita indisponível")?;
-    stream.write_all(command.as_bytes()).map_err(|_| "Não foi possível posicionar a conversa")?;
-    let mut bytes = Vec::new();
-    stream.take(256 * 1024 + 1).read_to_end(&mut bytes).map_err(|_| "O compositor não respondeu")?;
-    if bytes.len() > 256 * 1024 { return Err("Inventário do compositor demasiado grande".into()); }
-    Ok(bytes)
+    hyprland::request(&hyprland::socket_path()?, command)
 }
 
 fn own_chat(clients: &Value, pid: u32) -> Result<&Value, String> {

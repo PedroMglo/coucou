@@ -23,6 +23,8 @@ pub enum PreparationMode{Dedicated,Snapshot}
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct ContextBinding{
     #[cfg(target_os="linux")]
+    #[serde(default,skip_serializing_if="Option::is_none")]pub project_progress:Option<super::project_goal_observation::Snapshot>,
+    #[cfg(target_os="linux")]
     #[serde(default,skip_serializing_if="Option::is_none")]pub calendars:Option<crate::pet_calendar::goal::Context>,
     #[serde(default,skip_serializing_if="Option::is_none")]pub received_request:Option<super::received_context::Selection>,
     #[serde(default,skip_serializing_if="Option::is_none")]pub memory:Option<crate::pet_memory::context_model::Selection>,
@@ -31,8 +33,12 @@ pub struct ContextBinding{
     pub copied_messages:usize,pub seed_hash:String,pub prepared_at:u64,
 }
 pub(super)fn cid(goal:&Record)->String{format!("goal-{}",goal.id.trim_start_matches("g-"))}
+pub(super)fn same_memory_project(binding:&ContextBinding,choice:Option<&crate::pet_memory::context_model::SelectedProject>)->bool{match binding.project(){Some(p)=>choice.is_some_and(|c|p.id==c.id&&p.revision==c.revision),None=>match &binding.memory{Some(m)=>m.matches_project(choice),None=>choice.is_none()}}}
 impl ContextBinding{
-    pub fn has_selected_data(&self)->bool{self.memory.is_some()||self.received_request.is_some()||self.has_calendars()}
+    pub(super)fn has_project_progress(&self)->bool{#[cfg(target_os="linux")]{self.project_progress.is_some()}#[cfg(not(target_os="linux"))]{false}}
+    pub(super)fn project(&self)->Option<&crate::pet_memory::projects::Project>{#[cfg(target_os="linux")]if let Some(p)=&self.project_progress{return Some(&p.selection.project);}self.memory.as_ref().and_then(|m|m.project.as_deref())}
+    pub(super)fn project_memory(&self)->bool{self.memory.as_ref().is_some_and(|m|m.schema_version==2&&m.project.is_some())}
+    pub fn has_selected_data(&self)->bool{self.has_project_progress()||self.memory.is_some()||self.received_request.is_some()||self.has_calendars()}
     pub(super)fn has_calendars(&self)->bool{
         #[cfg(target_os="linux")]{self.calendars.is_some()}
         #[cfg(not(target_os="linux"))]{false}
@@ -42,12 +48,14 @@ impl ContextBinding{
         #[cfg(not(target_os="linux"))]{false}
     }
     pub fn valid(&self,goal:&Record)->bool{
+        #[cfg(target_os="linux")]if self.project_progress.as_ref().is_some_and(|p|!p.valid_for(&self.pet_id,Some(&goal.id))||self.provider!="ollama"||goal.spec.owner.adapter!="ollama"||self.source_conversation_id.as_ref()!=Some(&p.selection.source_conversation_id)||p.observed_at>self.prepared_at||self.has_calendars()||self.received_request.is_some()||self.mode!=PreparationMode::Dedicated||self.source_messages!=0||self.copied_messages!=0||self.memory.as_ref().is_some_and(|m|m.schema_version!=2||m.project.as_deref()!=Some(&p.selection.project)||m.references.iter().any(|r|!matches!(&r.owner.scope,crate::pet_memory::Scope::Project{project_id}if project_id==&p.selection.project.id)))){return false;}
+        if self.project_memory()&&(self.has_calendars()||self.received_request.is_some()||self.mode!=PreparationMode::Dedicated){return false;}
         #[cfg(target_os="linux")]
         if self.calendars.as_ref().is_some_and(|c|self.received_request.is_some()||self.mode!=PreparationMode::Dedicated||c.selection.captured_at>self.prepared_at||self.source_messages!=0||self.copied_messages!=0||!c.valid(&goal.id,&goal.spec.owner.pet_id,&goal.spec.owner.provider,self.source_conversation_id.as_deref())){return false;}
-        if self.schema_version!=(if self.pet_calendars(){11}else if self.has_calendars(){10}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==7){9}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==6){8}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==5){7}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==4){6}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==3){5}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==2){4}else if self.received_request.is_some(){3}else if self.memory.is_some(){2}else{1})||self.received_request.as_ref().is_some_and(|r|!r.valid_for(goal))||self.received_request.is_some()&&self.memory.as_ref().is_some_and(|m|m.references.len()>=crate::pet_memory::context_model::MAX_SELECTED)||self.memory.as_ref().is_some_and(|m|!m.valid(&self.pet_id,self.source_conversation_id.as_deref()))||self.goal_id!=goal.id||self.pet_id!=goal.spec.owner.pet_id||self.provider!=goal.spec.owner.provider||self.conversation_id!=cid(goal)||!key(&self.request_id)||self.prepared_at==0||self.prepared_at>8_640_000_000_000_000||self.seed_hash.len()!=64||!self.seed_hash.bytes().all(|b|b.is_ascii_hexdigit())||self.copied_messages>crate::assistant_memory::MAX_CONTEXT_MESSAGES||self.copied_messages>self.source_messages{return false;}
+        if self.schema_version!=(if self.has_project_progress(){12}else if self.pet_calendars(){11}else if self.has_calendars(){10}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==7){9}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==6){8}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==5){7}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==4){6}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==3){5}else if self.received_request.as_ref().is_some_and(|r|r.schema_version==2){4}else if self.received_request.is_some(){3}else if self.memory.is_some(){2}else{1})||self.received_request.as_ref().is_some_and(|r|!r.valid_for(goal))||self.received_request.is_some()&&self.memory.as_ref().is_some_and(|m|m.references.len()>=crate::pet_memory::context_model::MAX_SELECTED)||self.memory.as_ref().is_some_and(|m|!m.valid(&self.pet_id,self.source_conversation_id.as_deref()))||self.goal_id!=goal.id||self.pet_id!=goal.spec.owner.pet_id||self.provider!=goal.spec.owner.provider||self.conversation_id!=cid(goal)||!key(&self.request_id)||self.prepared_at==0||self.prepared_at>8_640_000_000_000_000||self.seed_hash.len()!=64||!self.seed_hash.bytes().all(|b|b.is_ascii_hexdigit())||self.copied_messages>crate::assistant_memory::MAX_CONTEXT_MESSAGES||self.copied_messages>self.source_messages{return false;}
         match (&goal.spec.context,self.mode){
             (Context::Unbound,PreparationMode::Dedicated)=>self.source_conversation_id.is_none()&&self.source_messages==0&&self.copied_messages==0,
-            (Context::Mochi{conversation_id},PreparationMode::Dedicated)if self.has_calendars()=>self.source_conversation_id.as_ref()==Some(conversation_id)&&self.source_messages==0&&self.copied_messages==0,
+            (Context::Mochi{conversation_id},PreparationMode::Dedicated)if self.has_calendars()||self.project_memory()||self.has_project_progress()=>self.source_conversation_id.as_ref()==Some(conversation_id)&&self.source_messages==0&&self.copied_messages==0,
             (Context::Mochi{conversation_id},PreparationMode::Snapshot)=>self.source_conversation_id.as_ref()==Some(conversation_id),
             _=>false,
         }
@@ -91,7 +99,7 @@ pub enum CommitStatus{Durable,Uncertain,Unchanged}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct Receipt{pub status:CommitStatus,pub record:Record}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
-pub struct Summary{pub id:String,pub revision:String,pub pet_id:String,pub state:State,pub updated_at:u64,pub intent_preview:String,pub tasks:usize,pub steps:usize,#[serde(skip_serializing_if="is_false")]pub historical_source:bool}
+pub struct Summary{pub project:Option<crate::pet_memory::context_model::SelectedProject>,pub id:String,pub revision:String,pub pet_id:String,pub state:State,pub updated_at:u64,pub intent_preview:String,pub tasks:usize,pub steps:usize,#[serde(skip_serializing_if="is_false")]pub historical_source:bool}
 fn is_false(v:&bool)->bool{!*v}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct Listing{pub schema_version:u32,pub goals:Vec<Summary>,pub unavailable:usize,pub pending_artifacts:usize,pub complete:bool}
@@ -150,6 +158,8 @@ impl Spec{
 }
 impl Record{
     fn required_schema(&self)->u32{
+        if self.execution_context.as_ref().is_some_and(ContextBinding::has_project_progress)||self.admissions.iter().any(|a|a.spec.schema_version==32){return 69;}
+        if self.admissions.iter().any(|a|a.spec.schema_version==31){return 68;}
         if self.admissions.iter().any(|a|a.spec.rule_occurrence.is_some()){return 67;}
         if self.admissions.iter().any(|a|a.spec.execution_start.as_ref().is_some_and(|s|s.schema_version==2)){return 66;}
         if self.execution_context.as_ref().is_some_and(ContextBinding::pet_calendars)||self.admissions.iter().any(|a|a.spec.context.pet_calendars()){return 65;}
@@ -322,7 +332,7 @@ impl Record{
         self.drained(&lease,r.confirmed,r.observed_at,r.target_revision.clone(),r.request_id.clone())?;
         if self.state!=r.target_state||self.sequence!=r.target_sequence{return Err(Error::Conflict);}let e=self.events.last_mut().ok_or(Error::InvalidRecord)?;e.kind=EventKind::NativeDrained;e.fingerprint=fingerprint(r)?;self.native_drains.push(r.clone());self.refresh_schema();self.validate()
     }
-    pub fn summary(&self)->Summary{Summary{id:self.id.clone(),revision:self.revision.clone(),pet_id:self.spec.owner.pet_id.clone(),state:self.state,updated_at:self.updated_at,intent_preview:self.spec.intent.chars().take(120).collect(),tasks:self.tasks.len(),steps:self.plans.iter().map(|p|p.steps.len()).sum(),historical_source:false}}
+    pub fn summary(&self)->Summary{Summary{project:self.execution_context.as_ref().and_then(ContextBinding::project).map(|p|crate::pet_memory::context_model::SelectedProject{id:p.id.clone(),revision:p.revision}),id:self.id.clone(),revision:self.revision.clone(),pet_id:self.spec.owner.pet_id.clone(),state:self.state,updated_at:self.updated_at,intent_preview:self.spec.intent.chars().take(120).collect(),tasks:self.tasks.len(),steps:self.plans.iter().map(|p|p.steps.len()).sum(),historical_source:false}}
     /// Only Store accepts an authenticated native closure transaction. This
     /// transition attaches audit metadata for an uncommitted claim, never work.
     pub(super)fn lost_owner_closed(&mut self,r:&super::recovery::Reference,lease:&super::leases::Lease)->Result<()>{

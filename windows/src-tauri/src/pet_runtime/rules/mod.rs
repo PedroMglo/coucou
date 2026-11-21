@@ -7,14 +7,23 @@ use serde::{Deserialize,Serialize};
 pub struct Definition{pub name:String,pub intent:String,pub criteria:Vec<String>,pub schedule:Schedule,pub missed:Missed,pub grace_seconds:u32,pub data_scope:DataScope,pub limits:Limits}
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
 pub enum Missed{Skip,Coalesce,Decision}
-#[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase")]
-pub enum DataScope{None}
+mod data_scope;
+mod calendar_policy;
+mod project_policy;
+#[cfg(target_os="linux")]mod project_progress_policy;
+#[cfg(target_os="linux")]pub use project_progress_policy::ProjectProgressPolicy;
+pub use project_policy::{ProjectConsent,ProjectPolicy};
+pub(crate)mod notification;
+pub use notification::{NotificationConsent,NotificationPolicy,NotificationAttempt,NotificationOutcome};
+pub use calendar_policy::{CalendarConsent,CalendarOrigin,CalendarPolicy,CalendarRead,CalendarReadOutcome};
+pub use data_scope::{DataScope,CalendarReference};
+pub use authority_model::CalendarCountUpdate;
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Limits{pub max_occurrences:u16,pub max_model_calls:u16,pub max_tool_calls:u16,pub max_output_bytes:u64,pub occurrence_output_bytes:u64,pub occurrence_timeout_seconds:u32}
 impl Definition{
  pub(super)fn validate(&self)->Result<(),&'static str>{
   let l=&self.limits;
-  if !model::text(&self.name,160)||!model::text(&self.intent,4096)||self.criteria.is_empty()||self.criteria.len()>16||self.criteria.iter().any(|c|!model::text(c,1024))||self.grace_seconds>3600||!(1..=64).contains(&l.max_occurrences)||l.max_model_calls!=l.max_occurrences||l.max_tool_calls!=0||!(1024..=256*1024).contains(&l.occurrence_output_bytes)||!(60..=86400).contains(&l.occurrence_timeout_seconds)||l.max_output_bytes!=l.occurrence_output_bytes*u64::from(l.max_occurrences)||l.max_output_bytes>16*1024*1024{return Err("invalidRule");}
+  if !self.data_scope.valid()||!model::text(&self.name,160)||!model::text(&self.intent,4096)||self.criteria.is_empty()||self.criteria.len()>16||self.criteria.iter().any(|c|!model::text(c,1024))||self.grace_seconds>3600||!(1..=64).contains(&l.max_occurrences)||l.max_model_calls!=l.max_occurrences||l.max_tool_calls!=0||!(1024..=256*1024).contains(&l.occurrence_output_bytes)||!(60..=86400).contains(&l.occurrence_timeout_seconds)||l.max_output_bytes!=l.occurrence_output_bytes*u64::from(l.max_occurrences)||l.max_output_bytes>16*1024*1024{return Err("invalidRule");}
   self.schedule.validate()
  }
 }
@@ -24,18 +33,19 @@ pub enum State{Draft}
 pub struct Rule{pub id:String,pub revision:u64,pub owner:Owner,pub state:State,pub created_at:u64,pub updated_at:u64,pub definition:Definition}
 #[derive(Clone,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Book{version:u32,generation:u64,rules:Vec<Rule>}
+fn is_progress_scope(scope:&DataScope)->bool{#[cfg(target_os="linux")]{matches!(scope,DataScope::ProjectProgress{..})}#[cfg(not(target_os="linux"))]{let _=scope;false}}
 fn valid_id(s:&str)->bool{s.strip_prefix("rule-").is_some_and(|s|s.len()==64&&s.bytes().all(|b|b.is_ascii_digit()||matches!(b,b'a'..=b'f')))}
 #[cfg(target_os="linux")]
 impl private_registry::Document for Book{
  const MAX_BYTES:usize=768*1024;const LOCK_NAME:&'static str="pet-rules.lock";const TEMP_PREFIX:&'static str=".pet-rules-";
  fn empty()->Self{Self{version:1,generation:0,rules:vec![]}}
  fn validate(&self)->Result<(),&'static str>{
-  if self.version!=1||self.rules.len()>64{return Err("invalidRuleBook");}let mut ids=std::collections::BTreeSet::new();
+  if !matches!(self.version,1..=4)||self.version==1&&self.rules.iter().any(|r|r.definition.data_scope!=DataScope::None)||self.version<3&&self.rules.iter().any(|r|matches!(r.definition.data_scope,DataScope::Project{..}))||self.version<4&&self.rules.iter().any(|r|is_progress_scope(&r.definition.data_scope))||self.rules.len()>64{return Err("invalidRuleBook");}let mut ids=std::collections::BTreeSet::new();
   for r in &self.rules{if !valid_id(&r.id)||!ids.insert(&r.id)||r.revision==0||!r.owner.local_engine()||r.created_at==0||r.created_at>r.updated_at||r.updated_at>8_640_000_000_000_000{return Err("invalidRuleIdentity");}r.definition.validate()?;}Ok(())
  }
  fn generation(&self)->u64{self.generation}
  fn next(mut self,previous:&Self)->Result<Self,&'static str>{
-  if self.version!=1||self.generation!=previous.generation||previous.rules.iter().any(|old|!self.rules.iter().any(|r|r.id==old.id)){return Err("ruleRevisionConflict");}
+  if !matches!(self.version,1..=4)||self.version<previous.version||self.generation!=previous.generation||previous.rules.iter().any(|old|!self.rules.iter().any(|r|r.id==old.id)){return Err("ruleRevisionConflict");}
   self.generation=self.generation.checked_add(1).ok_or("revisionLimit")?;
   for r in &mut self.rules{if let Some(old)=previous.rules.iter().find(|o|o.id==r.id){if r.revision!=old.revision||r.owner!=old.owner||r.created_at!=old.created_at||r.updated_at<old.updated_at{return Err("ruleRevisionConflict");}if r!=old{r.revision=r.revision.checked_add(1).ok_or("revisionLimit")?;}}else{if r.revision>1{return Err("ruleRevisionConflict");}r.revision=1;}}
   self.validate()?;Ok(self)
@@ -44,7 +54,7 @@ impl private_registry::Document for Book{
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct Document{pub schema_version:u32,pub revision:String,pub rules:Vec<Rule>,pub execution_available:bool}
 #[cfg(target_os="linux")]
-fn document(s:private_registry::Snapshot<Book>,pet:&str)->Document{Document{schema_version:1,revision:s.revision,rules:s.registry.rules.into_iter().filter(|r|r.owner.pet_id==pet).collect(),execution_available:false}}
+fn document(s:private_registry::Snapshot<Book>,pet:&str)->Document{Document{schema_version:s.registry.version,revision:s.revision,rules:s.registry.rules.into_iter().filter(|r|r.owner.pet_id==pet).collect(),execution_available:false}}
 fn path()->std::path::PathBuf{crate::pet_config::path().with_file_name("pet-rules.json")}
 fn check(w:&tauri::WebviewWindow)->Result<(),String>{if adapter::allowed(w.label()){Ok(())}else{Err("Abre a gestão de rotinas do pet.".into())}}
 fn error(e:&str)->String{match e{"registryConflict"|"registryChanged"|"ruleRevisionConflict"=>"O catálogo de regras mudou. Consulta-o antes de guardar novamente.","registryCommitUncertain"=>"A gravação pode ter ocorrido. Consulta o catálogo antes de repetir.","invalidRuleBook"=>"O catálogo de regras tem um formato incompatível; foi preservado.","unknownTimeZone"=>"O fuso IANA não existe na base de dados distribuída.",_=>e}.into()}
@@ -57,7 +67,7 @@ fn save_at(path:&std::path::Path,input:&Save,owner:Owner,now:u64,current:impl Fn
 #[cfg(target_os="linux")]
 fn save_at_reviewed(path:&std::path::Path,input:&Save,owner:Owner,now:u64,current:impl Fn()->bool,before_edit:impl FnOnce(&Rule)->Result<(),&'static str>)->Result<Document,&'static str>{
  input.definition.validate()?;if !owner.local_engine()||owner.pet_id!=input.pet_id||!model::key(&input.request_id)||!current(){return Err("invalidRuleIdentity");}
- let snapshot=private_registry::load_for_update::<Book>(path,&input.expected_revision)?;let mut book=snapshot.registry.clone();
+ let snapshot=private_registry::load_for_update::<Book>(path,&input.expected_revision)?;let mut book=snapshot.registry.clone();if is_progress_scope(&input.definition.data_scope){book.version=4;}else if matches!(input.definition.data_scope,DataScope::Project{..}){book.version=book.version.max(3);}else if input.definition.data_scope!=DataScope::None{book.version=book.version.max(2);}
  let id=input.rule_id.clone().unwrap_or_else(||format!("rule-{}",model::hash(format!("{}\0{}",input.pet_id,input.request_id).as_bytes())));if !valid_id(&id){return Err("invalidRuleIdentity");}
  if let Some(old)=book.rules.iter_mut().find(|r|r.id==id){
   if input.rule_id.is_none()||!old.owner.same_runtime_binding(&owner){return Err("ruleRevisionConflict");}
@@ -78,7 +88,9 @@ pub async fn pet_runtime_rules(window:tauri::WebviewWindow,pet_id:String)->Resul
 pub async fn pet_runtime_rule_save(app:tauri::AppHandle,window:tauri::WebviewWindow,input:Save)->Result<Document,String>{
  check(&window)?;
  #[cfg(not(target_os="linux"))]{let _=(app,input);Err("As rotinas ainda requerem Linux.".into())}
- #[cfg(target_os="linux")]{let frame=crate::settings::review::capture_window(&window).await.map_err(|_|"ruleReviewClosed")?;tauri::async_runtime::spawn_blocking(move||{let owner=adapter::owner(&app,&input.pet_id).map_err(|_|"invalidRuleOwner".to_string())?;save_at_reviewed(&path(),&input,owner,crate::assistant_memory::now(),||frame.current(),authority_api::before_edit).map_err(error)}).await.map_err(|_|"A gravação das regras foi interrompida. Consulta o catálogo.".to_string())?}
+ #[cfg(target_os="linux")]{let frame=crate::settings::review::capture_window(&window).await.map_err(|_|"ruleReviewClosed")?;tauri::async_runtime::spawn_blocking(move||{let owner=adapter::owner(&app,&input.pet_id).map_err(|_|"invalidRuleOwner".to_string())?;if is_progress_scope(&input.definition.data_scope)&&owner.adapter!="ollama"{return Err("ruleProjectProgressRequiresOllama".into());}input.definition.data_scope.validate_progress(&owner.pet_id)?;let selected=input.definition.data_scope.capture(&owner.provider)?;let project=input.definition.data_scope.capture_project(&owner.pet_id)?;let provider=owner.provider.clone();
+ if let Some(source_conversation_id)=input.definition.data_scope.project_source(){use tauri::Manager;if !app.state::<crate::chat::Chat>().has_public_conversation(&provider,source_conversation_id){return Err("ruleProjectConversationChanged".into());}}
+ save_at_reviewed(&path(),&input,owner,crate::assistant_memory::now(),||frame.current()&&input.definition.data_scope.validate_progress(&input.pet_id).is_ok()&&project.as_ref().is_none_or(|p|p.verify(crate::assistant_memory::now()).is_ok())&&crate::pet_sources::validate_pet_group(&selected.iter().collect::<Vec<_>>(),&provider).is_ok(),authority_api::before_edit).map_err(error)}).await.map_err(|_|"A gravação das regras foi interrompida. Consulta o catálogo.".to_string())?}
 }
 #[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct PreviewInput{pub pet_id:String,pub rule_id:String,pub revision:u64}
@@ -126,6 +138,7 @@ pub(super)fn valid_rule(rule:&Rule)->bool{valid_id(&rule.id)&&rule.revision>0&&r
 pub(crate)mod authority_api;
 
 pub(crate)mod occurrences;
+pub(crate)mod calendar_materialization;
 
 #[cfg(target_os="linux")]pub(crate)mod scheduled;
 #[cfg(target_os="linux")]pub(crate)fn saved_rules()->Result<Vec<Rule>,&'static str>{if !path().try_exists().map_err(|_|"ruleStorageUnavailable")?{return Ok(vec![]);}Ok(private_registry::load_at::<Book>(&path())?.registry.rules)}

@@ -13,7 +13,7 @@ import { serviceCards } from "./phone-services";
 
 interface Ask {
   id: number;
-  kind: "pills" | "info";
+  kind: "pills" | "resolve-pills" | "info";
   input: { action?: string; names?: string[] };
 }
 
@@ -71,6 +71,15 @@ export async function pills(input: Ask["input"]): Promise<string> {
   return JSON.stringify({ done, failed, now: JSON.parse(describe()) });
 }
 
+/** Name resolution only. The captured voice turn owns the native roster CAS;
+ * the renderer supplies the same catalog matching as the existing controls. */
+export function resolvePills(input: Ask["input"]): string {
+  return JSON.stringify((input.names ?? []).map(spoken => {
+    const id = findPill(spoken);
+    return { id, label: id ? pillDefinition(id)?.name ?? id : spoken };
+  }));
+}
+
 function info(): string {
   const sessions = State.tasks
     .filter((t) => !t.isIntegration || t.state !== "idle" || t.steps.length > 0)
@@ -104,7 +113,7 @@ export function registerVoiceHandlers() {
   void onEvent<Ask>("voice-ask", async (ask) => {
     let text: string;
     try {
-      text = ask.kind === "pills" ? await pills(ask.input ?? {}) : info();
+      text = ask.kind === "pills" ? await pills(ask.input ?? {}) : ask.kind === "resolve-pills" ? resolvePills(ask.input ?? {}) : info();
     } catch (err) {
       text = `error: ${String(err)}`;
     }

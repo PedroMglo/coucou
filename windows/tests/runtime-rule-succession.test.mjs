@@ -9,6 +9,31 @@ test('changed native owner, budget, validity, model or disposed late reply canno
  for(const dimension of ['pet','budget','deadline','model','oldReferences']){const t=prepared();if(dimension==='pet')t.proposal.petId='agent_codex';if(dimension==='budget')t.proposal.freshBudgetGranted=true;if(dimension==='deadline')t.proposal.deadlineRenewed=true;if(dimension==='model')t.proposal.originalPolicy.model='fallback';if(dimension==='oldReferences')t.proposal.oldReferencesRemainRevoked=false;const v=buildRuleSuccession(rule(),{transport:{petRuntimeRuleSuccessionPrepare:async()=>t,petRuntimeRuleSuccessionConfirm:async()=>{throw Error('Must not confirm');}}});button(v,'Rever continuação da regra revogada').fire('click');await flush();assert.match(v.el.textContent,/não conserva/);assert.equal(button(v,'Autorizar concessão sucessora revista'),undefined);}
  let release;const v=buildRuleSuccession(rule(),{transport:{petRuntimeRuleSuccessionPrepare:()=>new Promise(r=>release=r),petRuntimeRuleSuccessionConfirm:async()=>{throw Error('Must not confirm');}}});button(v,'Rever continuação da regra revogada').fire('click');await flush();v.dispose();release(prepared());await flush();assert.equal(button(v,'Autorizar concessão sucessora revista'),undefined);
 });
+test('a verified acknowledgement allows a fresh succession with its own unchecked consent',async()=>{
+ const calls=[];
+ const first=prepared(),second=prepared();
+ second.token='next-native';second.proposal.generation=2;second.proposal.predecessorDecisionId='first-successor';
+ const tickets=[first,second];
+ const v=buildRuleSuccession(rule(),{transport:{
+  petRuntimeRuleSuccessionPrepare:async()=>tickets.shift(),
+  petRuntimeRuleSuccessionConfirm:async input=>{
+   calls.push(input.token);
+   const {rootDecisionId,predecessorDecisionId,generation}=(input.token===first.token?first:second).proposal;
+   return {status:'recorded',authority:{ruleId:rule().id,phase:'authorizedNotDispatched',executionAvailable:false,snapshotOnly:false,
+    lineage:{rootDecisionId,predecessorDecisionId,generation}}};
+  },
+ }});
+ const review=button(v,'Rever continuação da regra revogada');
+ async function approve(){
+  const consent=v.el.find('input')[0];assert.equal(consent.checked,false);
+  const confirm=button(v,'Autorizar concessão sucessora revista');assert.equal(confirm.disabled,true);
+  consent.checked=true;consent.fire('change');confirm.fire('click');await flush();
+ }
+ review.fire('click');await flush();await approve();
+ assert.deepEqual(calls,[first.token]);assert.equal(review.disabled,false);
+ review.fire('click');await flush();assert.match(v.el.textContent,/geração 2/);
+ await approve();assert.deepEqual(calls,[first.token,second.token]);
+});
 test('bridge supplies references and own consent only; lineage, policies and new budget cannot come from renderer',async()=>{
  const old=internals.invoke,calls=[];internals.invoke=async(command,args)=>{calls.push({command,args});return null;};try{
   await Bridge.petRuntimeRuleSuccessionPrepare({petId:'ai_ollama',ruleId:rule().id,revision:3,sourceHash:'forged'});await Bridge.petRuntimeRuleSuccessionConfirm({petId:'ai_ollama',ruleId:rule().id,revision:3,token:'native',approve:true,consent:'continueRevokedRuleWithOriginalRemainingAllocationAndDeadline',candidate:{modelCalls:999},lineage:{rootDecisionId:'forged'}});assert.deepEqual(Object.keys(calls[0].args.input),['petId','ruleId','revision']);assert.deepEqual(Object.keys(calls[1].args.input),['petId','ruleId','revision','token','approve','consent']);

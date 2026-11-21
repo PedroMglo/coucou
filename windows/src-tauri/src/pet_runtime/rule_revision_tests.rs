@@ -7,7 +7,7 @@ struct F{path:PathBuf,policy:RulePolicy}impl F{
   let definition=serde_json::from_value(json!({"name":"Bounded daily","intent":"Prepare one response per authorized occurrence","criteria":["Verify actual result"],"schedule":{"kind":"daily","firstDate":"2026-10-24","days":3,"localTime":"09:00","timeZone":"Europe/Lisbon","weekdays":[1,2,3,4,5,6,7],"overlap":"earlier","gap":"skip"},"missed":"skip","graceSeconds":300,"dataScope":"none","limits":{"maxOccurrences":2,"maxModelCalls":2,"maxToolCalls":0,"maxOutputBytes":8192,"occurrenceOutputBytes":4096,"occurrenceTimeoutSeconds":900}})).unwrap();
   let owner=crate::pet_runtime::model::Owner{pet_id:"ai_ollama".into(),provider:"ollama".into(),adapter:"ollama".into(),model_hint:None};let rule=Rule{id:format!("rule-{}","a".repeat(64)),revision:1,owner,state:crate::pet_runtime::rules::State::Draft,created_at:1000,updated_at:1000,definition};
   let schedule={let _s=crate::pet_calendar::TEST_SERIAL.lock().unwrap();crate::pet_calendar::schedule::resolve(&rule.definition.schedule,||true).unwrap()};let first=schedule.slots[0].at.unwrap();let last=schedule.slots.last().unwrap().at.unwrap();
-  let policy=RulePolicy{dispatch:None,schema_version:1,scope:RuleScope::BoundedRuleRecurrenceWithoutSelectedData,rule,payment:crate::pet_runtime::admission::Payment::LocalOnly,destination:crate::pet_memory::context_model::Destination::Server{provider:"ollama".into(),endpoint:"http://127.0.0.1:11434/v1/chat/completions".into(),model:"fixture-free".into()},model:"fixture-free".into(),engine_binding:None,policy_revision:"b".repeat(64),descriptor_semantics:"c".repeat(64),schedule,prepared_at:first-60_000,valid_until:last+900_000};assert!(policy.valid());Self{path,policy}
+  let policy=RulePolicy{project_progress_data:None,project_data:None,calendar_priority_count:None,notification:None,calendar_data:None,dispatch:None,schema_version:1,scope:RuleScope::BoundedRuleRecurrenceWithoutSelectedData,rule,payment:crate::pet_runtime::admission::Payment::LocalOnly,destination:crate::pet_memory::context_model::Destination::Server{provider:"ollama".into(),endpoint:"http://127.0.0.1:11434/v1/chat/completions".into(),model:"fixture-free".into()},model:"fixture-free".into(),engine_binding:None,policy_revision:"b".repeat(64),descriptor_semantics:"c".repeat(64),schedule,prepared_at:first-60_000,valid_until:last+900_000};assert!(policy.valid());Self{path,policy}
  }
  fn root(&self)->PathBuf{self.path.join("consent")}
  fn authority(&self)->Authority{Authority::ensure(&self.root()).unwrap()}
@@ -37,4 +37,62 @@ fn evidence(g:&crate::pet_runtime::model::Record,p:&RulePolicy,n:u64)->crate::pe
 }
 #[test]fn rule_revision_core_old_formats_and_restored_history_stay_data_only(){
  let f=F::new();let a=f.authority();let root=base(&f,&a);let original=a.rule_grant(&root.decision_id).unwrap();assert!(serde_json::to_value(&original).unwrap().get("revisionAuthority").is_none());let p=changed(&f,f.at(0)+2);let g=revise(&a,&p,Mode::RenewFiniteAllocation,f.at(0)+3);let before=f.bytes(&g);let review=restoration::Review::capture(&f.root(),&f.path.join("goals"),&"d".repeat(64),||Ok(())).unwrap();let fp=review.fingerprint().unwrap();review.apply(&fp,||Ok(())).unwrap();let a=Authority::existing(&f.root()).unwrap();let status=a.rule_status(&p.rule,true).unwrap();assert!(status.snapshot_only);assert_eq!(status.remaining_occurrences,None);assert!(a.prepare_rule_revision(&p,Mode::RenewFiniteAllocation,f.at(0)+4).is_err());assert!(a.reserve_rule_occurrence(&g.decision_id,&p.hash().unwrap(),1,f.at(1),||true).is_err());assert_eq!(f.bytes(&g),before);
+}
+
+/// Opt-in DATA fixture for the actual CLI backup/restore path. This producer
+/// is absent from application builds and cannot use a live user profile.
+#[test]
+#[ignore]
+fn rule_revision_native_preservation_fixture(){
+ let Ok(raw)=std::env::var("COUCOU_REVISION_FIXTURE_NATIVE")else{return;};
+ let target=PathBuf::from(raw);assert!(target.is_absolute()&&!target.is_symlink());
+ assert_eq!(fs::read(target.join(".qa-rule-revision-profile")).unwrap(),b"coucou-generated-rule-revision-preservation-only");
+ let config=target.join("config/coucou");let data=target.join("data/coucou");
+ for path in [&config,&data]{assert!(!path.exists());fs::create_dir_all(path).unwrap();fs::set_permissions(path,fs::Permissions::from_mode(0o700)).unwrap();}
+ fs::write(config.join("settings.json"),serde_json::to_vec(&json!({"mainPill":"ai_ollama","activeIntegrations":["ai_ollama"],"chatProvider":"ollama","chatModels":{"ollama":"fixture-free"},"ollamaUrl":"http://127.0.0.1:1","lmstudioUrl":"","autostart":false,"phoneLink":false,"phoneRelay":false,"hooksInstalled":false,"planRelayInstalled":false})).unwrap()).unwrap();
+ fs::set_permissions(config.join("settings.json"),fs::Permissions::from_mode(0o600)).unwrap();
+ let address=std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap();
+ let native_owner=dbus::blocking::Connection::new_address(&address).unwrap();
+ assert_eq!(native_owner.request_name("fr.louisraille.coucou.dev.SingleInstance",false,false,true).unwrap(),dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply::PrimaryOwner);
+ let layout=crate::pet_data::Layout::new(config,data).unwrap();
+ let(payload,_)=crate::pet_data::fixture_publish_profile(&address,"fr.louisraille.coucou.dev",layout).unwrap();assert!(payload.starts_with(&target));std::hint::black_box(&native_owner);
+
+ let f=F::new();let a=Authority::ensure(&payload.join("pet-runtime-consent-v1")).unwrap();let root=base(&f,&a);
+ let p=changed(&f,f.at(0)+2);let carry=revise(&a,&p,Mode::CarryRemaining,f.at(0)+3);
+ let goals=payload.join("pet-runtime-v1");Store::ensure(&goals).unwrap();
+ let store=Store::existing_verified(&goals,&payload.join("pet-runtime-consent-v1")).unwrap().unwrap();
+ let main=crate::chat::Chat::persistent(f.path.join("manual.json"));
+ let child=occurrences::admit_at(&store,&a,&payload.join("pet-runtime-contexts-v1"),&main,&carry.decision_id,1,||f.at(1),|_|true,|r,n|Ok(evidence(r,&p,n))).unwrap();
+ let queued=store.read(&child.goal_id,"ai_ollama").unwrap();assert_eq!(queued.schema_version,67);assert_eq!(queued.admissions[0].spec.schema_version,29);
+ stop(&a,&carry,f.at(1)+1);
+ let mut renewed=p.clone();renewed.prepared_at=f.at(1)+2;
+ let renewal=revise(&a,&renewed,Mode::RenewFiniteAllocation,f.at(1)+2);
+ a.reserve_rule_occurrence(&renewal.decision_id,&renewed.hash().unwrap(),2,f.at(2),||true).unwrap();stop(&a,&renewal,f.at(2)+1);
+ let source=a.prepare_rule_succession("ai_ollama",&p.rule.id,f.at(2)+2).unwrap();
+ let successor=source.candidate(&nonce().unwrap(),f.at(2)+2).unwrap();a.succeed_rule(&source,&successor,f.at(2)+3,||true).unwrap();assert_eq!(successor.schema_version,6);
+ let status=a.rule_status(&p.rule,true).unwrap();assert_eq!(status.committed_occurrences,3);assert_eq!(status.remaining_occurrences,Some(1));
+ let allocation=status.lineage.as_ref().unwrap().allocation.as_ref().unwrap();assert_eq!(allocation.root_decision_id,renewal.decision_id);assert_eq!(allocation.committed_occurrences,1);
+ assert!(a.verify_queued(&queued,f.at(2)+4).is_err());
+ let book=payload.join("pet-rules.json");fs::write(&book,serde_json::to_vec(&json!({"version":1,"generation":1,"rules":[p.rule]})).unwrap()).unwrap();fs::set_permissions(book,fs::Permissions::from_mode(0o600)).unwrap();
+ fs::write(target.join("NATIVE-FIXTURE.json"),serde_json::to_vec(&json!({"schemaVersion":1,"kind":"generatedHistoricalDataOnly","sourceNativeTest":"rule_revision_native_preservation_fixture","rootDecisionId":root.decision_id,"carryDecisionId":carry.decision_id,"renewalDecisionId":renewal.decision_id,"successorDecisionId":successor.decision_id,"goalId":child.goal_id,"status":status,"nativePublication":true,"modelCalls":0,"humanApproval":false,"actualNativeWindow":false,"goalComplete":false})).unwrap()).unwrap();
+}
+
+fn calendar_fixture(f:&F,count:u8)->RulePolicy{
+ let mut p=f.policy.clone();p.rule.definition.data_scope=serde_json::from_value(json!({"calendars":{"sources":[{"id":"work","revision":1}]}})).unwrap();
+ p.calendar_data=Some(serde_json::from_value(json!({"schemaVersion":1,"readerRevision":"f".repeat(64),"consent":"boundedRuleFutureCalendarData","sources":[{"id":"work","revision":1,"name":"Fixture metadata","path":"/synthetic/work.ics","enrollmentBinding":"e".repeat(64)}],"dataClass":"nativeCalendarEventsV1","window":"occurrenceCivilDay","maxDataBytes":65536,"maxInputBytes":262144,"maxCaptureSeconds":10,"maxReadsPerOccurrence":1})).unwrap());p.scope=RuleScope::BoundedRuleRecurrenceWithFutureCalendarData;p.calendar_options(Some(count),true).unwrap();p
+}
+fn calendar_parent(f:&F,a:&Authority,count:u8)->RuleGrant{
+ let mut g=f.candidate();g.policy=calendar_fixture(f,count);g.schema_version=g.required_version();assert_eq!(g.schema_version,10);a.issue_rule(&g,g.approved_at,||true).unwrap();let owned=a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,f.at(0),||true).unwrap();a.finish_rule_calendar_read(&owned,crate::pet_runtime::rules::CalendarReadOutcome::Stopped,f.at(0)+1,||true).unwrap();drop(owned);a.revoke_rule("ai_ollama",&g.policy.rule.id,&g.decision_id,f.at(0)+2).unwrap();a.rule_grant(&g.decision_id).unwrap()
+}
+#[test]fn calendar_succession_keeps_count_notice_spent_read_and_original_remainder(){
+ let f=F::new();let a=f.authority();let parent=calendar_parent(&f,&a,2);let before=f.bytes(&parent);let source=a.prepare_rule_succession("ai_ollama",&parent.policy.rule.id,f.at(0)+3).unwrap();let chosen=source.candidate(&nonce().unwrap(),f.at(0)+3).unwrap();assert_eq!(chosen.schema_version,10);assert_eq!(chosen.policy,parent.policy);let next=a.succeed_rule(&source,&chosen,f.at(0)+4,||true).unwrap();assert_eq!(f.bytes(&parent),before);let status=a.rule_status(&next.policy.rule,true).unwrap();assert_eq!(status.committed_occurrences,1);assert_eq!(status.remaining_occurrences,Some(1));assert!(a.begin_owned_rule_calendar(&next.decision_id,&next.policy.hash().unwrap(),0,f.at(0)+5,||true).is_err());let read=a.begin_owned_rule_calendar(&next.decision_id,&next.policy.hash().unwrap(),1,f.at(1),||true).unwrap();a.finish_rule_calendar_read(&read,crate::pet_runtime::rules::CalendarReadOutcome::Stopped,f.at(1)+1,||true).unwrap();assert_eq!(a.rule_status(&next.policy.rule,true).unwrap().remaining_occurrences,Some(0));assert_eq!(a.rule_grant(&parent.decision_id).unwrap(),parent);
+}
+#[test]fn calendar_revision_preserves_choices_by_default_and_changes_count_only_in_exact_review(){
+ use crate::pet_runtime::rules::CalendarCountUpdate;
+ let f=F::new();let a=f.authority();let parent=calendar_parent(&f,&a,2);let mut policy=parent.policy.clone();policy.rule.revision+=1;policy.rule.updated_at=f.at(0)+3;policy.rule.definition.intent="Reviewed future preparation".into();policy.prepared_at=f.at(0)+3;policy.calendar_options(None,false).unwrap();let kept=a.prepare_rule_revision(&policy,Mode::CarryRemaining,f.at(0)+3).unwrap();assert_eq!(kept.policy().calendar_priority_count,Some(2));assert!(kept.policy().notification.is_some());let selected=a.prepare_rule_revision_options(&policy,Mode::CarryRemaining,CalendarCountUpdate::Set(7),Some(false),f.at(0)+3).unwrap();assert_eq!(selected.policy().calendar_priority_count,Some(7));assert!(selected.policy().notification.is_none());let c=selected.candidate(&nonce().unwrap(),f.at(0)+3).unwrap();assert_eq!(c.schema_version,10);let next=a.succeed_rule(&selected,&c,f.at(0)+4,||true).unwrap();assert_eq!(a.rule_status(&next.policy.rule,true).unwrap().remaining_occurrences,Some(1));assert_eq!(a.rule_grant(&parent.decision_id).unwrap(),parent);let stale=kept.candidate(&nonce().unwrap(),f.at(0)+3).unwrap();assert!(a.succeed_rule(&kept,&stale,f.at(0)+5,||true).is_err());
+}
+
+#[test]fn reviewed_count10_keeps_the_same_owned_bounded_automatic_readiness_path(){
+ use crate::pet_runtime::rules::{DispatchPolicy,CalendarReadOutcome};
+ let f=F::new();let a=f.authority();let mut g=f.candidate();g.policy=calendar_fixture(&f,2);g.policy.dispatch=Some(DispatchPolicy::bounded());g.schema_version=g.required_version();a.issue_rule(&g,g.approved_at,||true).unwrap();let read=a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,f.at(0),||true).unwrap();let goal_id=crate::pet_runtime::model::id_for(&g.policy.goal_spec(0).unwrap());a.finish_rule_calendar_read(&read,CalendarReadOutcome::Captured{goal_id,context_hash:"c".repeat(64)},f.at(0)+1,||true).unwrap();drop(read);let parent=a.rule_grant(&g.decision_id).unwrap();let occurrence=&parent.reservations[0].occurrence_id;let probe=a.begin_owned_rule_probe(&g.decision_id,occurrence,f.at(0)+2,||true).unwrap();a.finish_rule_probe(&g.decision_id,occurrence,probe.probe(),true,f.at(0)+3).unwrap();let current=a.rule_grant(&g.decision_id).unwrap();assert_eq!(current.schema_version,10);assert_eq!(current.reservations.len(),1);assert_eq!(current.reservations[0].readiness.len(),1);assert_eq!(current.reservations[0].readiness[0].observed,Some(true));assert_eq!(current.reservations[0].model_calls,1);
 }

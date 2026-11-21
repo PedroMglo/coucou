@@ -45,13 +45,16 @@ fn conversation(value: Value, version: u32) -> std::io::Result<SavedConversation
     if version < 5 && !saved.attachment_history.is_empty() {
         return Err(std::io::Error::other("attachment history requires version5"));
     }
+    if version < 8 && saved.attachment_history.iter().any(|record| !record.preparation.is_empty()) {
+        return Err(std::io::Error::other("attachment preparation requires version8"));
+    }
     validate_captured_messages(&saved)?;
     Ok(saved)
 }
 
 pub(super) fn decode(bytes: &[u8], goal: Option<(&str, &str)>) -> std::io::Result<Library> {
     let raw: RawDisk = serde_json::from_slice(bytes)?;
-    if !matches!(raw.version, 1..=7) { return Err(std::io::Error::other("unknown memory version")); }
+    if !matches!(raw.version, 1..=8) { return Err(std::io::Error::other("unknown memory version")); }
     if raw.version < 6 && raw.unavailable_history.is_some() {
         return Err(std::io::Error::other("inactive history requires version6"));
     }

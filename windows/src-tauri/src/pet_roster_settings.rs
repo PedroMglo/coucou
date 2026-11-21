@@ -1,5 +1,5 @@
 //! Explicit roster intentions, serialized against current native preferences.
-//! A stale general settings snapshot never owns these two fields.
+//! A stale general settings snapshot never owns roster or desktop visibility.
 use crate::settings::Settings;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, io, sync::Mutex};
@@ -12,6 +12,8 @@ const MAIN_PETS: &[&str] = &["integration_claude", "agent_cursor", "agent_antigr
 pub(crate) enum Request {
     SetMain { id: String },
     SetActive { id: String, enabled: bool },
+    SetDesktopVisibility { enabled: bool },
+    ToggleDesktopVisibility {},
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -19,10 +21,11 @@ pub(crate) enum Request {
 pub(crate) struct Roster {
     pub(crate) main_pill: String,
     pub(crate) active_integrations: Vec<String>,
+    pub(crate) companion_mode: bool,
 }
 impl From<&Settings> for Roster {
     fn from(settings: &Settings) -> Self {
-        Self { main_pill: settings.main_pill.clone(), active_integrations: settings.active_integrations.clone() }
+        Self { main_pill: settings.main_pill.clone(), active_integrations: settings.active_integrations.clone(), companion_mode:settings.companion_mode }
     }
 }
 fn invalid(message: &str) -> io::Error { io::Error::new(io::ErrorKind::InvalidInput, message) }
@@ -37,8 +40,8 @@ fn offered(id: &str, windows: bool) -> bool {
         && (!windows || id != "agent_system_guardian")
 }
 fn change(settings: &mut Settings, request: Request) -> io::Result<()> {
-    let id = match &request { Request::SetMain { id } | Request::SetActive { id, .. } => id };
-    if !offered(id, cfg!(target_os = "windows")) { return Err(invalid("Este pet não está disponível nesta versão.")); }
+    let id = match &request { Request::SetMain { id } | Request::SetActive { id, .. } => Some(id), _=>None };
+    if id.is_some_and(|id|!offered(id, cfg!(target_os = "windows"))) { return Err(invalid("Este pet não está disponível nesta versão.")); }
     match request {
         Request::SetMain { id } => {
             if !MAIN_PETS.contains(&id.as_str()) { return Err(invalid("Este pet não pode ser o pet principal.")); }
@@ -56,6 +59,8 @@ fn change(settings: &mut Settings, request: Request) -> io::Result<()> {
                 settings.active_integrations.push(id);
             } else if !enabled { settings.active_integrations.retain(|active| active != &id); }
         }
+        Request::SetDesktopVisibility {enabled}=>settings.companion_mode=enabled,
+        Request::ToggleDesktopVisibility {}=>settings.companion_mode=!settings.companion_mode,
     }
     Ok(())
 }
@@ -71,6 +76,7 @@ pub(crate) fn apply_with(
 pub(crate) fn preserve_incoming(current: &Settings, incoming: &mut Settings) {
     incoming.main_pill = current.main_pill.clone();
     incoming.active_integrations = current.active_integrations.clone();
+    incoming.companion_mode = current.companion_mode;
 }
 
 pub(crate) fn authorize_window(actual: &str, island: &str, settings: &str) -> io::Result<()> {

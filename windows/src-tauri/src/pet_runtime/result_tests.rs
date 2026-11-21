@@ -25,8 +25,9 @@ fn missing_result_reads_do_not_create_storage_or_dispatch() {
     assert!(!root.exists());
 }
 #[test]
-fn every_common_owner_keeps_independent_authenticated_observations_without_provider_io() {
-    for provider in ["codex", "antigravity", "copilot", "ollama", "integration_notion"] {
+fn every_llm_owner_keeps_independent_authenticated_observations_without_provider_io() {
+    assert!(!crate::pet_config::blueprint("integration_notion").unwrap().features.inference);
+    for provider in ["codex", "antigravity", "copilot", "ollama"] {
         let (_f, a, g, _p, o, _main) = setup(provider);
         // Synthetic accounting fixture: this deliberately makes no provider call.
         let call = settled(&o, &g, "result", "Synthetic result");
@@ -82,7 +83,7 @@ fn actual_http_success_with_failed_receipt_publication_retains_charge_and_cannot
     // Preflight cannot predict a failure introduced after dispatch. Preserve
     // this uncertain-result/no-replay regression at its actual causal boundary.
     let (server, worker) = fixture_with_hook(vec![("application/json", local_metadata().to_string()), ("text/event-stream", stream("Known", true))], move |path| {
-        if path == "/v1/chat/completions" {
+        if path == "/v1/chat/completions" || path == "/api/chat" {
             fs::write(&late, b"occupied after dispatch").unwrap();
             fs::set_permissions(&late, fs::Permissions::from_mode(0o600)).unwrap();
         }

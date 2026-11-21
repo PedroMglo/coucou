@@ -18,7 +18,7 @@ impl Drop for Files{fn drop(&mut self){let _=fs::remove_dir_all(&self.root);}}
 fn destination(provider:&str)->Destination{match provider{
  "ollama"|"lmstudio"=>Destination::Server{provider:provider.into(),endpoint:"http://127.0.0.1:11444/v1/chat/completions".into(),model:"fixture-free".into()},
  "anthropic"|"google"|"openai"=>Destination::Api{provider:provider.into(),endpoint:"https://api.example.invalid/v1/chat".into(),model:"fixture-free".into()},
- _=>Destination::NativeSession{provider:provider.into(),adapter:crate::cli_chat::backend(provider).unwrap().into(),model:"fixture-free".into(),workspace:"/private/fixture".into(),session_id:Some("original-native-session".into())},
+ _=>Destination::NativeSession{provider:provider.into(),adapter:crate::cli_chat::backend(provider).or_else(||crate::pet_config::blueprint(provider).and_then(|b|b.runtime.adapter).map(|a|a.key())).unwrap().into(),model:"fixture-free".into(),workspace:"/private/fixture".into(),session_id:Some("original-native-session".into())},
 }}
 fn prepared(f:&Files,pet:&str,provider:&str,id:&str)->Prepared{Prepared::new(f.capture(pet,"original-cid",id),destination(provider),"Original public question".into(),Some("PRIVATE_CREDENTIAL_SNAPSHOT".into()),101).unwrap()}
 fn channel(f:&Files,provider:&str)->(crate::chat::Chat,Destination,super::super::Receipt){
@@ -88,7 +88,7 @@ fn remove(f:&Files,record:super::super::Receipt){let old=crate::private_registry
 #[test]fn selected_capture_is_common_to_existing_transport_owners_and_has_no_cross_pet_or_cid_fallback(){
  for(provider,pet)in[("codex","agent_codex"),("copilot","agent_copilot"),("antigravity","agent_antigravity"),("ollama","ai_ollama"),("lmstudio","ai_lmstudio"),("anthropic","ai_anthropic"),("openai","ai_openai"),("google","ai_google"),("integration_notion","integration_notion")]{
   let f=Files::new();let a=f.create(pet,None,"owned note",None);let b=f.create(pet,Some("original-cid"),"owned conversation note",None);let wrong=f.create("integration_n8n",None,"other owner note",None);
-  let capture=Capture::at(&f.path(),pet,"original-cid",&[Selected{id:a.id.clone(),revision:1},Selected{id:b.id.clone(),revision:1}],101).unwrap();assert_eq!(capture.references().len(),2);assert!(Prepared::new(capture,destination(provider),"Question".into(),None,101).is_ok(),"{provider}");
+  let capture=Capture::at(&f.path(),pet,"original-cid",&[Selected{id:a.id.clone(),revision:1},Selected{id:b.id.clone(),revision:1}],101).unwrap();assert_eq!(capture.references().len(),2);let prepared=Prepared::new(capture,destination(provider),"Question".into(),None,101);if provider=="integration_notion"{assert_eq!(prepared.err(),Some("invalidMemoryDestination"),"a service without live inference retains notes but cannot borrow its historical adapter");}else{assert!(prepared.is_ok(),"{provider}");}
   assert_eq!(Capture::at(&f.path(),pet,"another-cid",&[Selected{id:b.id,revision:1}],101).err(),Some("memorySelectionChanged"));
   if pet!="integration_n8n"{assert_eq!(Capture::at(&f.path(),pet,"original-cid",&[Selected{id:wrong.id,revision:1}],101).err(),Some("memorySelectionChanged"));}
  }

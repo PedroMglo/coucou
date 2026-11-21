@@ -60,6 +60,7 @@ export interface FlowStatus {
   keys: string;
   hasClaudeKey: boolean;
   voiceProviderReady: boolean;
+  hotwordCapture?: "inactive" | "starting" | "listening" | "recovering";
   mics: { name: string; default: boolean }[];
   platform: "windows" | "linux";
   autostarted: boolean;
@@ -143,6 +144,7 @@ export interface Note {
   end?: number | null;
   app?: string | null;
   status: "recording" | "processing" | "ready" | "failed";
+  microphoneOnly?: boolean;
   speakers: Speaker[];
   lines: NoteLine[];
   summary?: string | null;
@@ -214,7 +216,7 @@ export const FlowBridge = {
   renameSpeaker: (id: string, speaker: string, name: string) => call<void>("notes_rename_speaker", { id, speaker, name }),
   toggleTodo: (id: string, todo: string) => call<void>("notes_toggle_todo", { id, todo }),
   deleteNote: (id: string) => call<void>("notes_delete", { id }),
-  summarize: (id: string) => call<void>("notes_summarize", { id }),
+  summarize: (id: string) => callOrThrow<void>("notes_summarize", { id }),
   retryNote: (id: string) => call<void>("notes_retry", { id }),
   markdown: (id: string) => call<string>("notes_markdown", { id }),
   exportNote: (id: string) => callOrThrow<string>("notes_export", { id }),

@@ -4,8 +4,8 @@
 // its floor — they hop, look around, wave, and react when poked. Also the
 // glowing cards and the Mochis of empty pages. Port of FlowHubMochis.swift.
 //
-// One animation loop draws every live canvas; it stops when none is on screen
-// or the window is hidden, so a hidden window costs nothing.
+// One animation loop draws the Hub artwork. It runs at display speed during
+// interaction, slows down at rest, and stops when the Hub is hidden.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { IS_TAURI, onEvent } from "../core/bridge";
@@ -24,13 +24,21 @@ interface Animated {
 const live = new Set<Animated>();
 let nativeVisible = !IS_TAURI;
 let frame: number | null = null;
+let idleTimer: number | null = null;
 let last = performance.now();
 const start = performance.now();
+const IDLE_DELAY_MS = 80;
+const INTERACTION_MS = 1200;
+let interactiveUntil = start + INTERACTION_MS;
+
+function canDraw() {
+  return nativeVisible && !document.hidden && live.size > 0;
+}
 
 function loop(now: number) {
   frame = null;
-  if (!nativeVisible || document.hidden) return;
-  const dt = Math.min(0.05, (now - last) / 1000);
+  if (!canDraw()) return;
+  const dt = Math.min(0.12, (now - last) / 1000);
   last = now;
   const t = (now - start) / 1000;
   for (const a of live) {
@@ -42,29 +50,59 @@ function loop(now: number) {
     a.shown = true;
     a.draw(dt, t);
   }
-  if (nativeVisible && live.size > 0 && document.visibilityState === "visible") frame = requestAnimationFrame(loop);
+  if (!canDraw()) return;
+  if (now < interactiveUntil) {
+    frame = requestAnimationFrame(loop);
+  } else {
+    idleTimer = window.setTimeout(() => {
+      idleTimer = null;
+      if (canDraw()) frame = requestAnimationFrame(loop);
+    }, IDLE_DELAY_MS);
+  }
 }
 
 function wake() {
-  if (frame === null && nativeVisible && live.size > 0 && document.visibilityState === "visible") {
+  if (!canDraw() || frame !== null) return;
+  if (idleTimer !== null) {
+    window.clearTimeout(idleTimer);
+    idleTimer = null;
+  } else {
     last = performance.now();
-    frame = requestAnimationFrame(loop);
   }
+  frame = requestAnimationFrame(loop);
+}
+
+function interact() {
+  interactiveUntil = performance.now() + INTERACTION_MS;
+  wake();
 }
 
 function visibility(visible: boolean) {
   nativeVisible = visible;
-  if (!visible && frame != null) { cancelAnimationFrame(frame); frame = null; }
-  if (visible) wake();
+  updateVisibility();
+}
+
+function updateVisibility() {
+  if (nativeVisible && !document.hidden) {
+    interact();
+    return;
+  }
+  if (frame !== null) cancelAnimationFrame(frame);
+  if (idleTimer !== null) window.clearTimeout(idleTimer);
+  frame = idleTimer = null;
 }
 if (IS_TAURI) {
   void onEvent<boolean>("hub-visible", visibility).then(async () => visibility(await getCurrentWindow().isVisible()));
 }
-document.addEventListener("visibilitychange", wake);
+document.addEventListener("visibilitychange", updateVisibility);
+document.addEventListener("pointermove", interact, { passive: true });
+document.addEventListener("pointerdown", interact, { passive: true });
+document.addEventListener("keydown", interact);
+document.addEventListener("wheel", interact, { passive: true });
 
 function add(a: Animated) {
   live.add(a);
-  wake();
+  interact();
 }
 
 function fit(canvas: HTMLCanvasElement): { w: number; h: number; ctx: CanvasRenderingContext2D | null } {

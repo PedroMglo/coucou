@@ -9,7 +9,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::sync::{Arc,atomic::AtomicBool};
+use std::sync::{Arc, mpsc, atomic::AtomicBool};
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -271,7 +271,10 @@ fn system_device(host: &cpal::Host) -> Result<cpal::Device, String> {
 }
 
 /// An open input. Dropping it (or `stop`) closes the device.
-pub struct Capture { owner:Option<worker::Owner> }
+pub struct Capture {
+    owner: Option<worker::Owner>,
+    device_id: String,
+}
 /// Stable backend feature owners. Changing a microphone or selecting another
 /// pet must not manufacture a fresh capture owner after a failed startup.
 #[derive(Clone,Copy)]
@@ -291,7 +294,7 @@ impl CaptureUse{
 impl Capture {
     /// The original native worker owns its request and endpoint until join.
     pub fn start(source:Source,usage:CaptureUse,sink:impl FnMut(&[f32])+Send+'static)->Result<Capture,String>{
-        Self::start_owned(source,usage,None,sink)
+        Self::start_owned(source,usage,None,None,sink)
     }
     /// Cancelling the caller revokes startup/play/data delivery without
     /// turning normal capture completion into cancellation of the whole turn.
@@ -299,20 +302,45 @@ impl Capture {
         Self::start_stoppable_for(source,CaptureUse::Voice,stop,sink)
     }
     pub(crate) fn start_stoppable_for(source:Source,usage:CaptureUse,stop:Arc<AtomicBool>,sink:impl FnMut(&[f32])+Send+'static)->Result<Capture,String>{
-        Self::start_owned(source,usage,Some(stop),sink)
+        Self::start_owned(source,usage,Some(stop),None,sink)
     }
-    fn start_owned(source:Source,usage:CaptureUse,stop:Option<Arc<AtomicBool>>,mut sink:impl FnMut(&[f32])+Send+'static)->Result<Capture,String>{
+    pub(crate) fn start_hotword(
+        source: Source,
+        stop: Arc<AtomicBool>,
+        expected_device: Option<String>,
+        sink: impl FnMut(&[f32]) + Send + 'static,
+    ) -> Result<Capture, String> {
+        Self::start_owned(source, CaptureUse::Voice, Some(stop), expected_device, sink)
+    }
+
+    pub(crate) fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    fn start_owned(
+        source: Source,
+        usage: CaptureUse,
+        stop: Option<Arc<AtomicBool>>,
+        expected_device: Option<String>,
+        mut sink: impl FnMut(&[f32]) + Send + 'static,
+    ) -> Result<Capture, String> {
         if matches!(&source,Source::Mic(Some(name))if name.is_empty()||name.len()>1024||name.chars().any(char::is_control)){return Err(selection::Failure::Invalid.message());}
         let request=usage.key(&source)?;
+        let (identity_tx, identity_rx) = mpsc::channel();
         let owner=worker::start(request,Duration::from_secs(5),stop,move|authority|{
             let device=open_device(&source)?;
             let identity=device.id().map_err(|_|"The selected audio endpoint has no verifiable native identity.".to_owned())?.to_string();
+            if expected_device.as_deref().is_some_and(|expected| expected != identity.as_str()) {
+                return Err("The original microphone has not returned.".into());
+            }
             authority.device(&identity)?;
             if !authority.current(){return Err("Audio capture was cancelled before opening the device.".into());}
+            identity_tx.send(identity).map_err(|_| "The capture owner is no longer available.".to_owned())?;
             let current=authority.guard();
             build_stream(&device,&source,move|data|{if current(){sink(data);}})
         },|stream|stream.play().map_err(|error|error.to_string()))?;
-        Ok(Capture{owner:Some(owner)})
+        let device_id = identity_rx.try_recv().map_err(|_| "The capture has no native device identity.".to_owned())?;
+        Ok(Capture{owner:Some(owner),device_id})
     }
     pub fn stop(&mut self){drop(self.owner.take());}
 }

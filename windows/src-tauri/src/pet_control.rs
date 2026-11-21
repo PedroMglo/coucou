@@ -63,18 +63,22 @@ pub async fn pet_control_input(_app:AppHandle,window:tauri::WebviewWindow,rect:R
 }
 #[tauri::command]
 pub async fn pet_control_configure(app:AppHandle,window:tauri::WebviewWindow)->Result<(),String>{
- use crate::pet_native_binding::{self as binding,ipc::Mode};
+ use crate::pet_native_binding as binding;
  if window.label()!=crate::island::WINDOW_LABEL{return Err("O estado da barra pertence à ilha.".into());}
  let(enabled,system_center,pref)={let shared=app.state::<crate::Shared>();let s=shared.settings.lock().unwrap();(control_enabled(s.companion_mode,s.pet_control_bar,s.pet_system_center),s.pet_system_center,s.screen.clone())};
  if !system_center{crate::pet_system::release_lease().await;}
  let win=app.get_webview_window(LABEL).ok_or("A barra dos pets não está disponível.")?;
- let context=binding::manager(&app).and_then(|m|m.current()).and_then(|c|c.context()).map_err(|_|"A barra dos pets ainda não está disponível.")?;
- if !enabled||matches!(context.mode,Mode::Inactive){
-  let target=if enabled{Mode::Compact}else{Mode::Inactive};
-  let plan=binding::begin_trusted(&app,target).map_err(|_|"Não foi possível configurar a ilha.")?;
-  binding::apply(&win,plan,enabled.then(||placement(&app,system_center,&pref))).await.map_err(|_|"Não foi possível configurar a ilha.")?;
- }else{
-  binding::place_current(&win,placement(&app,system_center,&pref)).await.map_err(|_|"Não foi possível posicionar a ilha.")?;
+ let (plan, context) = binding::begin_compact_configuration(&app, enabled)
+     .map_err(|_| "A barra dos pets ainda não está disponível.")?;
+ if let Some(plan) = plan {
+     let position = enabled.then(|| placement(&app, system_center, &pref));
+     binding::apply(&win, plan, position)
+         .await
+         .map_err(|_| "Não foi possível configurar a ilha.")?;
+ } else if !context.pending && (enabled || context.mode.expanded()) {
+     binding::place_current(&win, placement(&app, system_center, &pref))
+         .await
+         .map_err(|_| "Não foi possível posicionar a ilha.")?;
  }
  Ok(())
 }

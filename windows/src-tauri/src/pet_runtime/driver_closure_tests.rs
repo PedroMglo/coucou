@@ -34,7 +34,7 @@ fn grant(f:&Fixture,g:&Record)->serde_json::Value{serde_json::from_slice::<serde
 fn wait_closing(driver:&Driver){let until=Instant::now()+Duration::from_secs(3);while !driver.status().unwrap().retained_closure{assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));}}
 #[test]fn actual_http_stop_retains_one_native_proof_and_unknown_attempt_through_lock_and_projection_delay(){
     let(f,a,g,_pending,owner,main)=setup_planning();let owner=Arc::new(owner);let lock=Arc::new(Mutex::new(None));let thread_lock=lock.clone();let path=root(&f);let spec=g.admissions[0].spec.clone();let proof=g.admissions[0].proof.clone().unwrap();let lease=owner.lease().clone();
-    let(server,http)=fixture_with_hook(vec![("application/json",local_metadata().to_string()),("text/event-stream",stream("interrupted",true))],move|endpoint|{if endpoint=="/v1/chat/completions"{
+    let(server,http)=fixture_with_hook(vec![("application/json",local_metadata().to_string()),("text/event-stream",stream("interrupted",true))],move|endpoint|{if endpoint=="/api/chat"{
         let authority=Authority::existing(&path).unwrap();authority.request_stop(&spec,&proof,crate::pet_runtime::leases::StopReason::Pause,crate::assistant_memory::now()).unwrap();let file=OpenOptions::new().read(true).write(true).open(path.join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(file.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);*thread_lock.lock().unwrap()=Some(file);crate::pet_runtime::lease_controller::signal_stop(&lease);
     }});
     let env=Env::new(Some(server.url));let driver=Driver::new(owner.clone(),Arc::new(generated::native(&f)),env.clone()).unwrap();driver.spawn().unwrap();wait_closing(&driver);

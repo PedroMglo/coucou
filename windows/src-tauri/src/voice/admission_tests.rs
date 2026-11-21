@@ -13,7 +13,7 @@ fn descriptor(provider: &str) -> Descriptor {
             decision: Decision::NativeApproval, callers: vec![Caller::NativeUser], limits: Limits::default(), limitations: vec![] }] }
 }
 #[test]
-fn optional_service_assistant_keeps_the_native_voice_controller_and_rejects_other_accounts(){
+fn legacy_spotify_adapter_keeps_the_native_voice_controller_and_rejects_other_accounts(){
     let mut d=descriptor("integration_spotify");d.binding.adapter=Some("codex");
     let candidate=admit("integration_spotify",&d,|c|c.route==Route::Spotify).unwrap();
     assert_eq!(candidate.pet,Pet::Spotify);assert_eq!(candidate.pet.provider(),"integration_spotify");assert_eq!(candidate.route,Route::Spotify);
@@ -22,18 +22,22 @@ fn optional_service_assistant_keeps_the_native_voice_controller_and_rejects_othe
 
 #[test]
 fn implemented_voice_routes_do_not_infer_execution_from_observer_or_api_catalog_entries() {
-    for pet in Pet::ALL { assert_eq!(implemented_for_pet(pet.pill()), !matches!(pet, Pet::Claude | Pet::Gemini)); }
+    for pet in Pet::ALL {
+        let expected = matches!(pet, Pet::Codex | Pet::Copilot | Pet::Gravity | Pet::Ollama | Pet::Spotify);
+        assert_eq!(implemented_for_pet(pet.pill()), expected, "{}", pet.pill());
+    }
     for id in ["ai_openai", "ai_anthropic", "ai_google", "ai_lmstudio", "agent_cursor", "unknown"] { assert!(!implemented_for_pet(id)); }
 }
 
 #[test]
-fn configured_pets_keep_own_identity_even_when_services_use_the_codex_adapter() {
-    for pet in Pet::ALL.into_iter().filter(|p| !matches!(p, Pet::GitHub | Pet::Claude | Pet::Gemini)) {
+fn supported_voice_routes_keep_the_original_pet_identity() {
+    for pet in [Pet::Codex, Pet::Copilot, Pet::Gravity, Pet::Ollama, Pet::Spotify] {
         let d = descriptor(pet.provider()); let called = Cell::new(0);
         let plan = admit(pet.provider(), &d, |candidate| { called.set(called.get()+1); assert_eq!(candidate.pet, pet); true }).unwrap();
         assert_eq!(plan.pet.provider(), pet.provider()); assert_eq!(called.get(), 1);
-        if crate::pet_config::service(pet.pill()) && pet != Pet::Spotify { assert_eq!(plan.route, Route::Codex); assert_ne!(plan.pet.provider(), "codex"); }
+        if pet == Pet::Spotify { assert_eq!(plan.route, Route::Spotify); }
     }
+    assert!(matches!(admit("integration_n8n", &descriptor("integration_n8n"), |_| panic!("A workflow service must not probe inference")), Err(Failure::UnsupportedPet)));
 }
 
 #[test]
@@ -133,11 +137,12 @@ fn deterministic_spotify_does_not_require_an_llm_model_or_borrow_codex() {
 fn addressed_recovery_intents_do_not_require_new_pet_execution() {
     for text in ["interromper tarefa", "estado da tarefa", "parar conversa", "ditar"] { assert!(!uses_pet_response(text), "{text}"); }
     for text in ["resume o documento", "abre uma aplicação", "altera o volume", ""] { assert!(uses_pet_response(text), "{text}"); }
-    for name in ["Codex", "Gravity", "Copilot", "Spotify", "GitHub"] {
+    for name in ["Codex", "Gravity", "Copilot", "Spotify"] {
         let command = super::super::dialogue::parse(&format!("{name} interromper tarefa"));
         assert!(known_voice_address(&command));
         if let super::super::dialogue::Command::Select(_, question) = command { assert!(!uses_pet_response(&question)); } else { panic!("pet address was not resolved"); }
     }
+    assert!(!known_voice_address(&super::super::dialogue::parse("GitHub interromper tarefa")));
 }
 
 #[test]

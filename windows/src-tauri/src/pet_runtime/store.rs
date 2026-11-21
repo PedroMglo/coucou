@@ -106,6 +106,13 @@ impl super::Repository for Store{
 }
 impl Store{
     pub(super)fn root_path(&self)->&Path{&self.dir.path}
+    /// Pin one authenticated, exact observation while a separate local data
+    /// record is committed. This grants no lease, continuation or execution.
+    pub(super)fn with_observed_goal<T>(&self,expected:&Record,run:impl FnOnce()->Result<T>)->Result<T>{
+        let _guard=self.lock(false)?;let(record,_)=self.load(&expected.id)?.ok_or(Error::NotFound)?;
+        if fingerprint(&record)?!=fingerprint(expected)?{return Err(Error::Conflict);}
+        self.require_current_goal(&record)?;run()
+    }
     /// Read and authenticate before Authority takes its writer. Keep the exact
     /// goal reader throughout the small atomic local-message transaction.
     pub(super)fn with_message_goal<T>(&self,expected:&Record,run:impl FnOnce(&Record)->Result<T>)->Result<T>{
@@ -312,15 +319,35 @@ impl Store{
         if row.stop_reason!=reason{return Err(Error::Conflict);}
         goal.drained(drain.lease(),drain.confirmed(),now,nonce()?,drain.request_id().into())?;self.publish(goal,Some(&before),true)
     }
-    pub fn list(&self,pet_id:Option<&str>)->Result<Listing>{
-        let _guard=self.lock(false)?;let mut goals=vec![];let mut unavailable=0;let mut pending=0;let mut seen=0;
-        for n in self.dir.names()?{
+    pub fn list(&self,pet_id:Option<&str>)->Result<Listing>{self.list_after_read(pet_id,&|_|())}
+    pub(super)fn list_after_read(&self,pet_id:Option<&str>,after_read:&impl Fn(&Record))->Result<Listing>{
+        // A passive inventory must not hold the catalog reader while each row
+        // authenticates its native provenance/recovery. That work may scan the
+        // authority and otherwise starve the original writer's bounded retry.
+        let(names,catalog_stamp)={let _guard=self.lock(false)?;let stamp=stamp(&self.dir.file.metadata().map_err(|_|Error::StorageUnavailable)?);(self.dir.names()?,stamp)};
+        let mut rows=vec![];let mut unavailable=0;let mut pending=0;let mut seen=0;
+        for n in names{
             if matches!(n.as_str(),MARKER|LOCK){continue;}
             let Some(id)=n.strip_suffix(".json").filter(|s|goal_id(s))else{pending+=1;continue;};
             seen+=1;if seen>MAX_GOALS{unavailable+=1;continue;}
-            match self.load(id){Ok(Some((r,_)))=>{if pet_id.is_none_or(|p|p==r.spec.owner.pet_id){match self.historical_source(&r){Ok(historical)=>{let mut summary=r.summary();summary.historical_source=historical;goals.push(summary);},Err(_)=>unavailable+=1}}},_=>unavailable+=1}
+            match self.load(id){
+                Ok(Some((r,observed)))=>match self.historical_source(&r){
+                    Ok(historical)=>{after_read(&r);let summary=if pet_id.is_none_or(|p|p==r.spec.owner.pet_id){let mut summary=r.summary();summary.historical_source=historical;Some(summary)}else{None};rows.push((n,observed,summary));},
+                    Err(_)=>unavailable+=1,
+                },
+                _=>unavailable+=1,
+            }
         }
+        // Only the short final file-stamp fence is shared with native writers.
+        // A changed/removed row is never returned as current. New entries or any
+        // catalog publication make this inventory explicitly incomplete; no
+        // ledger, refreshed consent or authority is manufactured by the read.
+        let(mut goals,unchanged)={
+            let _guard=self.lock(false)?;let mut goals=vec![];
+            for(name,observed,summary)in rows{if self.dir.has_stamp(&name,&observed).unwrap_or(false){if let Some(summary)=summary{goals.push(summary);}}else{unavailable+=1;}}
+            (goals,stamp(&self.dir.file.metadata().map_err(|_|Error::StorageUnavailable)?)==catalog_stamp)
+        };
         goals.sort_by(|a,b|b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
-        Ok(Listing{schema_version:1,goals,unavailable,pending_artifacts:pending,complete:unavailable==0&&pending==0})
+        Ok(Listing{schema_version:1,goals,unavailable,pending_artifacts:pending,complete:unavailable==0&&pending==0&&unchanged})
     }
 }

@@ -1,5 +1,6 @@
 //! Durable goals. Reading/opening this repository never dispatches work.
 pub(crate)mod rules;
+#[cfg(target_os="linux")]pub(crate)mod project_decision;
 pub(crate)mod messages;
 pub(crate)mod delegation;
 mod funding;
@@ -176,3 +177,5 @@ pub(crate)fn deterministic_identity(d:&crate::pet_capabilities::Descriptor)->boo
 
 #[cfg(all(test,target_os="linux"))]mod health_runtime_tests;
 #[cfg(all(test,target_os="linux"))]mod inventory_runtime_tests;
+
+#[cfg(target_os="linux")]pub mod project_goal_observation;

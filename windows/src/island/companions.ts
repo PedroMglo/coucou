@@ -35,7 +35,7 @@ export class CompanionsLink {
   private open: (id: string, view?: string, manual?: boolean) => void;
   private outfit: () => Outfit;
 
-  constructor(open: (id: string, view?: string, manual?: boolean) => void, outfit: () => Outfit) {
+  constructor(open: (id: string, view?: string, manual?: boolean) => void, outfit: () => Outfit, private readonly showDiff?: (id:number)=>void) {
     this.open = open;
     this.outfit = outfit;
   }
@@ -62,7 +62,7 @@ export class CompanionsLink {
       }catch{/* Hooks keep their exact origin while the metadata service is unavailable. */}finally{this.inventoryPending=false;}
     };
     void inventory();window.setInterval(()=>void inventory(),15000);
-    await onEvent<{pet:string;backend:string;id:string;cwd?:string;title?:string;owned?:boolean;view?:string}>('pet-session-select',value=>{
+    await onEvent<{pet:string;backend:string;id:string;cwd?:string;title?:string;owned?:boolean;view?:string;diffId?:number}>('pet-session-select',value=>{
       if(State.pendingApproval?.pillId===value.pet){this.open(value.pet,State.pendingApproval.questions?'question':'approval');return;}
       const def=pillDefinition(value.pet);if(!def||!State.isKept(value.pet)||typeof value.id!=='string'||value.id.length>512)return;
       State.upsertExternalAgent(def.id,petName(def.id,def.name),def.color);
@@ -70,7 +70,7 @@ export class CompanionsLink {
         const task=State.tasks.find(t=>t.id===def.id)!;
         const s=State.petSessions.observe(task,value.backend,value.id,value.cwd??'',!!value.owned);s.sessionTitle=value.title??'';s.hookAt=undefined;
       }
-      if(State.petSessions.choose(value.pet,value.backend,value.id)){State.projectSessions(value.pet);this.open(value.pet,value.view==='finished'?'finished':'overview',true);}
+      if(State.petSessions.choose(value.pet,value.backend,value.id)){State.projectSessions(value.pet);this.open(value.pet,value.view==='finished'?'finished':'overview',true);if(typeof value.diffId==='number'&&Number.isSafeInteger(value.diffId)&&value.diffId>=0)this.showDiff?.(value.diffId);}
     });
     await onEvent<{pillId:string;view?:string}>(PET_EVENTS.summon,async value=>{
       const def=pillDefinition(value.pillId);
@@ -118,9 +118,10 @@ export class CompanionsLink {
       State.settings={...State.settings,chatModels:{...State.settings.chatModels,[providerDef(value.provider).id]:"@default"}};void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);State.notify();
     });
     await onEvent(PET_EVENTS.ready, () => { this.key = ""; void this.sync(); });
-    await onEvent<{ pillId: string; view?: string; manual?:boolean }>(PET_EVENTS.open, e => {
+    await onEvent<{ pillId: string; view?: string; manual?:boolean;diffId?:number }>(PET_EVENTS.open, e => {
       if ((!State.settings.companionMode&&!State.petCardsOnly) || !State.tasks.some(t => t.id === e.pillId)) return;
       this.open(e.pillId, e.view,e.manual===true);
+      if(typeof e.diffId==='number'&&Number.isSafeInteger(e.diffId)&&e.diffId>=0)this.showDiff?.(e.diffId);
     });
     await onEvent<{ action: string }>(PET_EVENTS.action, e => {
       if (e.action !== "pause" || !State.settings.companionMode) return;

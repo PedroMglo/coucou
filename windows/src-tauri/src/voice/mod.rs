@@ -59,17 +59,61 @@ pub struct VoiceView {
 
 struct Running {
     stop: Arc<AtomicBool>,
+    capture: HotwordCapture,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum HotwordCapture {
+    Inactive,
+    Starting,
+    Listening,
+    Recovering,
 }
 
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
-fn release_running(running:&mut Option<Running>,stop:&Arc<AtomicBool>){
-    if running.as_ref().is_some_and(|r|Arc::ptr_eq(&r.stop,stop)){*running=None;}
+
+pub(crate) fn hotword_capture() -> HotwordCapture {
+    RUNNING.lock().unwrap().as_ref().map_or(HotwordCapture::Inactive, |running| running.capture)
 }
-struct ListeningOwner(Arc<AtomicBool>);
-impl Drop for ListeningOwner{fn drop(&mut self){
-    self.0.store(true,Ordering::Release);
-    release_running(&mut RUNNING.lock().unwrap(),&self.0);
-}}
+
+fn notify_hotword_capture(app: &AppHandle) {
+    let _ = app.emit_to("settings", "voice-hotword-capture", ());
+}
+
+fn set_hotword_capture(app: &AppHandle, stop: &Arc<AtomicBool>, capture: HotwordCapture) {
+    let mut running = RUNNING.lock().unwrap();
+    let Some(current) = running.as_mut() else { return };
+    if !Arc::ptr_eq(&current.stop, stop) || current.capture == capture {
+        return;
+    }
+    current.capture = capture;
+    drop(running);
+    notify_hotword_capture(app);
+}
+
+fn release_running(running: &mut Option<Running>, stop: &Arc<AtomicBool>) -> bool {
+    if !running.as_ref().is_some_and(|current| Arc::ptr_eq(&current.stop, stop)) {
+        return false;
+    }
+    *running = None;
+    true
+}
+
+struct ListeningOwner {
+    app: AppHandle,
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for ListeningOwner {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let released = release_running(&mut RUNNING.lock().unwrap(), &self.stop);
+        if released {
+            notify_hotword_capture(&self.app);
+        }
+    }
+}
 static CAPTURE_OWNER: Mutex<()> = Mutex::new(());
 
 /// Wait for the previous voice capture to close instead of guessing how long
@@ -123,17 +167,21 @@ pub fn sync(app: &AppHandle) {
     let wanted=wanted&&crate::settings::optional::check(crate::settings::optional::Operation::Voice).is_ok();
     let explicit = session::active() || manual::active();
     let mut running = RUNNING.lock().unwrap();
-    match (wanted && !explicit && !session::suspend_hotword() && requirements_met(app), running.is_some()) {
+    let changed = match (wanted && !explicit && !session::suspend_hotword() && requirements_met(app), running.is_some()) {
         (true, false) => {
+            // Capture once before starting either reader. A concurrent preload
+            // must not make the listener mistake this read for a settings write.
+            let input=match input::Input::capture(app){Ok(input)=>input,Err(error)=>{hotword_failure(app,"prepare",error);return}};
+            let scope=input.context.clone();
             let stop = Arc::new(AtomicBool::new(false));
             let app2 = app.clone();
             let stop2 = stop.clone();
-            *running = Some(Running { stop:stop.clone() });
-            if std::thread::Builder::new().name("coucou-voice".into()).spawn(move || run(app2, stop2)).is_err(){
+            *running = Some(Running { stop: stop.clone(), capture: HotwordCapture::Starting });
+            if std::thread::Builder::new().name("coucou-voice".into()).spawn(move || run(app2, stop2,input)).is_err(){
                 release_running(&mut running,&stop);return;
             }
-            preload_asr(app,stop.clone());
-            crate::log::line("voice: « OK Coucou » listening");
+            preload_recognition(scope,stop.clone());
+            true
         }
         (false, true) => {
             if let Some(r) = running.take() {
@@ -145,8 +193,13 @@ pub fn sync(app: &AppHandle) {
                 speech::unload();
             }
             crate::log::line("voice: « OK Coucou » off");
+            true
         }
-        _ => {}
+        _ => false,
+    };
+    drop(running);
+    if changed {
+        notify_hotword_capture(app);
     }
 }
 
@@ -157,9 +210,11 @@ pub fn is_listening() -> bool {
 
 /// Starts again on another microphone.
 pub fn restart(app: &AppHandle) {
-    if let Some(r) = RUNNING.lock().unwrap().take() {
+    let previous = RUNNING.lock().unwrap().take();
+    if let Some(r) = previous {
         r.stop.store(true, Ordering::Relaxed);
         cancel_speech(app);
+        notify_hotword_capture(app);
     }
     sync(app);
 }
@@ -189,50 +244,129 @@ enum Mode {
     FollowUp { until: Instant },
 }
 
-fn run(app: AppHandle, stop: Arc<AtomicBool>) {
-    let _owner=ListeningOwner(stop.clone());
-    let input=match input::Input::capture(&app){Ok(input)=>input,Err(_)=>return};
-    let provider=input.settings.chat_provider.clone();
+fn hotword_failure(app:&AppHandle,stage:&str,error:String){
+    crate::log::line(format!("voice: hotword {stage}: {error}"));
+    pill::announce(app,"mic","#FFB84D",error,None,7);
+}
+
+fn run(app: AppHandle, stop: Arc<AtomicBool>, input: input::Input) {
+    let _owner = ListeningOwner { app: app.clone(), stop: stop.clone() };
     let Some(_lease) = capture_lease(&stop) else { return };
-    if input.check().is_err() {return;}
-    let (tx, rx) = mpsc::sync_channel::<Vec<f32>>(8);
-    let capture = audio::Capture::start_stoppable(input.source.clone(), stop.clone(), move |s| {
-        let _ = tx.try_send(s.to_vec());
-    });
-    let mut capture = match capture {
-        Ok(c) => c,
-        Err(err) => {
-            crate::log::line(format!("voice: microphone: {err}"));
-            return;
+    let pet = dialogue::Pet::from_provider(&input.settings.chat_provider).map(dialogue::Pet::pill);
+    let named_mic = matches!(&input.source, audio::Source::Mic(Some(_)));
+    let mut device = None;
+    let mut recovery_deadline = None;
+    let mut brain = brain::Brain::default();
+    while !stop.load(Ordering::Acquire) {
+        if let Err(error) = input.check() {
+            hotword_failure(&app, "before capture", error);
+            break;
         }
-    };
+        if recovery_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            hotword_failure(&app, "microphone recovery", "O microfone selecionado não voltou. Volta a ligar a escuta quando estiver disponível.".into());
+            break;
+        }
+        let (tx, rx) = mpsc::sync_channel::<Vec<f32>>(8);
+        let capture = audio::Capture::start_hotword(input.source.clone(), stop.clone(), device.clone(), move |samples| {
+            let _ = tx.try_send(samples.to_vec());
+        });
+        match capture {
+            Ok(capture) => {
+                if named_mic && device.is_none() {
+                    device = Some(capture.device_id().to_owned());
+                }
+                let lost = listen_hotword(&app, &input, &stop, &rx, &mut brain, &mut recovery_deadline, named_mic);
+                drop(capture);
+                if !lost || stop.load(Ordering::Acquire) {
+                    break;
+                }
+                set_hotword_capture(&app, &stop, HotwordCapture::Recovering);
+                show_for_pet(&app, None, pet);
+                if recovery_deadline.is_none() {
+                    recovery_deadline = Some(Instant::now() + Duration::from_secs(30));
+                    hotword_failure(&app, "microphone interrupted", "Escuta interrompida. A aguardar o microfone selecionado.".into());
+                }
+            }
+            Err(error) if recovery_deadline.is_none() => {
+                if !stop.load(Ordering::Acquire) {
+                    hotword_failure(&app, "microphone", format!("O microfone não está disponível: {error}"));
+                }
+                break;
+            }
+            Err(_) => {}
+        }
+        let Some(deadline) = recovery_deadline else { break };
+        let retry_at = (Instant::now() + Duration::from_secs(1)).min(deadline);
+        while !stop.load(Ordering::Acquire) && Instant::now() < retry_at {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    show_for_pet(&app, None, pet);
+}
+
+// A reopened capture starts a new wake sequence. Buffered audio and a pending
+// follow-up from the old stream must not trigger a request after reconnection.
+fn listen_hotword(
+    app: &AppHandle,
+    input: &input::Input,
+    stop: &Arc<AtomicBool>,
+    rx: &mpsc::Receiver<Vec<f32>>,
+    brain: &mut brain::Brain,
+    recovery_deadline: &mut Option<Instant>,
+    named_mic: bool,
+) -> bool {
+    crate::log::line("voice: « OK Coucou » listening");
+    let provider = &input.settings.chat_provider;
+    let pet = dialogue::Pet::from_provider(provider).map(dialogue::Pet::pill);
     let mut vad = wake::Vad::default();
     let mut mode = Mode::Wake;
-    let mut brain = brain::Brain::default();
     let mut hide_at: Option<Instant> = None;
-    while !stop.load(Ordering::Relaxed) {
-        if input.check().is_err(){break;}
+    let mut quiet_since = None;
+    let mut waiting_for_samples = true;
+    while !stop.load(Ordering::Acquire) {
+        if let Err(error) = input.check() {
+            hotword_failure(app, "source changed", error);
+            break;
+        }
         let chunk = match rx.recv_timeout(Duration::from_millis(300)) {
-            Ok(c) => Some(c),
-            Err(mpsc::RecvTimeoutError::Timeout) => None,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(samples) => {
+                quiet_since = None;
+                if waiting_for_samples {
+                    waiting_for_samples = false;
+                    set_hotword_capture(app, stop, HotwordCapture::Listening);
+                }
+                if recovery_deadline.take().is_some() {
+                    crate::log::line("voice: selected microphone resumed");
+                    pill::announce(app, "mic", "#64D2A4", "Escuta retomada no microfone selecionado.".into(), None, 4);
+                }
+                Some(samples)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let now = Instant::now();
+                let since = *quiet_since.get_or_insert(now);
+                if named_mic && now.duration_since(since) >= Duration::from_secs(2) {
+                    return true;
+                }
+                None
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return named_mic,
         };
         let now = Instant::now();
         // The pill's last answer goes away after a while.
         if hide_at.is_some_and(|t| now > t) {
             hide_at = None;
-            show_for_pet(&app, None, dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
+            show_for_pet(app, None, pet);
         }
         match &mode {
             Mode::Command { until, .. } | Mode::FollowUp { until } if now > *until => {
                 mode = Mode::Wake;
                 vad.hangover = 25;
-                show_for_pet(&app, None, dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
+                show_for_pet(app, None, pet);
             }
             _ => {}
         }
         // Dictation and calls have the microphone: Coucou doesn't listen meanwhile.
-        if pill::dictating(&app) || crate::notes::is_recording(&app) {
+        if pill::dictating(app) || crate::notes::is_recording(app) {
             vad.reset();
             continue;
         }
@@ -241,7 +375,7 @@ fn run(app: AppHandle, stop: Arc<AtomicBool>) {
             if segment.len() < speech::SAMPLE_RATE as usize * 35 / 100 {
                 continue;
             }
-            let Some(heard) = input.transcribe(&segment, Some(&stop)).map(|t| t.text.trim().to_string()) else { continue };
+            let Some(heard) = input.transcribe(&segment, Some(stop)).map(|t| t.text.trim().to_string()) else { continue };
             if heard.is_empty() {
                 continue;
             }
@@ -253,7 +387,7 @@ fn run(app: AppHandle, stop: Arc<AtomicBool>) {
                         if crate::flow::text::word_count(&rest) >= 2 {
                             Some(rest)
                         } else {
-                            show_for_pet(&app, Some(VoiceView { phase: "listening".into(), heard: rest.clone(), answer: String::new() }), dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
+                            show_for_pet(app, Some(VoiceView { phase: "listening".into(), heard: rest.clone(), answer: String::new() }), pet);
                             mode = Mode::Command { text: rest, until: now + Duration::from_secs(7) };
                             // A question may come with pauses in it.
                             vad.hangover = 40;
@@ -271,37 +405,36 @@ fn run(app: AppHandle, stop: Arc<AtomicBool>) {
             let Some(question) = question else { continue };
             mode = Mode::Wake;
             vad.hangover = 25;
-            show_for_pet(&app, Some(VoiceView { phase: "thinking".into(), heard: question.clone(), answer: String::new() }), dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
+            show_for_pet(app, Some(VoiceView { phase: "thinking".into(), heard: question.clone(), answer: String::new() }), pet);
             brain.forget_if_idle();
-            let reply = brain.respond_as(&app, &question, &provider, &input, Some(stop.clone()));
+            let reply = brain.respond_as(app, &question, provider, input, Some(stop.clone()));
             if stop.load(Ordering::Relaxed) { break; }
             let answer = reply.as_ref().map(|r| r.text.clone()).unwrap_or_default();
             if answer.is_empty() {
                 let done = reply.is_some_and(|r| r.acted);
-                show_for_pet(&app, Some(VoiceView {
+                show_for_pet(app, Some(VoiceView {
                     phase: "speaking".into(),
                     heard: question,
                     answer: if done { "✓".into() } else { crate::i18n::t("Coucou couldn't answer: check the selected voice provider.") },
-                }), dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
+                }), pet);
                 hide_at = Some(Instant::now() + Duration::from_secs(5));
                 continue;
             }
-            show_for_pet(&app, Some(VoiceView { phase: "speaking".into(), heard: question.clone(), answer: answer.clone() }), dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
-            speak_prepared(&app, &answer, Some(&stop), None, None, &input);
+            show_for_pet(app, Some(VoiceView { phase: "speaking".into(), heard: question.clone(), answer: answer.clone() }), pet);
+            speak_prepared(app, &answer, Some(stop), None, None, input);
             vad.reset();
             // Drop what the microphone heard of Coucou's own voice.
             while rx.try_recv().is_ok() {}
             if answer.trim_end().ends_with('?') {
                 mode = Mode::FollowUp { until: Instant::now() + Duration::from_secs(8) };
                 vad.hangover = 40;
-                show_for_pet(&app, Some(VoiceView { phase: "listening".into(), heard: String::new(), answer }), dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
+                show_for_pet(app, Some(VoiceView { phase: "listening".into(), heard: String::new(), answer }), pet);
             } else {
                 hide_at = Some(Instant::now() + Duration::from_secs(6));
             }
         }
     }
-    capture.stop();
-    show_for_pet(&app, None, dialogue::Pet::from_provider(&provider).map(dialogue::Pet::pill));
+    false
 }
 
 // ── Speaking ──────────────────────────────────────────────────────────────────
@@ -354,6 +487,9 @@ pub(crate) fn recognition_status(app:&AppHandle)->RecognitionStatus {
 pub(crate) fn asr_ready(app: &AppHandle) -> bool {recognition_status(app).ready}
 fn preload_asr(app:&AppHandle,stop:std::sync::Arc<AtomicBool>){
     let Ok(scope)=RecognitionScope::capture(app)else{return;};
+    preload_recognition(Arc::new(scope),stop);
+}
+fn preload_recognition(scope:Arc<RecognitionScope>,stop:Arc<AtomicBool>){
     if stop.load(Ordering::Acquire)||scope.check().is_err(){return;}
     if matches!(scope.recognition.backend(),input::Recognizer::Parakeet){crate::speech::preload();return;}
     std::thread::spawn(move||{let _=scope.transcribe(&[],Some(&stop),||true);});
@@ -532,9 +668,36 @@ pub fn ask_island(app: &AppHandle, kind: &str, input: Value) -> Option<String> {
 }
 
 /// Runs one of Claude's tools: what goes back to Claude, and whether something changed.
-pub fn run_tool_for(app:&AppHandle,pet:&str,name:&str,input:&Value,current:impl Fn()->bool)->(String,bool){
+pub(super) fn run_tool_for(app:&AppHandle,pet:&str,name:&str,input:&Value,voice:&input::Input,current:impl Fn()->bool)->(String,bool){
     if let Err(error)=crate::settings::effect_allowed(){return(error,false);}
-    crate::pet_operations::run(pet,name,input,current,crate::pet_config::read_existing,|call|run_native_tool(app,call)).legacy()
+    crate::pet_operations::run(pet,name,input,&current,crate::pet_config::read_existing,|call|{
+        if let crate::pet_operations::Arguments::Roster(value)=call.arguments(){
+            if value["action"]!="list"{return voice_roster(app,pet,value,voice,&current);}
+        }
+        run_native_tool(app,call)
+    }).legacy()
+}
+
+fn voice_roster(app:&AppHandle,pet:&str,input:&Value,voice:&input::Input,current:impl Fn()->bool)->crate::pet_operations::NativeOutcome{
+    use crate::pet_operations::{Delivery as D,NativeOutcome as O};
+    #[derive(serde::Deserialize)]#[serde(deny_unknown_fields)]struct Resolved{id:Option<String>,label:String}
+    let Some(text)=ask_island(app,"resolve-pills",input.clone())else{return O::new(D::Uncertain,"A ilha não confirmou os nomes dos pets.");};
+    let resolved=serde_json::from_str::<Vec<Resolved>>(&text).ok().filter(|rows|text.len()<=16_000&&rows.len()==input["names"].as_array().map_or(0,Vec::len)&&rows.iter().all(|r|!r.label.trim().is_empty()&&r.label.chars().count()<=128&&r.id.as_ref().is_none_or(|id|id.len()<=128)));
+    let Some(resolved)=resolved else{return O::new(D::Uncertain,"Os nomes dos pets não foram confirmados.");};
+    let shared=app.state::<crate::Shared>();let mut done=Vec::new();let mut failed=Vec::new();
+    for row in resolved{
+        let Some(id)=row.id else{failed.push(format!("{}: unknown pill",row.label));continue;};
+        let request=if input["action"]=="set_main"{crate::pet_roster_settings::Request::SetMain{id}}else{crate::pet_roster_settings::Request::SetActive{id,enabled:input["action"]=="add"}};
+        match voice.change_roster_with(&shared.settings,pet,request,&current,crate::settings::save,|fresh|{
+            let _=app.emit("settings-changed",fresh);
+            crate::integrations::settings_saved(app,&fresh.active_integrations);
+            crate::spotify::sync(app,&fresh.active_integrations);
+        }){Ok(_)=>done.push(row.label),Err(error)=>failed.push(format!("{}: {error}",row.label))}
+    }
+    let Some(now)=ask_island(app,"pills",json!({"action":"list"})).and_then(|text|serde_json::from_str::<Value>(&text).ok())else{return O::new(D::Uncertain,"Verifica os pets ativos antes de repetir; o estado final não foi confirmado.");};
+    let text=json!({"done":done,"failed":failed,"now":now}).to_string();
+    let accepted=crate::pet_operations::roster::confirmed(input,&text);
+    O::new(if accepted{D::Accepted}else{D::Partial},text)
 }
 pub(crate) fn run_native_tool_for(app:&AppHandle,pet:&str,name:&str,input:&Value,native:&crate::pet_native_invocation::Fence,current:impl Fn()->bool)->(String,bool){
     if let Err(error)=crate::settings::effect_allowed(){return(error,false);}

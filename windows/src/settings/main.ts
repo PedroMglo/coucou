@@ -100,6 +100,14 @@ function pickColor(next: Record<string, string>) {
 
 // ── Reusable bits ─────────────────────────────────────────────────────────────
 
+function desktopVisibilityControl():HTMLElement{
+ const row=h('div',{class:'row'});
+ const draw=()=>{
+  clear(row);row.append(h('label',{text:t("Desktop companion")}),h('button',{class:settings.companionMode?'switch on':'switch','aria-label':t('Show or hide desktop pets'),'aria-pressed':settings.companionMode,'data-desktop-visibility':'toggle',disabled:rosterSaving,onclick:()=>{void changeRoster({action:'setDesktopVisibility',enabled:!settings.companionMode});}}));
+ };
+ declaredViews.push(draw);draw();return row;
+}
+
 function toggle(on: boolean, onChange: (v: boolean) => void): HTMLElement {
   const el = h("button", { class: on ? "switch on" : "switch", "aria-pressed": on });
   el.addEventListener("click", () => {
@@ -660,7 +668,7 @@ function localSection(customKey: boolean,lmstudioKey=false): HTMLElement {
     "section",
     {},
     h("h2", {}, h("span", { text: CHAT_STRINGS.localTitle })),
-    h("div", { class: "hint", text: CHAT_STRINGS.localHint }),
+    h("div", { class: "hint", text: settings.companionMode ? "Liga o servidor para consultar os modelos. Depois escolhe o motor, endereço, modelo e credencial na gestão do pet que o vai usar. Ligar ou desligar aqui não altera a escolha explícita de cada pet." : CHAT_STRINGS.localHint }),
     body,
   );
   const viewCurrent=settingsSectionCurrent(section);
@@ -691,9 +699,14 @@ function localSection(customKey: boolean,lmstudioKey=false): HTMLElement {
 
     if (connected) {
       const inUse = settings.chatProvider === id;
-      const use = h("button", { class: inUse ? "" : "primary", text: inUse ? CHAT_STRINGS.inUse : CHAT_STRINGS.useInChat });
-      use.disabled = inUse;
+      const petChoice = settings.companionMode;
+      const use = h("button", { class: !petChoice && inUse ? "" : "primary", text: petChoice ? "Configurar num pet" : inUse ? CHAT_STRINGS.inUse : CHAT_STRINGS.useInChat });
+      use.disabled = !petChoice && inUse;
       use.addEventListener("click", () => {
+        if (petChoice) {
+          void Bridge.openSettingsWindow('pets').catch(Bridge.reportSettingsError);
+          return;
+        }
         settings.chatProvider = id;
         void save().then(redraw).catch(Bridge.reportSettingsError);
       });
@@ -986,11 +999,8 @@ function generalSection(): HTMLElement {
       autoClose,
       h("span", { class: "hint", text: t("seconds after you leave the island") }),
     ),
-    h("div", { class: "row" },
-      h("label", { text: t("Desktop companion") }),
-      toggle(settings.companionMode, (v) => { settings.companionMode = v; void save().catch(Bridge.reportSettingsError); }),
-    ),
-    h("div", { class: "hint", text: t("Each active integration has its own companion. Click a pet for its controls; right-click for actions. Restart Coucou after changing companion mode.") }),
+    desktopVisibilityControl(),
+    h("div", { class: "hint", text: t("Each configured pet can appear on the desktop. Click a pet for its controls; right-click for actions.") }),
     availabilityControls(),
     h("div", { class: "row" },
       h("label", { text: t("Companion movement") }),

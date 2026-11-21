@@ -2,9 +2,24 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DesktopLink} from '../src/island/desktop.ts';
 import {State,DEFAULT_SETTINGS} from '../src/core/state.ts';
-import {calls,internals,subscriptions} from './tauri.mjs';
+import {calls,internals,subscriptions,emit} from './tauri.mjs';
 import {Sound} from '../src/core/sound.ts';
 import {Island} from '../src/island/island.ts';
+import {CompanionsLink} from '../src/island/companions.ts';
+
+test('a centre diff selects its exact pet session before opening; pending decisions retain priority',async()=>{
+ const invoke=internals.invoke,interval=window.setInterval;window.setInterval=()=>0;
+ internals.invoke=async(cmd,args)=>cmd==='companions_configure'?{width:1440,height:900,top:0,band:null}:invoke(cmd,args);
+ try{
+  State.petCardsOnly=true;State.settings={...DEFAULT_SETTINGS,activeIntegrations:['ai_ollama'],companionMode:false};State.pendingApproval=null;
+  State.tasks=[{id:'ai_ollama',name:'Ollama',color:'#eab308',state:'working',steps:[],stepIndex:0}];State.focusId='ai_ollama';
+  const routed=[];const link=new CompanionsLink((pet,view)=>routed.push([pet,view,State.petSessions.current(pet,null)?.sessionId]),()=>null,id=>routed.push(['diff',id]));await link.init();
+  await emit('pet-session-select',{pet:'ai_ollama',backend:'ollama',id:'source-a',view:'overview',diffId:0});
+  assert.deepEqual(routed,[['ai_ollama','overview','source-a'],['diff',0]]);
+  routed.length=0;await emit('pet-session-select',{pet:'ai_ollama',backend:'ollama',id:'source-b',view:'overview',diffId:NaN});assert.equal(routed.length,1);assert.equal(routed[0][2],'source-b');
+  routed.length=0;State.pendingApproval={pillId:'ai_ollama',sessionId:'source-a',backend:'ollama'};await emit('pet-session-select',{pet:'ai_ollama',backend:'ollama',id:'source-b',view:'overview',diffId:0});assert.equal(routed.length,1);assert.equal(routed[0][1],'approval');
+ }finally{internals.invoke=invoke;window.setInterval=interval;State.petCardsOnly=false;State.pendingApproval=null;}
+});
 
 test('pet-card runtime configures the real shared lifecycle without singleton initialization or waking pets',async()=>{
  const invoke=internals.invoke,interval=window.setInterval,sound=Sound.enabled;

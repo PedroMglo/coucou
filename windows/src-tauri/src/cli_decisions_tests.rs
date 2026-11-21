@@ -13,8 +13,8 @@ fn insert(requests:&Requests,id:&str,t:&Value,cancel:Arc<AtomicBool>,expires:Ins
 }
 fn until()->Instant{Instant::now()+Duration::from_secs(30)}
 #[test]
-fn decisions_for_all_native_adapters_and_service_owners_require_the_exact_original_target(){
-    for provider in ["codex","copilot","antigravity","integration_spotify","integration_notion"]{
+fn decisions_for_all_native_adapters_require_the_exact_original_target(){
+    for provider in ["codex","copilot","antigravity","gemini-cli","claude-cli"]{
         let(chat,t,cancel)=fixture(provider,false);let requests=Arc::default();let rx=insert(&requests,"request",&t,cancel,until(),None);
         assert!(answer_in(&chat,&requests,"request",json!({"allow":true}),None).is_err());
         for key in ["petId","provider","sessionId","conversationId","origin"]{let mut wrong=t.clone();wrong[key]=json!("other");assert!(answer_in(&chat,&requests,"request",json!({"allow":true}),Some(wrong)).is_err());}
@@ -117,7 +117,7 @@ fn form_request(id:&str,t:&Value,cancel:Arc<AtomicBool>)->(crate::pet_native_dec
  }
 }
 #[test]fn an_explicit_native_choice_is_materialized_by_rust_and_consumed_once_for_the_original_owner(){
- for provider in["codex","integration_spotify"]{let(chat,t,cancel)=fixture(provider,false);let(source,_)=crate::pet_native_decisions::Ticket::fixture();let(request,rx)=choice_request("bound-choice",&t,cancel,source,&json!({}));let id=request.request["nativeChoices"].as_array().unwrap().iter().find(|v|v["scope"]=="session").unwrap()["id"].clone();let requests=Mutex::new(HashMap::new());register(&requests,"bound-choice".into(),request).unwrap();let answer=json!({"allow":true,"nativeChoice":id});answer_in(&chat,&requests,"bound-choice",answer.clone(),Some(t.clone())).unwrap();assert_eq!(rx.recv().unwrap()["nativeResponse"],json!({"decision":"acceptForSession"}));assert!(answer_in(&chat,&requests,"bound-choice",answer,Some(t)).is_err());}
+ for provider in["codex","gemini-cli"]{let(chat,t,cancel)=fixture(provider,false);let(source,_)=crate::pet_native_decisions::Ticket::fixture();let(request,rx)=choice_request("bound-choice",&t,cancel,source,&json!({}));let id=request.request["nativeChoices"].as_array().unwrap().iter().find(|v|v["scope"]=="session").unwrap()["id"].clone();let requests=Mutex::new(HashMap::new());register(&requests,"bound-choice".into(),request).unwrap();let answer=json!({"allow":true,"nativeChoice":id});answer_in(&chat,&requests,"bound-choice",answer.clone(),Some(t.clone())).unwrap();assert_eq!(rx.recv().unwrap()["nativeResponse"],json!({"decision":"acceptForSession"}));assert!(answer_in(&chat,&requests,"bound-choice",answer,Some(t)).is_err());}
 }
 #[test]fn forged_native_values_foreign_choice_ids_and_mismatched_allow_do_not_consume_a_review(){
  let(chat,t,cancel)=fixture("codex",false);let(source,_)=crate::pet_native_decisions::Ticket::fixture();let(request,rx)=choice_request("bound-choice",&t,cancel,source,&json!({}));let public=request.request["nativeChoices"].clone();let session=public.as_array().unwrap().iter().find(|v|v["scope"]=="session").unwrap()["id"].clone();let requests=Mutex::new(HashMap::new());register(&requests,"bound-choice".into(),request).unwrap();

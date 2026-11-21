@@ -173,6 +173,7 @@ export class Island {
     });
     this.desktop = new DesktopLink({
       openFromDesktop: (id, view, manual) => this.openFromDesktop(id, view, manual),
+      showDiff: id=>{if(State.mode==='expanded'&&State.view==='overview'){const view=this.views.get('overview');view?.sync();view?.command?.('toggleDiff',id);}},
       reveal: () => this.reveal(),
       wardrobeFromDesktop: () => this.wardrobeFromDesktop(),
       dizzyFromDesktop: () => this.handleDizzy(),
@@ -926,6 +927,10 @@ export class Island {
       h = QUESTION_PICKER_H;
     }
     if (this.cardsOnly && State.mode === 'expanded' && State.view === 'mail') h = 320;
+    if(this.cardsOnly&&State.mode==='expanded'&&State.view==='prompt'){
+      const viewport=Number.isFinite(window.innerHeight)&&window.innerHeight>0?window.innerHeight:PANEL_H;
+      h=Math.min(Math.max(1,viewport-24),Math.max(h,320));
+    }
     if(State.mode==='expanded'&&State.view==='prompt'&&this.views.get('prompt')?.el.querySelector('.task-notice:not([hidden])'))h=Math.max(h,316);
     if(State.mode==='expanded'&&State.view==='upload'&&this.dragHeight!==null)h=Math.max(h,this.dragHeight);
     const r = State.mode === "expanded" ? EXPANDED_CORNER : ROUNDED_CORNER;

@@ -93,16 +93,17 @@ test("Gravity model-family chats never require a separate paid API key",()=>{
 });
 
 
-test("service pets use distinct logical conversations through the native account, without API credentials",()=>{
+test("service pets do not open model chats and retain the label for stored provider IDs",()=>{
  for(const id of ["integration_github","integration_notion","integration_n8n","integration_vercel","integration_resend","integration_calcom","integration_stripe"]){
-  assert.equal(providerForPill(id),id);assert.equal(providerDef(id).key,null);assert.match(providerDef(id).name,/via Codex/);
+  assert.equal(providerForPill(id),null);assert.equal(providerDef(id).key,null);assert.match(providerDef(id).name,/via Codex/);
+  assert.ok(!visibleProviders(settings()).some(p=>p.id===id));
   assert.equal(activeModel(settings({chatProvider:id})),"@default");assert.ok(visibleProviders(settings({chatProvider:id})).some(p=>p.id===id));
  }
 });
 
-test("Spoty keeps sound commands and supports optional assistant chat profiles",async()=>{
+test("Spoty keeps sound commands without a model chat profile",async()=>{
  const {petCapabilities}=await import('../src/mochi/capabilities.ts');
  const {profileProvider}=await import('../src/mochi/pet-preferences.ts');
- assert.equal(providerForPill('integration_spotify'),'integration_spotify');assert.equal(profileProvider('integration_spotify'),true);
- const cap=petCapabilities('integration_spotify');assert.equal(cap.chat,'integration_spotify');assert.equal(cap.voice,'integration_spotify');assert.match(cap.role,/som do PC/);
+ assert.equal(providerForPill('integration_spotify'),null);assert.equal(profileProvider('integration_spotify'),false);
+ const cap=petCapabilities('integration_spotify');assert.equal(cap.chat,null);assert.equal(cap.voice,'integration_spotify');assert.match(cap.role,/som do PC/);
 });

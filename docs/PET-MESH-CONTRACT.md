@@ -725,3 +725,79 @@ Um filho com admissão F2 e reserva já vinculadas pode executar no backend recu
 Cancel/Pause posteriores ao fecho usam a mesma autoridade e subárvore. Concluir um Stop já assinado pode reconhecer a mesma redução apesar de um descendente ter assinado depois do instante capturado inicialmente; não é permissão para um novo efeito, outro motivo de Stop ou novo prazo. Projeção da decisão na fila só é atual quando corresponde ao estado pausado/cancelado assinado. A UI oferece a pausa recuperada suportada e não reabre um rascunho com lease em recuperação.
 
 O restauro do produto preserva grants, orçamento, mensagens e revisões como história autenticada; não restabelece authority, Owned ou saldo. Ausência do dono e estado posterior ao snapshot continuam por provar, mesmo quando a cópia contém um fecho. Inbox corrente exclui essas mensagens; a consulta histórica explícita conserva proveniência e recusa execução. Um leitor anterior recusa formatos incompatíveis sem destruir dados; pode rever formatos que efetivamente conhece, mantendo-os não executáveis. As provas desta unidade não abrem a admissão pública da nova iteração nem fecham o objetivo integral. Ver [integração1219](../.build/pet-goal-execution-next-r1/integration1219-native-recovery-h3d2/FINAL-CHECKPOINT.json).
+## Acompanhamento até uma decisão —17/11/2026, implementado e validado nativamente nas fontes
+
+O relatório futuro existente já podia aguardar estados nativos revistos, mas o
+preparador/editor só expunha conclusão/cancelamento. O controlo passa a ligar
+os estados já suportados: a opção anterior continua por omissão;
+uma escolha explícita acrescenta pausa, recuperação, prazo terminado e resposta
+ou efeito ainda por verificar. O filtro não afirma que um desses estados já
+ocorreu e não constitui uma decisão de execução ou retoma.
+
+O preparador aceita uma seleção opcional de estados apenas no modo autónomo,
+valida-a pelo contrato existente de `pet.workReport` versão2 e conserva-a na
+revisão nativa assinada. Lista vazia, repetida, histórica, indisponível ou
+fornecida num relatório imediato é recusada. A interface captura sujeito,
+origem, estados, campos, requestId e prazo antes de IO e conserva essa escolha
+perante resultado incerto. O backend continua a derivar o estado efetivo da
+reconciliação canónica, vinculando remetente, sujeito e especificação originais.
+
+Mantêm-se Policy1/Goal27/Grant17, o Driver, os recursos e os recibos existentes:
+uma única divulgação finita, zero inferências, consentimento próprio dos dados e
+orçamento próprio revistos. A espera não ocupa o slot de execução. Revogação,
+Stop, prazo e configuração continuam a impedir novos efeitos; reinício não
+repete a entrega. O destinatário recebe metadados, sem prompt/memória, execução,
+autoaprovação ou conclusão inventada. Não concede conversa genérica aos serviços.
+
+Esta unidade torna utilizável o acompanhamento de um pedido recebido quando
+precisa de decisão. AUTO-04 permanece aberto para os restantes percursos de
+objetivo/projeto, memória e acompanhamento recorrente; não se alteram os seus
+critérios integrais. A aceitação exige UI/API/Driver, estado futuro não terminal,
+consentimento recusado, pausa/Stop, entrega única e reinício na composição atual.
+
+Na composição1333/SOURCE5, o preparador, bridge e editor conservam o conjunto
+exato capturado, inclusive perante resultado incerto; a revisão mostra rótulos
+portugueses existentes e exige consentimento próprio. O Driver usa o percurso
+comum de conclusão das mensagens nativas: Busy conhecido repete só a verificação
+dos recibos, com limite e Stop; IO incerto não repete a entrega. O teste de lock
+real reproduziu a lacuna anterior e passou com esta reutilização.
+
+A prova atual passou pedido→tarefa própria→escolha→admissão→espera→reinício→pausa
+com vista fechada→relatório único→inbox do remetente→reinício sem replay. O objetivo
+observado continua pausado, sem critérios falsamente verificados ou resposta enviada.
+As quatro imagens atuais foram observadas; são escolhas automatizadas num perfil
+QA gerado, sem consentimento/aceitação humana inventados. Só pausa foi exercitada
+como evento não terminal na janela atual. Sem novos codecs, scheduler, ledger ou
+inferência. Não integra o RPM49 congelado nem a instalada44. AUTO-04 integral,
+contexto de projeto e recorrência continuam abertos.
+[Composição, provas e limites](../.build/work-followup-decision-20261117/VERIFIED.json).
+
+### Leitura do relatório recebido — implementada e validada17/11/2026
+
+A inbox passiva deve mostrar o estado nativo com os rótulos já existentes, a
+data da observação e se os critérios estavam verificados nessa observação.
+Histórico restaurado conserva a indicação explícita de estado posterior
+desconhecido. O JSON exato fica num detalhe fechado; proveniência e recibo
+continuam acessíveis. Nenhuma consulta inicia trabalho, chama modelos ou cria
+aprovações. Sem mudança de backend, formatos ou política de domínio.
+
+A alteração em dois ficheiros passou23 casos web afetados/TypeScript e a
+composição privada1333 `6505753c…`: pedido próprio, consentimento/fila, pausa com
+vista fechada, um relatório/um débito, inbox legível e dois reinícios sem replay.
+A imagem X11 atual mostra estado/data/critérios e detalhes fechados.819 inputs
+nativos são idênticos à unidade anterior; não se repetiu a suite Rust. O caso
+histórico com critérios verificados tem prova dirigida web, sem alegar restauro
+nativo novo. Falha inicial Busy na admissão preservada; a UI nativa conserva a
+revisão original para repetir só a confirmação, sem rever/renovar âmbito.
+Sem inferência, instalação, aceite humano ou fecho integral de AUTO-04.
+[Provas da leitura e limites](../.build/work-report-readable-20261117/VERIFIED.json).
+
+## Consulta de objetivos sob concorrência — 17/11
+
+Listing1 conserva autenticação nativa e valida os stamps de todos os registos
+antes de devolver sínteses, com bloqueios breves de inventário/fence. A validação
+extensa de proveniência ocorre fora do bloqueio partilhado do catálogo. Alterações
+invalidam a linha; mudança de catálogo torna complete false, mesmo que unavailable
+seja zero. Esse resultado nunca constitui autoridade ou substitui revisão por
+ID/revisão na preparação/admissão/execução. Sem novo formato ou cache de permissões.
+[Provas e limites](PETS-PROJECT-DECISION-2026-11-17.md#consultas-e-publicação-da-captura-sob-contenção).

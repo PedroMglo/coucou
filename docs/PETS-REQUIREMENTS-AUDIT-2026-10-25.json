@@ -1,12 +1,19 @@
 {
-  "dataUtc": "2026-11-11T22:29:12.102917+00:00",
-  "classificacaoTurnoAnterior": "H3D1: evidência correlacionada integrada1170; iteração H3D2 e objetivo integral ativos",
+  "dataUtc": "2026-11-18T22:09:21.746677+00:00",
+  "classificacaoTurnoAnterior": "progress",
   "arvore": "/home/pmglo/Projects/coucou-codex",
   "branch": "feat/mochi-cli-accounts",
-  "head": "0a1ba8173625ac255646b4650a3a688ff3e20d4e",
-  "rootIntegrated": 1255,
+  "head": "de75abcb3eb87bc4f4f59fbc329ac7dad1e2b53e",
+  "rootIntegrated": 1368,
   "privateSdk": 1176,
-  "installed": "0.5.1-mochi.43",
+  "installed": "0.5.1-mochi.62",
+  "latestInstalled62Delivery": {
+    "version": "0.5.1-mochi.62",
+    "delivery": "PETS-INSTALLED-DELIVERY-62.md",
+    "signedSysworkspaceCommit": "05299549edccb9ce6ed2008aa26bce5e108dabc3",
+    "technicalInstalledScope": "Arranque, executável, página Pets e preservação dos dados observados no perfil operacional.",
+    "allRequirementsComplete": false
+  },
   "nativeInputsPrivate": 736,
   "privateVariant": "H3D2 B3A2 private exact own canonical DATA publication/lineage and common entry gate; peer iteration not enabled/integrated",
   "privateSnapshot": ".build/pet-goal-execution-next-r1/peer-iteration-h3d2-b3a2/SOURCE.json",
@@ -2186,9 +2193,10 @@
         {
           "fonte": ".build/pet-goal-execution-next-r1/integration1034-inference-binding-r6f1/CHECKPOINT.json",
           "alcance": "R6 F1: dois donos lógicos/motores explícitos, admissão/memória/destino/corpo/orçamento/revogação, recipe driver em fixtures, Tauri319/320/322 e restauro/leitor anterior. Modelos/protocolos sintéticos; .32 instalada inalterada; nenhuma conclusão integral por catálogo/testes."
-        }
+        },
+        "17/11 normal50: .build/operational50-20261117/VERIFIED.json —4 percursos no próprio RPM e18 comandos de recuperação; uma resposta sintética, histórico/restauro/recusas e reinícios sem replay; imagens X11 virtuais pós-reinício observadas. Âmbitos e falhas em docs/PETS-INSTALLED-DELIVERY-50.md."
       ],
-      "limiteDaProva": "NoAuthority normal operacional privado comprovado; geração incerta/seed inválido/pre-manifest/staging anónimo ainda conservados/recusados até reconciliação explícita. Migrações/revalidações voz/mobile/autostart/B3/adoção e aceitação integral continuam abertas.",
+      "limiteDaProva": "NoAuthority normal operacional privado comprovado; geração incerta/seed inválido/pre-manifest/staging anónimo ainda conservados/recusados até reconciliação explícita. Migrações/revalidações voz/mobile/autostart/B3/adoção e aceitação integral continuam abertas. Normal50 não está instalada/autorizada; Wayland real bloqueado, hardware/humano/uso prolongado e critérios integrais não certificados. Provas anteriores conservam a composição respetiva.",
       "lacunaConcreta": "A adoção995 e o fecho nativo de Settings C5/277 já foram comprovados; não são trabalho ainda por executar. Faltam ativação governada de Voz, Móvel/Hooks/Credenciais, lifecycle autónomo, migração/restauro da composição completa e aceitação/entrega dos critérios aplicáveis.",
       "proximoCriterioAceitacao": "C5: fechar Settings durante confirmação nativa pendente revoga a decisão sem replay, sem libertar gates antes do fim do worker. Depois Voz/Móvel/Hooks/Credenciais e restantes dependências integrais.",
       "entregaIntegral": "não demonstrada; requisito aberto",
@@ -10151,6 +10159,18 @@
         {
           "fonte": "docs/PETS-VALIDATION.md",
           "alcance": "Relatos/checkpoints por composição; as provas parciais não cobrem todos os critérios deste ID."
+        },
+        {
+          "fonte": ".build/attachment-turn-context-20261118/VERIFIED.json",
+          "alcance": "Reenvio após retirar anexo reproduzido nos binários exatos 44 e 53, e ausente no mesmo percurso privado corrigido. Dois documentos sintéticos, mesma conversa e processo, dois pedidos HTTP por executável."
+        },
+        {
+          "fonte": ".build/pet-goal-execution-next-r1/release54-attachment-context-20261118/VERIFIED.json",
+          "alcance": "RPM 54 exato: retirada de uma de duas cópias, reinício preservado e ausência de nova autorização de leitura. Restauro inativo e leitura histórica 6/7 no próprio pacote."
+        },
+        {
+          "fonte": ".build/pet-goal-execution-next-r1/release55-rule-succession-20261118/VERIFIED.json",
+          "alcance": "RPM 55 exato em perfis privados. Retirada de anexos sem reenvio, sucessão6/revisão7 na mesma vista, três respostas sintéticas, recuperação, reinício e restauro preservados. Aceitação no perfil operacional aberta."
         }
       ],
       "limiteDaProva": "Fecho da limpeza, composição e migração/backup/rollback ainda bloqueiam entrega do conjunto.",
@@ -10170,7 +10190,7 @@
       "id": "CTX-02",
       "trabalho": "Apresentação por mensagem e seleção de anexos para contexto",
       "criteriosOriginaisPreservados": "CTX-01. IDs/proveniência/cobertura visíveis onde necessário; não reautorizar cópias nem inferir leitura integral do modelo",
-      "estadoObservado": "privado + base integrada",
+      "estadoObservado": "Proveniência integrada nas duas vistas. Cobertura por cópia validada no chat Ollama e Anthropic nativos privados, com persistência após reinício. Aceitação integral aberta.",
       "ficheirosSimbolos": [
         {
           "ficheiro": "windows/src-tauri/src/pet_documents/request.rs",
@@ -10193,16 +10213,56 @@
         }
       ],
       "dependenciasEaceitacao": "CTX-01. IDs/proveniência/cobertura visíveis onde necessário; não reautorizar cópias nem inferir leitura integral do modelo",
-      "implementacaoExistente": "Captura/manifestos e seleção por turno em protótipos e percursos de documentos.",
+      "implementacaoExistente": "Captura, seleção ativa e manifestos por pet/CID. As vistas inline e flutuante projetam o registo por turno, incluindo os IDs de cópia e a indicação de tentativa sem mensagens guardadas. Ao fechar o turno, o contexto para a próxima inferência conserva a pergunta pública e a resposta. Os bytes dos anexos exigem seleção e validação do turno que os envia. O chat local guarda o resultado observado da preparação de texto por ID no registo do próprio turno. Os rótulos separam preparação e leitura pelo modelo. Bibliotecas anteriores continuam legíveis. Os adaptadores API usam os mesmos registos e limites de texto e multimédia. A janela flutuante dos pets API usa a rota própria declarada na fábrica.",
       "provaDisponivel": [
         {
           "fonte": "docs/PETS-VALIDATION.md",
           "alcance": "Relatos/checkpoints por composição; as provas parciais não cobrem todos os critérios deste ID."
+        },
+        {
+          "fonte": ".build/attachment-history-20261118/VERIFIED.json",
+          "alcance": "Dois anexos por arrasto GTK, HTTP local, registos nativos conservados entre RPM 53 e sucessora privada, consulta sem reativar acesso e mensagem posterior sem anexos."
+        },
+        {
+          "fonte": ".build/attachment-turn-context-20261118/VERIFIED.json",
+          "alcance": "Reenvio após retirar anexo reproduzido nos binários exatos 44 e 53, e ausente no mesmo percurso privado corrigido. Dois documentos sintéticos, mesma conversa e processo, dois pedidos HTTP por executável."
+        },
+        {
+          "fonte": ".build/pet-goal-execution-next-r1/release54-attachment-context-20261118/VERIFIED.json",
+          "alcance": "RPM 54 exato: retirada de uma de duas cópias, reinício preservado e ausência de nova autorização de leitura. Restauro inativo e leitura histórica 6/7 no próprio pacote."
+        },
+        {
+          "fonte": ".build/pet-goal-execution-next-r1/release55-rule-succession-20261118/VERIFIED.json",
+          "alcance": "RPM 55 exato em perfis privados. Retirada de anexos sem reenvio, sucessão6/revisão7 na mesma vista, três respostas sintéticas, recuperação, reinício e restauro preservados. Aceitação no perfil operacional aberta."
+        },
+        {
+          "fonte": ".build/attachment-coverage-20261118/rpm55-coverage-1/RESULT.json",
+          "alcance": "No RPM 55 exato, uma única resposta Ollama sintética recebeu um anexo curto e um prefixo truncado. A ficha apresentou ambas as cópias sem a diferença de preparação."
+        },
+        {
+          "fonte": ".build/attachment-coverage-20261118/corrected/native-1/RESULT.json",
+          "alcance": "Arrasto real GTK, pedido HTTP local sintético, texto completo e parcial por ID, inspeção visual em WebKit e reinício sem reenvio nem autorização."
+        },
+        {
+          "fonte": ".build/attachment-coverage-20261118/corrected/backup-preview-native/RESULT.json",
+          "alcance": "Prévia nativa sobre o perfil com a biblioteca 8, sem criar arquivo, conceder autoridade ou alterar os 18 ficheiros comparados."
+        },
+        {
+          "fonte": ".build/attachment-coverage-20261118/corrected/archive-restore/RESULT.json",
+          "alcance": "Backup, inspeção e restauro inativo da biblioteca 8 no binário nativo, com os 12 ficheiros iguais e sem autoridade de execução."
+        },
+        {
+          "fonte": ".build/attachment-covers-api-20261118/baseline-1/RESULT.json",
+          "alcance": "A janela flutuante Anthropic ficou sem rota e sem conversa no binário privado anterior."
+        },
+        {
+          "fonte": ".build/attachment-covers-api-20261118/corrected-2/RESULT.json",
+          "alcance": "Binário privado corrigido. Arrasto GTK de quatro cópias, gateway Anthropic sintético e estados associados a cada uma após resposta e reinício."
         }
       ],
-      "limiteDaProva": "UI/integração da coleção múltipla e cobertura por mensagem não integralmente entregues.",
-      "lacunaConcreta": "UI/integração da coleção múltipla e cobertura por mensagem não integralmente entregues.",
-      "proximoCriterioAceitacao": "Adicionar cumulativamente e selecionar conjunto imutável sem confundir nome, cópia e leitura.",
+      "limiteDaProva": "Chat flutuante X11 privado, dois ficheiros gerados, uma resposta Ollama sintética e reinício sem novo envio ou leitura ativa. O backup e restauro inativo conservaram os 12 ficheiros. Falta ensaio operacional e reversão da composição normal. Anthropic foi ensaiado com quatro cópias e um POST no gateway privado, incluindo texto parcial e imagem codificada. As provas não usam contas reais.",
+      "lacunaConcreta": "Faltam validação ponta a ponta nos restantes adaptadores e formatos sem resultado medido, verificação de reversão da biblioteca 8 e entrega em composição normal, com CTX-01.",
+      "proximoCriterioAceitacao": "Verificar a reversão de uma composição normal com a biblioteca 8. Medir resultados nas restantes rotas aplicáveis à medida que são validadas.",
       "entregaIntegral": "não demonstrada; requisito aberto"
     },
     {
@@ -10356,10 +10416,38 @@
             "discard"
           ],
           "sha256": "dfbfd85b8c6cfdb39561f936c89df036a2af6cb4d8aefd8dc6659297724a94c9"
+        },
+        {
+          "ficheiro": "windows/src-tauri/src/pet_memory/projects.rs",
+          "ambito": "SOURCE5/1339 privado atual; backend idêntico à NATIVE-SOURCE4. Provas anteriores conservam âmbito.",
+          "simbolos": [
+            "Project"
+          ],
+          "sha256": "c52bfda32298d08a1a91e2408690cb3d8b07c44b6b3b536a802745702a897b05"
+        },
+        {
+          "ficheiro": "windows/src-tauri/src/pet_memory/context_model.rs",
+          "ambito": "SOURCE5/1339 privado atual; backend idêntico à NATIVE-SOURCE4. Provas anteriores conservam âmbito.",
+          "simbolos": [
+            "Reference",
+            "SelectedProject",
+            "NativeContext"
+          ],
+          "sha256": "c92675003fcc3ce444f5a17466188aac8fd57f04faf0c90d5aae4de72afca0a7"
+        },
+        {
+          "ficheiro": "windows/src-tauri/src/pet_memory/context.rs",
+          "ambito": "SOURCE5/1339 privado atual; backend idêntico à NATIVE-SOURCE4. Provas anteriores conservam âmbito.",
+          "simbolos": [
+            "Capture",
+            "at_manual",
+            "at_native_references"
+          ],
+          "sha256": "da710c18b54a8dbc2cb4ef45343cbd3e5d0945a1bde6a035b6d0628306c5dcd0"
         }
       ],
       "dependenciasEaceitacao": "PET-01 + RUN-01. Dono/âmbito/proveniência/validade/revisão; dados derivados não viram instrução nem autorização",
-      "implementacaoExistente": "Notas/preferências com dono/origem/validade/revisões em834; seleção/revisão humana de dois âmbitos e contexto nativo em854.",
+      "implementacaoExistente": "Notas/preferências Pet/Conversation e projetos lógicos explícitos por pet com CID nativo retido, revisões e CAS. Seleção manual exata de projeto/notas, revisão/destino/consentimento e dados como user-data; referências de sessão nativa2 preservam dependências. Selection2 liga snapshot completo do projeto e referências de notas ao contexto original do objetivo local; revisão/consentimento próprios e hash assinado, sem formatos exteriores novos.",
       "provaDisponivel": [
         {
           "fonte": ".build/pet-goal-execution-next-r1/SCOPED-MEMORY-INTEGRATED-CHECKPOINT-R42.json",
@@ -10380,11 +10468,40 @@
         {
           "fonte": ".build/pet-goal-execution-next-r1/SHORTCUTS-CALLBACK-PARTIAL-CHECKPOINT-R43F10B2C3D2A2C3.json",
           "alcance": "Private full3092/25ignored +1024 memory races, native241 synthetic portal, exact source970; not integral acceptance."
-        }
+        },
+        {
+          "fonte": ".build/project-memory-20261117/VERIFIED.json",
+          "alcance": "SOURCE6/1338, binário privadoadbe95ad: catálogo/associações/notas isoladas, CRUD/reinícios nativos e42 Rust/21 web/tipos. Uso por modelo/objetivo recusado nesta unidade; não é entrega instalada nem aceite gráfico integral."
+        },
+        {
+          "fonte": ".build/project-memory-context-20261117/VERIFIED.json",
+          "alcance": "SOURCE5/1339, binário privado0f2b0d8e: UI/revisão/consentimento→HTTP sintético→resposta legível→retirada/reinício.43 Rust/24 web/tipos com hashes; CLI/metadata2/revogação ativa apenas fixtures. Sem objetivo de projeto, novo restauro nativo ou entrega instalada."
+        },
+        {
+          "fonte": ".build/project-goal-memory-20261117/VERIFIED.json",
+          "alcance": "SOURCE3/1340, binário privado6873c5e8: UI/projeto/CID/revisão→Authority/Driver com janela fechada→HTTP Ollama sintético→resposta, revogação em IO, controlo Selection1 e reinício sem replay.36 Rust/132 web/tipos; limites/abortos anteriores preservados. Não é recorrência, restauro novo, pacote ou instalada."
+        },
+        {
+          "fonte": ".build/project-recovery-20261117/VERIFIED.json",
+          "alcance": "Mesma composição1340/6873c5e8: dois backups/restauros nativos, Registry2/Selection2/respostas/incerteza, um turno Codex sintético com NativeContext2 efetivamente persistido; reinícios/leitura e recusa histórica específica. Grants[]; nenhuma autoridade renovada. Falhas do observador qualificadas."
+        },
+        {
+          "fonte": ".build/project-progress-20261117/VERIFIED.json",
+          "alcance": "Composição1342/9a83c8cb: consulta explícita de progresso/critério/recibo/contabilidade, janela limitada ao pet mostrado, exclusão de objetivo legado, arquivo, restauro e reinícios.86 web/tipos,7 Rust; três inferências sintéticas no cenário e zero adicional nas consultas. Não rotina prolongada ou aceitação instalada."
+        },
+        {
+          "fonte": "docs/PETS-PROJECT-FOLLOWUP-2026-11-17.md",
+          "alcance": "Source17/build5/native9, binário privado14036407: observação recorrente1..8 objetivos próprios, as-of/contabilidade/última resposta elegível, consentimento próprio e notas opcionais; duas ocorrências reais, sucessão6/revisão7, revogação derivada durante HTTP e reinício.71 Rust/58 web/tipos; restauro69/32/12 em fixtures. Não é pedido de decisão governado, uso prolongado, restauro nativo desta composição, pacote/instalada ou conclusão integral49."
+        },
+        {
+          "fonte": "docs/PETS-PROJECT-DECISION-2026-11-17.md",
+          "alcance": "Source3/1363/build2/native2, privado bbac7a16: pergunta de relatório32/12, revisão própria da resposta, nota Registry2 sem nova autoridade/ledger, CAS sem sobrescrita, fonte revogada/repôr não revive e reinício. Uso posterior da nota só após seleção/revisão num novo objetivo.5 Rust/79 web/tipos,4 inferências sintéticas; sem instalada/humano/restauro atual ou conclusão integral49."
+        },
+        "17/11 normal50: .build/operational50-20261117/VERIFIED.json —4 percursos no próprio RPM e18 comandos de recuperação; uma resposta sintética, histórico/restauro/recusas e reinícios sem replay; imagens X11 virtuais pós-reinício observadas. Âmbitos e falhas em docs/PETS-INSTALLED-DELIVERY-50.md."
       ],
-      "limiteDaProva": "Projetos, episódios, derivados, resumos e partilha explícita por implementar.",
-      "lacunaConcreta": "Projetos, episódios, derivados, resumos e partilha explícita por implementar.",
-      "proximoCriterioAceitacao": "Concluir R43 e evoluir classes com dependências/invalidação sem memória global.",
+      "limiteDaProva": "Pedidos manuais e objetivo próprio local/zero ferramentas, incluindo restauro dos novos dados, validados em perfis privados com inferência sintética. Não certifica episódios/derivados, partilha, recorrência ou entrega/aceitação integral. Normal50 não está instalada/autorizada; Wayland real bloqueado, hardware/humano/uso prolongado e critérios integrais não certificados. Provas anteriores conservam a composição respetiva.",
+      "lacunaConcreta": "Episódios/resumos/derivados, partilha governada, atualização/recorrência de projeto e entrega integral.",
+      "proximoCriterioAceitacao": "Confirmar a consulta/pintura pós-reinício em Wayland real desbloqueado e a entrega operacional50 no âmbito próprio; depois validar uso prolongado, utilidade semântica, decisões/ações governadas e os restantes critérios. A rotina/decisão de projeto já tem prova QA; não repetir essa infraestrutura como se estivesse por implementar.",
       "entregaIntegral": "não demonstrada; requisito aberto",
       "incrementoPrivadoAtual": {
         "variante": "R43F10B2C3D2A2C3",
@@ -10430,7 +10547,14 @@
           "evidencia": ".build/pet-goal-execution-next-r1/PEER-MEMORY-R9C2H3B2-FINAL-VERIFICATION-F1.json",
           "limite": "memória própria selecionada e resposta local finita com consentimento próprio; dados transitivos/delegação gerada/aceitação integral abertos"
         }
-      ]
+      ],
+      "projetos1711": {
+        "implementado": "CRUD/associações/notas isoladas, seleção manual e objetivo próprio com snapshot exato de projeto/revisões/CID. Uma resposta local sob revisão, Authority e orçamento próprios; Driver/vista fechada, revogação e reinício nativos sintéticos.",
+        "limite": "Rotina prolongada, planeamento/partilha/atualização/continuação/recorrência de projeto e entrega integral abertos; fora do RPM49/instalada44. Sem aceitação humana ou contas reais.",
+        "proximo": "Integrar acompanhamento recorrente e atualização governada de contexto com consentimento próprio para dados futuros, scheduler/Authority/orçamento existentes.",
+        "preservacao": "Restauro nativo dos novos dados passou nesta composição, incluindo contexto Codex2, respostas e tentativa desconhecida. Histórico é snapshot autenticado, não contabilidade atual completa.",
+        "progresso": "Consulta explícita por ID/revisão, critérios e comprovativos existentes; resposta/resultado desconhecido e contabilidade histórica distinguidos. Arquivo/restauro/reinício nativos atuais."
+      }
     },
     {
       "id": "MEM-02",
@@ -10640,10 +10764,44 @@
             "discard"
           ],
           "sha256": "dfbfd85b8c6cfdb39561f936c89df036a2af6cb4d8aefd8dc6659297724a94c9"
+        },
+        {
+          "ficheiro": "windows/src-tauri/src/pet_memory/context.rs",
+          "ambito": "SOURCE5/1339 privado atual; backend idêntico à NATIVE-SOURCE4. Provas anteriores conservam âmbito.",
+          "simbolos": [
+            "verify",
+            "at_manual"
+          ],
+          "sha256": "da710c18b54a8dbc2cb4ef45343cbd3e5d0945a1bde6a035b6d0628306c5dcd0"
+        },
+        {
+          "ficheiro": "windows/src-tauri/src/pet_memory/native.rs",
+          "ambito": "SOURCE5/1339 privado atual; backend idêntico à NATIVE-SOURCE4. Provas anteriores conservam âmbito.",
+          "simbolos": [
+            "Binding",
+            "metadata"
+          ],
+          "sha256": "8d3987e43f24093fd78f01b50ca92082f15214a2a5dc35402b1ffa15889e4a39"
+        },
+        {
+          "ficheiro": "windows/src/views/manual-memory.ts",
+          "ambito": "SOURCE5/1339 privado atual; backend idêntico à NATIVE-SOURCE4. Provas anteriores conservam âmbito.",
+          "simbolos": [
+            "buildManualMemory"
+          ],
+          "sha256": "f66d89565d47da5082de9ae95cb32d407a42ee32c2396cab86938ea610b78604"
+        },
+        {
+          "ficheiro": "windows/src/views/memory-projects.ts",
+          "ambito": "SOURCE5/1339 privado atual; backend idêntico à NATIVE-SOURCE4. Provas anteriores conservam âmbito.",
+          "simbolos": [
+            "buildMemoryProjects"
+          ],
+          "sha256": "3d9f2ee5a0aa631c33f9e41fb71502a1bcc5928bb730bfb9e8809c58a34435b4"
         }
       ],
       "dependenciasEaceitacao": "MEM-01 + CTX-01. Pesquisa estruturada/lexical inicial, isolamento entre pets/projetos e invalidação de derivados/índices; embeddings externos só com concessão própria",
-      "implementacaoExistente": "CRUD/CAS, pesquisa/captura/revogação e dados por destino; SDK854 acrescenta revisão manual e hash de contexto antes de consumir o token. Retoma selecionada nativa146/147 conserva referências e consumo e exige novo consentimento próprio; duas rondas e revogação em IO com motores sintéticos. Backup atual conserva ficheiros de memória e contexto como dados.",
+      "implementacaoExistente": "CRUD/CAS, pesquisa/captura/revogação e dados por destino; SDK854 acrescenta revisão manual e hash de contexto antes de consumir o token. Retoma selecionada nativa146/147 conserva referências e consumo e exige novo consentimento próprio; duas rondas e revogação em IO com motores sintéticos. Backup atual conserva ficheiros de memória e contexto como dados. Projetos acrescentam isolamento real e revisão manual ligada a associação/revisão; alterações revogam a captura. Metadata2/revogação nativa ativa e recusa após restauro de bytes têm fixtures. Objetivo próprio conserva projeto completo (não apenas revisão), revalida no reinício e revoga em IO sem publicar resposta tardia; o resultado do motor mantém-se desconhecido e debitado.",
       "provaDisponivel": [
         {
           "fonte": ".build/pet-goal-execution-next-r1/SCOPED-MEMORY-INTEGRATED-CHECKPOINT-R42.json",
@@ -10672,11 +10830,40 @@
         {
           "fonte": ".build/pet-goal-execution-next-r1/integration1034-inference-binding-r6f1/CHECKPOINT.json",
           "alcance": "R6 F1: dois donos lógicos/motores explícitos, admissão/memória/destino/corpo/orçamento/revogação, recipe driver em fixtures, Tauri319/320/322 e restauro/leitor anterior. Modelos/protocolos sintéticos; .32 instalada inalterada; nenhuma conclusão integral por catálogo/testes."
-        }
+        },
+        {
+          "fonte": ".build/project-memory-20261117/VERIFIED.json",
+          "alcance": "SOURCE6/1338, binário privadoadbe95ad: catálogo/associações/notas isoladas, CRUD/reinícios nativos e42 Rust/21 web/tipos. Uso por modelo/objetivo recusado nesta unidade; não é entrega instalada nem aceite gráfico integral."
+        },
+        {
+          "fonte": ".build/project-memory-context-20261117/VERIFIED.json",
+          "alcance": "SOURCE5/1339, binário privado0f2b0d8e: UI/revisão/consentimento→HTTP sintético→resposta legível→retirada/reinício.43 Rust/24 web/tipos com hashes; CLI/metadata2/revogação ativa apenas fixtures. Sem objetivo de projeto, novo restauro nativo ou entrega instalada."
+        },
+        {
+          "fonte": ".build/project-goal-memory-20261117/VERIFIED.json",
+          "alcance": "SOURCE3/1340, binário privado6873c5e8: UI/projeto/CID/revisão→Authority/Driver com janela fechada→HTTP Ollama sintético→resposta, revogação em IO, controlo Selection1 e reinício sem replay.36 Rust/132 web/tipos; limites/abortos anteriores preservados. Não é recorrência, restauro novo, pacote ou instalada."
+        },
+        {
+          "fonte": ".build/project-recovery-20261117/VERIFIED.json",
+          "alcance": "Mesma composição1340/6873c5e8: dois backups/restauros nativos, Registry2/Selection2/respostas/incerteza, um turno Codex sintético com NativeContext2 efetivamente persistido; reinícios/leitura e recusa histórica específica. Grants[]; nenhuma autoridade renovada. Falhas do observador qualificadas."
+        },
+        {
+          "fonte": ".build/project-progress-20261117/VERIFIED.json",
+          "alcance": "Composição1342/9a83c8cb: consulta explícita de progresso/critério/recibo/contabilidade, janela limitada ao pet mostrado, exclusão de objetivo legado, arquivo, restauro e reinícios.86 web/tipos,7 Rust; três inferências sintéticas no cenário e zero adicional nas consultas. Não rotina prolongada ou aceitação instalada."
+        },
+        {
+          "fonte": "docs/PETS-PROJECT-FOLLOWUP-2026-11-17.md",
+          "alcance": "Source17/build5/native9, binário privado14036407: observação recorrente1..8 objetivos próprios, as-of/contabilidade/última resposta elegível, consentimento próprio e notas opcionais; duas ocorrências reais, sucessão6/revisão7, revogação derivada durante HTTP e reinício.71 Rust/58 web/tipos; restauro69/32/12 em fixtures. Não é pedido de decisão governado, uso prolongado, restauro nativo desta composição, pacote/instalada ou conclusão integral49."
+        },
+        {
+          "fonte": "docs/PETS-PROJECT-DECISION-2026-11-17.md",
+          "alcance": "Source3/1363/build2/native2, privado bbac7a16: pergunta de relatório32/12, revisão própria da resposta, nota Registry2 sem nova autoridade/ledger, CAS sem sobrescrita, fonte revogada/repôr não revive e reinício. Uso posterior da nota só após seleção/revisão num novo objetivo.5 Rust/79 web/tipos,4 inferências sintéticas; sem instalada/humano/restauro atual ou conclusão integral49."
+        },
+        "17/11 normal50: .build/operational50-20261117/VERIFIED.json —4 percursos no próprio RPM e18 comandos de recuperação; uma resposta sintética, histórico/restauro/recusas e reinícios sem replay; imagens X11 virtuais pós-reinício observadas. Âmbitos e falhas em docs/PETS-INSTALLED-DELIVERY-50.md."
       ],
-      "limiteDaProva": "Inline/aceitação humana e contas reais, derivados/índices, restauro/adoção pendentes.150 teve Busy de conclusão corrigido emD;145 não tem diagnóstico causal exato.",
-      "lacunaConcreta": "Inline/aceitação humana e contas reais, derivados/índices, restauro/adoção pendentes.150 teve Busy de conclusão corrigido emD;145 não tem diagnóstico causal exato.",
-      "proximoCriterioAceitacao": "Fechar restauro/migração da composição coerente e preservar revisão/destino/autoridade sem renovação.",
+      "limiteDaProva": "Preservação/restauro atual de Registry2/Selection2/NativeContext2 passou por manutenção nativa, revisão de dados e recusa histórica após reinício. Não certifica todos os transportes/planeadores, sessões externas reais ou aceitação humana/instalada. Normal50 não está instalada/autorizada; Wayland real bloqueado, hardware/humano/uso prolongado e critérios integrais não certificados. Provas anteriores conservam a composição respetiva.",
+      "lacunaConcreta": "Atualização/recorrência de projeto, derivados/índices e entrega/aceitação integral ainda abertos.",
+      "proximoCriterioAceitacao": "Confirmar a consulta/pintura pós-reinício em Wayland real desbloqueado e a entrega operacional50 no âmbito próprio; depois validar uso prolongado, utilidade semântica, decisões/ações governadas e os restantes critérios. A rotina/decisão de projeto já tem prova QA; não repetir essa infraestrutura como se estivesse por implementar.",
       "entregaIntegral": "não demonstrada; requisito aberto",
       "r9B1Evidence": ".build/pet-goal-execution-next-r1/RECEIVED-TASK-R9B1-FINAL-VERIFICATION-F1.json",
       "r9B2AEvidence": ".build/pet-goal-execution-next-r1/RECEIVED-PLAN-R9B2A-FINAL-VERIFICATION-F1.json",
@@ -10691,7 +10878,14 @@
           "evidencia": ".build/pet-goal-execution-next-r1/PEER-MEMORY-R9C2H3B2-FINAL-VERIFICATION-F1.json",
           "limite": "memória própria selecionada e resposta local finita com consentimento próprio; dados transitivos/delegação gerada/aceitação integral abertos"
         }
-      ]
+      ],
+      "projetos1711": {
+        "implementado": "CRUD/associações/notas isoladas, seleção manual e objetivo próprio com snapshot exato de projeto/revisões/CID. Uma resposta local sob revisão, Authority e orçamento próprios; Driver/vista fechada, revogação e reinício nativos sintéticos.",
+        "limite": "Rotina prolongada, planeamento/partilha/atualização/continuação/recorrência de projeto e entrega integral abertos; fora do RPM49/instalada44. Sem aceitação humana ou contas reais.",
+        "proximo": "Integrar acompanhamento recorrente e atualização governada de contexto com consentimento próprio para dados futuros, scheduler/Authority/orçamento existentes.",
+        "preservacao": "Restauro nativo dos novos dados passou nesta composição, incluindo contexto Codex2, respostas e tentativa desconhecida. Histórico é snapshot autenticado, não contabilidade atual completa.",
+        "progresso": "Consulta explícita por ID/revisão, critérios e comprovativos existentes; resposta/resultado desconhecido e contabilidade histórica distinguidos. Arquivo/restauro/reinício nativos atuais."
+      }
     },
     {
       "id": "CTX-03",
@@ -10838,7 +11032,7 @@
       "id": "CTX-04",
       "trabalho": "Evoluir fontes de pet/CID para objetivos/regras e coleções persistentes",
       "criteriosOriginaisPreservados": "RUN-01 + EXE-02 + CTX-03. Migração sem alargar concessões antigas; seleção explícita de vários calendários, revisão e revogação por ocorrência",
-      "estadoObservado": "parcial: fontes próprias do pet, coleções de conversa e recortes explícitos de objetivos dedicados integrados; nova UI/F2/corpo/hash/reinício e preservação Source3/Goal65 validados em composição nativa de desenvolvimento com provider sintético; regra/ocorrência e entrega pendentes",
+      "estadoObservado": "Parcial integrada no RPM48: coleções ICS próprias por rotina/ocorrência, resposta manual/automática, revisão/sucessão/renovação e preservação nativas verificadas. Entrega operacional pendente.",
       "ficheirosSimbolos": [
         {
           "ficheiro": "windows/src-tauri/src/pet_sources/model.rs",
@@ -10868,16 +11062,24 @@
         }
       ],
       "dependenciasEaceitacao": "RUN-01 + EXE-02 + CTX-03. Migração sem alargar concessões antigas; seleção explícita de vários calendários, revisão e revogação por ocorrência",
-      "implementacaoExistente": "Fonte inscrita tem âmbito/revisão; base CAS reutilizável.",
+      "implementacaoExistente": "Seleção explícita multicalendário, enrolamento/revisão, captura DATA própria por ocorrência, concessão finita, revogação, contexto imutável e referências separadas da conversa. Reutiliza runtime/Authority existentes.",
       "provaDisponivel": [
         {
-          "fonte": "docs/PETS-VALIDATION.md",
-          "alcance": "Relatos/checkpoints por composição; as provas parciais não cobrem todos os critérios deste ID."
+          "fonte": ".build/operational48-20261116/VERIFIED.json",
+          "alcance": "Percursos afetados do próprio RPM48: domínios, calendários, revisão/sucessão/renovação,13 comandos de preservação e leitura histórica6/7 e10; não instalação/aceitação humana/paridade global."
+        },
+        {
+          "fonte": ".build/calendar-agenda-selection-20261116/SEMANTIC-ASSESSMENT.json",
+          "alcance": "Dados ICS novos; um caso real gratuito9h/10h correto, com corpo/hash e resposta exata reaberta. Código de produto igual antes da versão48; não repetido no RPM."
+        },
+        {
+          "fonte": "/home/pmglo/Projects/coucou-codex/.build/resources48-20261116/docs-before/PETS-REQUIREMENTS-AUDIT-2026-10-25.json",
+          "alcance": "Estado/provas anteriores conservados; entradas de atalhos/Settings não provam PostgreSQL ou os novos critérios de calendários."
         }
       ],
-      "limiteDaProva": "Coleções multicalendário e principais de objetivo/regra/ocorrência não concluídos.",
-      "lacunaConcreta": "Concessões próprias de regra/ocorrência e rotinas/DST não são autorizadas por GoalGrant10 finito. CLI/API autónomos e aceitação operacional continuam no objetivo integral.",
-      "proximoCriterioAceitacao": "AUTO-01/02: implementar regras e ocorrências autorizadas sobre o runtime/Authority/dispatcher/recursos/contabilidade comuns, sem segundo scheduler ou ledger. Fixar contrato de concessão própria, dono/revisão, orçamento total, idempotência, IANA/DST e política de atrasos antes de ativar recorrência. O consentimento finito de GoalGrant10 não autoriza rondas futuras. Manter a preparação diária multicalendário AUTO-03 como entrega dependente, com dados/frescura/cobertura e notificação deduplicada; não fechar a autonomia só com CRUD de regras. Entrega/aceitação instalada e limites de providers/voz/Guardian continuam no objetivo integral.",
+      "limiteDaProva": "Fixtures nativas e um caso com modelo real; não aceitação de dados pessoais/contas, coleções arbitrárias, todos os providers ou instalação. Revogação durante HTTP conserva prova anterior apenas nas guardas sem delta.",
+      "lacunaConcreta": "Entrega autorizada/aceitação operacional do48 e restantes coleções/cenários aplicáveis. Quantidade, aviso limitado, ciclo de regras e janela restaurada já implementados e verificados no âmbito descrito.",
+      "proximoCriterioAceitacao": "Aplicar/verificar a candidata48 apenas se autorizada, preservando dados/permissões; depois aceitar coleções e cenários restantes com contratos próprios. Não reimplementar o percurso ICS já comprovado.",
       "entregaIntegral": "não demonstrada; requisito aberto",
       "persistentCalendarCollectionsReview": {
         "atUtc": "2026-11-09T21:35:00.670861+00:00",
@@ -10972,6 +11174,43 @@
         "humanAcceptance": false,
         "goalComplete": false,
         "next": "AUTO-01/02: implementar regras e ocorrências autorizadas sobre o runtime/Authority/dispatcher/recursos/contabilidade comuns, sem segundo scheduler ou ledger. Fixar contrato de concessão própria, dono/revisão, orçamento total, idempotência, IANA/DST e política de atrasos antes de ativar recorrência. O consentimento finito de GoalGrant10 não autoriza rondas futuras. Manter a preparação diária multicalendário AUTO-03 como entrega dependente, com dados/frescura/cobertura e notificação deduplicada; não fechar a autonomia só com CRUD de regras. Entrega/aceitação instalada e limites de providers/voz/Guardian continuam no objetivo integral."
+      },
+      "calendarOccurrenceReview": {
+        "atUtc": "2026-11-16T16:19:14.094544+00:00",
+        "state": "Captura própria por ocorrência implementada/integrada e validada em aplicação nativa de desenvolvimento; inferência/resumo/notificação e entrega operacional pendentes",
+        "verification": ".build/rule-calendar-materialization-20261116/VERIFIED-CAPTURE.json",
+        "sourceMap": ".build/rule-calendar-materialization-20261116/SOURCE-MATERIALIZER2.json",
+        "sourceFiles": 1326,
+        "nativeBinarySha256": "eb183dcff98b254b2c02576bddfaba3a1ba32d96835bf3a8696969e1580dfe00",
+        "nativeUiAndReader": true,
+        "partialAndUnavailableCoverage": true,
+        "metadataBusyNoReadSpent": true,
+        "restartAndRevocation": true,
+        "modelCalls": 0,
+        "installed": false,
+        "humanAcceptance": false,
+        "full49Accepted": false,
+        "next": "Bind this original completed capture to actual request/body limits/hash and derived own rule child DATA authority via existing finite-response writer, then synthetic model result and one governed notification; preserve read once/deadline/partition."
+      },
+      "calendarInferenceReview": {
+        "atUtc": "2026-11-16T17:23:17.871164+00:00",
+        "state": "Resposta finita manual/automática com dados futuros próprios integrada e validada nativamente em desenvolvimento; notificação/semântica/ciclo/entrega ainda pendentes",
+        "verification": ".build/rule-calendar-inference-20261116/VERIFIED-INFERENCE.json",
+        "sourceMap": ".build/rule-calendar-inference-20261116/SOURCE5.json",
+        "sourceFiles": 1326,
+        "nativeBinarySha256": "2714dbe39653e286f74691995c13ea4ed51df8b9e221c5db9fac72ab9465f96b",
+        "actualBodyAndHash": true,
+        "oneAttemptPerOccurrence": true,
+        "readableDialogueAndRestart": true,
+        "approvedAutomaticTimeWithPanelsClosed": true,
+        "revocationDuringActualHttp": true,
+        "nativePreservationCommands": 13,
+        "previousReaderRefusedWithoutChange": true,
+        "realModelCalls": 0,
+        "installed": false,
+        "humanAcceptance": false,
+        "full49Accepted": false,
+        "next": "Integrar uma notificação governada/deduplicada no horário permitido e validar o resumo com dados novos semanticamente desconhecidos pelo modelo. Depois fechar ciclo de edição/sucessão das regras com dados futuros, aceitação restaurada e entrega da composição atual; preservar49 e recuperação por domínio."
       }
     },
     {
@@ -11016,7 +11255,7 @@
       "id": "AUTO-01",
       "trabalho": "Repositório de regras, gatilhos e concessões; ativar/desativar por utilizador",
       "criteriosOriginaisPreservados": "RUN-01/02 + EXE-02 + CTX-04. Regra tem dono, revisão, fontes, limites e validade; conteúdo externo não inscreve regras",
-      "estadoObservado": "Revisão governada7 implementada na cadeia Authority comum: carryRemaining conserva saldo/limites/validade; renewFiniteAllocation exige decisão própria e nova alocação finita, sem somar saldo antigo. Só slots futuros à aprovação; consumo histórico permanece visível. Core Rust, web1566, fábrica e build58 passaram nos âmbitos descritos. Aceitação Tauri/HTTP, hardware, migração completa7 e entrega instalada pendentes. Publicação autorizada uma vez; parar depois do push.",
+      "estadoObservado": "Parcial integrado; percurso de revisão/sucessão6/7, execução finita, recuperação/revogação/reinício e preservação do perfil de QA validados nativamente na candidata normal35. Requisito integral aberto.",
       "ficheirosSimbolos": [
         {
           "ficheiro": "windows/src-tauri/src/pet_runtime/model.rs",
@@ -11069,39 +11308,10 @@
       ],
       "dependenciasEaceitacao": "RUN-01/02 + EXE-02 + CTX-04. Regra tem dono, revisão, fontes, limites e validade; conteúdo externo não inscreve regras",
       "implementacaoExistente": "Mesmo catálogo Authority/leases/dispatcher/Goal/Attempt e diretório de owners. OperationId tipado antes de IO; guard único e registo Weak nativo, ou ausência do processo com inode/boot/namespace/perfil exatos. Revisão nativa conserva origem/candidato/decisão em intenção pendente e ACK perdido; a sondagem mantém-se gasta. Regras/condições continuam locais e sem dados selecionados.",
-      "provaDisponivel": [
-        {
-          "fonte": "docs/PETS-VALIDATION.md",
-          "alcance": "Apenas bases/histórico; não há aceitação integral específica deste requisito."
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-scheduled-dispatch/VERIFIED-PARTIAL.json",
-          "alcance": "Automatic mode native/synthetic and preservation; requirement remains partial"
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-readiness-recovery/VERIFIED-PARTIAL.json",
-          "alcance": "Native metadata recovery and preservation; AUTO requirement remains partial"
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-temporal-status/VERIFIED.json",
-          "alcance": "Native/functional temporal status only; requirement remains partial"
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/revoked-rule-intents/VERIFIED.json",
-          "alcance": "Revoked signed rule metadata only: exact durable reconciliation, fault/restart recovery, native consent/denials and safe old-reader refusal; no worker drain or full requirement completion"
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-authority-succession/VERIFIED-PARTIAL.json",
-          "alcance": "Native Authority tests of original remaining allowance, permanent old revocation, contention/fault/restart and CLI preservation of generated6 data. No real model, native GUI or installed acceptance."
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-governed-revisions/VERIFIED-PARTIAL.json",
-          "alcance": "Core/persistência/controlo tipado de revisão7; não é aceitação gráfica, provider real, instalação ou conclusão do requisito."
-        }
-      ],
-      "limiteDaProva": "5 cenários nativos,11 regressões de regras,8 controlos simulados, Tauri54/provider HTTP sintético e13 recibos CLI. Não é inferência real, aceitação humana/instalada, reinício físico, mudança de boot/namespace ou rotina integral.",
-      "lacunaConcreta": "Aceitação gráfica/nativa6/7 e composição/restauro7; decisões de atraso/DST, regras com dados/fontes próprios, rotinas/notificações e instalação/aceitação integral.",
-      "proximoCriterioAceitacao": "Aguardar novas instruções após esta publicação. Na retoma, aceitar a composição atual com revisão6/7 Tauri, HTTP sintético, reinício e preservação; não repetir provas válidas nem usar o binário57 para declarar aceite a58. Depois restantes49 critérios integrais.",
+      "provaDisponivel": "RULE67-SOURCE35-VERIFIED.json: cenário nativo atual,3 respostas sintéticas;13 comandos CLI,8 registos assinados/3 Goal67/formatos1,6,6,7,7;12 payloads originais iguais e janela restaurada histórica sem execução. Segunda sucessão detetada no RPM 54 e corrigida na vista. Na composição privada passaram sucessão6/revisão7, três respostas sintéticas, perda de processo, restauro e recusa de execução. Aceitação do pacote sucessor aberta. .build/rule-succession-reopen-20261118/VERIFIED.json RPM 55 exato em perfis privados. Retirada de anexos sem reenvio, sucessão6/revisão7 na mesma vista, três respostas sintéticas, recuperação, reinício e restauro preservados. Aceitação no perfil operacional aberta. .build/pet-goal-execution-next-r1/release55-rule-succession-20261118/VERIFIED.json",
+      "limiteDaProva": "Escolhas automatizadas de fixtures próprias, sem aceitação humana ou instalada. Não certifica todos os gatilhos/cenários/contas/efeitos reais nem a rotina diária completa.",
+      "lacunaConcreta": "Aceitação humana/instalada e restantes critérios de produto/gatilhos/cenários aplicáveis. O percurso técnico6/7 atual e a preservação descrita já passaram; não voltar a tratá-los como implementação inexistente.",
+      "proximoCriterioAceitacao": "Entregar e aceitar operacionalmente no âmbito autorizado; continuar as dependências funcionais de rotinas úteis, sem repetir infraestrutura já fechada.",
       "entregaIntegral": "não demonstrada; requisito aberto",
       "scheduledStartReview": {
         "state": "partial integrated and native-private validated: one-shot signed UTC barrier; rules/occurrences not complete",
@@ -11315,13 +11525,63 @@
         "nativeWindowVerified": false,
         "installed": false,
         "humanAcceptance": false
+      },
+      "historicoEstadoAntesAceitacao35": {
+        "estadoObservado": "Revisão governada7 implementada na cadeia Authority comum: carryRemaining conserva saldo/limites/validade; renewFiniteAllocation exige decisão própria e nova alocação finita, sem somar saldo antigo. Só slots futuros à aprovação; consumo histórico permanece visível. Core Rust, web1566, fábrica e build58 passaram nos âmbitos descritos. Aceitação Tauri/HTTP, hardware, migração completa7 e entrega instalada pendentes. Publicação autorizada uma vez; parar depois do push.",
+        "provaDisponivel": [
+          {
+            "fonte": "docs/PETS-VALIDATION.md",
+            "alcance": "Apenas bases/histórico; não há aceitação integral específica deste requisito."
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-scheduled-dispatch/VERIFIED-PARTIAL.json",
+            "alcance": "Automatic mode native/synthetic and preservation; requirement remains partial"
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-readiness-recovery/VERIFIED-PARTIAL.json",
+            "alcance": "Native metadata recovery and preservation; AUTO requirement remains partial"
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-temporal-status/VERIFIED.json",
+            "alcance": "Native/functional temporal status only; requirement remains partial"
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/revoked-rule-intents/VERIFIED.json",
+            "alcance": "Revoked signed rule metadata only: exact durable reconciliation, fault/restart recovery, native consent/denials and safe old-reader refusal; no worker drain or full requirement completion"
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-authority-succession/VERIFIED-PARTIAL.json",
+            "alcance": "Native Authority tests of original remaining allowance, permanent old revocation, contention/fault/restart and CLI preservation of generated6 data. No real model, native GUI or installed acceptance."
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-governed-revisions/VERIFIED-PARTIAL.json",
+            "alcance": "Core/persistência/controlo tipado de revisão7; não é aceitação gráfica, provider real, instalação ou conclusão do requisito."
+          }
+        ],
+        "limiteDaProva": "5 cenários nativos,11 regressões de regras,8 controlos simulados, Tauri54/provider HTTP sintético e13 recibos CLI. Não é inferência real, aceitação humana/instalada, reinício físico, mudança de boot/namespace ou rotina integral.",
+        "lacunaConcreta": "Aceitação gráfica/nativa6/7 e composição/restauro7; decisões de atraso/DST, regras com dados/fontes próprios, rotinas/notificações e instalação/aceitação integral.",
+        "proximoCriterioAceitacao": "Aguardar novas instruções após esta publicação. Na retoma, aceitar a composição atual com revisão6/7 Tauri, HTTP sintético, reinício e preservação; não repetir provas válidas nem usar o binário57 para declarar aceite a58. Depois restantes49 critérios integrais."
+      },
+      "latestCurrentRule67TechnicalAcceptance": {
+        "atUtc": "2026-11-13T00:37:19.169035+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "buildRecord": "FORK44-SOURCE35-BUILD.json",
+        "receipt": ".build/upstream-parity-20261111/RULE67-SOURCE35-VERIFIED.json",
+        "technicalNativeAndPreservationScopeComplete": true,
+        "syntheticResponses": 3,
+        "signedRecords": 8,
+        "originalPayloadsExact": 12,
+        "nativeCommandReceipts": 13,
+        "humanApproval": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false
       }
     },
     {
       "id": "AUTO-02",
       "trabalho": "Agendador de horários/eventos e deduplicação de ocorrências",
       "criteriosOriginaisPreservados": "AUTO-01. Fuso IANA, mudança de hora, suspensão/offline e políticas skip/coalesce/decisão; nenhum efeito duplicado por evento repetido",
-      "estadoObservado": "Revisão governada7 implementada na cadeia Authority comum: carryRemaining conserva saldo/limites/validade; renewFiniteAllocation exige decisão própria e nova alocação finita, sem somar saldo antigo. Só slots futuros à aprovação; consumo histórico permanece visível. Core Rust, web1566, fábrica e build58 passaram nos âmbitos descritos. Aceitação Tauri/HTTP, hardware, migração completa7 e entrega instalada pendentes. Publicação autorizada uma vez; parar depois do push.",
+      "estadoObservado": "Parcial integrado; percurso de revisão/sucessão6/7, execução finita, recuperação/revogação/reinício e preservação do perfil de QA validados nativamente na candidata normal35. Requisito integral aberto.",
       "ficheirosSimbolos": [
         {
           "ficheiro": "windows/src-tauri/src/pet_runtime/resource_wait.rs",
@@ -11375,39 +11635,10 @@
       ],
       "dependenciasEaceitacao": "AUTO-01. Fuso IANA, mudança de hora, suspensão/offline e políticas skip/coalesce/decisão; nenhum efeito duplicado por evento repetido",
       "implementacaoExistente": "Mesmo catálogo Authority/leases/dispatcher/Goal/Attempt e diretório de owners. OperationId tipado antes de IO; guard único e registo Weak nativo, ou ausência do processo com inode/boot/namespace/perfil exatos. Revisão nativa conserva origem/candidato/decisão em intenção pendente e ACK perdido; a sondagem mantém-se gasta. Regras/condições continuam locais e sem dados selecionados.",
-      "provaDisponivel": [
-        {
-          "fonte": "docs/PETS-VALIDATION.md",
-          "alcance": "Apenas bases/histórico; não há aceitação integral específica deste requisito."
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-scheduled-dispatch/VERIFIED-PARTIAL.json",
-          "alcance": "Automatic mode native/synthetic and preservation; requirement remains partial"
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-readiness-recovery/VERIFIED-PARTIAL.json",
-          "alcance": "Native metadata recovery and preservation; AUTO requirement remains partial"
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-temporal-status/VERIFIED.json",
-          "alcance": "Native/functional temporal status only; requirement remains partial"
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/revoked-rule-intents/VERIFIED.json",
-          "alcance": "Revoked signed rule metadata only: exact durable reconciliation, fault/restart recovery, native consent/denials and safe old-reader refusal; no worker drain or full requirement completion"
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-authority-succession/VERIFIED-PARTIAL.json",
-          "alcance": "Native Authority tests of original remaining allowance, permanent old revocation, contention/fault/restart and CLI preservation of generated6 data. No real model, native GUI or installed acceptance."
-        },
-        {
-          "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-governed-revisions/VERIFIED-PARTIAL.json",
-          "alcance": "Core/persistência/controlo tipado de revisão7; não é aceitação gráfica, provider real, instalação ou conclusão do requisito."
-        }
-      ],
-      "limiteDaProva": "5 cenários nativos,11 regressões de regras,8 controlos simulados, Tauri54/provider HTTP sintético e13 recibos CLI. Não é inferência real, aceitação humana/instalada, reinício físico, mudança de boot/namespace ou rotina integral.",
-      "lacunaConcreta": "Aceitação gráfica/nativa6/7 e composição/restauro7; decisões de atraso/DST, regras com dados/fontes próprios, rotinas/notificações e instalação/aceitação integral.",
-      "proximoCriterioAceitacao": "Aguardar novas instruções após esta publicação. Na retoma, aceitar a composição atual com revisão6/7 Tauri, HTTP sintético, reinício e preservação; não repetir provas válidas nem usar o binário57 para declarar aceite a58. Depois restantes49 critérios integrais.",
+      "provaDisponivel": "RULE67-SOURCE35-VERIFIED.json: cenário nativo atual,3 respostas sintéticas;13 comandos CLI,8 registos assinados/3 Goal67/formatos1,6,6,7,7;12 payloads originais iguais e janela restaurada histórica sem execução. Segunda sucessão detetada no RPM 54 e corrigida na vista. Na composição privada passaram sucessão6/revisão7, três respostas sintéticas, perda de processo, restauro e recusa de execução. Aceitação do pacote sucessor aberta. .build/rule-succession-reopen-20261118/VERIFIED.json RPM 55 exato em perfis privados. Retirada de anexos sem reenvio, sucessão6/revisão7 na mesma vista, três respostas sintéticas, recuperação, reinício e restauro preservados. Aceitação no perfil operacional aberta. .build/pet-goal-execution-next-r1/release55-rule-succession-20261118/VERIFIED.json",
+      "limiteDaProva": "Escolhas automatizadas de fixtures próprias, sem aceitação humana ou instalada. Não certifica todos os gatilhos/cenários/contas/efeitos reais nem a rotina diária completa.",
+      "lacunaConcreta": "Aceitação humana/instalada e restantes critérios de produto/gatilhos/cenários aplicáveis. O percurso técnico6/7 atual e a preservação descrita já passaram; não voltar a tratá-los como implementação inexistente.",
+      "proximoCriterioAceitacao": "Entregar e aceitar operacionalmente no âmbito autorizado; continuar as dependências funcionais de rotinas úteis, sem repetir infraestrutura já fechada.",
       "entregaIntegral": "não demonstrada; requisito aberto",
       "scheduledStartReview": {
         "state": "partial integrated and native-private validated: one-shot signed UTC barrier; rules/occurrences not complete",
@@ -11653,13 +11884,63 @@
         "nativeWindowVerified": false,
         "installed": false,
         "humanAcceptance": false
+      },
+      "historicoEstadoAntesAceitacao35": {
+        "estadoObservado": "Revisão governada7 implementada na cadeia Authority comum: carryRemaining conserva saldo/limites/validade; renewFiniteAllocation exige decisão própria e nova alocação finita, sem somar saldo antigo. Só slots futuros à aprovação; consumo histórico permanece visível. Core Rust, web1566, fábrica e build58 passaram nos âmbitos descritos. Aceitação Tauri/HTTP, hardware, migração completa7 e entrega instalada pendentes. Publicação autorizada uma vez; parar depois do push.",
+        "provaDisponivel": [
+          {
+            "fonte": "docs/PETS-VALIDATION.md",
+            "alcance": "Apenas bases/histórico; não há aceitação integral específica deste requisito."
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-scheduled-dispatch/VERIFIED-PARTIAL.json",
+            "alcance": "Automatic mode native/synthetic and preservation; requirement remains partial"
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-readiness-recovery/VERIFIED-PARTIAL.json",
+            "alcance": "Native metadata recovery and preservation; AUTO requirement remains partial"
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-temporal-status/VERIFIED.json",
+            "alcance": "Native/functional temporal status only; requirement remains partial"
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/revoked-rule-intents/VERIFIED.json",
+            "alcance": "Revoked signed rule metadata only: exact durable reconciliation, fault/restart recovery, native consent/denials and safe old-reader refusal; no worker drain or full requirement completion"
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-authority-succession/VERIFIED-PARTIAL.json",
+            "alcance": "Native Authority tests of original remaining allowance, permanent old revocation, contention/fault/restart and CLI preservation of generated6 data. No real model, native GUI or installed acceptance."
+          },
+          {
+            "fonte": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-governed-revisions/VERIFIED-PARTIAL.json",
+            "alcance": "Core/persistência/controlo tipado de revisão7; não é aceitação gráfica, provider real, instalação ou conclusão do requisito."
+          }
+        ],
+        "limiteDaProva": "5 cenários nativos,11 regressões de regras,8 controlos simulados, Tauri54/provider HTTP sintético e13 recibos CLI. Não é inferência real, aceitação humana/instalada, reinício físico, mudança de boot/namespace ou rotina integral.",
+        "lacunaConcreta": "Aceitação gráfica/nativa6/7 e composição/restauro7; decisões de atraso/DST, regras com dados/fontes próprios, rotinas/notificações e instalação/aceitação integral.",
+        "proximoCriterioAceitacao": "Aguardar novas instruções após esta publicação. Na retoma, aceitar a composição atual com revisão6/7 Tauri, HTTP sintético, reinício e preservação; não repetir provas válidas nem usar o binário57 para declarar aceite a58. Depois restantes49 critérios integrais."
+      },
+      "latestCurrentRule67TechnicalAcceptance": {
+        "atUtc": "2026-11-13T00:37:19.169035+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "buildRecord": "FORK44-SOURCE35-BUILD.json",
+        "receipt": ".build/upstream-parity-20261111/RULE67-SOURCE35-VERIFIED.json",
+        "technicalNativeAndPreservationScopeComplete": true,
+        "syntheticResponses": 3,
+        "signedRecords": 8,
+        "originalPayloadsExact": 12,
+        "nativeCommandReceipts": 13,
+        "humanApproval": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false
       }
     },
     {
       "id": "AUTO-03",
       "trabalho": "Primeira rotina: preparação diária a partir de calendários escolhidos",
       "criteriosOriginaisPreservados": "AUTO-01/02 + EXE-03. Dados sintéticos desconhecidos pelo modelo, várias fontes, frescura/cobertura, falha parcial e uma única notificação no horário permitido",
-      "estadoObservado": "pendente",
+      "estadoObservado": "Parcial de produto; implementação/caso técnico verificados. RPM48 passou captura/DATA/corpo/hash, resposta/reinício, horário original, aviso limitado, revisão/sucessão/renovação e restauro. O caso real9h/10h passou na composição anterior de código equivalente antes da versão48.",
       "ficheirosSimbolos": [
         {
           "ficheiro": "windows/src-tauri/src/pet_calendar/mod.rs",
@@ -11690,16 +11971,25 @@
         }
       ],
       "dependenciasEaceitacao": "AUTO-01/02 + EXE-03. Dados sintéticos desconhecidos pelo modelo, várias fontes, frescura/cobertura, falha parcial e uma única notificação no horário permitido",
-      "implementacaoExistente": "Consulta de calendário é base, não rotina diária completa.",
+      "implementacaoExistente": "Rotina própria multicalendário no Ollama configurado, quantidade opcional revista1–64, validação nativa, índice global de eventos, factos/cobertura/frescura da DATA, cronologia com rank do pet, uma notificação limitada por ocorrência e preservação sem renovar autoridade.",
       "provaDisponivel": [
         {
-          "fonte": "docs/PETS-VALIDATION.md",
-          "alcance": "Apenas bases/histórico; não há aceitação integral específica deste requisito."
-        }
+          "fonte": ".build/operational48-20261116/VERIFIED.json",
+          "alcance": "Percursos afetados do próprio RPM48: domínios, calendários, revisão/sucessão/renovação,13 comandos de preservação e leitura histórica6/7 e10; não instalação/aceitação humana/paridade global."
+        },
+        {
+          "fonte": ".build/calendar-agenda-selection-20261116/VERIFIED-AGENDA-SELECTION.json",
+          "alcance": "Caso real gratuito:9h/10h de fontes diferentes,85 palavras, parcial/indisponível corretos, UI/reinício/revogação sem nova inferência. Não certificação geral de seleção."
+        },
+        {
+          "fonte": "/home/pmglo/Projects/coucou-codex/.build/resources48-20261116/docs-before/PETS-REQUIREMENTS-AUDIT-2026-10-25.json",
+          "alcance": "Estado/provas anteriores conservados; entradas de atalhos/Settings não provam PostgreSQL ou os novos critérios de calendários."
+        },
+        "17/11 normal50: .build/operational50-20261117/VERIFIED.json —4 percursos no próprio RPM e18 comandos de recuperação; uma resposta sintética, histórico/restauro/recusas e reinícios sem replay; imagens X11 virtuais pós-reinício observadas. Âmbitos e falhas em docs/PETS-INSTALLED-DELIVERY-50.md."
       ],
-      "limiteDaProva": "Multicalendário, regra/ocorrência e notificação dependem CTX-04/AUTO.",
-      "lacunaConcreta": "Multicalendário, regra/ocorrência e notificação dependem CTX-04/AUTO.",
-      "proximoCriterioAceitacao": "Uma ocorrência com dados novos, falha parcial, origem e uma notificação permitida.",
+      "limiteDaProva": "Dados sintéticos e um caso com motor real; nenhuma aceitação humana/instalada ou banner físico. Uma seleção correta não certifica intenções arbitrárias, todos os dados/providers/modelos ou qualidade geral. Normal50 não está instalada/autorizada; Wayland real bloqueado, hardware/humano/uso prolongado e critérios integrais não certificados. Provas anteriores conservam a composição respetiva.",
+      "lacunaConcreta": "Autorização/entrega operacional48, banner real e aceitação humana com dados/cenários pertinentes. Quantidade configurável, ciclo governado,13 comandos de preservação e janela restaurada já passaram; não os repetir como implementação ausente.",
+      "proximoCriterioAceitacao": "Concluir a verificação Wayland e a eventual entrega50 com autorização própria, incluindo percurso operacional/aviso e preservação; distinguir aceitação humana, hardware, fixtures e restantes critérios integrais. A proposta48/49 é histórica.",
       "entregaIntegral": "não demonstrada; requisito aberto",
       "persistentCalendarCollectionsReview": {
         "atUtc": "2026-11-09T21:35:00.670861+00:00",
@@ -11794,13 +12084,117 @@
         "humanAcceptance": false,
         "goalComplete": false,
         "next": "AUTO-01/02: implementar regras e ocorrências autorizadas sobre o runtime/Authority/dispatcher/recursos/contabilidade comuns, sem segundo scheduler ou ledger. Fixar contrato de concessão própria, dono/revisão, orçamento total, idempotência, IANA/DST e política de atrasos antes de ativar recorrência. O consentimento finito de GoalGrant10 não autoriza rondas futuras. Manter a preparação diária multicalendário AUTO-03 como entrega dependente, com dados/frescura/cobertura e notificação deduplicada; não fechar a autonomia só com CRUD de regras. Entrega/aceitação instalada e limites de providers/voz/Guardian continuam no objetivo integral."
+      },
+      "calendarOccurrenceReview": {
+        "atUtc": "2026-11-16T16:19:14.094544+00:00",
+        "state": "Captura própria por ocorrência implementada/integrada e validada em aplicação nativa de desenvolvimento; inferência/resumo/notificação e entrega operacional pendentes",
+        "verification": ".build/rule-calendar-materialization-20261116/VERIFIED-CAPTURE.json",
+        "sourceMap": ".build/rule-calendar-materialization-20261116/SOURCE-MATERIALIZER2.json",
+        "sourceFiles": 1326,
+        "nativeBinarySha256": "eb183dcff98b254b2c02576bddfaba3a1ba32d96835bf3a8696969e1580dfe00",
+        "nativeUiAndReader": true,
+        "partialAndUnavailableCoverage": true,
+        "metadataBusyNoReadSpent": true,
+        "restartAndRevocation": true,
+        "modelCalls": 0,
+        "installed": false,
+        "humanAcceptance": false,
+        "full49Accepted": false,
+        "next": "Bind this original completed capture to actual request/body limits/hash and derived own rule child DATA authority via existing finite-response writer, then synthetic model result and one governed notification; preserve read once/deadline/partition."
+      },
+      "calendarInferenceReview": {
+        "atUtc": "2026-11-16T17:23:17.871164+00:00",
+        "state": "Resposta finita manual/automática com dados futuros próprios integrada e validada nativamente em desenvolvimento; notificação/semântica/ciclo/entrega ainda pendentes",
+        "verification": ".build/rule-calendar-inference-20261116/VERIFIED-INFERENCE.json",
+        "sourceMap": ".build/rule-calendar-inference-20261116/SOURCE5.json",
+        "sourceFiles": 1326,
+        "nativeBinarySha256": "2714dbe39653e286f74691995c13ea4ed51df8b9e221c5db9fac72ab9465f96b",
+        "actualBodyAndHash": true,
+        "oneAttemptPerOccurrence": true,
+        "readableDialogueAndRestart": true,
+        "approvedAutomaticTimeWithPanelsClosed": true,
+        "revocationDuringActualHttp": true,
+        "nativePreservationCommands": 13,
+        "previousReaderRefusedWithoutChange": true,
+        "realModelCalls": 0,
+        "installed": false,
+        "humanAcceptance": false,
+        "full49Accepted": false,
+        "next": "Integrar uma notificação governada/deduplicada no horário permitido e validar o resumo com dados novos semanticamente desconhecidos pelo modelo. Depois fechar ciclo de edição/sucessão das regras com dados futuros, aceitação restaurada e entrega da composição atual; preservar49 e recuperação por domínio."
+      },
+      "latestRuleResultNotification": ".build/rule-result-notification-20261116/VERIFIED-NOTIFICATION.json",
+      "latestCalendarLink": ".build/rule-calendar-link-20261116/VERIFIED-LINK.json",
+      "latestActualSemanticAttempt": ".build/rule-calendar-link-20261116/SEMANTIC-FAILED-QUALIFICATION.json",
+      "latestCurrentOllamaRuntimeContext": {
+        "atUtc": "2026-11-16T19:14:06.788465+00:00",
+        "sourceFiles": 1329,
+        "binarySha256": "aec31dd2a50822a8d8089582c17935bd7b9f0ec1c7b41b2bc9b2fb832643baa6",
+        "verification": "/home/pmglo/Projects/coucou-codex/.build/ollama-runtime-context-20261116/VERIFIED-CONTEXT.json",
+        "technicalNativeContext": true,
+        "semanticAcceptance": false,
+        "actualFreeModelCalls": 2,
+        "humanAcceptance": false,
+        "installed": false,
+        "full49Complete": false
+      },
+      "latestCurrentCalendarFactualResponse": {
+        "atUtc": "2026-11-16T20:03:09.078473+00:00",
+        "sourceFiles": 1330,
+        "sourceManifest": "/home/pmglo/Projects/coucou-codex/.build/calendar-factual-response-20261116/SOURCE3.json",
+        "binarySha256": "d0a0f8f73fa47cbb65320e54110115eeb603231f9d71687c0712c4ed58e5a633",
+        "verification": "/home/pmglo/Projects/coucou-codex/.build/calendar-factual-response-20261116/VERIFIED-FACTUAL-RESPONSE.json",
+        "nativeFactualGroundingChronologyAndFunctionalRead": true,
+        "strictIntentAcceptance": false,
+        "actualFreeModelCalls": 2,
+        "humanAcceptance": false,
+        "installed": false,
+        "full49Complete": false
+      },
+      "latestCurrentCalendarCountLifecycle": {
+        "atUtc": "2026-11-16T20:57:35.092474+00:00",
+        "sourceManifest": "/home/pmglo/Projects/coucou-codex/.build/calendar-count-lifecycle-20261116/SOURCE3.json",
+        "sourceFiles": 1332,
+        "binarySha256": "d653795bd3fe3a395b357fd73ea598eb0184d74ef2ff29f794a5c1c92152475d",
+        "verification": "/home/pmglo/Projects/coucou-codex/.build/calendar-count-lifecycle-20261116/VERIFIED-COUNT-LIFECYCLE.json",
+        "nativeReviewedQuantityLifecycleAndRestoredWindow": true,
+        "strictIntentAcceptance": false,
+        "actualFreeModelCalls": 1,
+        "humanAcceptance": false,
+        "installed": false,
+        "full49Complete": false
+      },
+      "latestCurrentCalendarAgendaSelection": {
+        "atUtc": "2026-11-16T21:12:26.197331+00:00",
+        "sourceManifest": "/home/pmglo/Projects/coucou-codex/.build/calendar-agenda-selection-20261116/SOURCE1.json",
+        "sourceFiles": 1332,
+        "binarySha256": "668072518b0080bd7ab117cb2f908f04860ed03c5a89872325defa7c90b0f5c0",
+        "verification": "/home/pmglo/Projects/coucou-codex/.build/calendar-agenda-selection-20261116/VERIFIED-AGENDA-SELECTION.json",
+        "strictCurrentCaseAcceptance": true,
+        "generalSemanticCertification": false,
+        "actualFreeModelCalls": 1,
+        "humanAcceptance": false,
+        "installed": false,
+        "full49Complete": false
+      },
+      "latestNormal48Candidate": {
+        "verification": ".build/operational48-20261116/VERIFIED.json",
+        "proposal": "docs/PETS-INSTALLED-DELIVERY-48.md",
+        "candidateVersion": "0.5.1-mochi.48",
+        "rpmSha256": "45983dfee0bbc9832614ee88f4ab8c81a30cdde83600206a77b56dec2f35b292",
+        "binarySha256": "050bf265427a143c837a4afc842ae53c36b0486f981e7eb86e329d6e40765fb0",
+        "sourceFiles": 1332,
+        "currentPackageAffectedRoutesVerified": true,
+        "installed": false,
+        "humanAcceptance": false,
+        "wholeParityRecertified": false,
+        "full49Complete": false
       }
     },
     {
       "id": "AUTO-04",
       "trabalho": "Rotina de acompanhamento de objetivo/projeto e pedido de decisão",
       "criteriosOriginaisPreservados": "RUN-03/04 + MEM-02. Progresso verificável, interrupção/retoma sem repetir efeitos, orçamento repartido e comunicação sem spam",
-      "estadoObservado": "pendente + base integrada",
+      "estadoObservado": "Parcial integrado. O RPM 59 confirmou acompanhamento ativo em duas ocorrências da mesma regra, orçamento repartido, pergunta, resposta como nota e reabertura após pausa. Um binário privado posterior confirmou o seguimento da decisão até um pedido local revisto e um rascunho próprio do pet destinatário.",
       "ficheirosSimbolos": [
         {
           "ficheiro": "windows/src-tauri/src/pet_runtime/criteria.rs",
@@ -11827,26 +12221,124 @@
             "source_matches"
           ],
           "sha256": "995c481723b7d0f3b5a8a8bd9582c5a5579c091691630bbf81cf44a8817d49e3"
+        },
+        {
+          "ficheiro": "windows/src-tauri/src/pet_runtime/work_report_api.rs",
+          "ambito": "SOURCE5/1333, incremento pós49 privado validado; sem entrega instalada",
+          "simbolos": [
+            "Input",
+            "prepare"
+          ],
+          "sha256": "1438efe38927e9e0ccd3ea768ce3f8f9196f66c7036d9b7b4472b623da797df5"
+        },
+        {
+          "ficheiro": "windows/src-tauri/src/pet_runtime/dispatcher.rs",
+          "ambito": "SOURCE5/1333, incremento pós49 privado validado; sem entrega instalada",
+          "simbolos": [
+            "drive_disclosure",
+            "finish_native_peer_plan"
+          ],
+          "sha256": "7deaeb5fa8af2f78ae2624f5417be4125b082195197d49b064646f5b52782eef"
+        },
+        {
+          "ficheiro": "windows/src/views/runtime-work-report.ts",
+          "ambito": "SOURCE5/1333, incremento pós49 privado validado; sem entrega instalada",
+          "simbolos": [
+            "buildRuntimeWorkReport",
+            "selectedStates"
+          ],
+          "sha256": "ad136f74a4a0f75bca7fe4b91928b370c57312913c65d12f08dcdd3dc4871f39"
+        },
+        {
+          "ficheiro": "windows/src/views/runtime-message-inbox.ts",
+          "ambito": "Fontes1333/SOURCE1 da leitura do relatório, privado atual; sem entrega instalada",
+          "simbolos": [
+            "buildRuntimeMessageInbox"
+          ],
+          "sha256": "3d6da8d801a054e34499597774d2aa91060ff38ecc8125c79cca3da68ba88bd4"
         }
       ],
       "dependenciasEaceitacao": "RUN-03/04 + MEM-02. Progresso verificável, interrupção/retoma sem repetir efeitos, orçamento repartido e comunicação sem spam",
-      "implementacaoExistente": "Critérios/progresso/recuperação individuais existem.",
+      "implementacaoExistente": "Critérios/progresso/recuperação individuais e relatório finito de pedido recebido, com partilha própria limitada e sem retoma implícita. Inbox legível com estado/data/critérios/proveniência. Projeto lógico e notas têm seleção manual e objetivo local Selection2 sob revisão/Authority/orçamento próprios; retirada em IO e reinício sem replay. Consulta explícita do projeto liga apenas objetivos com snapshot desse ID, mostra critérios/recibo/débito/incerteza e qualifica histórico restaurado. Arquivo, restauro e reinícios atuais passaram sem inferência adicional. Acompanhamento recorrente explícito1..8 objetivos próprios com consentimento futuro, respostas finitas elegíveis, notas opcionais, as-of e revogação derivados foi validado em Source17/native9. A leitura de ocorrências sem notas foi corrigida e validada em Source1/0a3e9482/native-after2. Pedido limitado no relatório, revisão SaveProjectDecisionData e nota ordinária de projeto com origem/recibo, confirmação sem duplicação e revogação. Uso da nota num objetivo novo exigiu seleção e revisão de dados próprias, sem executar a opção por inferência.",
       "provaDisponivel": [
         {
           "fonte": "docs/PETS-VALIDATION.md",
           "alcance": "Apenas bases/histórico; não há aceitação integral específica deste requisito."
-        }
+        },
+        {
+          "fonte": ".build/work-followup-decision-20261117/VERIFIED.json",
+          "alcance": "SOURCE5/1333 e binário privado5b7d154d: UI de escolha/consentimento, espera sem slot, pausa/drenagem com vista fechada, uma entrega/um débito, inbox original e dois reinícios sem replay. Testes dirigidos/negativos e quatro imagens X11 atuais. Sem inferência, instalação ou aceitação humana."
+        },
+        {
+          "fonte": ".build/work-report-readable-20261117/VERIFIED.json",
+          "alcance": "UI passiva legível na composição atual6505753c/1333;23 web e tipos, pausa/entrega única/reinícios nativos, imagem X11 observada. Backend819 inputs inalterados; histórico apenas fixture web nesta unidade."
+        },
+        {
+          "fonte": ".build/project-memory-20261117/VERIFIED.json",
+          "alcance": "SOURCE6/1338, binário privadoadbe95ad: catálogo/associações/notas isoladas, CRUD/reinícios nativos e42 Rust/21 web/tipos. Uso por modelo/objetivo recusado nesta unidade; não é entrega instalada nem aceite gráfico integral."
+        },
+        {
+          "fonte": ".build/project-memory-context-20261117/VERIFIED.json",
+          "alcance": "SOURCE5/1339, binário privado0f2b0d8e: UI/revisão/consentimento→HTTP sintético→resposta legível→retirada/reinício.43 Rust/24 web/tipos com hashes; CLI/metadata2/revogação ativa apenas fixtures. Sem objetivo de projeto, novo restauro nativo ou entrega instalada."
+        },
+        {
+          "fonte": ".build/project-goal-memory-20261117/VERIFIED.json",
+          "alcance": "SOURCE3/1340, binário privado6873c5e8: UI/projeto/CID/revisão→Authority/Driver com janela fechada→HTTP Ollama sintético→resposta, revogação em IO, controlo Selection1 e reinício sem replay.36 Rust/132 web/tipos; limites/abortos anteriores preservados. Não é recorrência, restauro novo, pacote ou instalada."
+        },
+        {
+          "fonte": ".build/project-recovery-20261117/VERIFIED.json",
+          "alcance": "Mesma composição1340/6873c5e8: dois backups/restauros nativos, Registry2/Selection2/respostas/incerteza, um turno Codex sintético com NativeContext2 efetivamente persistido; reinícios/leitura e recusa histórica específica. Grants[]; nenhuma autoridade renovada. Falhas do observador qualificadas."
+        },
+        {
+          "fonte": ".build/project-progress-20261117/VERIFIED.json",
+          "alcance": "Composição1342/9a83c8cb: consulta explícita de progresso/critério/recibo/contabilidade, janela limitada ao pet mostrado, exclusão de objetivo legado, arquivo, restauro e reinícios.86 web/tipos,7 Rust; três inferências sintéticas no cenário e zero adicional nas consultas. Não rotina prolongada ou aceitação instalada."
+        },
+        {
+          "fonte": "docs/PETS-PROJECT-RULE-2026-11-17.md",
+          "alcance": "Rotina com revisões exatas de notas de projeto: duas ocorrências nativas, sucessão6, revisão7, revogação/fecho e reinício privados; docs/PETS-PROJECT-RULE-2026-11-17.md. Aceitação privada Source4/build2/native5; uso prolongado, observação automática de objetivos/resultados e entrega instalada permanecem abertos."
+        },
+        {
+          "fonte": "docs/PETS-PROJECT-FOLLOWUP-2026-11-17.md",
+          "alcance": "Source17/build5/native9, binário privado14036407: observação recorrente1..8 objetivos próprios, as-of/contabilidade/última resposta elegível, consentimento próprio e notas opcionais; duas ocorrências reais, sucessão6/revisão7, revogação derivada durante HTTP e reinício.71 Rust/58 web/tipos; restauro69/32/12 em fixtures. Não é pedido de decisão governado, uso prolongado, restauro nativo desta composição, pacote/instalada ou conclusão integral49."
+        },
+        {
+          "fonte": "docs/PETS-PROJECT-PROGRESS-2026-11-17.md#ocorrências-do-acompanhamento-sem-notas-opcionais",
+          "alcance": "Source1/1357 e binário privado0a3e9482: recusa anterior reproduzida; três ocorrências Context12 sem notas consultadas via UI real, duas respostas exatas, débito desconhecido e reinício com ficheiros iguais e zero inferência.24 web/tipos, sem delta backend, pacote/instalação ou aceitação humana."
+        },
+        {
+          "fonte": "docs/PETS-PROJECT-DECISION-2026-11-17.md",
+          "alcance": "Source3/1363/build2/native2, privado bbac7a16: pergunta de relatório32/12, revisão própria da resposta, nota Registry2 sem nova autoridade/ledger, CAS sem sobrescrita, fonte revogada/repôr não revive e reinício. Uso posterior da nota só após seleção/revisão num novo objetivo.5 Rust/79 web/tipos,4 inferências sintéticas; sem instalada/humano/restauro atual ou conclusão integral49."
+        },
+        {
+          "fonte": "docs/PETS-PROJECT-DECISION-2026-11-17.md#prazo-e-restauro-da-composição-atual",
+          "alcance": "Source2/build2 privado b321a700: guarda de confirmação UTC+monotónico validado em7 Rust;6 percursos sintéticos seed4 com continuação de leitura/reinício finalize2; dois arquivos/restauros nativos,8 objetivos/4Context12/duas notas e tentativa desconhecida65536, UI histórica, recusa de nova autoridade e zero HTTP/replay nos restauros.79 web/tipos reutilizados por hashes. Seed5 ficou na preparação antes de tarefa/contexto/admissão; causa ainda não estabelecida. Sem utilidade/fiabilidade prolongada, entrega instalada/humana ou conclusão integral49."
+        },
+        {
+          "fonte": "docs/PETS-PROJECT-DECISION-2026-11-17.md#consultas-e-publicação-da-captura-sob-contenção",
+          "alcance": "Source5/build2 privado0ba38c5e: contenção de leitor/lista e publicação de captura reproduzidas e corrigidas com fences/prazo/dono originais;91 Rust/79web-tipos reutilizados; nova rotina revista na UI percorreu tarefa/contexto12/admissão32/Driver/HTTP/resposta/reinício com consultas concorrentes e registos antigos exatos. Leitor histórico atual preservou notas/recibos/unknown65536 e recusou nova autoridade, sem HTTP/replay. WebKit/DOM após reinício legíveis; pintura física X11 virtual em branco, compositor real pendente. Sem instalação, humano, uso prolongado ou conclusão integral49."
+        },
+        "17/11 normal50: .build/operational50-20261117/VERIFIED.json —4 percursos no próprio RPM e18 comandos de recuperação; uma resposta sintética, histórico/restauro/recusas e reinícios sem replay; imagens X11 virtuais pós-reinício observadas. Âmbitos e falhas em docs/PETS-INSTALLED-DELIVERY-50.md.",
+        "21/11 RPM 59: .build/pet-goal-execution-next-r1/release59-service-cards-20261121/PROJECT-ACTIVE-VERIFIED.json. Dois perfis novos em X11 privado, escolha registada como nota, reutilização sob consentimento próprio, pausa durante HTTP, reserva de 65 536 bytes, reinício e reabertura do rascunho sem repetir a chamada.",
+        "21/11 RPM 59: .build/pet-goal-execution-next-r1/release59-service-cards-20261121/PROJECT-RECURRENCE-VERIFIED.json. Duas ocorrências da mesma regra com relógio real. O segundo pedido viu o estado novo, o primeiro relatório ficou intacto, o orçamento terminou a zero e o observador privado recebeu zero notificações, incluindo após reinício.",
+        "21/11 binário privado posterior: .build/project-decision-action-20261121-r2/VERIFIED.json. A nota informa planeamento com consentimento próprio. O envio exato revisto produziu um único recibo e o Codex adotou o pedido como rascunho, sem executar. A revisão alterada do projeto bloqueou nova adoção."
       ],
-      "limiteDaProva": "Acompanhamento periódico autorizado e memória de projeto não concluídos.",
-      "lacunaConcreta": "Acompanhamento periódico autorizado e memória de projeto não concluídos.",
-      "proximoCriterioAceitacao": "Detetar bloqueio/progresso e pedir decisão sem replay, spam ou orçamento renovado.",
-      "entregaIntegral": "não demonstrada; requisito aberto"
+      "limiteDaProva": "Verificação nativa em X11 privado, com perfis e respostas sintéticos. Abrange duas ocorrências com uma autorização silenciosa e zero saldo após a segunda. A data futura adicional não foi atingida. A correspondência fecha o envio local e a adoção como rascunho. A fonte posterior ainda precisa de pacote. A instalada continua na 44.",
+      "lacunaConcreta": "Utilidade e fiabilidade prolongadas no trabalho real, continuação do rascunho recebido com autorização própria e aceitação operacional e humana no compositor da estação.",
+      "proximoCriterioAceitacao": "Verificar a cooperação direta até ao trabalho admitido pelo destinatário, empacotar e avaliar a preservação dos dados novos. Provar a utilidade prolongada e confirmar o percurso em composição operacional autorizada.",
+      "entregaIntegral": "não demonstrada; requisito aberto",
+      "projetos1711": {
+        "implementado": "CRUD/associações/notas isoladas, seleção manual e objetivo próprio com snapshot exato de projeto/revisões/CID. Uma resposta local sob revisão, Authority e orçamento próprios; Driver/vista fechada, revogação e reinício nativos sintéticos.",
+        "limite": "Rotina prolongada, planeamento/partilha/atualização/continuação/recorrência de projeto e entrega integral abertos; fora do RPM49/instalada44. Sem aceitação humana ou contas reais.",
+        "proximo": "Confirmar a pintura/consulta após reinício no compositor Wayland real, em perfil de desenvolvimento isolado e sem inferência nova; depois reavaliar paridade/49, entrega operacional e próxima dependência funcional, evitando mais infraestrutura sem falha demonstrada.",
+        "preservacao": "Composição b321a700: dois restauros nativos preservaram projetos, notas de escolha/recusa,8 objetivos/4Context12 e tentativa desconhecida. Histórico consultável, sem autoridade/contabilidade atual reconstruídas; reinícios com zero HTTP/replay. Diagnóstico de preparação seed5 continua separado.",
+        "progresso": "Consulta explícita por ID/revisão, critérios e comprovativos existentes; resposta/resultado desconhecido e contabilidade histórica distinguidos. Arquivo/restauro/reinício nativos atuais."
+      }
     },
     {
       "id": "AUTO-05",
       "trabalho": "Notificações, silêncio e escalada de bloqueios",
       "criteriosOriginaisPreservados": "OBS-01 + AUTO-01. Conteúdo sensível limitado, deduplicação e validade; indisponibilidade não causa reenvio infinito ou mudança de canal/conta",
-      "estadoObservado": "pendente + base integrada",
+      "estadoObservado": "Parcial: aviso de resposta diária integrado/verificado no RPM48, consentimento próprio e deduplicação pela ocorrência; política geral de silêncio/escalada ainda aberta.",
       "ficheirosSimbolos": [
         {
           "ficheiro": "windows/src-tauri/src/pet_runtime/model.rs",
@@ -11895,16 +12387,24 @@
         }
       ],
       "dependenciasEaceitacao": "OBS-01 + AUTO-01. Conteúdo sensível limitado, deduplicação e validade; indisponibilidade não causa reenvio infinito ou mudança de canal/conta",
-      "implementacaoExistente": "Estado/avisos têm bases existentes; não prova política integral de notificações de regras.",
+      "implementacaoExistente": "Uma tentativa desktop de baixa prioridade/silenciosa, sem conteúdo privado, ligada ao recibo da ocorrência; janela original limitada, compromisso antes de D-Bus, falha/ACK incerto sem replay ou fallback de canal/conta.",
       "provaDisponivel": [
         {
-          "fonte": "docs/PETS-VALIDATION.md",
-          "alcance": "Apenas bases/histórico; não há aceitação integral específica deste requisito."
+          "fonte": ".build/operational48-20261116/VERIFIED.json",
+          "alcance": "Percursos afetados do próprio RPM48: domínios, calendários, revisão/sucessão/renovação,13 comandos de preservação e leitura histórica6/7 e10; não instalação/aceitação humana/paridade global."
+        },
+        {
+          "fonte": ".build/rule-result-notification-20261116/VERIFIED-NOTIFICATION.json",
+          "alcance": "Contrato/fixtures da notificação anterior, reutilizados só no código sem delta; o percurso atual do RPM48 tem prova própria."
+        },
+        {
+          "fonte": "/home/pmglo/Projects/coucou-codex/.build/resources48-20261116/docs-before/PETS-REQUIREMENTS-AUDIT-2026-10-25.json",
+          "alcance": "Estado/provas anteriores conservados; entradas de atalhos/Settings não provam PostgreSQL ou os novos critérios de calendários."
         }
       ],
-      "limiteDaProva": "Silêncio, escalada e deduplicação por ocorrência/canal por completar.",
-      "lacunaConcreta": "Silêncio, escalada e deduplicação por ocorrência/canal por completar.",
-      "proximoCriterioAceitacao": "Validade/limites/sensibilidade e ausência de reenvio infinito ou troca de conta/canal.",
+      "limiteDaProva": "D-Bus privado comprova protocolo, silêncio pedido e deduplicação; não a apresentação/obediência do desktop operacional. Escalada, DND/quiet hours gerais e outros canais/cenários não aceites.",
+      "lacunaConcreta": "Banner operacional e restantes políticas de silêncio/escalada aplicáveis; não falta implementar novamente o aviso diário limitado já verificado.",
+      "proximoCriterioAceitacao": "Verificar o aviso da entrega48 no desktop autorizado; avaliar depois os cenários restantes, sem reenvio infinito, divulgação sensível ou troca silenciosa de canal/conta.",
       "entregaIntegral": "não demonstrada; requisito aberto"
     },
     {
@@ -14730,9 +15230,10 @@
         {
           "fonte": ".build/pet-goal-execution-next-r1/SETTINGS-AUTOSTART-PHYSICAL-PARTIAL-CHECKPOINT-R43F10B2C3D1B2E4.json",
           "alcance": "Native239 private5→legacy4ACK→6→old5 refusal→physical base replacement→new exact review/effect→portable6 restore depth4;3082Rust21ignored,0models. Not integral acceptance."
-        }
+        },
+        "17/11 telefone no próprio normal50: .build/phone-parity-current50-20261117/VERIFIED.json —TLS/modelo/conversa/reset/cancelamento/retirada/503/reinício e probe readonly,14 POSTs sintéticos; causa pré-HTTP22/82 não demonstrada e não reproduzida neste âmbito. Sem código/instalação/quota real/aceitação humana alterados."
       ],
-      "limiteDaProva": "Operações reais de cada serviço/envio/contas não universalmente implementadas/aceites. F10A não implementa revalidação: faltam intenção por campo/CAS e confirmação após publicação/fsync diretório antes de a conceder. Consumidores não fecham escritor: CAS/fsyncdiretório/resultado incerto tipado/reconciliação/reinício pendentes. Listener ainda antes da gravação e chaves com efeitos próprios; não revalidados/entregues. Isto é verificação otimista para writers cooperantes, não CAS atómico/sandbox deoutros processos do mesmoUID. Incerteza pós-publicação tem classe/recusa de nova escrita,mas barreira global deefeitos/reconciliação durável/reinício/fsyncdiretório eparidade Mac/Windows ainda pendentes.",
+      "limiteDaProva": "Operações reais de cada serviço/envio/contas não universalmente implementadas/aceites. F10A não implementa revalidação: faltam intenção por campo/CAS e confirmação após publicação/fsync diretório antes de a conceder. Consumidores não fecham escritor: CAS/fsyncdiretório/resultado incerto tipado/reconciliação/reinício pendentes. Listener ainda antes da gravação e chaves com efeitos próprios; não revalidados/entregues. Isto é verificação otimista para writers cooperantes, não CAS atómico/sandbox deoutros processos do mesmoUID. Incerteza pós-publicação tem classe/recusa de nova escrita,mas barreira global deefeitos/reconciliação durável/reinício/fsyncdiretório eparidade Mac/Windows ainda pendentes. A prova telefone50 é nativa/privada e delimitada; sem Android físico, todos os providers, instalada, fiabilidade prolongada ou causa histórica confirmada.",
       "lacunaConcreta": "Autostart físico/legado6 validado em privado. Faltam as cinco componentes com decisões próprias, composição/adoção exata, aceitação operacional e restantes critérios integrais deste requisito.",
       "proximoCriterioAceitacao": "C3D: separate explicit component reactivation and durable intent/outcome/recovery for listeners, key writes, hooks and registration; keep six suspensions until their paths prove exact effect/uncertainty, then compose/integrate exact sources without installation replacement",
       "entregaIntegral": "não demonstrada; requisito aberto",
@@ -14866,7 +15367,149 @@
           "antesDe": "R43F10B2C3B1B4",
           "texto": "Intenção/resultado de preferências e respetiva revisão persistente comprovados em C3A4; fence operacional em C3B0. Faltam revisão humana exata, reativação por componente e intenções/recibos de listeners/chaves/hooks; outros serviços/contas ainda sem aceitação integral."
         }
-      ]
+      ],
+      "latestCurrentOriginalVoiceOperationAcceptance": {
+        "atUtc": "2026-11-12T23:36:45.193254+00:00",
+        "source": "SOURCE33-CUSTOM-DOCUMENTATION.json",
+        "receipt": ".build/upstream-parity-20261111/VOICE-EFFECTS-SOURCE33-VERIFIED.json",
+        "freshIsolatedNativeCases": 6,
+        "ownedNativeProcessEnvironmentAttestations": 12,
+        "originalFiveOperationNamesExercisedInBoundedVariants": true,
+        "permissionDenial": true,
+        "priorHomeIsolationClaimsQualified": ".build/upstream-parity-20261111/VOICE-QA-HOME-ISOLATION-QUALIFICATION33.json",
+        "humanAcceptance": false,
+        "allRealWorldEffectsVerified": false,
+        "physicalAudioAcceptance": false,
+        "granularResourceAuthorityCertified": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentVoiceRosterRecovery": {
+        "atUtc": "2026-11-13T00:22:22.188220+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "receipt": ".build/upstream-parity-20261111/VOICE-ROSTER-SOURCE35-VERIFIED.json",
+        "nativeSetMainAndPermissionDenialPassed": true,
+        "sameBeforeDuringAfterRestartCid": true,
+        "otherChoicesPreserved": true,
+        "virtualAudioWithRealAsrFreeTts": true,
+        "realChatModelRequests": 0,
+        "physicalOrHumanAcceptance": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false,
+        "remainingVoiceVariantsAccepted": false
+      },
+      "latestCurrentNaturalVoiceAcceptance": {
+        "atUtc": "2026-11-13T01:04:04.213633+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "receipt": ".build/upstream-parity-20261111/VOICE-NATURAL-SOURCE35-VERIFIED.json",
+        "technicalFullRecordedPhraseAndReadOnlyReopenVerified": true,
+        "originalOverallHarnessFailuresRetainedAndQualified": true,
+        "sameBeforeTurnCidResponseAndChoicesAfterRestart": true,
+        "newVoiceActionOrChatInferenceOnResume": false,
+        "physicalHumanInstalledOrAll49Acceptance": false
+      },
+      "latestCurrentHookFormatsAcceptance": {
+        "atUtc": "2026-11-13T01:25:49.922727+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "receipt": ".build/upstream-parity-20261111/HOOK-FORMATS-SOURCE35-VERIFIED.json",
+        "nativeFormatComparisons": 6,
+        "centreAndSessionReturn": true,
+        "actualCodexMultiEditImageAccepted": true,
+        "compositorFullScenarioPassed": false,
+        "finalCompositorBackVerified": false,
+        "compositorFailureQualifiedAndRetained": true,
+        "originalOverallFailedReceiptRetained": true,
+        "realIdeProviderEmissionVerified": false,
+        "humanAcceptance": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentInstalled35Delivery": {
+        "atUtc": "2026-11-13T01:42:56.368358+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "version": "0.5.1-mochi.44",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/INSTALLED44-TECHNICAL.json",
+        "sameBinaryAsScopedNative35QA": true,
+        "nativeBackupAndPrevious43Preserved": true,
+        "existingFiles": 49,
+        "unchanged": 48,
+        "onlyLogChanged": true,
+        "settingsPetsWholeJsonExact": true,
+        "actualInstalledHubVersionAndPetsObserved": true,
+        "personalProfileInferenceOrAutonomyExecutionAcceptance": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentFreeRealLocalVoice": {
+        "atUtc": "2026-11-13T02:05:56.883860+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/VOICE-LOCAL-REAL-SOURCE35-VERIFIED.json",
+        "freeAlreadySelectedModel": "gemma3:4b",
+        "realLocalRequests": 1,
+        "nativeCorrectReplyNaturalEndStopAndSameCidRestart": true,
+        "independentAllSpokenWordsRecognized": false,
+        "originalAsrFailureRetained": true,
+        "newProductDefectEstablished": false,
+        "personalProfileUsed": false,
+        "paidOrCopilotGithubQuota": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentPhoneAdmissionRecovery": {
+        "atUtc": "2026-11-13T19:19:48.952817+00:00",
+        "source": "SOURCE37-PHONE-ADMISSION-RELEASE45.json",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/PHONE-NORMAL45-SOURCE37-VERIFIED.json",
+        "realProducerNegativeControl": "Unreachable vs Busy before fix; corrected same backend36",
+        "directedTests": 11,
+        "normalVersion": "0.5.1-mochi.45",
+        "normalBuildRecord": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/FORK45-SOURCE37-BUILD.json",
+        "nativeSyntheticHttpPosts": 7,
+        "readOnlyStatusQueries": 112,
+        "initialAdmissionContentionForcedInNativeRun": false,
+        "oldIntermittentCauseEstablished": false,
+        "normalPackageAndNativePhoneScopeVerified": true,
+        "installedAcceptance": false,
+        "humanAcceptance": false,
+        "newAuthorityRetryFallbackOrPersistentFormat": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentPhoneQuestionParity": {
+        "atUtc": "2026-11-13T19:47:52.415476+00:00",
+        "state": "preserved in complete native synthetic-phone path; no product delta needed",
+        "source": "SOURCE37-PHONE-ADMISSION-RELEASE45.json",
+        "officialCommit": "841a81ce1d75b65882b30139e6b716d0837dce30",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/PHONE-QUESTIONS-SOURCE37-VERIFIED-COMPARISON.json",
+        "nativeQuestionsAndExactSocketAnswersPerComposition": 2,
+        "capabilityRefusalAndReplayBoundariesPerComposition": 10,
+        "sameRunnerAndExactAnswers": true,
+        "nativeAppRestartNoReplay": true,
+        "generatedProfileDecisionRoute": "Coucou explicitly selected/verified; operational choice preserved",
+        "realOrPaidInferenceOrRealIde": false,
+        "failedObserverCasesRetained": 2,
+        "physicalAndroidOrBiometricOrHumanOrInstalledAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentPhoneN8nSourceRecovery": {
+        "atUtc": "2026-11-13T20:47:06.387570+00:00",
+        "state": "root integrated:1 mapper;37 directed/private87 native selected-session/revoke/restart verified; normal/installed pending",
+        "source": "SOURCE38-PHONE-N8N-NATIVE-ACTIVITY.json",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/PHONE-N8N-SOURCE38-VERIFIED.json",
+        "inputs": 1323,
+        "productionFilesChanged": 1,
+        "nativeNormal37Negative": true,
+        "nativeModelTextExposureProven": false,
+        "fixtureWrongSourceAndCardInventionProven": true,
+        "directedTests": 37,
+        "privateNativeBuild": 87,
+        "privateNativeFixedRoutePassed": true,
+        "originalInitialBaselinePassedButWholeRestartFailed": true,
+        "visualSelectionCaptureAccepted": false,
+        "realOrPaidInferenceCalls": 0,
+        "normalPackagePrepared": false,
+        "installed": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
+      }
     },
     {
       "id": "VOICE-01",
@@ -15872,6 +16515,77 @@
           "Missing-Close-ACK durable reconciliation, persistence ACK, Notes/pre-audio context, physical capture/runtime/model identity and governed Voice activation remain open.",
           "Native clipboard proof uses real Coucou/Tauri/IPC/helpers on private synthetic Xvfb; no host/Wayland/Windows/audio/model/provider quota or installed acceptance."
         ]
+      },
+      "latestCurrentOriginalVoiceOperationAcceptance": {
+        "atUtc": "2026-11-12T23:36:45.193254+00:00",
+        "source": "SOURCE33-CUSTOM-DOCUMENTATION.json",
+        "receipt": ".build/upstream-parity-20261111/VOICE-EFFECTS-SOURCE33-VERIFIED.json",
+        "freshIsolatedNativeCases": 6,
+        "ownedNativeProcessEnvironmentAttestations": 12,
+        "originalFiveOperationNamesExercisedInBoundedVariants": true,
+        "permissionDenial": true,
+        "priorHomeIsolationClaimsQualified": ".build/upstream-parity-20261111/VOICE-QA-HOME-ISOLATION-QUALIFICATION33.json",
+        "humanAcceptance": false,
+        "allRealWorldEffectsVerified": false,
+        "physicalAudioAcceptance": false,
+        "granularResourceAuthorityCertified": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentVoiceRosterRecovery": {
+        "atUtc": "2026-11-13T00:22:22.188220+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "receipt": ".build/upstream-parity-20261111/VOICE-ROSTER-SOURCE35-VERIFIED.json",
+        "nativeSetMainAndPermissionDenialPassed": true,
+        "sameBeforeDuringAfterRestartCid": true,
+        "otherChoicesPreserved": true,
+        "virtualAudioWithRealAsrFreeTts": true,
+        "realChatModelRequests": 0,
+        "physicalOrHumanAcceptance": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false,
+        "remainingVoiceVariantsAccepted": false
+      },
+      "latestCurrentNaturalVoiceAcceptance": {
+        "atUtc": "2026-11-13T01:04:04.213633+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "receipt": ".build/upstream-parity-20261111/VOICE-NATURAL-SOURCE35-VERIFIED.json",
+        "technicalFullRecordedPhraseAndReadOnlyReopenVerified": true,
+        "originalOverallHarnessFailuresRetainedAndQualified": true,
+        "sameBeforeTurnCidResponseAndChoicesAfterRestart": true,
+        "newVoiceActionOrChatInferenceOnResume": false,
+        "physicalHumanInstalledOrAll49Acceptance": false
+      },
+      "latestCurrentInstalled35Delivery": {
+        "atUtc": "2026-11-13T01:42:56.368358+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "version": "0.5.1-mochi.44",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/INSTALLED44-TECHNICAL.json",
+        "sameBinaryAsScopedNative35QA": true,
+        "nativeBackupAndPrevious43Preserved": true,
+        "existingFiles": 49,
+        "unchanged": 48,
+        "onlyLogChanged": true,
+        "settingsPetsWholeJsonExact": true,
+        "actualInstalledHubVersionAndPetsObserved": true,
+        "personalProfileInferenceOrAutonomyExecutionAcceptance": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentFreeRealLocalVoice": {
+        "atUtc": "2026-11-13T02:05:56.883860+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/VOICE-LOCAL-REAL-SOURCE35-VERIFIED.json",
+        "freeAlreadySelectedModel": "gemma3:4b",
+        "realLocalRequests": 1,
+        "nativeCorrectReplyNaturalEndStopAndSameCidRestart": true,
+        "independentAllSpokenWordsRecognized": false,
+        "originalAsrFailureRetained": true,
+        "newProductDefectEstablished": false,
+        "personalProfileUsed": false,
+        "paidOrCopilotGithubQuota": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
       }
     },
     {
@@ -16207,6 +16921,77 @@
           "Missing-Close-ACK durable reconciliation, persistence ACK, Notes/pre-audio context, physical capture/runtime/model identity and governed Voice activation remain open.",
           "Native clipboard proof uses real Coucou/Tauri/IPC/helpers on private synthetic Xvfb; no host/Wayland/Windows/audio/model/provider quota or installed acceptance."
         ]
+      },
+      "latestCurrentOriginalVoiceOperationAcceptance": {
+        "atUtc": "2026-11-12T23:36:45.193254+00:00",
+        "source": "SOURCE33-CUSTOM-DOCUMENTATION.json",
+        "receipt": ".build/upstream-parity-20261111/VOICE-EFFECTS-SOURCE33-VERIFIED.json",
+        "freshIsolatedNativeCases": 6,
+        "ownedNativeProcessEnvironmentAttestations": 12,
+        "originalFiveOperationNamesExercisedInBoundedVariants": true,
+        "permissionDenial": true,
+        "priorHomeIsolationClaimsQualified": ".build/upstream-parity-20261111/VOICE-QA-HOME-ISOLATION-QUALIFICATION33.json",
+        "humanAcceptance": false,
+        "allRealWorldEffectsVerified": false,
+        "physicalAudioAcceptance": false,
+        "granularResourceAuthorityCertified": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentVoiceRosterRecovery": {
+        "atUtc": "2026-11-13T00:22:22.188220+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "receipt": ".build/upstream-parity-20261111/VOICE-ROSTER-SOURCE35-VERIFIED.json",
+        "nativeSetMainAndPermissionDenialPassed": true,
+        "sameBeforeDuringAfterRestartCid": true,
+        "otherChoicesPreserved": true,
+        "virtualAudioWithRealAsrFreeTts": true,
+        "realChatModelRequests": 0,
+        "physicalOrHumanAcceptance": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false,
+        "remainingVoiceVariantsAccepted": false
+      },
+      "latestCurrentNaturalVoiceAcceptance": {
+        "atUtc": "2026-11-13T01:04:04.213633+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "receipt": ".build/upstream-parity-20261111/VOICE-NATURAL-SOURCE35-VERIFIED.json",
+        "technicalFullRecordedPhraseAndReadOnlyReopenVerified": true,
+        "originalOverallHarnessFailuresRetainedAndQualified": true,
+        "sameBeforeTurnCidResponseAndChoicesAfterRestart": true,
+        "newVoiceActionOrChatInferenceOnResume": false,
+        "physicalHumanInstalledOrAll49Acceptance": false
+      },
+      "latestCurrentInstalled35Delivery": {
+        "atUtc": "2026-11-13T01:42:56.368358+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "version": "0.5.1-mochi.44",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/INSTALLED44-TECHNICAL.json",
+        "sameBinaryAsScopedNative35QA": true,
+        "nativeBackupAndPrevious43Preserved": true,
+        "existingFiles": 49,
+        "unchanged": 48,
+        "onlyLogChanged": true,
+        "settingsPetsWholeJsonExact": true,
+        "actualInstalledHubVersionAndPetsObserved": true,
+        "personalProfileInferenceOrAutonomyExecutionAcceptance": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentFreeRealLocalVoice": {
+        "atUtc": "2026-11-13T02:05:56.883860+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/VOICE-LOCAL-REAL-SOURCE35-VERIFIED.json",
+        "freeAlreadySelectedModel": "gemma3:4b",
+        "realLocalRequests": 1,
+        "nativeCorrectReplyNaturalEndStopAndSameCidRestart": true,
+        "independentAllSpokenWordsRecognized": false,
+        "originalAsrFailureRetained": true,
+        "newProductDefectEstablished": false,
+        "personalProfileUsed": false,
+        "paidOrCopilotGithubQuota": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
       }
     },
     {
@@ -18339,11 +19124,12 @@
         {
           "fonte": ".build/pet-goal-execution-next-r1/integration1034-inference-binding-r6f1/CHECKPOINT.json",
           "alcance": "R6 F1: dois donos lógicos/motores explícitos, admissão/memória/destino/corpo/orçamento/revogação, recipe driver em fixtures, Tauri319/320/322 e restauro/leitor anterior. Modelos/protocolos sintéticos; .32 instalada inalterada; nenhuma conclusão integral por catálogo/testes."
-        }
+        },
+        "17/11 normal50: .build/operational50-20261117/VERIFIED.json —4 percursos no próprio RPM e18 comandos de recuperação; uma resposta sintética, histórico/restauro/recusas e reinícios sem replay; imagens X11 virtuais pós-reinício observadas. Âmbitos e falhas em docs/PETS-INSTALLED-DELIVERY-50.md."
       ],
-      "limiteDaProva": "NoAuthority normal operacional privado comprovado; geração incerta/seed inválido/pre-manifest/staging anónimo ainda conservados/recusados até reconciliação explícita. Migrações/revalidações voz/mobile/autostart/B3-aceitação-integral/adoção e aceitação integral continuam abertas. F10A não implementa revalidação: faltam intenção por campo/CAS e confirmação após publicação/fsync diretório antes de a conceder. Consumidores não fecham escritor: CAS/fsyncdiretório/resultado incerto tipado/reconciliação/reinício pendentes. Listener ainda antes da gravação e chaves com efeitos próprios; não revalidados/entregues. Isto é verificação otimista para writers cooperantes, não CAS atómico/sandbox deoutros processos do mesmoUID. Incerteza pós-publicação tem classe/recusa de nova escrita,mas barreira global deefeitos/reconciliação durável/reinício/fsyncdiretório eparidade Mac/Windows ainda pendentes.",
+      "limiteDaProva": "NoAuthority normal operacional privado comprovado; geração incerta/seed inválido/pre-manifest/staging anónimo ainda conservados/recusados até reconciliação explícita. Migrações/revalidações voz/mobile/autostart/B3-aceitação-integral/adoção e aceitação integral continuam abertas. F10A não implementa revalidação: faltam intenção por campo/CAS e confirmação após publicação/fsync diretório antes de a conceder. Consumidores não fecham escritor: CAS/fsyncdiretório/resultado incerto tipado/reconciliação/reinício pendentes. Listener ainda antes da gravação e chaves com efeitos próprios; não revalidados/entregues. Isto é verificação otimista para writers cooperantes, não CAS atómico/sandbox deoutros processos do mesmoUID. Incerteza pós-publicação tem classe/recusa de nova escrita,mas barreira global deefeitos/reconciliação durável/reinício/fsyncdiretório eparidade Mac/Windows ainda pendentes. Normal50 não está instalada/autorizada; Wayland real bloqueado, hardware/humano/uso prolongado e critérios integrais não certificados. Provas anteriores conservam a composição respetiva.",
       "lacunaConcreta": "A adoção995 e o fecho nativo de Settings C5/277 já foram comprovados; não são trabalho ainda por executar. Faltam ativação governada de Voz, Móvel/Hooks/Credenciais, lifecycle autónomo, migração/restauro da composição completa e aceitação/entrega dos critérios aplicáveis.",
-      "proximoCriterioAceitacao": "C5: fechar Settings durante confirmação nativa pendente revoga a decisão sem replay, sem libertar gates antes do fim do worker. Depois Voz/Móvel/Hooks/Credenciais e restantes dependências integrais.",
+      "proximoCriterioAceitacao": "Antes de eventual substituição50 autorizada, backup nativo específico e inspeção pelos leitores44/50, sem restaurar automaticamente; confirmar preservação operacional e as dependências de componentes/autoridade restantes.18 comandos50 sobre arquivos sintéticos não são backup da instalação pessoal.",
       "entregaIntegral": "não demonstrada; requisito aberto",
       "incrementoPrivadoAtual": {
         "variante": "R43F10B2C3D2B3A1",
@@ -18756,13 +19542,43 @@
         "nativeBuild": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/host-native-development-20261107/build47/BUILD-RESULT.json",
         "installed": false,
         "humanAcceptance": false
+      },
+      "latestCurrentRule67TechnicalAcceptance": {
+        "atUtc": "2026-11-13T00:37:19.169035+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "buildRecord": "FORK44-SOURCE35-BUILD.json",
+        "receipt": ".build/upstream-parity-20261111/RULE67-SOURCE35-VERIFIED.json",
+        "technicalNativeAndPreservationScopeComplete": true,
+        "syntheticResponses": 3,
+        "signedRecords": 8,
+        "originalPayloadsExact": 12,
+        "nativeCommandReceipts": 13,
+        "humanApproval": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentInstalled35Delivery": {
+        "atUtc": "2026-11-13T01:42:56.368358+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "version": "0.5.1-mochi.44",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/INSTALLED44-TECHNICAL.json",
+        "sameBinaryAsScopedNative35QA": true,
+        "nativeBackupAndPrevious43Preserved": true,
+        "existingFiles": 49,
+        "unchanged": 48,
+        "onlyLogChanged": true,
+        "settingsPetsWholeJsonExact": true,
+        "actualInstalledHubVersionAndPetsObserved": true,
+        "personalProfileInferenceOrAutonomyExecutionAcceptance": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
       }
     },
     {
       "id": "DATA-02",
       "trabalho": "Decisão e eventual backend PostgreSQL",
       "criteriosOriginaisPreservados": "Benefício medido e esquema/base/utilizador próprios; IDs e concessões preservados, migração/restauro comprovados; estado atual continua sem integração",
-      "estadoObservado": "parcial integrado1008; composição1003 entregue32; requisito integral pendente",
+      "estadoObservado": "Backend opcional não introduzido; a decisão atual é preservar a persistência existente. Não há necessidade/benefício demonstrados para PostgreSQL ou pesquisa vetorial.",
       "ficheirosSimbolos": [
         {
           "ficheiro": "docs/AI-LOCAL-REUSE.md",
@@ -19170,36 +19986,28 @@
         }
       ],
       "dependenciasEaceitacao": "Benefício medido e esquema/base/utilizador próprios; IDs e concessões preservados, migração/restauro comprovados; estado atual continua sem integração",
-      "implementacaoExistente": "PostgreSQL não integrado; decisão exige benefício, sem acesso a outras bases.",
+      "implementacaoExistente": "Estado e autoridade mantêm repositórios locais existentes. Sem dependência PostgreSQL/pgvector/sqlx/tokio-postgres no manifesto Cargo; as menções em código encontradas são testes/texto de tarefa, não um backend.",
       "provaDisponivel": [
         {
-          "fonte": "docs/PETS-VALIDATION.md",
-          "alcance": "Apenas bases/histórico; não há aceitação integral específica deste requisito."
+          "fonte": "coucou-migration/HANDOFF-CONTINUIDADE-INTEGRAL-2026-11-11.md:160",
+          "alcance": "PostgreSQL não é requisito nem backend universal; adoção depende de necessidade/benefício, base/role próprios e migração/restauro."
         },
         {
-          "fonte": ".build/pet-goal-execution-next-r1/SHORTCUTS-RECONCILIATION-PARTIAL-CHECKPOINT-R43F10B2C3D2B3B8.json",
-          "alcance": "Reconciliação/continuidade e leitor7 em privado: directedB8 52/0ignorados; fullB7 3129pass/1fixtureFailure/38ignorados, reteste dirigido B8. Nativos261/262 e backup7. Web1324/B3, portal18/B5 e build/nativeB7 reutilizados por identidade; não é aceitação instalada ou restauro7 nativo."
+          "fonte": "docs/PETS-ARCHITECTURE.md#14-persistência-e-integração-postgresql",
+          "alcance": "Contrato condicional de eventual adoção, sem alargar autoridade."
         },
         {
-          "fonte": ".build/pet-goal-execution-next-r1/SHORTCUTS-RESTORE-PARTIAL-CHECKPOINT-R43F10B2C3D2B3C2A1.json",
-          "alcance": "Restauro7/admissão4/all6 suspensas/recibos/restart/backup e recusa de dono noutro namespace em nativo265; 43 dirigidos A1; geral C2 com 3130pass/2expectativas corrigidas/38ignorados, sem nova execução geral A1. Sem novo registo nesse scope ou aceitação instalada."
+          "fonte": ".build/resources48-20261116/SOURCE.json",
+          "alcance": "Fontes verificadas1332; Cargo.toml sem driver PostgreSQL e backend não implementado."
         },
         {
-          "fonte": ".build/pet-goal-execution-next-r1/SHORTCUTS-ORIGINAL-OWNER-PARTIAL-CHECKPOINT-R43F10B2C3D2B3C3A2.json",
-          "alcance": "55dirigidos/3134gerais38ignorados/1326web/TSC/Vite/build e nativos266portal/268restauro/269X11; original/current visíveis e retidos, versão antiga recusada, incerteza antiga preservada.267 timeout com retorno externo ausente é diagnóstico conservado; sem entrega instalada/humana/hardware."
-        },
-        {
-          "fonte": ".build/pet-goal-execution-next-r1/SHORTCUTS-CURRENT-SCOPE-PARTIAL-CHECKPOINT-R43F10B2C3D2B3C4A1.json",
-          "alcance": "C4 privado: novo pedido no contexto atual, quatro confirmações, histórico original conservado, formato8, nativos274/275 portal sintético/X11 virtual/reinício/old7/backup-restauro8.68dirigidos2ignorados/3138gerais38ignorados/1329web/TSC/Vite/build. Não integração/entrega/humano/hardware."
-        },
-        {
-          "fonte": ".build/pet-goal-execution-next-r1/integration995-r43f10b2c3d2b3c4a1/CHECKPOINT.json",
-          "alcance": "Fontes995 integradas,593 inputs Rust exatos, TypeScript/Vite executados na árvore principal,42 outputs comuns exatos e29 sons existentes preservados; sem build/teste nativo adicional na raiz ou entrega instalada."
+          "fonte": "/home/pmglo/Projects/coucou-codex/.build/resources48-20261116/docs-before/PETS-REQUIREMENTS-AUDIT-2026-10-25.json",
+          "alcance": "Estado/provas anteriores conservados; entradas de atalhos/Settings não provam PostgreSQL ou os novos critérios de calendários."
         }
       ],
-      "limiteDaProva": "Não há medição que justifique adoção ou migração.",
-      "lacunaConcreta": "A adoção995 e o fecho nativo de Settings C5/277 já foram comprovados; não são trabalho ainda por executar. Faltam ativação governada de Voz, Móvel/Hooks/Credenciais, lifecycle autónomo, migração/restauro da composição completa e aceitação/entrega dos critérios aplicáveis.",
-      "proximoCriterioAceitacao": "C5: fechar Settings durante confirmação nativa pendente revoga a decisão sem replay, sem libertar gates antes do fim do worker. Depois Voz/Móvel/Hooks/Credenciais e restantes dependências integrais.",
+      "limiteDaProva": "A inexistência do backend não demonstra benefício de adoção. Provas históricas de atalhos/Settings não constituem evidência PostgreSQL. Os critérios de uma adoção futura permanecem preservados.",
+      "lacunaConcreta": "Nenhuma implementação PostgreSQL é exigida para a entrega atual. Só reabrir a adoção perante necessidade e benefício medidos; nessa hipótese faltam todos os critérios próprios de integração.",
+      "proximoCriterioAceitacao": "Manter backend atual. Se surgir proposta justificada: medir benefício, definir base/schema/role próprios, preservar IDs/concessões e provar migração/backup/restauro/rollback. Não introduzir infraestrutura apenas para fechar esta linha.",
       "entregaIntegral": "não demonstrada; requisito aberto",
       "lacunasHistoricas": [
         {
@@ -19270,6 +20078,36 @@
         "nativeUiProof": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/guardian-health-inventory/app8/RESULT.json",
         "installed": false,
         "requisitoIntegralConcluido": false
+      },
+      "latestCurrentRule67TechnicalAcceptance": {
+        "atUtc": "2026-11-13T00:37:19.169035+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "buildRecord": "FORK44-SOURCE35-BUILD.json",
+        "receipt": ".build/upstream-parity-20261111/RULE67-SOURCE35-VERIFIED.json",
+        "technicalNativeAndPreservationScopeComplete": true,
+        "syntheticResponses": 3,
+        "signedRecords": 8,
+        "originalPayloadsExact": 12,
+        "nativeCommandReceipts": 13,
+        "humanApproval": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentInstalled35Delivery": {
+        "atUtc": "2026-11-13T01:42:56.368358+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "version": "0.5.1-mochi.44",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/INSTALLED44-TECHNICAL.json",
+        "sameBinaryAsScopedNative35QA": true,
+        "nativeBackupAndPrevious43Preserved": true,
+        "existingFiles": 49,
+        "unchanged": 48,
+        "onlyLogChanged": true,
+        "settingsPetsWholeJsonExact": true,
+        "actualInstalledHubVersionAndPetsObserved": true,
+        "personalProfileInferenceOrAutonomyExecutionAcceptance": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
       }
     },
     {
@@ -21409,9 +22247,22 @@
         {
           "fonte": ".build/pet-goal-execution-next-r1/integration1034-inference-binding-r6f1/CHECKPOINT.json",
           "alcance": "R6 F1: dois donos lógicos/motores explícitos, admissão/memória/destino/corpo/orçamento/revogação, recipe driver em fixtures, Tauri319/320/322 e restauro/leitor anterior. Modelos/protocolos sintéticos; .32 instalada inalterada; nenhuma conclusão integral por catálogo/testes."
+        },
+        "17/11 telefone no próprio normal50: .build/phone-parity-current50-20261117/VERIFIED.json —TLS/modelo/conversa/reset/cancelamento/retirada/503/reinício e probe readonly,14 POSTs sintéticos; causa pré-HTTP22/82 não demonstrada e não reproduzida neste âmbito. Sem código/instalação/quota real/aceitação humana alterados.",
+        {
+          "fonte": ".build/attachment-turn-context-20261118/VERIFIED.json",
+          "alcance": "Reenvio após retirar anexo reproduzido nos binários exatos 44 e 53, e ausente no mesmo percurso privado corrigido. Dois documentos sintéticos, mesma conversa e processo, dois pedidos HTTP por executável."
+        },
+        {
+          "fonte": ".build/pet-goal-execution-next-r1/release54-attachment-context-20261118/VERIFIED.json",
+          "alcance": "RPM 54 exato: retirada de uma de duas cópias, reinício preservado e ausência de nova autorização de leitura. Restauro inativo e leitura histórica 6/7 no próprio pacote."
+        },
+        {
+          "fonte": ".build/pet-goal-execution-next-r1/release55-rule-succession-20261118/VERIFIED.json",
+          "alcance": "RPM 55 exato em perfis privados. Retirada de anexos sem reenvio, sucessão6/revisão7 na mesma vista, três respostas sintéticas, recuperação, reinício e restauro preservados. Aceitação no perfil operacional aberta."
         }
       ],
-      "limiteDaProva": "NoAuthority normal operacional privado comprovado; geração incerta/seed inválido/pre-manifest/staging anónimo ainda conservados/recusados até reconciliação explícita. Migrações/revalidações voz/mobile/autostart/B3-aceitação-integral/adoção e aceitação integral continuam abertas. F10A não implementa revalidação: faltam intenção por campo/CAS e confirmação após publicação/fsync diretório antes de a conceder. Consumidores não fecham escritor: CAS/fsyncdiretório/resultado incerto tipado/reconciliação/reinício pendentes. Listener ainda antes da gravação e chaves com efeitos próprios; não revalidados/entregues. Isto é verificação otimista para writers cooperantes, não CAS atómico/sandbox deoutros processos do mesmoUID. Incerteza pós-publicação tem classe/recusa de nova escrita,mas barreira global deefeitos/reconciliação durável/reinício/fsyncdiretório eparidade Mac/Windows ainda pendentes. C6C2: testes TTS/HTTP sintéticos; cancelamento scoped do renderer não prova admissão/cleanup do processo voice_say_native legado. Sem hardware, síntese humana ou entrega instalada.",
+      "limiteDaProva": "NoAuthority normal operacional privado comprovado; geração incerta/seed inválido/pre-manifest/staging anónimo ainda conservados/recusados até reconciliação explícita. Migrações/revalidações voz/mobile/autostart/B3-aceitação-integral/adoção e aceitação integral continuam abertas. F10A não implementa revalidação: faltam intenção por campo/CAS e confirmação após publicação/fsync diretório antes de a conceder. Consumidores não fecham escritor: CAS/fsyncdiretório/resultado incerto tipado/reconciliação/reinício pendentes. Listener ainda antes da gravação e chaves com efeitos próprios; não revalidados/entregues. Isto é verificação otimista para writers cooperantes, não CAS atómico/sandbox deoutros processos do mesmoUID. Incerteza pós-publicação tem classe/recusa de nova escrita,mas barreira global deefeitos/reconciliação durável/reinício/fsyncdiretório eparidade Mac/Windows ainda pendentes. C6C2: testes TTS/HTTP sintéticos; cancelamento scoped do renderer não prova admissão/cleanup do processo voice_say_native legado. Sem hardware, síntese humana ou entrega instalada. A prova telefone50 é nativa/privada e delimitada; sem Android físico, todos os providers, instalada, fiabilidade prolongada ou causa histórica confirmada.",
       "lacunaConcreta": "A admissão da fala por resposta/superfície/worker já foi entregue e passou o nativo284 com helper sintético. Permanecem alvo físico da captura, contexto antes do áudio, ativação de Voz após restauro, lifecycle/integrações restantes e aceitação real aplicável ao requisito.",
       "proximoCriterioAceitacao": "C6C4: identidade/revogação do recurso e contexto/ASR antes da captura; depois revisão e ativação governada de Voz após restauro e restantes componentes. Áudio real e aceitação operacional não são substituídos por fixtures.",
       "entregaIntegral": "não demonstrada; requisito aberto",
@@ -21789,6 +22640,36 @@
         "nativeUiProof": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/guardian-health-inventory/app8/RESULT.json",
         "installed": false,
         "requisitoIntegralConcluido": false
+      },
+      "latestCurrentRule67TechnicalAcceptance": {
+        "atUtc": "2026-11-13T00:37:19.169035+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "buildRecord": "FORK44-SOURCE35-BUILD.json",
+        "receipt": ".build/upstream-parity-20261111/RULE67-SOURCE35-VERIFIED.json",
+        "technicalNativeAndPreservationScopeComplete": true,
+        "syntheticResponses": 3,
+        "signedRecords": 8,
+        "originalPayloadsExact": 12,
+        "nativeCommandReceipts": 13,
+        "humanApproval": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentInstalled35Delivery": {
+        "atUtc": "2026-11-13T01:42:56.368358+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "version": "0.5.1-mochi.44",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/INSTALLED44-TECHNICAL.json",
+        "sameBinaryAsScopedNative35QA": true,
+        "nativeBackupAndPrevious43Preserved": true,
+        "existingFiles": 49,
+        "unchanged": 48,
+        "onlyLogChanged": true,
+        "settingsPetsWholeJsonExact": true,
+        "actualInstalledHubVersionAndPetsObserved": true,
+        "personalProfileInferenceOrAutonomyExecutionAcceptance": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
       }
     },
     {
@@ -22551,9 +23432,18 @@
         {
           "fonte": ".build/pet-goal-execution-next-r1/integration1034-inference-binding-r6f1/CHECKPOINT.json",
           "alcance": "R6 F1: dois donos lógicos/motores explícitos, admissão/memória/destino/corpo/orçamento/revogação, recipe driver em fixtures, Tauri319/320/322 e restauro/leitor anterior. Modelos/protocolos sintéticos; .32 instalada inalterada; nenhuma conclusão integral por catálogo/testes."
+        },
+        "17/11 telefone no próprio normal50: .build/phone-parity-current50-20261117/VERIFIED.json —TLS/modelo/conversa/reset/cancelamento/retirada/503/reinício e probe readonly,14 POSTs sintéticos; causa pré-HTTP22/82 não demonstrada e não reproduzida neste âmbito. Sem código/instalação/quota real/aceitação humana alterados.",
+        {
+          "fonte": ".build/rule-succession-reopen-20261118/VERIFIED.json",
+          "alcance": "Segunda sucessão detetada no RPM 54 e corrigida na vista. Na composição privada passaram sucessão6/revisão7, três respostas sintéticas, perda de processo, restauro e recusa de execução. Aceitação do pacote sucessor aberta."
+        },
+        {
+          "fonte": ".build/pet-goal-execution-next-r1/release55-rule-succession-20261118/VERIFIED.json",
+          "alcance": "RPM 55 exato em perfis privados. Retirada de anexos sem reenvio, sucessão6/revisão7 na mesma vista, três respostas sintéticas, recuperação, reinício e restauro preservados. Aceitação no perfil operacional aberta."
         }
       ],
-      "limiteDaProva": "Autostart/login/hotplug/lifecycle/áudio e aceitação integrada da nova composição pendentes. C6C2: testes TTS/HTTP sintéticos; cancelamento scoped do renderer não prova admissão/cleanup do processo voice_say_native legado. Sem hardware, síntese humana ou entrega instalada.",
+      "limiteDaProva": "Autostart/login/hotplug/lifecycle/áudio e aceitação integrada da nova composição pendentes. C6C2: testes TTS/HTTP sintéticos; cancelamento scoped do renderer não prova admissão/cleanup do processo voice_say_native legado. Sem hardware, síntese humana ou entrega instalada. A prova telefone50 é nativa/privada e delimitada; sem Android físico, todos os providers, instalada, fiabilidade prolongada ou causa histórica confirmada.",
       "lacunaConcreta": "A admissão da fala por resposta/superfície/worker já foi entregue e passou o nativo284 com helper sintético. Permanecem alvo físico da captura, contexto antes do áudio, ativação de Voz após restauro, lifecycle/integrações restantes e aceitação real aplicável ao requisito.",
       "proximoCriterioAceitacao": "C6C4: identidade/revogação do recurso e contexto/ASR antes da captura; depois revisão e ativação governada de Voz após restauro e restantes componentes. Áudio real e aceitação operacional não são substituídos por fixtures.",
       "entregaIntegral": "não demonstrada; requisito aberto",
@@ -22585,13 +23475,43 @@
         "installed": false,
         "publicTaskDispatchEnabled": false,
         "requisitoIntegralConcluido": false
+      },
+      "latestCurrentRule67TechnicalAcceptance": {
+        "atUtc": "2026-11-13T00:37:19.169035+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "buildRecord": "FORK44-SOURCE35-BUILD.json",
+        "receipt": ".build/upstream-parity-20261111/RULE67-SOURCE35-VERIFIED.json",
+        "technicalNativeAndPreservationScopeComplete": true,
+        "syntheticResponses": 3,
+        "signedRecords": 8,
+        "originalPayloadsExact": 12,
+        "nativeCommandReceipts": 13,
+        "humanApproval": false,
+        "installedAcceptance": false,
+        "all49GoalComplete": false
+      },
+      "latestCurrentInstalled35Delivery": {
+        "atUtc": "2026-11-13T01:42:56.368358+00:00",
+        "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+        "version": "0.5.1-mochi.44",
+        "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/INSTALLED44-TECHNICAL.json",
+        "sameBinaryAsScopedNative35QA": true,
+        "nativeBackupAndPrevious43Preserved": true,
+        "existingFiles": 49,
+        "unchanged": 48,
+        "onlyLogChanged": true,
+        "settingsPetsWholeJsonExact": true,
+        "actualInstalledHubVersionAndPetsObserved": true,
+        "personalProfileInferenceOrAutonomyExecutionAcceptance": false,
+        "humanOrPhysicalAcceptance": false,
+        "all49GoalComplete": false
       }
     },
     {
       "id": "GUA-01",
       "trabalho": "Inventário limitado, evidência e classificação de gestão",
       "criteriosOriginaisPreservados": "PET-01/04/05, EXE-01/02, OBS-01, SYS-01. Componentes/versões/serviços/processos/exposição/recursos/logs selecionados e estado desejado, com origem/data/cobertura e distinção gerido/observado/externo/privado/dinâmico; percurso determinístico sem LLM e sem varrimento pessoal indiscriminado",
-      "estadoObservado": "parcial: Saúde simples entregue43; inventário OS/kernel manual e tarefas finitas com grant próprio integrados/validados em privada35, ainda não instalados",
+      "estadoObservado": "parcial integrado com prova privada no RPM .63",
       "ficheirosSimbolos": [
         {
           "ficheiro": "docs/SYSTEM-GUARDIAN-ARCHITECTURE.md",
@@ -22659,14 +23579,18 @@
         }
       ],
       "dependenciasEaceitacao": "PET-01/04/05, EXE-01/02, OBS-01, SYS-01. Componentes/versões/serviços/processos/exposição/recursos/logs selecionados e estado desejado, com origem/data/cobertura e distinção gerido/observado/externo/privado/dinâmico; percurso determinístico sem LLM e sem varrimento pessoal indiscriminado",
-      "implementacaoExistente": "Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações.",
+      "implementacaoExistente": "Inventário de distribuição e kernel pela interface e por objetivo finito no runtime comum. Concessão separada por pet e recurso.",
       "provaDisponivel": [
         {
           "fonte": ".build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json",
           "alcance": "Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian."
+        },
+        {
+          "fonte": ".build/pet-goal-execution-next-r1/guardian-current-20261121/VERIFIED-63.json",
+          "alcance": "Inventário de três campos, concessões independentes, objetivo finito sem inferência, recusa de repetição, revogação e reinício."
         }
       ],
-      "limiteDaProva": "Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.",
+      "limiteDaProva": "Faltam pacotes, serviços, processos, exposição, recursos adicionais, logs selecionados e a comparação com estado desejado.",
       "lacunaConcreta": "ProviderModel/geração/delegação/arranque automático de Inventário fechados; componentes adicionais, pacotes/serviços/processos/exposição/logs e estado desejado/sysworkspace pendentes; entrega normal do incremento por concluir.",
       "proximoCriterioAceitacao": "Compor e entregar o percurso provado; ampliar inventário apenas por fontes/âmbitos distintos e governados, sem perder critérios integrais.",
       "entregaIntegral": "não demonstrada; requisito aberto",
@@ -22766,7 +23690,7 @@
       "id": "GUA-02",
       "trabalho": "Findings de segurança e vulnerabilidades",
       "criteriosOriginaisPreservados": "GUA-01, CTX-05, EXE-02/03, DATA-01. Componente/versão, evidência/origem/data, severidade/confiança/estado/recomendação; distinguir confirmação/candidata/suspeita, conferir advisories da distribuição e pacote; não inventar CVE, inferir vulnerabilidade só por upstream ou executar exploração/scans intrusivos",
-      "estadoObservado": "desenhado; pendente de implementação",
+      "estadoObservado": "desenhado, com findings e advisories pendentes",
       "ficheirosSimbolos": [
         {
           "ficheiro": "docs/SYSTEM-GUARDIAN-ARCHITECTURE.md",
@@ -22834,14 +23758,14 @@
         }
       ],
       "dependenciasEaceitacao": "GUA-01, CTX-05, EXE-02/03, DATA-01. Componente/versão, evidência/origem/data, severidade/confiança/estado/recomendação; distinguir confirmação/candidata/suspeita, conferir advisories da distribuição e pacote; não inventar CVE, inferir vulnerabilidade só por upstream ou executar exploração/scans intrusivos",
-      "implementacaoExistente": "Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações.",
+      "implementacaoExistente": "O contrato distingue confirmação, correspondência candidata e configuração suspeita. O inventário elementar fornece parte da identidade do componente.",
       "provaDisponivel": [
         {
           "fonte": ".build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json",
           "alcance": "Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian."
         }
       ],
-      "limiteDaProva": "Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.",
+      "limiteDaProva": "Faltam findings estruturados e a consulta ou fixture governada de advisories da distribuição. O inventário disponível não avalia vulnerabilidades.",
       "lacunaConcreta": "Separar binding lógico/motor/papel e implementar os módulos/cenários deste ID sobre as dependências após R43.",
       "proximoCriterioAceitacao": "GUA-01, CTX-05, EXE-02/03, DATA-01. Componente/versão, evidência/origem/data, severidade/confiança/estado/recomendação; distinguir confirmação/candidata/suspeita, conferir advisories da distribuição e pacote; não inventar CVE, inferir vulnerabilidade só por upstream ou executar exploração/scans intrusivos",
       "entregaIntegral": "não demonstrada; requisito aberto"
@@ -22850,7 +23774,7 @@
       "id": "GUA-03",
       "trabalho": "Saúde/desempenho com baseline e resultado",
       "criteriosOriginaisPreservados": "GUA-01, OBS-01/02, SYS-03. CPU/memória/IO/GPU suportada/arranque/falhas/conflitos, hipótese/métrica/impacto/custos e validação; fixtures de consumo, dock Thunderbolt e VPN/Tailscale/firewall sem mutações reais, tuning genérico, limpeza destrutiva ou desativação de proteções",
-      "estadoObservado": "parcial: observação simples e objetivos sem modelo entregues43; medição CPU/memória integrada/validada nativamente em privada32, ainda não instalada; aceitação integral pendente",
+      "estadoObservado": "parcial integrado com baseline nativo no RPM .63",
       "ficheirosSimbolos": [
         {
           "ficheiro": "docs/SYSTEM-GUARDIAN-ARCHITECTURE.md",
@@ -22918,14 +23842,18 @@
         }
       ],
       "dependenciasEaceitacao": "GUA-01, OBS-01/02, SYS-03. CPU/memória/IO/GPU suportada/arranque/falhas/conflitos, hipótese/métrica/impacto/custos e validação; fixtures de consumo, dock Thunderbolt e VPN/Tailscale/firewall sem mutações reais, tuning genérico, limpeza destrutiva ou desativação de proteções",
-      "implementacaoExistente": "Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações.",
+      "implementacaoExistente": "Consulta Saúde e medição de CPU e memória pela interface existente. CPU, memória e uptime dependem da concessão Saúde própria.",
       "provaDisponivel": [
         {
           "fonte": ".build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json",
           "alcance": "Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian."
+        },
+        {
+          "fonte": ".build/pet-goal-execution-next-r1/guardian-current-20261121/VERIFIED-63.json",
+          "alcance": "Medição em duas amostras, com intervalo de pelo menos 1 s, sem inferência. Separação Saúde/Inventário e revogação por recurso verificadas."
         }
       ],
-      "limiteDaProva": "Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.",
+      "limiteDaProva": "Faltam IO, GPU suportada, arranque, falhas, conflitos e validação de otimizações. Permanecem os três cenários exigidos no contrato.",
       "lacunaConcreta": "Medição curta CPU/memória concluída em privada32; faltam entrega desta medição, IO/GPU/arranque/falhas/conflitos, correlação e comparação antes/depois de intervenções. Sem tuning/remediação ou diagnóstico de vulnerabilidades.",
       "proximoCriterioAceitacao": "Entregar a medição comprovada e evoluir diagnóstico seletivo sobre inventário governado; conservar todos os critérios de desempenho e fixtures sem mutações sensíveis.",
       "entregaIntegral": "não demonstrada; requisito aberto",
@@ -22981,7 +23909,7 @@
       "id": "GUA-04",
       "trabalho": "Adaptador governado ao sysworkspace",
       "criteriosOriginaisPreservados": "GUA-01, EXE-01/02/03, DATA-01, REL-01. Contratos reais de plano/validação/backup/aplicação/recuperação, estado desejado efetivamente gerido e exclusões Coucou/Mochi/projetos preservados; integração de excluído é proposta separada, sem comandos ou fonte de verdade inventados",
-      "estadoObservado": "desenhado; pendente de implementação",
+      "estadoObservado": "desenhado, com adaptador sysworkspace pendente",
       "ficheirosSimbolos": [
         {
           "ficheiro": "docs/SYSTEM-GUARDIAN-ARCHITECTURE.md",
@@ -23049,14 +23977,14 @@
         }
       ],
       "dependenciasEaceitacao": "GUA-01, EXE-01/02/03, DATA-01, REL-01. Contratos reais de plano/validação/backup/aplicação/recuperação, estado desejado efetivamente gerido e exclusões Coucou/Mochi/projetos preservados; integração de excluído é proposta separada, sem comandos ou fonte de verdade inventados",
-      "implementacaoExistente": "Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações.",
+      "implementacaoExistente": "O contrato remete para os gestores reais do sysworkspace. As observações do Guardian têm o estado desejado por determinar.",
       "provaDisponivel": [
         {
           "fonte": ".build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json",
           "alcance": "Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian."
         }
       ],
-      "limiteDaProva": "Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.",
+      "limiteDaProva": "Falta o adaptador que distingue recursos geridos e excluídos e preserva as transações reais de plano, validação, backup, aplicação e recuperação.",
       "lacunaConcreta": "Separar binding lógico/motor/papel e implementar os módulos/cenários deste ID sobre as dependências após R43.",
       "proximoCriterioAceitacao": "GUA-01, EXE-01/02/03, DATA-01, REL-01. Contratos reais de plano/validação/backup/aplicação/recuperação, estado desejado efetivamente gerido e exclusões Coucou/Mochi/projetos preservados; integração de excluído é proposta separada, sem comandos ou fonte de verdade inventados",
       "entregaIntegral": "não demonstrada; requisito aberto"
@@ -23065,7 +23993,7 @@
       "id": "GUA-05",
       "trabalho": "Remediação autorizada completa",
       "criteriosOriginaisPreservados": "GUA-01/04, RUN, EXE, SYS-01, REL-01/02. Finding→proposta/diff→impacto/pré-condições→autorização→execução limitada→verificação→resultado; receitas específicas sob grants explícitos e aprovação exata para sensíveis; sem shell/root geral, autoaprovação ou replay; rollback só suportado/provado, compensação/irreversibilidade explícitas",
-      "estadoObservado": "base comum1255 com retirada governada de autoridade System48 sem admissão; Guardian e requisito integral pendentes",
+      "estadoObservado": "desenhado, com percurso de remediação pendente",
       "ficheirosSimbolos": [
         {
           "ficheiro": "docs/SYSTEM-GUARDIAN-ARCHITECTURE.md",
@@ -23133,14 +24061,14 @@
         }
       ],
       "dependenciasEaceitacao": "GUA-01/04, RUN, EXE, SYS-01, REL-01/02. Finding→proposta/diff→impacto/pré-condições→autorização→execução limitada→verificação→resultado; receitas específicas sob grants explícitos e aprovação exata para sensíveis; sem shell/root geral, autoaprovação ou replay; rollback só suportado/provado, compensação/irreversibilidade explícitas",
-      "implementacaoExistente": "Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações.",
+      "implementacaoExistente": "As concessões e os controlos governados do runtime comum existem. A leitura de Saúde e Inventário utiliza esse caminho.",
       "provaDisponivel": [
         {
           "fonte": ".build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json",
           "alcance": "Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian."
         }
       ],
-      "limiteDaProva": "Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.",
+      "limiteDaProva": "Falta a sequência de finding, proposta, aprovação, execução limitada, verificação e recuperação. A prova de observação não concede remediação.",
       "lacunaConcreta": "Separar binding lógico/motor/papel e implementar os módulos/cenários deste ID sobre as dependências após R43.",
       "proximoCriterioAceitacao": "Fechar preservação/lifecycle da base comum e depois finding/proposta/autorização/remediação/verificação Guardian; preservar critérios integrais.",
       "entregaIntegral": "não demonstrada; requisito aberto",
@@ -23428,7 +24356,7 @@
       "id": "GUA-06",
       "trabalho": "Proatividade e cooperação sem runtime paralelo",
       "criteriosOriginaisPreservados": "GUA-01/05, AUTO, TEAM, OBS. Gatilhos leves/debounce/deduplicação/limites no scheduler, orçamento e notificações comuns; LLM só quando útil; pedidos diretos/coordenador opcional, delegação autorizada sem ampliar acesso, ausência de motor/coordenador e conteúdo hostil sem alertas/efeitos repetidos",
-      "estadoObservado": "desenhado; pendente de implementação",
+      "estadoObservado": "execução finita integrada em parte, com proatividade e cooperação pendentes",
       "ficheirosSimbolos": [
         {
           "ficheiro": "docs/SYSTEM-GUARDIAN-ARCHITECTURE.md",
@@ -23496,14 +24424,18 @@
         }
       ],
       "dependenciasEaceitacao": "GUA-01/05, AUTO, TEAM, OBS. Gatilhos leves/debounce/deduplicação/limites no scheduler, orçamento e notificações comuns; LLM só quando útil; pedidos diretos/coordenador opcional, delegação autorizada sem ampliar acesso, ausência de motor/coordenador e conteúdo hostil sem alertas/efeitos repetidos",
-      "implementacaoExistente": "Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações.",
+      "implementacaoExistente": "O Guardian tem identidade própria na fábrica e executa um objetivo finito pelo runtime comum com revisão e sem motor configurado.",
       "provaDisponivel": [
         {
           "fonte": ".build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json",
           "alcance": "Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian."
+        },
+        {
+          "fonte": ".build/pet-goal-execution-next-r1/guardian-current-20261121/VERIFIED-63.json",
+          "alcance": "Objetivo finito revisto, resultado original, recusa de repetição, independência da escolha de motor e preservação após reinício."
         }
       ],
-      "limiteDaProva": "Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.",
+      "limiteDaProva": "Faltam gatilhos, deduplicação e notificações do Guardian, cooperação efetiva com autoridade do destinatário e os cenários de concorrência e recuperação.",
       "lacunaConcreta": "Separar binding lógico/motor/papel e implementar os módulos/cenários deste ID sobre as dependências após R43.",
       "proximoCriterioAceitacao": "GUA-01/05, AUTO, TEAM, OBS. Gatilhos leves/debounce/deduplicação/limites no scheduler, orçamento e notificações comuns; LLM só quando útil; pedidos diretos/coordenador opcional, delegação autorizada sem ampliar acesso, ausência de motor/coordenador e conteúdo hostil sem alertas/efeitos repetidos",
       "entregaIntegral": "não demonstrada; requisito aberto",
@@ -23584,8 +24516,8 @@
       }
     }
   ],
-  "rootIntegratedSourceFiles": 1322,
-  "rootSourceMap": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-governed-revisions/SOURCE2.json",
+  "rootIntegratedSourceFiles": 1374,
+  "rootSourceMap": ".build/pet-goal-execution-next-r1/release55-rule-succession-20261118/ROOT-SOURCE.json",
   "rootIntegration": ".build/pet-goal-execution-next-r1/integration1170-peer-feedback-h3d1-f1/FINAL-CHECKPOINT.json",
   "rootBundleVerification": {
     "proof": ".build/pet-goal-execution-next-r1/FUNDED-DELEGATION-R9C2A-FINAL-VERIFICATION-F1.json",
@@ -23595,10 +24527,10 @@
   },
   "installedApplicationUpdated": true,
   "rootIntegratedAtInitialDossier": 834,
-  "headScope": "HEAD0a1ba8173625ac255646b4650a3a688ff3e20d4e preservado; fontes1092 locais sem commit, distintas da instalação32",
+  "headScope": "Current fork HEAD verified; all production corrections remain uncommitted by owner instruction.",
   "privateIncrementAfterDelivery32": "R9A integração1080 posterior à composição1003 entregue32; não instalada/publicada",
   "rootHasUncommittedChangesAfterInstalledRelease32": true,
-  "proximaUnidadeGlobal": "Aguardar novas instruções após esta publicação. Na retoma, aceitar a composição atual com revisão6/7 Tauri, HTTP sintético, reinício e preservação; não repetir provas válidas nem usar o binário57 para declarar aceite a58. Depois restantes49 critérios integrais.",
+  "proximaUnidadeGlobal": "RPM 62 instalado e registado no sysworkspace. Continuar a aceitação da paridade em voz, telefone, integrações e fluidez em uso real, e os critérios de autonomia em aberto.",
   "gruposEntrega": {
     "documento": "docs/PETS-DELIVERY-GROUPS.md",
     "dados": "docs/PETS-DELIVERY-GROUPS.json",
@@ -24337,69 +25269,21 @@
     "missingUserUpdateApproval": false
   },
   "currentComposition": {
-    "rootSourceFiles": 1322,
-    "sourceMap": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-governed-revisions/SOURCE2.json",
-    "nativeLibraryChecked": true,
-    "privateWebBundle": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/system-orphan-retirement/web1/dist",
-    "latestNativePackageVersion": "0.5.1-mochi.44",
-    "packageSourceFiles": 1272,
-    "installedVersion": "0.5.1-mochi.43",
-    "legacyPrivateSdkTopLevelFields": "Historical snapshots retained, not current root composition",
-    "latestPrivateNativeVersion": "0.5.1-mochi.44",
-    "privateNativeBuild": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/host-native-development-20261107/build58/BUILD-RESULT.json",
-    "privateNativeBuildContainsLatestCacheReaping": true,
-    "nativeBuild23ProductionEquivalent": false,
-    "nativeLiteralSystemTaskEffectsEnabled": true,
-    "normalNativePackage": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/release44-native/PACKAGE-PREPARED.json",
-    "installedTechnicalVerification": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/release43-native/INSTALLED43-TECHNICAL.json",
-    "installedVisualAcceptance": false,
-    "guardianStablePetId": "agent_system_guardian",
-    "guardianManualHealthVerified": true,
-    "guardianIncrementInstalled": true,
-    "installedAutomatedVisualObservation": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/release43-native/INSTALLED43-VISUAL.json",
-    "guardianBaselineInstalled": false,
-    "guardianHostInventoryInstalled": false,
-    "guardianInventoryRuntimeInstalled": false,
-    "guardianBaselineApprovalReadinessCorrected": true,
-    "normal44NativeUiAccepted": false,
-    "systemRequestedExecutionImplemented": true,
-    "systemRequestedExecutionNativeTauriValidated": false,
-    "systemRequestedExecutionInstalled": false,
-    "systemRequestedExecutionPrivateNativeBuild": 36,
-    "systemRequestedExecutionNativeCliPreservationVerified": true,
-    "persistentCalendarCollectionsImplemented": true,
-    "persistentCalendarCollectionsInstalled": false,
-    "persistentCalendarCollectionsNativeWidgetAccepted": true,
-    "nativeBuildSourceMap": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-governed-revisions/SOURCE2.json",
-    "persistentCalendarCollectionsNativeRestartVerified": true,
-    "goalCalendarContextImplemented": true,
-    "goalCalendarContextNativeSyntheticVerified": true,
-    "goalCalendarContextPreservationVerified": true,
-    "goalCalendarContextInstalled": false,
-    "goalCalendarContextNativeHistoricalReaderVerified": true,
-    "goalCalendarContextOld43RefusalVerified": true,
-    "goalCalendarOwnPetSourcesImplemented": true,
-    "goalCalendarOwnPetSourcesNativeSyntheticVerified": true,
-    "goalCalendarOwnPetSourcesPreservationVerified": true,
-    "goalCalendarOwnPetSourcesInstalled": false,
-    "goalCalendarOwnPetSourcesHistoricalReaderVerified": true,
-    "goalCalendarOwnPetSourcesPreviousReaderRefusalVerified": true,
-    "ruleAutomaticDispatchNativeSyntheticVerified": true,
-    "ruleAutomaticDispatchInstalled": false,
-    "ruleProbeRecoveryNativeVerified": true,
-    "ruleProbeRecoveryInstalled": false,
-    "ruleTemporalStatusNativeVerified": true,
-    "ruleTemporalStatusInstalled": false,
-    "revokedRuleIntentRetirementNativeVerified": true,
-    "revokedRuleIntentRetirementInstalled": false,
-    "ruleSuccessionImplemented": true,
-    "ruleSuccessionCoreValidated": true,
-    "ruleSuccessionCliPreservationVerified": true,
-    "ruleSuccessionNativeWindowVerified": false,
-    "ruleSuccessionInstalled": false,
-    "governedRuleRevisionImplemented": true,
-    "governedRuleRevisionNativeWindowVerified": false,
-    "governedRuleRevisionInstalled": false
+    "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+    "rootSourceFiles": 1323,
+    "sourceMap": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+    "normalBuildRecord": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/FORK44-SOURCE35-BUILD.json",
+    "installedVersion": "0.5.1-mochi.44",
+    "installedSource": "Source35",
+    "binarySha256": "87400570bf911c5c5fe60204c19ad5f7def464b753b531ad957f44d326bd9e9d",
+    "rpmSha256": "98149dc1007d0eb705698ff03430bbfc48499a4b06afc46839945de8861a5027",
+    "installedTechnicalVerification": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/INSTALLED44-TECHNICAL.json",
+    "installedAutomatedVisualObservation": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/INSTALLED44-VISUAL.json",
+    "installedVoiceAndAutonomyEndToEndInPersonalProfileAccepted": false,
+    "humanOrPhysicalAcceptance": false,
+    "oldCompositionRetained": "historicalCompositionBeforeInstalled35; no historical component automatically recertified as35",
+    "workingSourceAfterInstalled35": "RPM53 normal e fonte exata verificados em perfis privados X11/Hyprland. Proposta operacional local pendente de autorização. Instalada44/Source35.",
+    "signedStationDeliveryReceipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/HOST-SIGNED-REGISTRATION.json"
   },
   "latestNativeSystemTaskReview": {
     "atUtc": "2026-11-09T05:00:51.605958+00:00",
@@ -24988,5 +25872,749 @@
     "nativeWindowVerified": false,
     "installed": false,
     "humanAcceptance": false
+  },
+  "latestUpstreamParity": {
+    "atUtc": "2026-11-12T14:41:18.188234+00:00",
+    "reference": "Official Linux0.5.0 /841a81ce1d75b65882b30139e6b716d0837dce30",
+    "priority": "Recover useful original capabilities inside autonomous-pet architecture before unnecessary new infrastructure; do not restore unused pets or rollback architecture",
+    "matrix": "docs/PETS-UPSTREAM-PARITY-2026-11-11.md",
+    "currentSource": "SOURCE25-PHONE-HTTP-STATUS.json",
+    "nativeDevelopmentRecord": "FORK84-BUILD.json",
+    "nativePhoneChatEvidence": ".build/upstream-parity-20261111/PHONE-CHAT-SOURCE25-VERIFIED.json",
+    "nativeNormalAcceptance": "Source25 normal RPM passed own native UI/TLS/7 synthetic POSTs/cancel/revoke/reset/restart; only this exercised scope, not whole app or installed acceptance",
+    "preservedUsefulScopes": "Voice/dictation/notes/code/diffs/hooks/documents/shortcuts/MPRIS/phone-link have scoped proofs in the matrix, not full installed/hardware acceptance",
+    "correction": "Local HTTP status survives classification; actual503 with401 in private body -> sanitized provider error. Model404 guidance preserved; no retry/fallback. Inherited defect also observed in pinned official.",
+    "remainingIntermittentRefusal": "Observed in native normal Source22 and diagnostic82 before second HTTP. Other82/83/84 runs passed; exact native cause not confirmed, not fixed by HTTP status change.",
+    "installedVersionPreserved": "0.5.1-mochi.43",
+    "all49IntegralCriteriaRemainOpen": true,
+    "paidInferenceCallsThisUnit": 0,
+    "publicationSuspended": true,
+    "normalBuildRecord": "FORK44-SOURCE25-BUILD.json",
+    "rpmSha256": "6111b52cce0205b5ccca68e764045ba6771fa41f0cf5329cffa1285558de91cb",
+    "normalBinarySha256": "7eb8df44aa37efb57e4a770a80e93f0b5444a67560e09011f715a03906531153"
+  },
+  "latestInteractiveInferenceReaderWait": {
+    "atUtc": "2026-11-12T15:24:08.375609+00:00",
+    "source": "SOURCE29-INFERENCE-READER-WAIT.json",
+    "receipt": ".build/upstream-parity-20261111/INFERENCE-READER-SOURCE29-VERIFIED.json",
+    "negativeControl": "inference-busy26-baseline: expected failure verified",
+    "fixtureScope": "Real HTTP/no IO during reader/once after unlock; Stop/target swap zero HTTP; original physical hold, retirement, deadline, one-use fence",
+    "scopedReusedSource28Files": [
+      "windows/src-tauri/src/local_chat.rs",
+      "windows/src-tauri/src/pet_inference.rs",
+      "windows/src-tauri/src/pet_resources_inference_tests.rs"
+    ],
+    "currentNativeScope": "Development85 and normal RPM29 independently pass UI/pinned TLS/7 synthetic POSTs/readers/context/reset/cancel/revoke/restart; not forced native mutex or whole-app/hardware/installed acceptance",
+    "normalBuildRecord": "FORK44-SOURCE29-BUILD.json",
+    "rpmSha256": "53d738c52921c5629ba67491b3c792ba67208a11728e747674b5ac05678c6f9b",
+    "normalBinarySha256": "2446d17676c80e9710dbde615bdf5735cfc41abc148c4beec8be7bae4d0674d7",
+    "historicalNativeIncidentExactCauseConfirmed": false,
+    "all49IntegralCriteriaRemainOpen": true,
+    "installedVersionPreserved": "0.5.1-mochi.43",
+    "paidOrRealInferenceThisUnit": 0,
+    "publicationSuspended": true
+  },
+  "latestCurrentGraphicalCodeDiff": {
+    "atUtc": "2026-11-12T16:01:57.740343+00:00",
+    "source": "SOURCE29-INFERENCE-READER-WAIT.json",
+    "buildRecord": "FORK44-SOURCE29-BUILD.json",
+    "receipt": ".build/upstream-parity-20261111/GRAPHICAL-CODE-DIFF-SOURCE29-VERIFIED.json",
+    "scope": "Actual current compositor Codex diff/card and floating Ollama five-line Markdown code; same-profile process restart preserves CID/messages with one synthetic HTTP",
+    "productionDelta": false,
+    "wholeAppOrHumanOrInstalledAcceptance": false,
+    "copyScope": "Control observed; prior X11 private clipboard proof retained, personal Wayland clipboard not invoked",
+    "installedIntegrity": ".build/upstream-parity-20261111/INSTALLED43-AFTER-GRAPHICAL29.json",
+    "cleanup": ".build/upstream-parity-20261111/GRAPHICAL29-CLEANUP.json",
+    "all49IntegralCriteriaRemainOpen": true,
+    "realOrPaidInferenceThisUnit": 0,
+    "publicationSuspended": true
+  },
+  "latestCurrentRule67TechnicalAcceptance": {
+    "atUtc": "2026-11-13T00:37:19.169035+00:00",
+    "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+    "buildRecord": "FORK44-SOURCE35-BUILD.json",
+    "receipt": ".build/upstream-parity-20261111/RULE67-SOURCE35-VERIFIED.json",
+    "technicalNativeAndPreservationScopeComplete": true,
+    "syntheticResponses": 3,
+    "signedRecords": 8,
+    "originalPayloadsExact": 12,
+    "nativeCommandReceipts": 13,
+    "humanApproval": false,
+    "installedAcceptance": false,
+    "all49GoalComplete": false
+  },
+  "latestCurrentCompositorDecisionRecap": {
+    "atUtc": "2026-11-12T16:40:41.919130+00:00",
+    "source": "SOURCE29-INFERENCE-READER-WAIT.json",
+    "receipt": ".build/upstream-parity-20261111/COMPOSITOR-DECISIONS-RECAP-SOURCE29-VERIFIED.json",
+    "scope": "Current compositor request/question, socket replies, summary/share/private PNG/privacy/restart; generated data only",
+    "productionDelta": false,
+    "installedOrHumanOrGlobalAcceptance": false
+  },
+  "latestCurrentServiceCardRecovery": {
+    "atUtc": "2026-11-12T17:14:49.327204+00:00",
+    "source": "SOURCE30-SERVICE-CARDS.json",
+    "receipt": ".build/upstream-parity-20261111/SERVICE-CARDS-SOURCE30-VERIFIED.json",
+    "implemented": true,
+    "nativeSyntheticHttpFunctionalAccepted": true,
+    "otherFiveNativeProjectionFixtures": true,
+    "wholeGraphicOrRemoteOrInstalledAcceptance": false,
+    "installedChanged": false
+  },
+  "latestCurrentCustomServerRecovery": {
+    "atUtc": "2026-11-12T18:04:40.557655+00:00",
+    "source": "SOURCE33-CUSTOM-DOCUMENTATION.json",
+    "receipt": ".build/upstream-parity-20261111/CUSTOM-SOURCE33-VERIFIED.json",
+    "nativeSyntheticFunctionalAcceptance": true,
+    "privateFloatingChatReadable": true,
+    "nativePreservationAndOldActivationRefusal": true,
+    "currentServiceRegression": true,
+    "compilationQualification": "Source32 normal compile; Source33 docs-only alignment, original full-source equality failure retained",
+    "installedChanged": false,
+    "humanOrWholeGraphicalOrAll49Acceptance": false
+  },
+  "latestCurrentCompositorServiceAttempt": {
+    "receipt": ".build/upstream-parity-20261111/COMPOSITOR-SERVICES33-QUALIFICATION.json",
+    "accepted": false,
+    "reason": "Exact operational43 overlay occlusion, one active monitor; no safe alternate selected, installed UI preserved",
+    "nextIndependentDependency": "Refresh current normal Source33 integrated Rule6/7 technical UI/synthetic HTTP/restart/preservation using existing isolated helpers. Prior Source29 receipt retains scope, not blanket Source33 acceptance. No production change or model quota required."
+  },
+  "latestCurrentServiceGraphicalAcceptance": {
+    "atUtc": "2026-11-12T22:32:38.715110+00:00",
+    "source": "SOURCE33-CUSTOM-DOCUMENTATION.json",
+    "receipt": ".build/upstream-parity-20261111/COMPOSITOR-SERVICES33-VERIFIED.json",
+    "nativeOwnedCompositorStages": 12,
+    "n8nSyntheticAuthenticatedGets": 22,
+    "otherServiceEventProjections": 5,
+    "humanAcceptance": false,
+    "installedAcceptance": false,
+    "realRemoteAccountsAccepted": false,
+    "all49GoalComplete": false
+  },
+  "latestCurrentHookFormatsAcceptance": {
+    "atUtc": "2026-11-13T01:25:49.922727+00:00",
+    "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+    "receipt": ".build/upstream-parity-20261111/HOOK-FORMATS-SOURCE35-VERIFIED.json",
+    "nativeFormatComparisons": 6,
+    "centreAndSessionReturn": true,
+    "actualCodexMultiEditImageAccepted": true,
+    "compositorFullScenarioPassed": false,
+    "finalCompositorBackVerified": false,
+    "compositorFailureQualifiedAndRetained": true,
+    "originalOverallFailedReceiptRetained": true,
+    "realIdeProviderEmissionVerified": false,
+    "humanAcceptance": false,
+    "installedAcceptance": false,
+    "all49GoalComplete": false
+  },
+  "latestCurrentOriginalVoiceOperationAcceptance": {
+    "atUtc": "2026-11-12T23:36:45.193254+00:00",
+    "source": "SOURCE33-CUSTOM-DOCUMENTATION.json",
+    "receipt": ".build/upstream-parity-20261111/VOICE-EFFECTS-SOURCE33-VERIFIED.json",
+    "freshIsolatedNativeCases": 6,
+    "ownedNativeProcessEnvironmentAttestations": 12,
+    "originalFiveOperationNamesExercisedInBoundedVariants": true,
+    "permissionDenial": true,
+    "priorHomeIsolationClaimsQualified": ".build/upstream-parity-20261111/VOICE-QA-HOME-ISOLATION-QUALIFICATION33.json",
+    "humanAcceptance": false,
+    "allRealWorldEffectsVerified": false,
+    "physicalAudioAcceptance": false,
+    "granularResourceAuthorityCertified": false,
+    "installedAcceptance": false,
+    "all49GoalComplete": false
+  },
+  "latestCurrentVoiceRosterRecovery": {
+    "atUtc": "2026-11-13T00:22:22.188220+00:00",
+    "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+    "receipt": ".build/upstream-parity-20261111/VOICE-ROSTER-SOURCE35-VERIFIED.json",
+    "nativeSetMainAndPermissionDenialPassed": true,
+    "sameBeforeDuringAfterRestartCid": true,
+    "otherChoicesPreserved": true,
+    "virtualAudioWithRealAsrFreeTts": true,
+    "realChatModelRequests": 0,
+    "physicalOrHumanAcceptance": false,
+    "installedAcceptance": false,
+    "all49GoalComplete": false,
+    "remainingVoiceVariantsAccepted": false
+  },
+  "latestCurrentNaturalVoiceAcceptance": {
+    "atUtc": "2026-11-13T01:04:04.213633+00:00",
+    "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+    "receipt": ".build/upstream-parity-20261111/VOICE-NATURAL-SOURCE35-VERIFIED.json",
+    "technicalFullRecordedPhraseAndReadOnlyReopenVerified": true,
+    "originalOverallHarnessFailuresRetainedAndQualified": true,
+    "sameBeforeTurnCidResponseAndChoicesAfterRestart": true,
+    "newVoiceActionOrChatInferenceOnResume": false,
+    "physicalHumanInstalledOrAll49Acceptance": false
+  },
+  "historicalHookFormatsAcceptanceBefore35": {
+    "atUtc": "2026-11-12T22:50:09.144093+00:00",
+    "source": "SOURCE33-CUSTOM-DOCUMENTATION.json",
+    "receipt": ".build/upstream-parity-20261111/HOOK-FORMATS-SOURCE33-VERIFIED.json",
+    "nativeFormatComparisons": 6,
+    "centreAndSessionReturn": true,
+    "codexMultiEditActualCompositorAccepted": true,
+    "originalOverallFailedReceiptRetained": true,
+    "realIdeProviderEmissionVerified": false,
+    "humanAcceptance": false,
+    "installedAcceptance": false,
+    "all49GoalComplete": false
+  },
+  "historicalInstalledBefore35": "0.5.1-mochi.43",
+  "historicalCompositionBeforeInstalled35": {
+    "rootSourceFiles": 1322,
+    "sourceMap": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-governed-revisions/SOURCE2.json",
+    "nativeLibraryChecked": true,
+    "privateWebBundle": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/system-orphan-retirement/web1/dist",
+    "latestNativePackageVersion": "0.5.1-mochi.44",
+    "packageSourceFiles": 1272,
+    "installedVersion": "0.5.1-mochi.43",
+    "legacyPrivateSdkTopLevelFields": "Historical snapshots retained, not current root composition",
+    "latestPrivateNativeVersion": "0.5.1-mochi.44",
+    "privateNativeBuild": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/host-native-development-20261107/build58/BUILD-RESULT.json",
+    "privateNativeBuildContainsLatestCacheReaping": true,
+    "nativeBuild23ProductionEquivalent": false,
+    "nativeLiteralSystemTaskEffectsEnabled": true,
+    "normalNativePackage": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/release44-native/PACKAGE-PREPARED.json",
+    "installedTechnicalVerification": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/release43-native/INSTALLED43-TECHNICAL.json",
+    "installedVisualAcceptance": false,
+    "guardianStablePetId": "agent_system_guardian",
+    "guardianManualHealthVerified": true,
+    "guardianIncrementInstalled": true,
+    "installedAutomatedVisualObservation": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/release43-native/INSTALLED43-VISUAL.json",
+    "guardianBaselineInstalled": false,
+    "guardianHostInventoryInstalled": false,
+    "guardianInventoryRuntimeInstalled": false,
+    "guardianBaselineApprovalReadinessCorrected": true,
+    "normal44NativeUiAccepted": false,
+    "systemRequestedExecutionImplemented": true,
+    "systemRequestedExecutionNativeTauriValidated": false,
+    "systemRequestedExecutionInstalled": false,
+    "systemRequestedExecutionPrivateNativeBuild": 36,
+    "systemRequestedExecutionNativeCliPreservationVerified": true,
+    "persistentCalendarCollectionsImplemented": true,
+    "persistentCalendarCollectionsInstalled": false,
+    "persistentCalendarCollectionsNativeWidgetAccepted": true,
+    "nativeBuildSourceMap": "/home/pmglo/Projects/coucou-codex/.build/pet-goal-execution-next-r1/rule-governed-revisions/SOURCE2.json",
+    "persistentCalendarCollectionsNativeRestartVerified": true,
+    "goalCalendarContextImplemented": true,
+    "goalCalendarContextNativeSyntheticVerified": true,
+    "goalCalendarContextPreservationVerified": true,
+    "goalCalendarContextInstalled": false,
+    "goalCalendarContextNativeHistoricalReaderVerified": true,
+    "goalCalendarContextOld43RefusalVerified": true,
+    "goalCalendarOwnPetSourcesImplemented": true,
+    "goalCalendarOwnPetSourcesNativeSyntheticVerified": true,
+    "goalCalendarOwnPetSourcesPreservationVerified": true,
+    "goalCalendarOwnPetSourcesInstalled": false,
+    "goalCalendarOwnPetSourcesHistoricalReaderVerified": true,
+    "goalCalendarOwnPetSourcesPreviousReaderRefusalVerified": true,
+    "ruleAutomaticDispatchNativeSyntheticVerified": true,
+    "ruleAutomaticDispatchInstalled": false,
+    "ruleProbeRecoveryNativeVerified": true,
+    "ruleProbeRecoveryInstalled": false,
+    "ruleTemporalStatusNativeVerified": true,
+    "ruleTemporalStatusInstalled": false,
+    "revokedRuleIntentRetirementNativeVerified": true,
+    "revokedRuleIntentRetirementInstalled": false,
+    "ruleSuccessionImplemented": true,
+    "ruleSuccessionCoreValidated": true,
+    "ruleSuccessionCliPreservationVerified": true,
+    "ruleSuccessionNativeWindowVerified": false,
+    "ruleSuccessionInstalled": false,
+    "governedRuleRevisionImplemented": true,
+    "governedRuleRevisionNativeWindowVerified": false,
+    "governedRuleRevisionInstalled": false
+  },
+  "latestCurrentInstalled35Delivery": {
+    "atUtc": "2026-11-13T01:42:56.368358+00:00",
+    "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+    "version": "0.5.1-mochi.44",
+    "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/INSTALLED44-TECHNICAL.json",
+    "sameBinaryAsScopedNative35QA": true,
+    "nativeBackupAndPrevious43Preserved": true,
+    "existingFiles": 49,
+    "unchanged": 48,
+    "onlyLogChanged": true,
+    "settingsPetsWholeJsonExact": true,
+    "actualInstalledHubVersionAndPetsObserved": true,
+    "personalProfileInferenceOrAutonomyExecutionAcceptance": false,
+    "humanOrPhysicalAcceptance": false,
+    "all49GoalComplete": false,
+    "focusedSignedStationCompletion": "14628283118d6532d2d7fa46a8ad69396d8db1ac",
+    "bothStationSignaturesVerified": true,
+    "finalStationSignaturePending": false,
+    "signedStationRegistration": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/installed-source35-delivery/HOST-SIGNED-REGISTRATION.json"
+  },
+  "latestCurrentNormalWaylandResources": {
+    "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/RESOURCES-SOURCE35-VERIFIED.json",
+    "fourPrivateStarts": true,
+    "meanExtraPssMiB": 38.375,
+    "wholeResourceParityAccepted": false
+  },
+  "latestCurrentFreeRealLocalVoice": {
+    "atUtc": "2026-11-13T02:05:56.883860+00:00",
+    "source": "SOURCE35-VOICE-ROSTER-CONTINUATION.json",
+    "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/VOICE-LOCAL-REAL-SOURCE35-VERIFIED.json",
+    "freeAlreadySelectedModel": "gemma3:4b",
+    "realLocalRequests": 1,
+    "nativeCorrectReplyNaturalEndStopAndSameCidRestart": true,
+    "independentAllSpokenWordsRecognized": false,
+    "originalAsrFailureRetained": true,
+    "newProductDefectEstablished": false,
+    "personalProfileUsed": false,
+    "paidOrCopilotGithubQuota": false,
+    "humanOrPhysicalAcceptance": false,
+    "all49GoalComplete": false
+  },
+  "latestCurrentPhoneAdmissionRecovery": {
+    "atUtc": "2026-11-13T19:19:48.952817+00:00",
+    "source": "SOURCE37-PHONE-ADMISSION-RELEASE45.json",
+    "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/PHONE-NORMAL45-SOURCE37-VERIFIED.json",
+    "realProducerNegativeControl": "Unreachable vs Busy before fix; corrected same backend36",
+    "directedTests": 11,
+    "normalVersion": "0.5.1-mochi.45",
+    "normalBuildRecord": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/FORK45-SOURCE37-BUILD.json",
+    "nativeSyntheticHttpPosts": 7,
+    "readOnlyStatusQueries": 112,
+    "initialAdmissionContentionForcedInNativeRun": false,
+    "oldIntermittentCauseEstablished": false,
+    "normalPackageAndNativePhoneScopeVerified": true,
+    "installedAcceptance": false,
+    "humanAcceptance": false,
+    "newAuthorityRetryFallbackOrPersistentFormat": false,
+    "all49GoalComplete": false
+  },
+  "latestCurrentPhoneQuestionParity": {
+    "atUtc": "2026-11-13T19:47:52.415476+00:00",
+    "state": "preserved in complete native synthetic-phone path; no product delta needed",
+    "source": "SOURCE37-PHONE-ADMISSION-RELEASE45.json",
+    "officialCommit": "841a81ce1d75b65882b30139e6b716d0837dce30",
+    "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/PHONE-QUESTIONS-SOURCE37-VERIFIED-COMPARISON.json",
+    "nativeQuestionsAndExactSocketAnswersPerComposition": 2,
+    "capabilityRefusalAndReplayBoundariesPerComposition": 10,
+    "sameRunnerAndExactAnswers": true,
+    "nativeAppRestartNoReplay": true,
+    "generatedProfileDecisionRoute": "Coucou explicitly selected/verified; operational choice preserved",
+    "realOrPaidInferenceOrRealIde": false,
+    "failedObserverCasesRetained": 2,
+    "physicalAndroidOrBiometricOrHumanOrInstalledAcceptance": false,
+    "all49GoalComplete": false
+  },
+  "latestCurrentPhoneN8nSourceRecovery": {
+    "atUtc": "2026-11-13T20:47:06.387570+00:00",
+    "state": "root integrated:1 mapper;37 directed/private87 native selected-session/revoke/restart verified; normal/installed pending",
+    "source": "SOURCE38-PHONE-N8N-NATIVE-ACTIVITY.json",
+    "receipt": "/home/pmglo/Projects/coucou-codex/.build/upstream-parity-20261111/PHONE-N8N-SOURCE38-VERIFIED.json",
+    "inputs": 1323,
+    "productionFilesChanged": 1,
+    "nativeNormal37Negative": true,
+    "nativeModelTextExposureProven": false,
+    "fixtureWrongSourceAndCardInventionProven": true,
+    "directedTests": 37,
+    "privateNativeBuild": 87,
+    "privateNativeFixedRoutePassed": true,
+    "originalInitialBaselinePassedButWholeRestartFailed": true,
+    "visualSelectionCaptureAccepted": false,
+    "realOrPaidInferenceCalls": 0,
+    "normalPackagePrepared": false,
+    "installed": false,
+    "humanOrPhysicalAcceptance": false,
+    "all49GoalComplete": false
+  },
+  "latestFactoryDomainFeaturePolicy": {
+    "atUtc": "2026-11-13T21:24:07.311782+00:00",
+    "ownerRule": "Only recover features appropriate to represented domain; inference/chat/models for applicable LLM pets, native tool/service functions for applications. Policy belongs to domain molds, not common base.",
+    "source": "SOURCE40-FACTORY-DOMAIN-FEATURES.json",
+    "privateNativeBuild": 88,
+    "directedFrontendTests": 98,
+    "directedRustTests": 64,
+    "nativeEndToEndAcceptance": true,
+    "installed": false,
+    "oldSerializedDefaultsAndDataFormatsUnchanged": true,
+    "priorWorkingComposition": {
+      "source": "SOURCE38-PHONE-N8N-NATIVE-ACTIVITY.json",
+      "inputs": 1323,
+      "deltaFrom37": [
+        "windows/src/island/phone-services.ts",
+        "windows/tests/phone-link.test.mjs",
+        "windows/tests/pet-service-cards.test.mjs"
+      ],
+      "privateNativeBuild": 87,
+      "nativePhoneN8nScopeVerified": true,
+      "normalPackagePrepared": false,
+      "previousNormal45Source37Unchanged": true,
+      "normal45ContainsThisCorrection": false,
+      "wholeAppAccepted": false,
+      "installed": false
+    },
+    "supersededNormal46": "NORMAL46-OWNER-SUPERSEDED.json",
+    "notAllDomainFeaturesAudited": true,
+    "nativeEndToEndScope": "Private88/40 n8n native HTTP/TLS workflow and inference refusal; whole generated n8n historical record exact; one synthetic Codex-only LLM turn and app restart/no replay.",
+    "proof": "FACTORY-DOMAIN40-VERIFIED.json",
+    "serviceReadableGraphicalAcceptance": false
+  },
+  "latestFactoryDomainHeader": {
+    "source": "SOURCE42-DOMAIN-HEADER-RELEASE47.json",
+    "delta": "SOURCE42-DELTA.json",
+    "actualHeaderNegative": "header-domain42-source-review/NEGATIVE-CONTROL.json",
+    "directedFrontend": 102,
+    "typescript": true,
+    "backendTestsReused64ByByteEquality": true,
+    "nativeCurrentPackageAccepted": false,
+    "normalBuildInProgress": true,
+    "installed": false,
+    "older41BuildQualified": "NORMAL47-SOURCE41-QUALIFIED.json"
+  },
+  "latestRuleCalendarMaterialization": {
+    "atUtc": "2026-11-16T16:19:14.094544+00:00",
+    "state": "Captura própria por ocorrência implementada/integrada e validada em aplicação nativa de desenvolvimento; inferência/resumo/notificação e entrega operacional pendentes",
+    "verification": ".build/rule-calendar-materialization-20261116/VERIFIED-CAPTURE.json",
+    "sourceMap": ".build/rule-calendar-materialization-20261116/SOURCE-MATERIALIZER2.json",
+    "sourceFiles": 1326,
+    "nativeBinarySha256": "eb183dcff98b254b2c02576bddfaba3a1ba32d96835bf3a8696969e1580dfe00",
+    "nativeUiAndReader": true,
+    "partialAndUnavailableCoverage": true,
+    "metadataBusyNoReadSpent": true,
+    "restartAndRevocation": true,
+    "modelCalls": 0,
+    "installed": false,
+    "humanAcceptance": false,
+    "full49Accepted": false,
+    "next": "Bind this original completed capture to actual request/body limits/hash and derived own rule child DATA authority via existing finite-response writer, then synthetic model result and one governed notification; preserve read once/deadline/partition."
+  },
+  "latestRuleCalendarInference": {
+    "atUtc": "2026-11-16T17:23:17.871164+00:00",
+    "state": "Resposta finita manual/automática com dados futuros próprios integrada e validada nativamente em desenvolvimento; notificação/semântica/ciclo/entrega ainda pendentes",
+    "verification": ".build/rule-calendar-inference-20261116/VERIFIED-INFERENCE.json",
+    "sourceMap": ".build/rule-calendar-inference-20261116/SOURCE5.json",
+    "sourceFiles": 1326,
+    "nativeBinarySha256": "2714dbe39653e286f74691995c13ea4ed51df8b9e221c5db9fac72ab9465f96b",
+    "actualBodyAndHash": true,
+    "oneAttemptPerOccurrence": true,
+    "readableDialogueAndRestart": true,
+    "approvedAutomaticTimeWithPanelsClosed": true,
+    "revocationDuringActualHttp": true,
+    "nativePreservationCommands": 13,
+    "previousReaderRefusedWithoutChange": true,
+    "realModelCalls": 0,
+    "installed": false,
+    "humanAcceptance": false,
+    "full49Accepted": false,
+    "next": "Integrar uma notificação governada/deduplicada no horário permitido e validar o resumo com dados novos semanticamente desconhecidos pelo modelo. Depois fechar ciclo de edição/sucessão das regras com dados futuros, aceitação restaurada e entrega da composição atual; preservar49 e recuperação por domínio."
+  },
+  "latestRuleResultNotification": {
+    "atUtc": "2026-11-16T17:56:25.262492+00:00",
+    "verification": ".build/rule-result-notification-20261116/VERIFIED-NOTIFICATION.json",
+    "source": ".build/rule-result-notification-20261116/SOURCE2.json",
+    "sourceFiles": 1328,
+    "fullAuto03Complete": false,
+    "fullGoalComplete": false,
+    "installed": "44/Source35 preserved",
+    "next": "Diagnosticar a captura automática interrompida com contexto durável mas objetivo ainda sem binding; corrigir apenas a publicação/revalidação de metadados sob a concessão e prazo originais, sem repetir extração. Depois validar semântica com dados novos num modelo local gratuito explicitamente escolhido; fechar edição/sucessão de regras com dados futuros, janela restaurada e entrega operacional."
+  },
+  "latestCalendarLinkAndActualSemanticAttempt": {
+    "atUtc": "2026-11-16T18:23:43.288745+00:00",
+    "source": ".build/rule-calendar-link-20261116/SOURCE2.json",
+    "linkVerification": ".build/rule-calendar-link-20261116/VERIFIED-LINK.json",
+    "semanticAttempt": ".build/rule-calendar-link-20261116/SEMANTIC-FAILED-QUALIFICATION.json",
+    "realFreeLocalModelCalls": 1,
+    "paidCalls": 0,
+    "semanticAcceptance": false,
+    "fullGoalComplete": false,
+    "next": "Corrigir o contrato de contexto do adaptador Ollama: distinguir máximo anunciado e contexto efetivamente usado, garantir que todos os dados selecionados cabem no pedido processado ou recusar antes de reservar/enviar inferência. Rever explicitamente destino/opções e preservar gemma3:4b, contas, preferências e daemon/modelos globais; sem fallback ou cópia de modelo. Depois uma nova aceitação com dados novos, seguida do ciclo edição/sucessão das regras, janela restaurada e entrega operacional."
+  },
+  "latestCurrentOllamaRuntimeContext": {
+    "atUtc": "2026-11-16T19:14:06.788465+00:00",
+    "sourceFiles": 1329,
+    "binarySha256": "aec31dd2a50822a8d8089582c17935bd7b9f0ec1c7b41b2bc9b2fb832643baa6",
+    "verification": "/home/pmglo/Projects/coucou-codex/.build/ollama-runtime-context-20261116/VERIFIED-CONTEXT.json",
+    "technicalNativeContext": true,
+    "semanticAcceptance": false,
+    "actualFreeModelCalls": 2,
+    "humanAcceptance": false,
+    "installed": false,
+    "full49Complete": false
+  },
+  "latestCurrentCalendarFactualResponse": {
+    "atUtc": "2026-11-16T20:03:09.078473+00:00",
+    "sourceFiles": 1330,
+    "sourceManifest": "/home/pmglo/Projects/coucou-codex/.build/calendar-factual-response-20261116/SOURCE3.json",
+    "binarySha256": "d0a0f8f73fa47cbb65320e54110115eeb603231f9d71687c0712c4ed58e5a633",
+    "verification": "/home/pmglo/Projects/coucou-codex/.build/calendar-factual-response-20261116/VERIFIED-FACTUAL-RESPONSE.json",
+    "nativeFactualGroundingChronologyAndFunctionalRead": true,
+    "strictIntentAcceptance": false,
+    "actualFreeModelCalls": 2,
+    "humanAcceptance": false,
+    "installed": false,
+    "full49Complete": false
+  },
+  "latestCurrentCalendarCountLifecycle": {
+    "atUtc": "2026-11-16T20:57:35.092474+00:00",
+    "sourceManifest": "/home/pmglo/Projects/coucou-codex/.build/calendar-count-lifecycle-20261116/SOURCE3.json",
+    "sourceFiles": 1332,
+    "binarySha256": "d653795bd3fe3a395b357fd73ea598eb0184d74ef2ff29f794a5c1c92152475d",
+    "verification": "/home/pmglo/Projects/coucou-codex/.build/calendar-count-lifecycle-20261116/VERIFIED-COUNT-LIFECYCLE.json",
+    "nativeReviewedQuantityLifecycleAndRestoredWindow": true,
+    "strictIntentAcceptance": false,
+    "actualFreeModelCalls": 1,
+    "humanAcceptance": false,
+    "installed": false,
+    "full49Complete": false
+  },
+  "latestCurrentCalendarAgendaSelection": {
+    "atUtc": "2026-11-16T21:12:26.197331+00:00",
+    "sourceManifest": "/home/pmglo/Projects/coucou-codex/.build/calendar-agenda-selection-20261116/SOURCE1.json",
+    "sourceFiles": 1332,
+    "binarySha256": "668072518b0080bd7ab117cb2f908f04860ed03c5a89872325defa7c90b0f5c0",
+    "verification": "/home/pmglo/Projects/coucou-codex/.build/calendar-agenda-selection-20261116/VERIFIED-AGENDA-SELECTION.json",
+    "strictCurrentCaseAcceptance": true,
+    "generalSemanticCertification": false,
+    "actualFreeModelCalls": 1,
+    "humanAcceptance": false,
+    "installed": false,
+    "full49Complete": false
+  },
+  "latestNormal48Candidate": {
+    "verification": ".build/operational48-20261116/VERIFIED.json",
+    "proposal": "docs/PETS-INSTALLED-DELIVERY-48.md",
+    "candidateVersion": "0.5.1-mochi.48",
+    "rpmSha256": "45983dfee0bbc9832614ee88f4ab8c81a30cdde83600206a77b56dec2f35b292",
+    "binarySha256": "050bf265427a143c837a4afc842ae53c36b0486f981e7eb86e329d6e40765fb0",
+    "sourceFiles": 1332,
+    "currentPackageAffectedRoutesVerified": true,
+    "installed": false,
+    "humanAcceptance": false,
+    "wholeParityRecertified": false,
+    "full49Complete": false
+  },
+  "latestResource48Review": {
+    "atUtc": "2026-11-16T21:55:09.702535+00:00",
+    "verification": "/home/pmglo/Projects/coucou-codex/.build/resources48-20261116/VERIFIED.json",
+    "sourceFiles": 1332,
+    "installedChanged": false,
+    "wholeParityRecertified": false
+  },
+  "latestCurrentFieldReconciliation": {
+    "atUtc": "2026-11-16T21:55:09.702535+00:00",
+    "ids": [
+      "CTX-04",
+      "AUTO-03",
+      "AUTO-05",
+      "DATA-02"
+    ],
+    "before": "/home/pmglo/Projects/coucou-codex/.build/resources48-20261116/docs-before/PETS-REQUIREMENTS-AUDIT-2026-10-25.json",
+    "original49CriteriaAndDependenciesUnchanged": true,
+    "reason": "Current primary fields contradicted verified calendar work and mixed unrelated shortcut evidence into optional PostgreSQL."
+  },
+  "latestWorkFollowupDecision": {
+    "source": ".build/work-followup-decision-20261117/SOURCE5.json",
+    "evidence": ".build/work-followup-decision-20261117/VERIFIED.json",
+    "normalPackage": false,
+    "installed": false,
+    "wholeAuto04Complete": false
+  },
+  "latestWorkReportReadability": {
+    "source": ".build/work-report-readable-20261117/SOURCE1.json",
+    "evidence": ".build/work-report-readable-20261117/VERIFIED.json",
+    "installed": false,
+    "wholeAuto04Complete": false
+  },
+  "composicaoAtual1711": {
+    "source": ".build/project-progress-20261117/SOURCE2.json",
+    "sourceInputs": 1342,
+    "nativeInputs": 825,
+    "privateBinary": "9a83c8cb96be9d9b44c43799fd7c87a6ea0a27cf44a454c498a7fa5e4fab4488",
+    "proof": ".build/project-progress-20261117/VERIFIED.json",
+    "installed": "0.5.1-mochi.44",
+    "frozenRpm": "0.5.1-mochi.49 separado; aprovação pendente",
+    "qualification": "Campos privateSdk/privateVariant/privateSnapshot conservam o seu SDK histórico, não o binário atual.",
+    "preservationProof": ".build/project-recovery-20261117/VERIFIED.json"
+  },
+  "latestProjectRule1711": {
+    "source": "/home/pmglo/Projects/coucou-codex/.build/project-rule-20261117/SOURCE4.json",
+    "receipt": "/home/pmglo/Projects/coucou-codex/.build/project-rule-20261117/VERIFIED.json",
+    "binarySha256": "fd04c0d69488328088d1948e5eb2f6c7800225416b4340cc0b139c85c77f8c0a",
+    "privateScopeComplete": true,
+    "installedDelivery": false,
+    "wholeAuto04Complete": false,
+    "whole49Complete": false
+  },
+  "latestProjectDecisionRecovery": {
+    "document": "docs/PETS-PROJECT-DECISION-2026-11-17.md#prazo-e-restauro-da-composição-atual",
+    "privateReceipt": ".build/project-decision-recovery-20261117/VERIFIED.json",
+    "binarySha256": "b321a7005a543073ef359277ace70345abd70ce9c63b2e146530a312ef45c668",
+    "scope": "clock publication fix and exact current native double archive/restoration/historical read/no authority or replay",
+    "knownLimitation": "seed5 occurrence preparation stopped before selected-data capture/admission; cause not established",
+    "installedChanged": false,
+    "fullGoalComplete": false,
+    "humanAcceptance": false
+  },
+  "latestProjectRulePreparation": {
+    "document": "docs/PETS-PROJECT-DECISION-2026-11-17.md#consultas-e-publicação-da-captura-sob-contenção",
+    "privateReceipt": "/home/pmglo/Projects/coucou-codex/.build/project-rule-preparation-20261117/VERIFIED.json",
+    "binarySha256": "0ba38c5ed053c2c3b83103bcfdbacffb0b73eda53854122f89d65a0bc16d08e7",
+    "scope": "current native reader contention + exact data-seal publication under Busy, one current own authorized synthetic response/restart and historical read/refusal/restart",
+    "virtualX11PostRestartWindowPixelsConfirmed": false,
+    "webkitAndDomPostRestartReadable": true,
+    "realCompositorAcceptance": false,
+    "installedChanged": false,
+    "whole49Complete": false,
+    "humanAcceptance": false,
+    "next": "Confirmar a pintura/consulta após reinício no compositor Wayland real, em perfil de desenvolvimento isolado e sem inferência nova; depois reavaliar paridade/49, entrega operacional e próxima dependência funcional, evitando mais infraestrutura sem falha demonstrada."
+  },
+  "latestNormal50Candidate": {
+    "proof": ".build/operational50-20261117/VERIFIED.json",
+    "delivery": "docs/PETS-INSTALLED-DELIVERY-50.md",
+    "version": "0.5.1-mochi.50",
+    "source": ".build/operational50-20261117/SOURCE1.json",
+    "sourceInputs": 1364,
+    "nativePackageCases": 4,
+    "nativeMaintenanceCommands": 18,
+    "syntheticModelCalls": 1,
+    "realModelCalls": 0,
+    "currentAndRestoredVirtualPostRestartPixelsObserved": true,
+    "realCompositorAcceptance": false,
+    "installed": false,
+    "humanAcceptance": false,
+    "full49Complete": false,
+    "knownShortcutGap": true,
+    "proposalSuspendedForSuccessorPackage": true
+  },
+  "latestCurrentPhone50": {
+    "proof": ".build/phone-parity-current50-20261117/VERIFIED.json",
+    "contract": "docs/ANDROID_LINK.md#phone-chat-normal50",
+    "normal50ArtifactPreserved": true,
+    "nativeCases": 2,
+    "syntheticChatPosts": 14,
+    "currentContractPassed": true,
+    "historicalCauseProven": false,
+    "currentRefusalReproduced": false,
+    "productChanged": false,
+    "installed": false,
+    "humanAcceptance": false,
+    "full49Complete": false
+  },
+  "latestCurrentShortcutRouting": {
+    "proof": ".build/shortcut-routing-20261117/VERIFIED.json",
+    "contract": "docs/PETS-UPSTREAM-PARITY-2026-11-11.md#atalhos-pedidos-cli-1711",
+    "source": ".build/shortcut-routing-20261117/SOURCE1.json",
+    "binarySha256": "71e4889d5850e9bb5d57164294418105c0efe2b598ce9823d689fda3816c9af1",
+    "normalPackage": false,
+    "developmentArtifact": true,
+    "officialReference": "841a81ce1d75b65882b30139e6b716d0837dce30",
+    "normal50Negative": true,
+    "sameNativeCaseFixed": true,
+    "legacyNavigationCompared": true,
+    "stopRetirementVerified": true,
+    "webPassed": 44,
+    "realModelCalls": 0,
+    "installed": false,
+    "humanAcceptance": false,
+    "full49Complete": false,
+    "normal51Proof": ".build/operational51-20261117/VERIFIED.json"
+  },
+  "latestNormal51Candidate": {
+    "proof": ".build/operational51-20261117/VERIFIED.json",
+    "delivery": "docs/PETS-INSTALLED-DELIVERY-51.md",
+    "version": "0.5.1-mochi.51",
+    "source": ".build/operational51-20261117/SOURCE1.json",
+    "sourceInputs": 1367,
+    "nativePackageCases": 2,
+    "syntheticRpcTurns": 1,
+    "realModelCalls": 0,
+    "shortcutFixNativeVerified": true,
+    "legacyNavigationComparedToOfficial": true,
+    "installed": false,
+    "humanAcceptance": false,
+    "full49Complete": false,
+    "knownIslandToggleGap": true,
+    "installProposalSuspended": true
+  },
+  "latestIslandTerminalShortcuts": {
+    "proof": ".build/island-terminal-shortcuts-20261117/VERIFIED.json",
+    "contract": "docs/PETS-UPSTREAM-PARITY-2026-11-11.md#ilha-terminal-1711",
+    "source": ".build/island-terminal-shortcuts-20261117/SOURCE1.json",
+    "binarySha256": "7d274c3c24e82366569f97198b960c16d4bd34030fe29addbe71c8cb3c2b92d0",
+    "normalPackage": false,
+    "normal51Negative": true,
+    "nativePrivateToggleAndOldArgumentCompatibility": true,
+    "webPassed": 46,
+    "fastRelayCauseProven": false,
+    "realModelCalls": 0,
+    "installed": false,
+    "humanAcceptance": false,
+    "full49Complete": false
+  },
+  "latestFastRelayLifecycleReview": {
+    "proof": ".build/fast-relay-review-20261117/VERIFIED.json",
+    "contract": "docs/PETS-UPSTREAM-PARITY-2026-11-11.md#relay-lifecycle-1711",
+    "productChanged": false,
+    "sameObservedLiveExitedBoundaryInOfficialAndCurrent": true,
+    "earlierRapidRelayCauseProven": false,
+    "realModelCalls": 0,
+    "installedChanged": false,
+    "full49Complete": false
+  },
+  "latestDesktopVisibilityRecovery": {
+    "proof": ".build/desktop-shortcut-20261117/VERIFIED.json",
+    "contract": "docs/PETS-UPSTREAM-PARITY-2026-11-11.md#desktop-pets-1711",
+    "implementedAndRootIntegrated": true,
+    "validatedPrivateNative": true,
+    "privateBinarySha256": "12230fac84ef3faa19dc944a8278c8f0c991788930d12a6b070e7f286dd471a5",
+    "normalRpmOrInstalled": false,
+    "strictRustTestsPassed": 14,
+    "webTestsPassed": 64,
+    "physicalPrivateKeysAndVisibility": true,
+    "generalControlAndRestart": true,
+    "exactLiveRequestPreservedWhilePetsHidden": true,
+    "newPersistentFormatsOrCommands": false,
+    "realInferenceCalls": 0,
+    "humanAcceptance": false,
+    "full49Complete": false
+  },
+  "latestNativeCentreConfigurationRecovery": {
+    "proof": ".build/operational52-20261117/VERIFIED.json",
+    "contract": "docs/PETS-INSTALLED-DELIVERY-52.md",
+    "rpm52X11AffectedRoutesVerified": true,
+    "rpm52WaylandRegressionReproduced": true,
+    "rpm52InstallationSuspended": true,
+    "fixIntegratedInWorkingSourceAndValidatedPrivateHyprland": true,
+    "correctedNormalRpmVerified": false,
+    "nativeCoreTestsPassed": 29,
+    "realModelCalls": 0,
+    "humanAcceptance": false,
+    "full49Complete": false
+  },
+  "latestNormal53Candidate": {
+    "proof": ".build/operational53-20261118/VERIFIED.json",
+    "contract": "docs/PETS-INSTALLED-DELIVERY-53.md",
+    "rpmSha256": "21dae4be20cbf50f6a64e4b4ef03959083a8e9bd0a35ebe99ff9037bf759dbc1",
+    "packagedBinarySha256": "aa0bd6ee29e6f8f0685f2b1974f6ea900fa1957cf851c45e0057e452a1578048",
+    "normalPackageVerified": true,
+    "nativePrivateHyprlandAndX11": true,
+    "legacy67HistoricalReadbackVerified": true,
+    "offlineBackupPreviewVerified": true,
+    "installed": false,
+    "humanAcceptance": false,
+    "full49Complete": false
+  },
+  "latestResendVisualOnExactNormal53": {
+    "proof": ".build/operational53-20261118/RESEND-VISUAL-VERIFIED.json",
+    "actualWaylandImageInspected": true,
+    "oneSyntheticServiceCard": true,
+    "remoteServiceOrModelCalls": 0,
+    "installedChanged": false,
+    "full49Complete": false
+  },
+  "latestExactNormal53IdleResources": {
+    "proof": ".build/operational53-20261118/RESOURCES-VERIFIED.json",
+    "sixPrivateNativeArranques": true,
+    "managedProfilesUntouched": true,
+    "matched44And53GeometryAndCounts": true,
+    "residentPssMiB53Minus44": -9.384765625,
+    "realModelCalls": 0,
+    "prolongedOrInstalledAcceptance": false,
+    "full49Complete": false
   }
 }

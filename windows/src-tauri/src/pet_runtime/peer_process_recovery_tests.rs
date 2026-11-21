@@ -187,8 +187,14 @@ fn resume_review(env:&Process,g:&Record,request:&str)->crate::pet_runtime::lease
 }
 fn resume_server(provider:&'static str,g:&crate::pet_runtime::authority::Grant)->crate::local_chat::Server{
  let destination=&g.planning_usage.as_ref().unwrap().rounds.last().unwrap().peer_data.as_ref().unwrap().source.destination;
+ server_from_reviewed_endpoint(provider,destination)
+}
+fn server_from_reviewed_endpoint(provider:&'static str,destination:&crate::pet_memory::context_model::Destination)->crate::local_chat::Server{
  let crate::pet_memory::context_model::Destination::Server{endpoint,..}=destination else{panic!("local synthetic endpoint")};
- crate::local_chat::Server{id:provider,name:"Original synthetic destination",url:endpoint.strip_suffix("/v1/chat/completions").unwrap().into(),key:None}
+ crate::local_chat::Server{id:provider,name:"Original synthetic destination",url:endpoint.strip_suffix(completion_path(provider)).unwrap().into(),key:None}
+}
+fn completion_path(provider:&str)->&'static str{
+ match provider{"ollama"=>"/api/chat","lmstudio"=>"/v1/chat/completions",_=>panic!("Unexpected fixture engine {provider}")}
 }
 #[test]fn peer_owner_handoff_runs_pending_work_after_process_loss_without_replaying_model_or_receipts(){
  for provider in["ollama","lmstudio"]{
@@ -399,7 +405,7 @@ fn resume_review_from_current(env:&Process,goal:&Record)->model::Result<crate::p
   let mut env=Process::with_endpoint(provider,"bound-inference",Some(&server));
   let pet=env.info["childPetId"].as_str().unwrap().to_owned();let child=env.store.read(env.info["childGoalId"].as_str().unwrap(),&pet).unwrap();let original=child.admissions[0].spec.clone();
   assert_eq!(original.budget.max_model_calls,1);assert_eq!(original.budget.max_tool_calls,0);assert_eq!(original.budget.max_output_bytes,4096);
-  assert_eq!(original.memory_data.as_ref().unwrap().destination,crate::pet_memory::context_model::Destination::Server{provider:provider.into(),endpoint:format!("{}/v1/chat/completions",server.url),model:"fixture-free".into()});
+  assert_eq!(original.memory_data.as_ref().unwrap().destination,crate::pet_memory::context_model::Destination::Server{provider:provider.into(),endpoint:format!("{}{}",server.url,completion_path(provider)),model:"fixture-free".into()});
   env.crash();let parent=env.close();let parent_bytes=env.s.bytes(&parent);let parent_before=body(&env.s,&parent);
   let inbox=env.s.a.message_inbox(&pet,None,8,crate::assistant_memory::now()).unwrap();let pending=&inbox.items.iter().find(|i|i.receipt.envelope().message_id==env.info["pendingMessageId"]).unwrap().receipt;
   assert!(data_review(&env.s,pending,"cannot-admit-new-child-after-parent-loss").is_err());assert_eq!(env.s.bytes(&parent),parent_bytes);
@@ -420,7 +426,7 @@ fn resume_review_from_current(env:&Process,goal:&Record)->model::Result<crate::p
  for provider in["ollama","lmstudio"]{
   let cancel:Arc<Mutex<Option<(PathBuf,Record)>>>=Arc::new(Mutex::new(None));let captured=cancel.clone();let partial=Arc::new(AtomicBool::new(false));let pending=partial.clone();let meta=if provider=="lmstudio"{lm_metadata()}else{metadata()};
   let(mut server,http)=crate::pet_runtime::lease_controller::memory_test_http_fixture_allow_disconnect(vec![("application/json",meta.to_string()),("text/event-stream",stream("This cancelled output must not become an accepted result",true))],move|url|{
-   if url.contains("chat/completions"){
+   if url==completion_path(provider){
     let(path,parent)=captured.lock().unwrap().clone().unwrap();let store=crate::pet_runtime::store::Store::existing_verified(&path.join("goals"),&path.join("authority")).unwrap().unwrap();
     let at=crate::assistant_memory::now();match crate::pet_runtime::authority_store::mutate_with_authority(&store,&path.join("authority"),&parent.id,&parent.spec.owner.pet_id,&parent.revision,"cancel-recovered-parent-during-child-io".into(),Action::Cancel,at){
      Ok(stopped)=>assert_eq!(stopped.record.state,State::Cancelled),

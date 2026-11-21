@@ -1,4 +1,5 @@
 import {Bridge} from '../core/bridge';
+import {petBlueprint} from '../core/pet-factory';
 import {State} from '../core/state';
 import {providerForPill} from '../core/providers';
 import {dialogueId} from '../core/chat-dialogue';
@@ -34,6 +35,6 @@ export function buildPetCardHeader(actions:ViewActions):ViewHost {
   owner.textContent=task?.name??'Pedido do pet';owner.style.color=task?.color??'';
   owner.title=task?.sessionTitle||task?.sessionCwd||'';
   chat.hidden=attach.hidden=!task||!providerForPill(task.id)||pending;
-  sessions.hidden=!task||task.id==='integration_spotify';profile.hidden=!task;
+  sessions.hidden=!task||!petBlueprint(task.id)?.presentation.sessions;profile.hidden=!task;
  }};
 }

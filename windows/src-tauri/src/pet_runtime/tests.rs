@@ -100,6 +100,8 @@ fn assert_error<T>(r:Result<T>,e:Error){assert_eq!(r.err(),Some(e));}
     assert!(serde_json::from_value::<super::adapter::DraftAction>(serde_json::json!({"kind":"importLegacy","reference":{}})).is_err());
     assert!(serde_json::from_value::<super::adapter::DraftAction>(serde_json::json!({"kind":"run"})).is_err());
     for label in [crate::HUB_LABEL,crate::pet_control::LABEL,crate::pet_panel::LABEL,crate::companions::LABEL]{assert!(super::adapter::allowed(label));}for label in ["website","pet-chat","island-unknown"]{assert!(!super::adapter::allowed(label));}
+    assert!(super::adapter::read_scope_allowed(crate::pet_chat::LABEL,Some("ai_ollama"),Some("ai_ollama")));
+    for (label,requested,shown) in [("website",Some("ai_ollama"),Some("ai_ollama")),("pet-chat",None,Some("ai_ollama")),("pet-chat",Some("ai_ollama"),Some("agent_codex")),("pet-chat",Some(""),Some(""))]{assert!(!super::adapter::read_scope_allowed(label,requested,shown));}
 }
 
 #[test]fn mutation_after_uncertain_publication_is_reconciled_without_new_steps(){
@@ -114,4 +116,22 @@ fn assert_error<T>(r:Result<T>,e:Error){assert_eq!(r.err(),Some(e));}
     let result=store.mutate(&original.id,"agent_codex",&original.revision,"task".into(),proposal(),100_001).unwrap();
     assert_eq!(result.status,CommitStatus::Uncertain);fs::set_permissions(&f.base,fs::Permissions::from_mode(0o700)).unwrap();
     let reopened=Store::existing(&f.root).unwrap().unwrap();let retry=reopened.mutate(&original.id,"agent_codex",&original.revision,"task".into(),proposal(),100_002).unwrap();assert_eq!(retry.status,CommitStatus::Unchanged);assert_eq!(retry.record.tasks.len(),1);
+}
+
+// The observer runs at the real list/read boundary. Both stores open the same
+// native catalog independently; no synthetic lock or grant bypass is supplied.
+#[test]fn catalogue_reader_does_not_block_a_writer_during_row_authentication(){
+ let f=Fixture::new();let reader=f.store();let writer=f.store();let goal=writer.create(spec("read-write-race"),100_000).unwrap().record;
+ let mutation=std::cell::RefCell::new(None);
+ let listing=reader.list_after_read(Some("agent_codex"),&|row|{if row.id==goal.id{*mutation.borrow_mut()=Some(writer.mutate(&goal.id,"agent_codex",&goal.revision,"concurrent-original-task".into(),proposal(),100_001));}}).unwrap();
+ let receipt=mutation.into_inner().unwrap();assert!(receipt.is_ok(),"passive catalog reader blocked the original writer: {:?}",receipt.err());
+ assert!(!listing.complete);assert_eq!(listing.unavailable,1);assert!(listing.goals.is_empty(),"a changed row must not be returned as current");
+ let current=writer.read(&goal.id,"agent_codex").unwrap();assert_eq!(current.sequence,2);assert_eq!(current.tasks.len(),1);assert!(current.admissions.is_empty());let stable=reader.list(Some("agent_codex")).unwrap();assert!(stable.complete);assert_eq!(stable.goals.len(),1);assert_eq!(stable.goals[0].revision,current.revision);
+}
+#[test]fn catalogue_reader_marks_a_concurrent_new_goal_as_incomplete_without_hiding_it_on_refresh(){
+ let f=Fixture::new();let reader=f.store();let writer=f.store();let first=writer.create(spec("inventory-before"),100_000).unwrap().record;let created=std::cell::RefCell::new(None);
+ let listing=reader.list_after_read(Some("agent_codex"),&|row|{if row.id==first.id{*created.borrow_mut()=Some(writer.create(spec("inventory-during-read"),100_001));}}).unwrap();
+ let receipt=created.into_inner().unwrap();assert!(receipt.is_ok(),"inventory observer blocked a new goal: {:?}",receipt.err());
+ assert!(!listing.complete);assert_eq!(listing.unavailable,0);assert_eq!(listing.goals.len(),1);assert_eq!(listing.goals[0].id,first.id);
+ let stable=reader.list(Some("agent_codex")).unwrap();assert!(stable.complete);assert_eq!(stable.goals.len(),2);assert!(stable.goals.iter().all(|g|g.state==State::Draft));
 }

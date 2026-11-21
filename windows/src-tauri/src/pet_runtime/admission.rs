@@ -49,7 +49,7 @@ impl ExecutionStart{
  pub(super)fn valid_for(&self,s:&AdmissionSpec)->bool{
   (match(self.schema_version,self.not_before_at){(1,None)=>true,(2,Some(at))=>self.scope==StartScope::FiniteResponse&&at>0&&at<s.budget.deadline_at&&at<=MAX_DATE,_=>false})&&self.mode==super::planning::Start::WhenAvailable&&s.planning_policy.is_none()&&s.work_disclosure.is_none()
    &&match self.scope{
-    StartScope::FiniteResponse=>matches!(s.schema_version,2|12|13|15|19|21|22|23|29)&&s.owner.local_engine()&&s.budget.payment==Payment::LocalOnly&&s.budget.max_model_calls==1&&s.budget.max_tool_calls==0&&s.result_disclosure.is_none()&&(s.schema_version!=2||s.continuation.is_none()),
+    StartScope::FiniteResponse=>matches!(s.schema_version,2|12|13|15|19|21|22|23|29|30|31|32)&&s.owner.local_engine()&&s.budget.payment==Payment::LocalOnly&&s.budget.max_model_calls==1&&s.budget.max_tool_calls==0&&s.result_disclosure.is_none()&&(s.schema_version!=2||s.continuation.is_none()),
     StartScope::NativePeerPlan=>s.native_peer_plan.as_ref().is_some_and(|p|p.for_spec(s)),
     StartScope::NativeSystemPlan=>s.system()&&s.native_system_plan.as_ref().is_some_and(|p|p.for_spec(s))&&s.resolved_model.is_empty()&&s.budget.payment==Payment::RuntimeOnly&&s.budget.max_model_calls==0,
     StartScope::ResultDisclosure=>matches!(s.schema_version,14|20)&&s.result_disclosure.as_ref().is_some_and(|p|p.for_spec(s))&&s.budget.payment==Payment::RuntimeOnly&&s.budget.max_model_calls==0&&s.budget.max_tool_calls==1,
@@ -98,7 +98,7 @@ impl AdmissionSpec{
     }
     pub(super)fn peer_planning(&self)->bool{super::planned_peer::enabled(self)}
     pub(super)fn funded_response(&self)->bool{matches!(self.schema_version,12|13|19|23)&&self.funding.is_some()}
-    pub(super)fn finite_response(&self)->bool{if self.schema_version==29{return self.rule_occurrence.as_ref().is_some_and(|r|r.for_spec(self));}self.funded_response()||matches!(self.schema_version,15|21|22)||self.schema_version==2&&self.execution_start.as_ref().is_some_and(|p|p.scope==StartScope::FiniteResponse&&p.valid_for(self))}
+    pub(super)fn finite_response(&self)->bool{if matches!(self.schema_version,29|30|31|32){return self.rule_occurrence.as_ref().is_some_and(|r|r.for_spec(self));}self.funded_response()||matches!(self.schema_version,15|21|22)||self.schema_version==2&&self.execution_start.as_ref().is_some_and(|p|p.scope==StartScope::FiniteResponse&&p.valid_for(self))}
     pub(super)fn system(&self)->bool{matches!(self.schema_version,27|28)}
     pub(super)fn native_system_requested(&self)->bool{self.system()&&self.execution_start.as_ref().is_some_and(|p|p.scope==StartScope::NativeSystemPlan&&p.valid_for(self))}
     pub(super)fn deterministic(&self)->bool{matches!(self.schema_version,4|5|6|7|8|9|10|11|14|16|17|18|20|27|28)}
@@ -106,7 +106,7 @@ impl AdmissionSpec{
 
     pub(super)fn execution_requested(&self)->bool{self.execution_start.as_ref().is_some_and(|p|p.valid_for(self))||self.planning_policy.as_ref().is_some_and(|p|p.requested())||self.work_disclosure.is_some()}
     pub(super)fn binding_format(&self)->bool{
-        if self.schema_version==29{return self.rule_occurrence.as_ref().is_some_and(|r|r.for_spec(self));}if self.rule_occurrence.is_some(){return false;}
+        if matches!(self.schema_version,29|30|31|32){return self.rule_occurrence.as_ref().is_some_and(|r|r.for_spec(self));}if self.rule_occurrence.is_some(){return false;}
         #[cfg(target_os="linux")]{
             if self.context.calendars.as_ref().map(|c|&c.selection)!=self.memory_data.as_ref().and_then(|d|d.calendar_selection.as_ref()){return false;}
             if self.context.has_calendars()&&(self.schema_version!=2||self.context.received_request.is_some()||self.planning_policy.is_some()||self.continuation.is_some()||self.budget.max_model_calls!=1||self.budget.max_tool_calls!=0||self.budget.payment!=Payment::LocalOnly){return false;}
@@ -114,6 +114,15 @@ impl AdmissionSpec{
 
         if self.system(){return self.native_system_plan.as_ref().is_some_and(|p|p.for_spec(self))&&self.native_verification.as_ref().is_some_and(|b|b.schema_version==(if self.schema_version==28{7}else{5})&&b.valid()&&b.conditions.len()==b.criteria_count as usize&&b.spec_hash==self.intent_hash)&&self.context.schema_version==1&&self.context.mode==model::PreparationMode::Dedicated&&self.context.copied_messages==0&&!self.context.has_selected_data()&&self.execution_start.as_ref().is_none_or(|p|p.scope==StartScope::NativeSystemPlan&&p.valid_for(self))&&self.native_peer_plan.is_none()&&self.result_disclosure.is_none()&&self.funding.is_none()&&self.work_disclosure.is_none()&&self.memory_data.is_none()&&self.engine_binding.is_none()&&self.continuation.is_none()&&self.planning_policy.is_none()&&self.resolved_model.is_empty()&&self.valid_budget();}
         if self.native_system_plan.is_some(){return false;}
+        if self.context.has_project_progress(){return false;}
+        if self.context.project_memory(){
+            let read_only=self.schema_version==2&&self.budget.max_tool_calls==0&&self.planning_policy.is_none();
+            // A project's selected notes can inform a local correspondence proposal.
+            // Each proposed message still needs its separate exact delivery review.
+            if !(read_only||self.peer_memory())||self.budget.max_model_calls!=1
+                ||self.budget.payment!=Payment::LocalOnly||self.continuation.is_some()||self.funding.is_some()
+                ||self.result_disclosure.is_some()||self.work_disclosure.is_some()||self.native_peer_plan.is_some(){return false;}
+        }
         if self.schema_version==24&&(!self.peer_memory_iteration()||self.context.memory.as_ref().is_none_or(|m|m.references.is_empty())||self.memory_data.as_ref().is_none_or(|d|d.schema_version!=1)){return false;}
         if self.schema_version==25&&(!self.peer_received_iteration()||self.context.received_request.as_ref().is_none_or(|r|!matches!(r.schema_version,1|3|5|6)||self.budget.deadline_at>r.source.deadline_at)||self.memory_data.as_ref().is_none_or(|d|d.received_request!=self.context.received_request)){return false;}
         if self.schema_version==26&&(!self.peer_funded_iteration()||self.context.received_request.as_ref().is_none_or(|r|!matches!(r.schema_version,2|4|7)||self.budget.deadline_at>r.source.deadline_at)||self.memory_data.as_ref().is_none_or(|d|d.received_request!=self.context.received_request)||self.funding.as_ref().is_none_or(|f|f.schema_version!=9)){return false;}
@@ -270,7 +279,11 @@ impl Evidence{
     #[cfg(target_os="linux")]
     pub(super)fn from_memory_capture(goal:&Record,d:&Descriptor,policy_revision:String,now:u64,tokens:bool,cost:bool,memory:Option<super::memory_review::Captured>)->Result<Self>{
         if memory.is_none(){return Self::observe(goal,d,policy_revision,now,tokens,cost);}
-        let memory=memory.unwrap();memory.current(goal,now).map_err(|_|Denial::ContextChanged)?;
+        let mut memory=memory.unwrap();memory.current(goal,now).map_err(|_|Denial::ContextChanged)?;
+        if let Some(row)=goal.admissions.last().filter(|r|matches!(r.spec.schema_version,30|31|32)){
+            let reference=row.spec.rule_occurrence.as_ref().filter(|r|r.for_spec(&row.spec)).ok_or(Denial::ContextChanged)?;
+            memory=if row.spec.schema_version==32{memory.into_rule_project_progress(goal,reference,now)}else if row.spec.schema_version==31{memory.into_rule_project(goal,reference,now)}else{memory.into_rule_calendar(goal,reference,now)}.map_err(|_|Denial::ContextChanged)?;
+        }
         let preview=memory.preview();
         if preview.pet_id!=goal.spec.owner.pet_id||preview.goal_id!=goal.id||preview.destination.provider()!=goal.spec.owner.adapter||!matches!(&preview.destination,crate::pet_memory::context_model::Destination::Server{model,..}if Some(model)==d.binding.model.as_ref()){return Err(Denial::ContextChanged);}
         let mut evidence=Self::observe_base(goal,d,policy_revision,now,tokens,cost,true,true)?;evidence.memory=Some(memory);Ok(evidence)
@@ -503,20 +516,31 @@ impl Review{
  pub(in crate::pet_runtime)fn prepare_rule_occurrence(goal:&Record,evidence:Evidence,budget:Budget,reference:super::rules::OccurrenceReference,prior:Option<&super::rules::RuleAdmission>,now:u64)->Result<Approved>{
   let request=format!("ra-{}",reference.occurrence_id);
   let decision=prior.map(|p|p.decision_id.clone()).unwrap_or_else(||model::hash(format!("coucou-rule-child-decision-v1\0{}\0{}",reference.rule_decision_id,reference.occurrence_id).as_bytes())[..32].into());
-  let mut review=Self::prepare(goal,evidence,budget,request,decision,now)?.with_execution_start(Some(super::planning::Start::WhenAvailable))?;
-  review.spec.schema_version=29;review.spec.rule_occurrence=Some(reference);
+  let mut review=Self::prepare(goal,evidence,budget,request,decision,now)?;
+  if reference.schema_version==4{review.spec.execution_start=Some(ExecutionStart{schema_version:1,scope:StartScope::FiniteResponse,mode:super::planning::Start::WhenAvailable,not_before_at:None});}else{review=review.with_execution_start(Some(super::planning::Start::WhenAvailable))?;}
+  if matches!(reference.schema_version,2|3|4){
+   let data=review.evidence.memory.take().ok_or(Denial::DataConsentRequired)?;
+   let data=if reference.schema_version==4{data.into_rule_project_progress(goal,&reference,now)}else if reference.schema_version==3{data.into_rule_project(goal,&reference,now)}else{data.into_rule_calendar(goal,&reference,now)}.map_err(|_|Denial::ContextChanged)?;
+   review.spec.schema_version=if reference.schema_version==4{32}else if reference.schema_version==3{31}else{30};review.spec.memory_data=Some(data.grant());review.evidence.memory=Some(data);
+   review.spec.evidence_hash=review.evidence.fingerprint().map_err(|_|Denial::Invalid)?;
+  }else{review.spec.schema_version=29;}
+  review.spec.rule_occurrence=Some(reference.clone());
   if let Some(prior)=prior{
    review.spec.source_revision=prior.source_revision.clone();review.spec.source_sequence=prior.source_sequence;review.spec.approved_at=prior.approved_at;review.spec.descriptor_revision=prior.descriptor_revision.clone();review.spec.evidence_hash=prior.evidence_hash.clone();
    if !prior.matches(&review.spec){return Err(Denial::RevisionChanged);}
   }
   if !review.spec.binding_format(){return Err(Denial::Invalid);}
-  let approved=Approved{system:None,peer:None,memory_confirmation:None,retained_authority:None,spec:review.spec,expires_at:review.expires_at,evidence:review.evidence};approved.current(goal,now).map_err(|_|Denial::RevisionChanged)?;Ok(approved)
+  let memory_confirmation=if matches!(reference.schema_version,2|3|4){let data=review.evidence.memory.take().ok_or(Denial::DataConsentRequired)?;Some((if reference.schema_version==4{data.confirm_rule_project_progress(goal,&reference,now)}else if reference.schema_version==3{data.confirm_rule_project(goal,&reference,now)}else{data.confirm_rule_calendar(goal,&reference,now)}).map_err(|_|Denial::ContextChanged)?)}else{None};
+  let approved=Approved{system:None,peer:None,memory_confirmation,retained_authority:None,spec:review.spec,expires_at:review.expires_at,evidence:review.evidence};approved.current(goal,now).map_err(|_|Denial::RevisionChanged)?;Ok(approved)
  }
 }
 
 #[cfg(target_os="linux")]
 impl Evidence{
  pub(in crate::pet_runtime)fn rule_binding(&self,p:&super::rules::RulePolicy)->bool{
-  !self.system&&!self.deterministic&&self.owner==p.rule.owner&&self.model==p.model&&self.engine_binding==p.engine_binding&&self.policy_revision==p.policy_revision&&!self.context.has_selected_data()&&self.context.copied_messages==0
+  !self.system&&!self.deterministic&&self.owner==p.rule.owner&&self.model==p.model&&self.engine_binding==p.engine_binding&&self.policy_revision==p.policy_revision&&self.context.copied_messages==0&&if let Some(data)=&p.project_progress_data{data.matches_context(&self.context)&&self.memory_grant().is_some_and(|g|g.destination==p.destination&&g.max_input_bytes==data.max_input_bytes as usize)}else if let Some(data)=&p.project_data{data.matches_context(&self.context)&&self.memory_grant().is_some_and(|g|g.destination==p.destination&&g.max_input_bytes==data.max_input_bytes as usize)}else{match &p.calendar_data{
+   None=>!self.context.has_selected_data(),
+   Some(data)=>data.matches_context(&self.context)&&self.context.calendars.as_ref().is_some_and(|c|c.selection.query.time_zone==p.rule.definition.schedule.time_zone)&&self.memory_grant().is_some_and(|g|g.destination==p.destination&&g.max_input_bytes==data.max_input_bytes as usize),
+  }}
  }
 }

@@ -15,7 +15,7 @@ fn fixture()->(Fixture,Record,Chat,crate::local_chat::Server,u64){
  let(f,g,_private,server,now)=fixture();
  assert_eq!(Evidence::observe(&g,&admission_tests::descriptor(&g,now),"a".repeat(64),now,false,false).err(),Some(Denial::Unsupported));
  let review=Review::prepare(&g,observation(&f,&g,&server,now),budget(now),"review-data".into(),nonce().unwrap(),now).unwrap();
- let proposal=serde_json::to_value(review.proposal()).unwrap();assert_eq!(proposal["memoryData"]["requiredConsent"],"boundedGoalContext");assert_eq!(proposal["memoryData"]["records"][0]["content"],"PRIVATE_GOAL_MEMORY_SENTINEL");assert_eq!(proposal["memoryData"]["destination"]["endpoint"],"http://127.0.0.1:12345/exact-base/v1/chat/completions");assert_eq!(proposal["memoryData"]["sourceConversationId"],Value::Null);
+ let proposal=serde_json::to_value(review.proposal()).unwrap();assert_eq!(proposal["memoryData"]["requiredConsent"],"boundedGoalContext");assert_eq!(proposal["memoryData"]["records"][0]["content"],"PRIVATE_GOAL_MEMORY_SENTINEL");assert_eq!(proposal["memoryData"]["destination"]["endpoint"],"http://127.0.0.1:12345/exact-base/api/chat");assert_eq!(proposal["memoryData"]["sourceConversationId"],Value::Null);
  assert_eq!(review.approve(&g,observation(&f,&g,&server,now+1),now+1).err(),Some(Denial::DataConsentRequired));assert!(g.admissions.is_empty());assert!(!serde_json::to_string(&g).unwrap().contains("PRIVATE_GOAL_MEMORY_SENTINEL"));
 }
 

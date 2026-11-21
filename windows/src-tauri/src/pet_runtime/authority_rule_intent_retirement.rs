@@ -29,9 +29,17 @@ fn join_probe(a:&mut ReadinessProbe,b:&ReadinessProbe)->Result<()>{
  Ok(())
 }
 fn join_reservation(a:&mut RuleReservation,b:&RuleReservation)->Result<()>{
- let mut immutable=b.clone();immutable.readiness=a.readiness.clone();immutable.admission=a.admission.clone();
+ let mut immutable=b.clone();immutable.readiness=a.readiness.clone();immutable.admission=a.admission.clone();immutable.calendar_read=a.calendar_read.clone();immutable.notification=a.notification.clone();
  if immutable!=*a{return Err(Failure::RecoveryRequired);}
  match(&a.admission,&b.admission){(None,Some(v))=>a.admission=Some(v.clone()),(Some(x),Some(y))if x!=y=>return Err(Failure::RecoveryRequired),_=>{}}
+ match(&mut a.calendar_read,&b.calendar_read){(slot@None,Some(v))=>*slot=Some(v.clone()),(Some(x),Some(y))=>{
+  let mut fixed=y.clone();fixed.finished_at=x.finished_at;fixed.outcome=x.outcome.clone();if fixed!=*x{return Err(Failure::RecoveryRequired);}
+  match(x.finished_at,y.finished_at){(None,Some(_))=>{x.finished_at=y.finished_at;x.outcome=y.outcome.clone();},(Some(at),Some(other))if at!=other||x.outcome!=y.outcome=>return Err(Failure::RecoveryRequired),_=>{}}
+ },_=>{}}
+ match(&mut a.notification,&b.notification){(slot@None,Some(v))=>*slot=Some(v.clone()),(Some(x),Some(y))=>{
+  let mut fixed=y.clone();fixed.finished_at=x.finished_at;fixed.outcome=x.outcome.clone();if fixed!=*x{return Err(Failure::RecoveryRequired);}
+  match(x.finished_at,y.finished_at){(None,Some(_))=>{x.finished_at=y.finished_at;x.outcome=y.outcome.clone();},(Some(at),Some(other))if at!=other||x.outcome!=y.outcome=>return Err(Failure::RecoveryRequired),_=>{}}
+ },_=>{}}
  // Sequence order is causal, not lexical. A different ID at the same index
  // is a conflicting branch, not another allowance to add.
  for(i,p)in b.readiness.iter().enumerate(){if let Some(old)=a.readiness.get_mut(i){join_probe(old,p)?;}else{a.readiness.push(p.clone());}}

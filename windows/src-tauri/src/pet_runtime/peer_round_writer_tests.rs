@@ -8,6 +8,7 @@ fn owned_at(server:&crate::local_chat::Server)->(Fixture,Authority,Record,Arc<Ow
  owned_at_with_fence(server,Arc::new(|_,_,_|Validity::Current))
 }
 fn owned_at_with_fence(server:&crate::local_chat::Server,fence:Fence)->(Fixture,Authority,Record,Arc<Owned>,Chat){
+ if server.id=="ollama"{let ticket=crate::pet_capabilities::begin_local(&server.url,"fixture-free");crate::pet_capabilities::finish_local(ticket,Some(&local_metadata()));}
  let provider=server.id;hybrid::own_with_evidence_fence(provider,hybrid::cap(),|g,at|{
   let mut descriptor=crate::pet_runtime::admission_tests::descriptor(g,at);
   if provider=="lmstudio"{descriptor.binding.engine_binding=Some(crate::local_chat::lmstudio::Catalog::parse(server,&json!({"models":[{"type":"llm","key":"fixture-free","publisher":"private-fixture","format":"gguf","size_bytes":1,"loaded_instances":[]}]})).unwrap().binding("fixture-free").unwrap());}

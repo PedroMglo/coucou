@@ -8,6 +8,7 @@
 // Nothing is polled until its key exists in the Credential Manager, and no
 // request goes anywhere the user has not configured.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -54,8 +55,8 @@ fn client() -> reqwest::Client {
         .unwrap_or_default()
 }
 
-/// Set from the tray's Pause item. While it is on, nothing reaches the network:
-/// pausing Coucou has to mean pausing Coucou, not just hiding the island.
+/// Set from the tray's Pause item. It prevents admitting new integration polls,
+/// including a refresh requested through a card that is still open.
 pub static PAUSED: AtomicBool = AtomicBool::new(false);
 
 pub fn set_paused(on: bool) {
@@ -76,9 +77,11 @@ pub fn start(app: AppHandle) {
     spawn(app, "integration_notion", 9, 300, poll_notion);
 }
 
-/// True when the user has this integration switched on in settings.
-fn enabled(app: &AppHandle, id: &str) -> bool {
-    if crate::pet_config::retired(id){return false;}
+/// Shared admission for scheduled polls and manual refreshes.
+fn polling_allowed(app: &AppHandle, id: &str) -> bool {
+    if PAUSED.load(Ordering::Relaxed) || crate::pet_config::retired(id) {
+        return false;
+    }
     app.try_state::<crate::Shared>()
         .map(|shared| {
             let settings = shared.settings.lock().unwrap();
@@ -101,7 +104,7 @@ where
             // integration the user switched off, or a paused app, must make no
             // network calls at all — CLAUDE.md allows talking only to services
             // the user configured, and a disabled one is not configured.
-            if PAUSED.load(Ordering::Relaxed) || !enabled(&app, id) {
+            if !polling_allowed(&app, id) {
                 continue;
             }
             poll(app.clone()).await;
@@ -111,7 +114,9 @@ where
 
 /// One-shot refresh from the Refresh buttons in the island.
 pub async fn poll_once(app: AppHandle, id: &str) {
-    if crate::pet_config::retired(id){return;}
+    if !polling_allowed(&app, id) {
+        return;
+    }
     match id {
         "integration_stripe" => poll_stripe(app).await,
         "integration_github" => {
@@ -154,77 +159,141 @@ fn status_error(code: u16, unauthorised_hint: &str) -> String {
     }
 }
 
+/// Use the card's existing error state for transport and payload failures.
+/// A valid empty list is still a successful read.
+async fn read_service_list(
+    app: &AppHandle,
+    id: &'static str,
+    request: reqwest::RequestBuilder,
+    list_key: &str,
+    access_hint: &str,
+) -> Option<Value> {
+    read_service(app, id, request, access_hint, |data| {
+        data.get(list_key).is_some_and(Value::is_array).then_some(data)
+    }).await
+}
+
+async fn read_service<T>(
+    app: &AppHandle,
+    id: &'static str,
+    request: reqwest::RequestBuilder,
+    access_hint: &str,
+    decode: impl FnOnce(Value) -> Option<T>,
+) -> Option<T> {
+    read_current_service(app, id, request, access_hint, decode, || true).await
+}
+
+async fn read_current_service<T>(
+    app: &AppHandle,
+    id: &'static str,
+    request: reqwest::RequestBuilder,
+    access_hint: &str,
+    decode: impl FnOnce(Value) -> Option<T>,
+    is_current: impl Fn() -> bool,
+) -> Option<T> {
+    if !is_current() {
+        return None;
+    }
+    let result = match request.send().await {
+        Err(_) => Err(crate::i18n::t("Could not reach the service.")),
+        Ok(response) if !response.status().is_success() => {
+            Err(status_error(response.status().as_u16(), access_hint))
+        }
+        Ok(response) => response.json::<Value>().await.ok().and_then(decode)
+            .ok_or_else(|| crate::i18n::t("The service returned an invalid response.")),
+    };
+    if !is_current() {
+        return None;
+    }
+    match result {
+        Ok(data) => Some(data),
+        Err(error) => {
+            emit(app, IntegrationUpdate { id, data: json!({}), error: Some(error), event: None });
+            None
+        }
+    }
+}
+
 // ── Stripe ────────────────────────────────────────────────────────────────────
 
+#[derive(Default)]
+struct StripeBalance {
+    currency: String,
+    available: Option<i64>,
+    pending: Option<i64>,
+}
+
+fn stripe_amount(minor: i64, currency: &str) -> String {
+    // Stripe's wire units. ISK and UGX still use two digits for compatibility.
+    let whole_units = matches!(currency,
+        "bif" | "clp" | "djf" | "gnf" | "jpy" | "kmf" | "krw" | "mga" |
+        "pyg" | "rwf" | "vnd" | "vuv" | "xaf" | "xof" | "xpf");
+    let sign = if minor < 0 { "-" } else { "" };
+    let amount = minor.unsigned_abs();
+    if whole_units {
+        format!("{sign}{amount}")
+    } else {
+        format!("{sign}{}.{:02}", amount / 100, amount % 100)
+    }
+}
+
+fn stripe_currency(row: &Value) -> Option<String> {
+    let currency = row.get("currency")?.as_str()?;
+    (currency.len() == 3 && currency.bytes().all(|byte| byte.is_ascii_alphabetic()))
+        .then(|| currency.to_ascii_lowercase())
+}
+
+fn stripe_balances(data: Value) -> Option<Vec<Value>> {
+    let mut balances = BTreeMap::<String, StripeBalance>::new();
+    for key in ["available", "pending"] {
+        for row in data.get(key)?.as_array()? {
+            let currency = stripe_currency(row)?;
+            let amount = row.get("amount")?.as_i64()?;
+            let balance = balances.entry(currency.clone()).or_insert_with(|| StripeBalance {
+                currency,
+                ..StripeBalance::default()
+            });
+            let slot = if key == "available" { &mut balance.available } else { &mut balance.pending };
+            *slot = Some(slot.unwrap_or(0).checked_add(amount)?);
+        }
+    }
+    Some(balances.into_values().map(|balance| json!({
+        "currency": balance.currency,
+        "available": balance.available.map(|amount| stripe_amount(amount, &balance.currency)),
+        "pending": balance.pending.map(|amount| stripe_amount(amount, &balance.currency)),
+    })).collect())
+}
+
 async fn poll_stripe(app: AppHandle) {
-    let Some(key) = secrets::get("stripe-api-key") else { return };
+    const ID: &str = "integration_stripe";
+    const KEY: &str = "stripe-api-key";
+    let Some(key) = secrets::get(KEY) else { return };
+    let is_current = || {
+        polling_allowed(&app, ID) && secrets::get(KEY).as_deref() == Some(key.as_str())
+    };
     let auth = format!("Basic {}", crate::claude::base64_for(format!("{key}:").as_bytes()));
     let http = client();
 
+    let hint = crate::i18n::t("Use a secret key (sk_live_… not pk_live_…)");
     let balance = http
         .get("https://api.stripe.com/v1/balance")
-        .header("Authorization", &auth)
-        .send()
-        .await;
-
-    let (amount, currency) = match balance {
-        Ok(r) if r.status().is_success() => {
-            let json: Value = r.json().await.unwrap_or(json!({}));
-            let mut buckets: Vec<Value> = Vec::new();
-            for k in ["available", "pending"] {
-                if let Some(arr) = json.get(k).and_then(Value::as_array) {
-                    buckets.extend(arr.iter().cloned());
-                }
-            }
-            let currency = buckets
-                .first()
-                .and_then(|b| b.get("currency"))
-                .and_then(Value::as_str)
-                .unwrap_or("eur")
-                .to_string();
-            let amount: i64 = buckets
-                .iter()
-                .filter_map(|b| b.get("amount").and_then(Value::as_i64))
-                .sum();
-            (amount, currency)
-        }
-        Ok(r) => {
-            let code = r.status().as_u16();
-            emit(&app, IntegrationUpdate {
-                id: "integration_stripe",
-                data: json!({}),
-                error: Some(status_error(code, &crate::i18n::t("Use a secret key (sk_live_… not pk_live_…)"))),
-                event: None,
-            });
-            return;
-        }
-        Err(e) => {
-            emit(&app, IntegrationUpdate {
-                id: "integration_stripe",
-                data: json!({}),
-                error: Some(crate::i18n::tf("No connection: {error}", &[("error", &e.to_string())])),
-                event: None,
-            });
-            return;
-        }
-    };
+        .header("Authorization", &auth);
+    let Some(balances) = read_current_service(&app, ID, balance, &hint, stripe_balances, &is_current).await else { return };
 
     let charges = http
         .get("https://api.stripe.com/v1/charges?limit=3")
-        .header("Authorization", &auth)
-        .send()
-        .await;
-    let Ok(response) = charges else { return };
-    if !response.status().is_success() {
-        return;
-    }
-    let json: Value = response.json().await.unwrap_or(json!({}));
+        .header("Authorization", &auth);
+    let Some(json) = read_current_service(&app, ID, charges, &hint, |data| {
+        data.get("data").is_some_and(Value::is_array).then_some(data)
+    }, &is_current).await else { return };
     let payments: Vec<Value> = json
         .get("data")
         .and_then(Value::as_array)
         .map(|list| {
             list.iter()
                 .filter_map(|c| {
+                    let amount = c.get("amount")?.as_i64()?;
+                    let currency = stripe_currency(c)?;
                     let description = c
                         .get("description")
                         .and_then(Value::as_str)
@@ -236,8 +305,9 @@ async fn poll_stripe(app: AppHandle) {
                         .map(str::to_string);
                     Some(json!({
                         "id": c.get("id")?.as_str()?,
-                        "amount": c.get("amount")?.as_i64()?,
-                        "currency": c.get("currency")?.as_str()?,
+                        "amount": amount,
+                        "amountText": stripe_amount(amount, &currency),
+                        "currency": currency,
                         "description": description,
                         "createdAt": c.get("created").and_then(Value::as_i64).unwrap_or(0) * 1000,
                         "status": c.get("status").and_then(Value::as_str).unwrap_or("succeeded"),
@@ -247,6 +317,9 @@ async fn poll_stripe(app: AppHandle) {
         })
         .unwrap_or_default();
 
+    if !is_current() {
+        return;
+    }
     let newest = payments
         .first()
         .and_then(|p| p.get("id"))
@@ -259,8 +332,9 @@ async fn poll_stripe(app: AppHandle) {
             .and_then(Value::as_str)
             .map(str::to_string)
             .unwrap_or_else(|| {
-                let cents = payments[0].get("amount").and_then(Value::as_i64).unwrap_or(0);
-                format!("{:.2}", cents as f64 / 100.0)
+                let amount = payments[0]["amountText"].as_str().unwrap_or_default();
+                let currency = payments[0]["currency"].as_str().unwrap_or_default();
+                format!("{amount} {}", currency.to_ascii_uppercase())
             });
         Some(IntegrationEvent { success: true, label, detail: None })
     } else {
@@ -268,8 +342,8 @@ async fn poll_stripe(app: AppHandle) {
     };
 
     emit(&app, IntegrationUpdate {
-        id: "integration_stripe",
-        data: json!({ "balance": amount, "currency": currency, "payments": payments }),
+        id: ID,
+        data: json!({ "balances": balances, "payments": payments }),
         error: None,
         event,
     });
@@ -453,7 +527,7 @@ async fn github_graphql(token: &str, query: &str, what: &str) -> Option<Value> {
 
 /// Returns whether some CI is still running, which sets the next interval.
 async fn run_github_pulse(app: &AppHandle) -> bool {
-    if PAUSED.load(Ordering::Relaxed) || !enabled(app, GITHUB_ID) {
+    if !polling_allowed(app, GITHUB_ID) {
         return false;
     }
     let Some(token) = secrets::get("github-token") else { return false };
@@ -482,7 +556,7 @@ async fn run_github_pulse(app: &AppHandle) -> bool {
 }
 
 async fn run_github_activity(app: &AppHandle) {
-    if PAUSED.load(Ordering::Relaxed) || !enabled(app, GITHUB_ID) {
+    if !polling_allowed(app, GITHUB_ID) {
         return;
     }
     let Some(token) = secrets::get("github-token") else { return };
@@ -547,7 +621,7 @@ pub fn github_token_changed(app: &AppHandle) {
     emit_github(app);
     GITHUB.pulse_wake.notify_one();
     GITHUB.activity_wake.notify_one();
-    if has_token && !PAUSED.load(Ordering::Relaxed) && enabled(app, GITHUB_ID) {
+    if has_token && polling_allowed(app, GITHUB_ID) {
         tauri::async_runtime::spawn(poll_github(app.clone()));
     }
 }
@@ -574,23 +648,13 @@ pub fn settings_saved(app: &AppHandle, active_integrations: &[String]) {
 
 async fn poll_vercel(app: AppHandle) {
     let Some(token) = secrets::get("vercel-token") else { return };
-    let response = client()
+    let request = client()
         .get("https://api.vercel.com/v6/deployments?limit=5")
         .header("Authorization", format!("Bearer {token}"))
-        .header("Accept", "application/json")
-        .send()
-        .await;
-    let Ok(response) = response else { return };
-    if !response.status().is_success() {
-        emit(&app, IntegrationUpdate {
-            id: "integration_vercel",
-            data: json!({}),
-            error: Some(status_error(response.status().as_u16(), &crate::i18n::t("Token lacks access"))),
-            event: None,
-        });
-        return;
-    }
-    let json: Value = response.json().await.unwrap_or(json!({}));
+        .header("Accept", "application/json");
+    let Some(json) = read_service_list(
+        &app, "integration_vercel", request, "deployments", &crate::i18n::t("Token lacks access"),
+    ).await else { return };
     let terminal = ["READY", "ERROR", "CANCELED"];
     let deployments: Vec<Value> = json
         .get("deployments")
@@ -646,23 +710,13 @@ async fn poll_vercel(app: AppHandle) {
 
 async fn poll_resend(app: AppHandle) {
     let Some(key) = secrets::get("resend-api-key") else { return };
-    let response = client()
+    let request = client()
         .get("https://api.resend.com/emails?limit=100")
         .header("Authorization", format!("Bearer {key}"))
-        .header("Accept", "application/json")
-        .send()
-        .await;
-    let Ok(response) = response else { return };
-    if !response.status().is_success() {
-        emit(&app, IntegrationUpdate {
-            id: "integration_resend",
-            data: json!({}),
-            error: Some(status_error(response.status().as_u16(), &crate::i18n::t("Key lacks access"))),
-            event: None,
-        });
-        return;
-    }
-    let json: Value = response.json().await.unwrap_or(json!({}));
+        .header("Accept", "application/json");
+    let Some(json) = read_service_list(
+        &app, "integration_resend", request, "data", &crate::i18n::t("Key lacks access"),
+    ).await else { return };
     let total = json
         .get("total")
         .or_else(|| json.get("count"))
@@ -703,7 +757,7 @@ async fn poll_resend(app: AppHandle) {
 
 async fn poll_notion(app: AppHandle) {
     let Some(token) = secrets::get("notion-api-key") else { return };
-    let response = client()
+    let request = client()
         .post("https://api.notion.com/v1/search")
         .header("Authorization", format!("Bearer {token}"))
         .header("Notion-Version", "2022-06-28")
@@ -711,20 +765,10 @@ async fn poll_notion(app: AppHandle) {
         .json(&json!({
             "sort": { "direction": "descending", "timestamp": "last_edited_time" },
             "page_size": 3
-        }))
-        .send()
-        .await;
-    let Ok(response) = response else { return };
-    if !response.status().is_success() {
-        emit(&app, IntegrationUpdate {
-            id: "integration_notion",
-            data: json!({}),
-            error: Some(status_error(response.status().as_u16(), &crate::i18n::t("Integration lacks access"))),
-            event: None,
-        });
-        return;
-    }
-    let json: Value = response.json().await.unwrap_or(json!({}));
+        }));
+    let Some(json) = read_service_list(
+        &app, "integration_notion", request, "results", &crate::i18n::t("Integration lacks access"),
+    ).await else { return };
     let pages: Vec<Value> = json
         .get("results")
         .and_then(Value::as_array)
@@ -743,38 +787,17 @@ fn parse_notion_page(obj: &Value) -> Option<Value> {
     let id = obj.get("id")?.as_str()?;
     let is_database = obj.get("object").and_then(Value::as_str) == Some("database");
 
-    let mut title = "Untitled".to_string();
-    if is_database {
-        if let Some(text) = obj
-            .get("title")
-            .and_then(Value::as_array)
-            .and_then(|a| a.first())
-            .and_then(|t| t.get("plain_text"))
-            .and_then(Value::as_str)
-        {
-            if !text.is_empty() {
-                title = text.to_string();
-            }
-        }
-    } else if let Some(props) = obj.get("properties").and_then(Value::as_object) {
-        for prop in props.values() {
-            if prop.get("type").and_then(Value::as_str) != Some("title") {
-                continue;
-            }
-            if let Some(text) = prop
-                .get("title")
-                .and_then(Value::as_array)
-                .and_then(|a| a.first())
-                .and_then(|t| t.get("plain_text"))
-                .and_then(Value::as_str)
-            {
-                if !text.is_empty() {
-                    title = text.to_string();
-                    break;
-                }
-            }
-        }
+    let title = if is_database {
+        obj.get("title").and_then(notion_title)
+    } else {
+        obj.get("properties").and_then(Value::as_object).and_then(|props| {
+            props.values()
+                .filter(|prop| prop.get("type").and_then(Value::as_str) == Some("title"))
+                .filter_map(|prop| prop.get("title"))
+                .find_map(notion_title)
+        })
     }
+    .unwrap_or_else(|| "Untitled".to_string());
 
     let emoji = obj
         .get("icon")
@@ -791,58 +814,25 @@ fn parse_notion_page(obj: &Value) -> Option<Value> {
     }))
 }
 
+fn notion_title(value: &Value) -> Option<String> {
+    let title: String = value.as_array()?.iter()
+        .filter_map(|segment| segment.get("plain_text").and_then(Value::as_str))
+        .collect();
+    (!title.is_empty()).then_some(title)
+}
+
 // ── Cal.com ───────────────────────────────────────────────────────────────────
 
 async fn poll_calcom(app: AppHandle) {
     let Some(key) = secrets::get("calcom-api-key") else { return };
-    let response = client()
-        .get("https://api.cal.com/v2/bookings?status=upcoming")
+    let request = client()
+        .get("https://api.cal.com/v2/bookings?status=upcoming&sortStart=asc")
         .header("Authorization", format!("Bearer {key}"))
-        .header("cal-api-version", "2024-08-13")
-        .send()
-        .await;
-    let Ok(response) = response else { return };
-    if !response.status().is_success() {
-        emit(&app, IntegrationUpdate {
-            id: "integration_calcom",
-            data: json!({}),
-            error: Some(status_error(response.status().as_u16(), &crate::i18n::t("Key lacks access"))),
-            event: None,
-        });
-        return;
-    }
-    let json: Value = response.json().await.unwrap_or(json!({}));
-    let bookings: Vec<Value> = json
-        .get("data")
-        .and_then(Value::as_array)
-        .map(|list| {
-            list.iter()
-                .filter_map(|b| {
-                    let start = b
-                        .get("start")
-                        .or_else(|| b.get("startTime"))
-                        .and_then(Value::as_str)?;
-                    let attendee = b.get("attendees").and_then(Value::as_array).and_then(|a| a.first());
-                    let notes = b
-                        .get("responses")
-                        .and_then(|r| r.get("notes"))
-                        .and_then(|n| n.get("value"))
-                        .and_then(Value::as_str)
-                        .or_else(|| b.get("description").and_then(Value::as_str))
-                        .filter(|s| !s.is_empty());
-                    Some(json!({
-                        "id": b.get("id").map(|v| v.to_string()).unwrap_or_default(),
-                        "title": b.get("title").and_then(Value::as_str).unwrap_or("Meeting"),
-                        "start": start,
-                        "status": b.get("status").and_then(Value::as_str).unwrap_or("accepted"),
-                        "attendeeName": attendee.and_then(|a| a.get("name")).and_then(Value::as_str),
-                        "attendeeEmail": attendee.and_then(|a| a.get("email")).and_then(Value::as_str),
-                        "attendeeNotes": notes,
-                    }))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+        .header("cal-api-version", "2024-08-13");
+    let Some(bookings) = read_service(
+        &app, "integration_calcom", request, &crate::i18n::t("Key lacks access"),
+        calcom_bookings,
+    ).await else { return };
 
     emit(&app, IntegrationUpdate {
         id: "integration_calcom",
@@ -852,7 +842,60 @@ async fn poll_calcom(app: AppHandle) {
     });
 }
 
+fn calcom_bookings(response: Value) -> Option<Vec<Value>> {
+    if response.get("status").is_some_and(|status| status.as_str() != Some("success")) {
+        return None;
+    }
+    response.get("data")?.as_array()?.iter().map(|booking| {
+        let start = booking.get("start").or_else(|| booking.get("startTime"))?.as_str()?;
+        chrono::DateTime::parse_from_rfc3339(start).ok()?;
+        let attendee = booking.get("attendees").and_then(Value::as_array).and_then(|a| a.first());
+        let notes = booking
+            .get("responses")
+            .and_then(|r| r.get("notes"))
+            .and_then(|n| n.get("value"))
+            .and_then(Value::as_str)
+            .or_else(|| booking.get("description").and_then(Value::as_str))
+            .filter(|s| !s.is_empty());
+        Some(json!({
+            "id": booking.get("id").map(|v| v.to_string()).unwrap_or_default(),
+            "title": booking.get("title").and_then(Value::as_str).unwrap_or("Meeting"),
+            "start": start,
+            "status": booking.get("status").and_then(Value::as_str).unwrap_or("accepted"),
+            "attendeeName": attendee.and_then(|a| a.get("name")).and_then(Value::as_str),
+            "attendeeEmail": attendee.and_then(|a| a.get("email")).and_then(Value::as_str),
+            "attendeeNotes": notes,
+        }))
+    }).collect()
+}
+
 // ── n8n ───────────────────────────────────────────────────────────────────────
+
+fn n8n_execution_identity(base: &str, key: &str, id: &str) -> String {
+    // Execution IDs are local to an instance. Keep only the digest in SEEN,
+    // since a configured URL can itself contain credentials.
+    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+    for part in [base, key, id] {
+        digest.update(&(part.len() as u64).to_be_bytes());
+        digest.update(part.as_bytes());
+    }
+    digest.finish().as_ref().iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn n8n_connection_is_current(base: &str, key: &str) -> bool {
+    secrets::get("n8n-url").is_some_and(|url| url.trim_end_matches('/') == base)
+        && secrets::get("n8n-api-key").as_deref() == Some(key)
+}
+
+fn n8n_needs_detail(identity: &str) -> bool {
+    let mut seen = SEEN.0.lock().unwrap();
+    if let Some(previous) = seen.get("n8n") {
+        return previous != identity;
+    }
+    // Keep the initial poll silent. Later executions are marked seen upon publication.
+    seen.insert("n8n", identity.to_string());
+    false
+}
 
 async fn poll_n8n(app: AppHandle) {
     let (Some(key), Some(raw_base)) = (secrets::get("n8n-api-key"), secrets::get("n8n-url")) else {
@@ -860,6 +903,9 @@ async fn poll_n8n(app: AppHandle) {
     };
     let base = raw_base.trim_end_matches('/').to_string();
     let http = client();
+    let may_continue = || {
+        polling_allowed(&app, "integration_n8n") && n8n_connection_is_current(&base, &key)
+    };
 
     // Same two shapes as the Swift poller: the public API first, then /rest.
     let list_urls = [
@@ -869,6 +915,9 @@ async fn poll_n8n(app: AppHandle) {
 
     let mut items: Option<Vec<Value>> = None;
     for url in &list_urls {
+        if !may_continue() {
+            return;
+        }
         let Ok(response) = http.get(url).header("X-N8N-API-KEY", &key).header("Accept", "application/json").send().await
         else {
             continue;
@@ -900,7 +949,8 @@ async fn poll_n8n(app: AppHandle) {
     if !["success", "error", "crashed", "canceled", "failed"].contains(&status) {
         return;
     }
-    if !is_new("n8n", &id) {
+    let identity = n8n_execution_identity(&base, &key, &id);
+    if !may_continue() || !n8n_needs_detail(&identity) {
         return;
     }
     let success = status == "success";
@@ -914,6 +964,9 @@ async fn poll_n8n(app: AppHandle) {
     let mut name = crate::i18n::t("Workflow");
     let mut detail = None;
     for url in &detail_urls {
+        if !may_continue() {
+            return;
+        }
         let Ok(response) = http.get(url).header("X-N8N-API-KEY", &key).header("Accept", "application/json").send().await
         else {
             continue;
@@ -933,6 +986,10 @@ async fn poll_n8n(app: AppHandle) {
         break;
     }
 
+    // Recheck after the last await before publishing or marking the execution seen.
+    if !may_continue() || !is_new("n8n", &identity) {
+        return;
+    }
     log::line(format!("n8n execution {id} {status} · {name}"));
     emit(&app, IntegrationUpdate {
         id: "integration_n8n",

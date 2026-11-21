@@ -16,7 +16,7 @@ import { washRGBA, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading, buildMail } from "./upload";
-import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
+import { renderIntegrationCard, type IntegrationCardDetail, type IntegrationCardHooks } from "./integrations";
 import { highlightRow, listRows, openRow } from "./github";
 import { pillDefinition, sessionSubtitle } from "../core/pills";
 import {
@@ -73,7 +73,7 @@ export interface ViewHost {
   /** Called every frame while the view is on screen. True = needs another frame. */
   tick?(nowMs: number): boolean | void;
   /** Ctrl+O / Ctrl+E while the view is on screen (island/shortcuts.ts). */
-  command?(command: ViewCommand): void;
+  command?(command: ViewCommand, diffId?: number): void;
 }
 
 // ── Shared pieces ─────────────────────────────────────────────────────────────
@@ -195,7 +195,7 @@ export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse
       closeBtn.hidden = !State.settings.companionMode;
       expandChat.hidden=!State.settings.companionMode || !State.focusTask || State.focusId===SPOTIFY_ID;
       tabHome.classList.toggle("on", v === "overview" || v === "empty");
-      const ownChat = State.focusId!==SPOTIFY_ID&&(!State.settings.companionMode || providerForPill(State.focusId ?? undefined) != null);
+      const ownChat = State.focusId!==SPOTIFY_ID&&(!(State.settings.companionMode || State.petCardsOnly) || providerForPill(State.focusId ?? undefined) != null);
       tabChat.hidden = tabDrop.hidden = !ownChat;
       tabChat.classList.toggle("on", v === "prompt");
       tabDrop.classList.toggle("on", v === "upload");
@@ -280,7 +280,7 @@ function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'
   );
 
   let pillIds = "";
-  let detailOpen = false;
+  let detail: IntegrationCardDetail | null = null;
   let lastFocus: string | null = null;
   let mode: "ticker" | "card" | "plan" | "diff" | "spotify" | null = null;
   let cardKey = "";
@@ -305,16 +305,16 @@ function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'
   );
 
   const hooks: IntegrationCardHooks = {
-    get detailOpen() {
-      return detailOpen;
+    get detail() {
+      return detail;
     },
-    openDetail() {
-      detailOpen = true;
+    openDetail(deploymentId) {
+      detail = { deploymentId };
       cardKey = "";
       State.notify();
     },
     closeDetail() {
-      detailOpen = false;
+      detail = null;
       cardKey = "";
       State.notify();
     },
@@ -367,7 +367,7 @@ function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'
       const focusKey=task?JSON.stringify([task.id,task.sessionBackend,task.sessionId]):null;
       if (focusKey !== lastFocus) {
         lastFocus = focusKey;
-        detailOpen = false;
+        detail = null;
         activeDiffId = null;
         cardKey = "";
         mode = null;
@@ -443,7 +443,7 @@ function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'
       } else if (task) {
         const info = State.integrations[task.id];
         const key = [
-          language(), task.id, task.color, detailOpen, task.state, task.steps.join("|"),
+          language(), task.id, task.color, detail != null, detail?.deploymentId, task.state, task.steps.join("|"),
           info?.loaded, info?.error, info?.configured,
           JSON.stringify(info?.data ?? {}),
         ].join("~");
@@ -455,7 +455,7 @@ function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'
         }
       }
 
-      jump.style.display = detailOpen || mode === "plan" || mode === "diff" ? "none" : "";
+      jump.style.display = detail || mode === "plan" || mode === "diff" ? "none" : "";
 
       // Ctrl+↓ Ctrl+↑ walk the open GitHub list (cardItemCount / cardSelection).
       const rows = mode === "card" ? listRows(leftBody) : [];

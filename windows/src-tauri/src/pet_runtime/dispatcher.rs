@@ -321,10 +321,9 @@ impl Driver{
     Ok(_)=>break,Err(model::Error::Busy)if Instant::now()<until=>tokio::time::sleep(Duration::from_millis(25)).await,Err(e)=>return Err(e),
    }}
   }
-  let current=self.store.read_control(&goal.id,&goal.spec.owner.pet_id)?;
-  if derived&&self.owner.live.spec.native_verification.is_none(){let cancel=self.sync_funded_stop()?;return self.finish(if cancel{Phase::Stopped}else{Phase::AwaitingVerification},0,Some("Entrega local guardada; critérios arbitrários continuam por verificar. Sem nova inferência ou orçamento.")).await;}
-  let progress=self.owner.verify_native_goal(&self.store,&current)?;
-  if derived&&progress.completion.is_none(){let cancel=self.sync_funded_stop()?;return self.finish(if cancel{Phase::Stopped}else{Phase::AwaitingVerification},0,Some("Recibo local verificado; restantes critérios não estão comprovados.")).await;}
-  let receipt=progress.completion.ok_or(model::Error::Conflict)?;if receipt.status==CommitStatus::Uncertain{return Err(model::Error::StorageUnavailable);}self.close_completed(&receipt.record,0).await
+  // The same receipt-only completion path as native peer messages retains the
+  // immutable verification across typed Busy. It never repeats delivery, and
+  // unknown storage results still require recovery rather than a retry.
+  self.finish_native_peer_plan(0).await
  }
 }

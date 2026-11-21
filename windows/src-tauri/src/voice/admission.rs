@@ -71,7 +71,7 @@ fn prepare(provider: &str, descriptor: &Descriptor) -> Result<Candidate, Failure
     if descriptor.binding.adapter!=Some(adapter.key())&&!declared.runtime.assistant_adapter.is_some_and(|a|descriptor.binding.adapter==Some(a.key())){return Err(Failure::UnsupportedPet);}
     let route = match adapter {
         Adapter::Codex=>Route::Codex,Adapter::Copilot=>Route::Copilot,
-        Adapter::Antigravity=>Route::Gravity,Adapter::Ollama=>Route::Ollama,Adapter::Spotify=>Route::Spotify,Adapter::Lmstudio=>return Err(Failure::UnsupportedPet),
+        Adapter::Antigravity=>Route::Gravity,Adapter::Ollama=>Route::Ollama,Adapter::Spotify=>Route::Spotify,Adapter::Lmstudio|Adapter::Custom=>return Err(Failure::UnsupportedPet),
     };
     Ok(Candidate { pet, route })
 }

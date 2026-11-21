@@ -17,6 +17,7 @@ impl Fixture {
  pub(crate) fn external(&self){let mut value:Value=serde_json::from_slice(&fs::read(&self.path).unwrap()).unwrap();value["soundVolume"]=json!(0.7123);fs::write(&self.path,serde_json::to_vec(&value).unwrap()).unwrap();}
  fn chat(&self)->crate::chat::Chat{crate::chat::Chat::persistent(self.root.join("chat.json")).with_effect_probe(self.probe.clone())}
  pub(crate) fn save(&self){update_with(&self.current,|next|next.sound_volume=0.45,|next|save_to(&self.path,next),|_|{}).unwrap();}
+ pub(crate) fn persist(&self,next:&Settings)->std::io::Result<()>{save_to(&self.path,next)}
  pub(crate) fn update(&self,change:impl FnOnce(&mut Settings)){update_with(&self.current,change,|next|save_to(&self.path,next),|_|{}).unwrap();}
  // Real data-review writer, exposed only by the existing cfg(test) fixture.
  // Callers outside Settings do not gain access to private production APIs.
@@ -100,24 +101,26 @@ impl Wire{
 }
 impl Drop for Wire{fn drop(&mut self){self.stop.store(true,Ordering::Release);self.release.store(true,Ordering::Release);if let Some(thread)=self.thread.take(){thread.join().unwrap();}}}
 fn provider(url:&str)->&'static crate::openai_compat::Provider{Box::leak(Box::new(crate::openai_compat::Provider{id:"openrouter",name:"synthetic",base_url:Box::leak(url.to_string().into_boxed_str()),key:"synthetic-only",models_path:"models",default_model:"unused-fixture",not_chat:&[],max_tokens_field:"max_tokens"}))}
-fn server(url:&str)->crate::local_chat::Server{crate::local_chat::Server{id:"custom",name:"synthetic",url:url.into(),key:None}}
+// This fixture tests IO provenance, with no enrolled sources. Use a declared
+// logical pet: bare `custom` is an adapter, not a factory identity/owner.
+fn server(url:&str)->crate::local_chat::Server{crate::local_chat::Server{id:"anthropic",name:"synthetic",url:url.into(),key:None}}
 #[tokio::test]async fn settings_effect_changed_source_blocks_all_three_http_transports_before_dispatch(){
  let f=Fixture::new();let wire=Wire::new(false);let chat=f.chat();f.external();let endpoint=reqwest::Url::parse(&wire.url).unwrap();
  assert!(crate::claude::memory_wire_fixture(&chat,"explicit-fixture","question".into(),None,&endpoint,"synthetic-only").await.is_err());
  assert!(crate::openai_compat::memory_wire_fixture(&chat,provider(&wire.url),"explicit-fixture","question".into(),None,"synthetic-only").await.is_err());
  assert!(crate::local_chat::send_with(&chat,&server(&wire.url),"explicit-fixture","question".into(),None,|_|{}).await.is_err());
- assert!(wire.requests.lock().unwrap().is_empty());assert!(chat.history("custom").is_empty());
+ assert!(wire.requests.lock().unwrap().is_empty());assert!(chat.history("anthropic").is_empty());
 }
 #[tokio::test]async fn settings_effect_legitimate_commit_during_local_io_keeps_captured_model_and_reply(){
  let f=Fixture::new();let wire=Wire::new(true);let chat=f.chat();let server=server(&wire.url);
- let(result,())=tokio::join!(crate::local_chat::send_with(&chat,&server,"captured-fixture","question".into(),None,|_|{}),async{wire.wait().await;f.save();wire.release.store(true,Ordering::Release);});
+ let(result,())=tokio::join!(async{crate::local_chat::send_with(&chat,&server,"captured-fixture","question".into(),None,|_|{}).await.inspect_err(|error|eprintln!("Synthetic request failed before fixture IO: {error}"))},async{wire.wait().await;f.save();wire.release.store(true,Ordering::Release);});
  assert_eq!(result.unwrap().text,"observed-fixture-answer");assert_eq!(f.probe.status().phase,IoPhase::Ready);
- let requests=wire.requests.lock().unwrap();assert_eq!(requests.len(),1);assert_eq!(requests[0]["model"],"captured-fixture");assert_eq!(chat.history("custom").len(),2);
+ let requests=wire.requests.lock().unwrap();assert_eq!(requests.len(),1);assert_eq!(requests[0]["model"],"captured-fixture");assert_eq!(chat.history("anthropic").len(),2);
 }
 #[tokio::test]async fn settings_effect_external_change_preserves_observed_reply_but_blocks_next_request(){
  let f=Fixture::new();let wire=Wire::new(true);let chat=f.chat();let server=server(&wire.url);
- let(result,())=tokio::join!(crate::local_chat::send_with(&chat,&server,"captured-fixture","question".into(),None,|_|{}),async{wire.wait().await;f.external();wire.release.store(true,Ordering::Release);});
- assert_eq!(result.unwrap().text,"observed-fixture-answer");assert_eq!(chat.history("custom").len(),2);assert_eq!(f.probe.status().phase,IoPhase::Changed);
+ let(result,())=tokio::join!(async{crate::local_chat::send_with(&chat,&server,"captured-fixture","question".into(),None,|_|{}).await.inspect_err(|error|eprintln!("Synthetic request failed before fixture IO: {error}"))},async{wire.wait().await;f.external();wire.release.store(true,Ordering::Release);});
+ assert_eq!(result.unwrap().text,"observed-fixture-answer");assert_eq!(chat.history("anthropic").len(),2);assert_eq!(f.probe.status().phase,IoPhase::Changed);
  assert!(crate::local_chat::send_with(&chat,&server,"captured-fixture","another question".into(),None,|_|{}).await.is_err());assert_eq!(wire.requests.lock().unwrap().len(),1);
 }
 

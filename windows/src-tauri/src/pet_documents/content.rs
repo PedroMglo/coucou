@@ -1,6 +1,7 @@
 //! Aggregate prompt budgets and bounded regular-file reads, shared by clients.
 use std::{io::Read,path::Path,time::{Duration,Instant}};
 use serde_json::{json,Value};
+use crate::attachment_history::Coverage;
 pub(crate) const MAX_MEDIA:usize=8*1024*1024;
 const MAX_TEXT:usize=256*1024;
 pub(crate) struct Budget{text:usize,media:usize,started:Instant}
@@ -8,24 +9,57 @@ impl Default for Budget{fn default()->Self{Self{text:0,media:0,started:Instant::
 impl Budget{
     pub(crate) fn available(&self)->bool{self.started.elapsed()<Duration::from_secs(8)}
     pub(crate) fn text(&mut self,text:String)->String{
-        let left=MAX_TEXT.saturating_sub(self.text);
-        if text.len()<=left{self.text+=text.len();return text;}
-        let mut end=left.saturating_sub(100).min(text.len());while !text.is_char_boundary(end){end-=1;}
-        self.text=MAX_TEXT;format!("{}\n[Partial attachment context: combined text limit reached; missing content is unknown.]",&text[..end])
+        self.bounded_text(text).0
     }
-    pub(crate) fn block(&mut self,part:Value,name:&str)->Value{
-        if part["type"]=="text"{return json!({"type":"text","text":self.text(part["text"].as_str().unwrap_or("").into())});}
+    pub(crate) fn bounded_text(&mut self,text:String)->(String,usize){
+        let left=MAX_TEXT.saturating_sub(self.text);
+        if text.len()<=left{let len=text.len();self.text+=len;return (text,len);}
+        let mut end=left.saturating_sub(100).min(text.len());while !text.is_char_boundary(end){end-=1;}
+        self.text=MAX_TEXT;(format!("{}\n[Partial attachment context: combined text limit reached; missing content is unknown.]",&text[..end]),end)
+    }
+    pub(crate) fn inline(&mut self, prefix: &str, body: &str) -> (Value, Coverage) {
+        let end = prefix.len() + body.len();
+        let (text, kept) = self.bounded_text(format!("{prefix}{body}"));
+        let coverage = text_coverage(kept, prefix.len(), end, Some(Coverage::Full))
+            .filter(|_| !body.is_empty()).unwrap_or(Coverage::Unavailable);
+        (json!({"type":"text","text":text}), coverage)
+    }
+    pub(crate) fn media_block(&mut self,part:Value,name:&str)->(Value,Coverage){
         let size=serde_json::to_vec(&part).map_or(MAX_MEDIA+1,|v|v.len());
-        if self.media.saturating_add(size)>MAX_MEDIA{return unavailable(name,"combined media limit");}
-        self.media+=size;part
+        if self.media.saturating_add(size)>MAX_MEDIA{return (unavailable(name,"combined media limit"),Coverage::Unavailable);}
+        self.media+=size;(part,Coverage::Encoded)
+    }
+}
+
+/// Only bytes from the body count; a remaining header is not partial content.
+pub(crate) fn text_coverage(kept: usize, body_start: usize, body_end: usize, coverage: Option<Coverage>) -> Option<Coverage> {
+    if kept >= body_end { coverage }
+    else if kept <= body_start { Some(Coverage::Unavailable) }
+    else { Some(Coverage::Partial) }
+}
+
+const INLINE_PREFIX: &str = "File contents:\n";
+pub(crate) enum Part { Media(Value), Text(String) }
+impl Part {
+    pub(crate) fn fit(self, budget: &mut Budget, name: &str) -> (Value, Coverage) {
+        match self {
+            Self::Media(part) => budget.media_block(part, name),
+            Self::Text(text) => budget.inline(INLINE_PREFIX, &text),
+        }
+    }
+    pub(crate) fn into_block(self) -> Value {
+        match self {
+            Self::Media(part) => part,
+            Self::Text(text) => json!({"type":"text","text":format!("{INLINE_PREFIX}{text}")}),
+        }
     }
 }
 pub(crate) fn unavailable(name:&str,reason:&str)->Value{json!({"type":"text","text":format!("Attachment {name:?}: content unavailable ({reason}). Do not infer its contents or treat this as an empty document.")})}
 
 pub(crate) fn bytes(path:&str,limit:usize)->Option<Vec<u8>>{
-    read(path,limit,false)
+    read(path,limit,false).map(|(data,_)|data)
 }
-fn read(path:&str,limit:usize,prefix:bool)->Option<Vec<u8>>{
+fn read(path:&str,limit:usize,prefix:bool)->Option<(Vec<u8>,bool)>{
     let mut options=std::fs::OpenOptions::new();options.read(true);
     #[cfg(unix)]{use std::os::unix::fs::OpenOptionsExt;options.custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK);}
     let file=options.open(path).ok()?;let before=file.metadata().ok()?;
@@ -37,7 +71,8 @@ fn read(path:&str,limit:usize,prefix:bool)->Option<Vec<u8>>{
     let before=fingerprint(&before);let mut data=vec![];(&file).take(limit as u64+1).read_to_end(&mut data).ok()?;
     if !prefix&&data.len()>limit||fingerprint(&file.metadata().ok()?)!=before{return None;}
     let after=std::fs::symlink_metadata(Path::new(path)).ok()?;
-    if !after.is_file()||fingerprint(&after)!=before{return None;}data.truncate(limit);Some(data)
+    if !after.is_file()||fingerprint(&after)!=before{return None;}
+    let clipped=data.len()>limit;data.truncate(limit);Some((data,clipped))
 }
 fn decode(mut data:Vec<u8>,prefix:bool)->Option<String>{
     if data.iter().any(|b|matches!(*b,0..=8|11|14..=31|127)){return None;}
@@ -48,7 +83,13 @@ fn decode(mut data:Vec<u8>,prefix:bool)->Option<String>{
     }
 }
 pub(crate) fn text(path:&str,limit:usize)->Option<String>{decode(bytes(path,limit)?,false)}
-pub(crate) fn text_prefix(path:&str,limit:usize)->Option<String>{decode(read(path,limit,true)?,true)}
+pub(crate) fn text_prefix(path:&str,limit:usize)->Option<(String,bool)>{
+    let (data,clipped)=read(path,limit,true)?;
+    let len=data.len();
+    let text=decode(data,true)?;
+    let partial=clipped||text.len()<len;
+    Some((text,partial))
+}
 
 #[cfg(test)]
 mod tests{
@@ -56,9 +97,9 @@ mod tests{
     #[test]
     fn text_prefix_keeps_its_byte_bound_and_utf8_boundary_without_following_links(){
         let files=crate::pet_documents::fixtures::Files::new();files.write("long.txt","é".repeat(100).as_bytes());let path=files.root.join("long.txt");let path=path.to_str().unwrap();
-        assert_eq!(text_prefix(path,5),Some("éé".into()));assert!(text(path,5).is_none());
+        assert_eq!(text_prefix(path,5),Some(("éé".into(),true)));assert!(text(path,5).is_none());
         #[cfg(unix)]{let link=files.root.join("link.txt");std::os::unix::fs::symlink(path,&link).unwrap();assert!(text_prefix(link.to_str().unwrap(),50).is_none());}
-        files.write("incomplete.txt",&[b'a',0xc3]);let path=files.root.join("incomplete.txt");assert_eq!(text_prefix(path.to_str().unwrap(),2),Some("a".into()));assert!(text(path.to_str().unwrap(),2).is_none());
+        files.write("incomplete.txt",&[b'a',0xc3]);let path=files.root.join("incomplete.txt");assert_eq!(text_prefix(path.to_str().unwrap(),2),Some(("a".into(),true)));assert!(text(path.to_str().unwrap(),2).is_none());
     }
     #[test]
     fn binary_control_bytes_are_not_reported_as_decoded_text(){
@@ -68,7 +109,7 @@ mod tests{
     #[test]
     fn text_and_media_budgets_are_aggregate_and_never_break_utf8_or_binary_blocks(){
         let mut budget=Budget::default();let first=budget.text("a".repeat(MAX_TEXT-10));assert_eq!(first.len(),MAX_TEXT-10);let clipped=budget.text("é".repeat(100));assert!(clipped.contains("Partial attachment context"));assert!(clipped.is_char_boundary(clipped.len()));
-        let image=json!({"type":"image_url","image_url":{"url":"x".repeat(MAX_MEDIA/2)}});assert_eq!(budget.block(image.clone(),"first"),image);let next=budget.block(image,"second");assert_eq!(next["type"],"text");assert!(next["text"].as_str().unwrap().contains("combined media limit"));
+        let image=json!({"type":"image_url","image_url":{"url":"x".repeat(MAX_MEDIA/2)}});assert_eq!(budget.media_block(image.clone(),"first"),(image.clone(),Coverage::Encoded));let (next,coverage)=budget.media_block(image,"second");assert_eq!(coverage,Coverage::Unavailable);assert_eq!(next["type"],"text");assert!(next["text"].as_str().unwrap().contains("combined media limit"));
     }
     #[test]
     fn regular_file_reads_are_bounded_and_do_not_follow_links(){

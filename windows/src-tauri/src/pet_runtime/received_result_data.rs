@@ -39,7 +39,8 @@ impl Dependencies{
   if depth>=MAX_SOURCE_DEPTH||!seen.insert((reference.decision_id.clone(),reference.message_id.clone())){return Err(Failure::Invalid);}
   let(policy,e)=if envelope.planned_data.is_some(){let(p,e)=authority.received_planned_data_unlocked(reference,&envelope.recipient.pet_id,now)?;(Policy::Planned(p),e)}else{let(p,e)=authority.received_result_policy_unlocked(reference,&envelope.recipient.pet_id,now)?;(Policy::Result(p),e)};if &e!=envelope{return Err(Failure::Changed);}
   let(references,pet,cid)=match &policy{Policy::Result(p)=>{let cid=p.memory_references.iter().find_map(|r|match &r.owner.scope{Scope::Conversation{conversation_id}=>Some(conversation_id.as_str()),_=>None}).unwrap_or(&envelope.origin.conversation_id);(&p.memory_references,&p.pet_id,cid)},Policy::Planned(p)=>(&p.source.references,&p.source.pet_id,p.source.conversation_id.as_str())};
-  let memory=if references.is_empty(){None}else{Some(Capture::at_references(memory_path,pet,cid,references,now).map_err(|_|Failure::Changed)?)};
+  let project=match &policy{Policy::Planned(p)=>p.source.reopen_project(memory_path,now).map_err(|_|Failure::Changed)?,Policy::Result(_)=>None};
+  let memory=if project.is_some()||references.is_empty(){project}else{Some(Capture::at_references(memory_path,pet,cid,references,now).map_err(|_|Failure::Changed)?)};
   let received=if let Policy::Planned(p)=&policy{if let Some(selection)=&p.source.received_request{
    // Snapshot4 is HMAC-bound to the exact source admission and native F2.
    // Reobserve the same receipt; never treat its serializable selection as

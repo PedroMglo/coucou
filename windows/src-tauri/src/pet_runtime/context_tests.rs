@@ -9,6 +9,18 @@ fn goal(provider:&str,context:Context)->Record{let id=crate::pet_config::pet_id(
 fn message(chat:&Chat,provider:&str,q:&str){let t=chat.begin(provider);chat.commit(&t,json!({"role":"user","content":q}),json!({"role":"assistant","content":"answer"}),q,"answer").unwrap();}
 fn bind(r:&mut Record,binding:ContextBinding){r.apply("prepare".into(),Action::BindContext{binding},100_001,nonce().unwrap()).unwrap();}
 
+#[test]fn passive_persisted_dialogue_is_readable_while_the_native_writer_remains_exclusive(){
+ let f=Fixture::new();let main=f.main();let mut g=goal("ollama",Context::Unbound);
+ let(binding,private)=context::prepare(&f.root(),&g,&main,PreparationMode::Dedicated,"prepare").unwrap();bind(&mut g,binding.clone());
+ message(&private,"ollama","First persisted goal response");
+ let before=fs::read(f.root().join(&g.id).join("conversation.json")).unwrap();
+ let(observed,snapshot)=context::read_snapshot(&f.root(),&g).unwrap();assert_eq!(observed,binding);assert_eq!(snapshot.source_messages,2);assert!(serde_json::to_string(&snapshot.messages).unwrap().contains("First persisted goal response"));
+ assert_eq!(fs::read(f.root().join(&g.id).join("conversation.json")).unwrap(),before);
+ assert!(context::open(&f.root(),&g,&main).is_err(),"observation cannot acquire or replace the original writer");
+ message(&private,"ollama","Second persisted goal response");let(_,latest)=context::read_snapshot(&f.root(),&g).unwrap();assert_eq!(latest.source_messages,4);
+ let header=f.root().join(&g.id).join(".context.json");fs::write(&header,b"changed marker").unwrap();assert!(context::read_snapshot(&f.root(),&g).is_err());assert_eq!(fs::read(header).unwrap(),b"changed marker");assert!(!f.path.join("main.json").exists());
+}
+
 #[test]fn dedicated_goal_context_does_not_create_or_select_a_main_conversation(){
     let f=Fixture::new();let main=f.main();message(&main,"codex","visible conversation");let visible=main.conversation("codex").unwrap();let bytes=fs::read(f.path.join("main.json")).unwrap();let mut g=goal("codex",Context::Unbound);
     let(b,private)=context::prepare(&f.root(),&g,&main,PreparationMode::Dedicated,"prepare").unwrap();assert_ne!(b.conversation_id,visible.id);assert!(private.conversation("codex").unwrap().messages.is_empty());assert_eq!(main.conversation("codex").unwrap().id,visible.id);assert_eq!(fs::read(f.path.join("main.json")).unwrap(),bytes);

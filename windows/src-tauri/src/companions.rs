@@ -32,12 +32,14 @@ struct Habitat {
     enabled: AtomicBool,
     surface: Mutex<Surface>,
     anchor: Mutex<Option<(f64, f64)>>,
+    #[cfg(target_os = "linux")]
+    configuration: tokio::sync::Mutex<()>,
 }
 
 pub fn setup(app: &AppHandle) {
     app.manage(Habitat::default());
     #[cfg(target_os = "linux")]
-    { native::create(app); native::watch_bar(app); }
+    { native::setup(app); }
 }
 
 pub fn enabled(app: &AppHandle) -> bool { app.try_state::<Habitat>().is_some_and(|h| h.enabled.load(Ordering::Relaxed)) }
@@ -176,10 +178,17 @@ mod native {
     use crate::{island, platform, Shared};
     use tauri::{LogicalSize, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
-    pub fn create(app: &AppHandle) {
+    pub fn setup(app: &AppHandle) {
         let mode = platform::desktop_mode();
         let _=app.state::<Habitat>().mode.set(mode);
-        if mode == platform::DesktopMode::Off { return; }
+        let start_enabled = app.state::<Shared>().settings.lock().unwrap().companion_mode;
+        if mode != platform::DesktopMode::Off && start_enabled {
+            let _ = create(app, mode);
+        }
+        watch_bar(app);
+    }
+
+    fn create(app: &AppHandle, mode: platform::DesktopMode) -> Option<tauri::WebviewWindow> {
         #[allow(unused_mut)]
         let mut url = WebviewUrl::App("companions.html".into());
         #[cfg(dev)]
@@ -196,9 +205,13 @@ mod native {
             .focusable(false).focused(false).visible(false)
             .maximizable(false).minimizable(false).closable(false).build() {
             Ok(win) => {
+                if !platform::prepare_companions_window(&win, mode) {
+                    crate::log::line("companions window: platform preparation failed");
+                    let _ = win.destroy();
+                    return None;
+                }
                 crate::settings::review::register_window(&win);
                 crate::voice::native_surface::register(&win);
-                if !platform::prepare_companions_window(&win, mode) { crate::log::line("companions window: platform preparation failed");let _ = win.destroy(); }
                 #[cfg(target_os="linux")]if let Err(error)=crate::linux_documents::install(&win){crate::log::line(error);}
                 win.on_window_event(|event|{
                     if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Enter{paths,position})=event{
@@ -209,23 +222,44 @@ mod native {
                         crate::files::allow_dropped(paths.iter().map(|p|p.to_string_lossy().to_string()));
                     }
                 });
+                Some(win)
             }
-            Err(error) => crate::log::line(format!("companions window: {error}")),
+            Err(error) => {
+                crate::log::line(format!("companions window: {error}"));
+                None
+            }
         }
     }
 
     pub async fn configure(app: &AppHandle, enabled: bool, count: usize) -> Option<Surface> {
-        let win = app.get_webview_window(LABEL)?;
         let habitat = app.state::<Habitat>();
+        let mode = *habitat.mode.get()?;
+        if mode == platform::DesktopMode::Off { return None; }
+        let _configuration = habitat.configuration.lock().await;
+        // The island probes compositor support with a disabled request.
+        // A supported compositor can answer without creating the surface.
         if !enabled {
             habitat.enabled.store(false, Ordering::Relaxed);
             crate::flow::pill::update(app, |_| {});
             *habitat.anchor.lock().unwrap() = None;
-            let win2 = win.clone();
-            let _ = app.run_on_main_thread(move || platform::set_companions_input(&win2, Vec::new()));
-            let _ = win.hide();
+            if let Some(win) = app.get_webview_window(LABEL) {
+                let win2 = win.clone();
+                let _ = app.run_on_main_thread(move || platform::set_companions_input(&win2, Vec::new()));
+                let _ = win.hide();
+            }
             return Some(habitat.surface.lock().unwrap().clone());
         }
+        let win = if let Some(win) = app.get_webview_window(LABEL) {
+            win
+        } else {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let owner = app.clone();
+            app.run_on_main_thread(move || {
+                let win = owner.get_webview_window(LABEL).or_else(|| create(&owner, mode));
+                let _ = tx.send(win);
+            }).ok()?;
+            rx.await.ok()??
+        };
         let (pref, clearance, bar_mode, control, system_center) = {
             let shared = app.state::<Shared>();
             let settings = shared.settings.lock().unwrap();
@@ -245,7 +279,6 @@ mod native {
         *habitat.surface.lock().unwrap() = surface.clone();
         // The habitat owns its platform surface independently of the retired
         // singleton desktop renderer (whose state is intentionally Off).
-        let mode = *habitat.mode.get()?;
         if mode == platform::DesktopMode::Layer {
             let win2 = win.clone();
             let origin=(screen.x.round() as i32,screen.y.round() as i32);

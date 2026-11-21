@@ -1,3 +1,1794 @@
+<a id="rpm67-nativo-2111"></a>
+
+## RPM .67 — voz, integrações e preservação de regras
+
+O RPM .67 foi compilado com a identidade normal e extraído
+para um prefixo privado. Foram verificados os 13 ficheiros do
+pacote e a correspondência com a fonte congelada. No executável
+empacotado passaram a retoma do microfone virtual e a indicação
+de captura no Hub, as recusas e a retoma do n8n após pausa ou
+desativação, e a abertura do ficheiro exato a partir do diff.
+Inventário e Saúde do Guardian mantiveram concessões próprias.
+
+A revisão, sucessão e renovação de regras 6/7 produziram três
+respostas sintéticas. A recuperação após reinício e o restauro
+inativo conservaram oito registos assinados. Os leitores .63
+e .67 preservaram os mesmos 54 ficheiros de cada arquivo
+gerado nas quatro combinações ensaiadas. O primeiro ensaio
+foi interrompido pelo limite externo antes da janela agendada.
+A repetição completou o percurso.
+
+Para Stripe, o RPM stock mostrou a falha de transporte com a
+rede externa fechada. A prova dos pedidos em curso usou duas
+compilações privadas com o mesmo serviço HTTP sintético. O
+código validado do poller coincide com a fonte do RPM .67.
+Contas Stripe reais, hardware e aceitação humana continuam
+fora do âmbito. A sessão operacional foi observada na .63.
+[Hashes e provas por percurso](../.build/pet-goal-execution-next-r1/release67-voice-stripe-20261121/VERIFIED.json).
+
+<a id="hotword-estado-2111"></a>
+
+## 21/11 — estado da captura «OK Coucou»
+
+No executável do RPM .66, uma perda prolongada do microfone
+encerrou a captura ao esgotar o prazo de recuperação. A preferência
+continuou ligada e a página de Voz não indicou o fim da captura.
+A compilação de desenvolvimento mostrou escuta, recuperação e
+inatividade na página já aberta. Ao voltar à página, o estado
+continuou correto. Repor o microfone a tempo retomou automaticamente
+a escuta. Após o fim do prazo, desligar e voltar a ligar retomou a
+captura no dispositivo escolhido. Desligar removeu a indicação.
+Ambos os ensaios usaram perfis privados, áudio PipeWire virtual
+e zero chamadas de inferência. A validação física e a entrega
+instalada continuam abertas.
+[Comparação e hashes](../.build/hotword-ui-state-20261121/VERIFIED.json).
+
+<a id="rpm66-nativo-2111"></a>
+
+## RPM .66 — integração de serviços, Guardian e regras 6/7
+
+Os ensaios da .66 usaram o executável extraído do RPM normal.
+Passaram os percursos do n8n abaixo, Inventário e Saúde com
+concessões próprias, revisão, sucessão, renovação, Stop e
+reinício das regras 6/7. O restauro conservou oito registos
+assinados e recusou a execução do histórico. Os dois leitores
+.63 e .66 verificaram ambas as cópias sintéticas e restauraram
+os mesmos ficheiros em modo inativo. A sessão operacional,
+observada à parte, executa a .63.
+[Artefacto e limites](PETS-INSTALLED-DELIVERY-66.md).
+
+<a id="integracoes-pausa-2111"></a>
+
+## 21/11 — pausa e desativação na atualização de integrações
+
+No próprio RPM .64, o comando nativo usado pelo botão Atualizar
+fez um GET autenticado ao n8n depois de Pause e outro depois
+de retirar o pet da lista de ativos. O agendador já verificava
+ambas as condições. O ensaio usou cofre, perfil, Wayland e rede
+privados, com dois servidores n8n sintéticos. O controlo do cartão
+funcionou em estado ativo e a atualização agendada retomou depois
+da reativação. [Resultado de referência](../.build/service-pause-20261121/rpm64-pause-baseline-b/RESULT.json).
+
+A fonte atual aplica a mesma condição de admissão aos pedidos
+agendados e manuais. Na mesma sequência nativa, com a compilação
+corrigida, os dois comandos recusados produziram zero GETs. O
+botão em estado ativo, a mudança de instância com o mesmo ID e o
+poll agendado após reativação voltaram a mostrar os workflows
+esperados. A mudança incide sobre a admissão de novos polls.
+O RPM .64 conserva o comportamento anterior.
+[Comparação com os mesmos passos e hashes](../.build/service-pause-20261121/VERIFIED.json).
+
+O pacote normal foi compilado com as raízes incorporadas de
+Rustls/WebPKI para os serviços HTTPS. O Notion e o Cal.com têm
+origens fixas. A ligação a instâncias n8n explicitamente
+escolhidas permitiu ensaiar sucesso no pacote normal com zero
+uso de contas externas. As respostas remotas de Notion e
+Cal.com conservam o âmbito de verificação anterior.
+
+<a id="n8n-alterar-ligacao-em-curso-2111"></a>
+
+## 21/11 — mudar a ligação n8n com uma consulta em curso
+
+No RPM .64, o primeiro pedido atrasado já tinha sido enviado
+quando a configuração mudou. Após a resposta de erro, o
+executável ainda tentou uma segunda rota na instância anterior.
+O caso de rotação da chave também enviou um GET complementar
+com a chave anterior. O cartão não mostrou essas respostas.
+Ao repor depois a mesma chave e execução, o detalhe já estava
+marcado como visto e não foi pedido novamente.
+
+A fonte atual confirma Pause, estado do pet, URL e chave
+antes de cada pedido complementar. Depois da resposta, só
+publica e marca a execução como vista se a ligação continuar
+válida. O primeiro poll mantém-se silencioso. A compatibilidade
+com a segunda rota da instância ativa é intencional.
+As provas usam apenas configurações e chaves sintéticas.
+[Reprodução no RPM .64](../.build/service-fallback-20261121/rpm64-old-fallback-c/RESULT.json).
+
+O binário de desenvolvimento registou zero GETs complementares nas
+trocas de instância e de chave. A segunda rota continuou a funcionar
+na instância escolhida quando a primeira devolveu erro. Após repor
+a chave, a mesma execução apareceu uma vez. O percurso de abrir o
+detalhe de um erro e voltar ao cartão continuou funcional.
+[Comparação e resultados](../.build/service-fallback-20261121/VERIFIED.json).
+
+Num segundo ensaio, a .64 fez um GET complementar após Pause e
+outro após desativar o pet, apesar de o primeiro pedido já ter
+chegado ao servidor antes de cada transição. A versão de
+desenvolvimento travou ambos os pedidos seguintes. Depois de
+retomar, cada execução pendente apareceu uma vez no cartão.
+[RPM .64](../.build/service-fallback-20261121/rpm64-policy-during-read-a/RESULT.json) ·
+[Versão corrigida](../.build/service-fallback-20261121/dev-policy-during-read-a/RESULT.json).
+
+<a id="rpm64-nativo-2111"></a>
+
+## RPM .64 — reconexão, interrupção e regras 6/7
+
+O RPM exato .64 retomou o microfone virtual selecionado após o
+regresso observado do dispositivo, em cerca de 526 ms. Recusou
+outro identificador nativo com o mesmo rótulo e respeitou Stop
+durante a espera. Duas frases deliberadas originaram dois pedidos
+ao Ollama sintético, com continuidade do contexto e sem repetição
+no reinício. Os dois percursos Stop interromperam a reprodução
+Piper em curso e conservaram o texto e o histórico.
+
+A revisão e sucessão 6/7, a renovação explícita, as três respostas,
+Stop e reinício passaram no próprio pacote. A cópia restaurada
+preservou os oito registos assinados. A janela mostrou a resposta
+histórica e recusou execução. O ensaio privado de ativação confirmou
+o encaminhamento para a instância antiga enquanto esta vivia e o
+arranque da nova após sair. O perfil foi gerado para o ensaio.
+[Provas e âmbito de entrega](PETS-INSTALLED-DELIVERY-64.md).
+
+<a id="rpm63-nativo-2111"></a>
+
+## RPM 63 — Hub, miniaturas, Notion e regras 6/7
+
+O RPM normal .63 tem SHA-256 `04e9ed608d0c33173bf7cac86e80b5991a9ca717c9a6377f336986164dd4ce7c`.
+O próprio executável passou navegação, ocultação e reabertura do
+Hub com um pet ocupado. Em Wayland privado, o cabeçalho registou
+10,6 frames/s em repouso e 58,4 com o ponteiro. Passaram também
+movimento reduzido, Dispensa/Revisão com dois IDs e a pintura apenas
+das miniaturas visíveis em compacto, galeria e detalhe.
+
+O Notion mostrou o erro de ligação quando o transporte isolado
+recusou o túnel HTTPS. A resposta bem-sucedida e a projeção por TLS
+para um telefone sintético conservam a prova do binário de
+desenvolvimento. O ficheiro do produto incluído no RPM corresponde
+ao dessa prova. A variante de teste acrescentava uma rota HTTP
+local, pelo que a sua primeira execução no RPM parou na verificação
+de compatibilidade do ensaio. Esse resultado foi conservado.
+A resposta do serviço remoto continua por verificar.
+
+Em perfis gerados, as regras 6/7 passaram revisão, sucessão,
+renovação, recuperação e três respostas HTTP sintéticas. Passaram
+Stop e reinício sem repetição. O restauro preservou os oito registos
+assinados e o histórico no widget, com execução recusada. A
+aceitação humana continua aberta.
+
+A .63 foi preparada num prefixo privado, com a fonte congelada.
+A observação posterior confirmou um prefixo .63 na conta apontado
+pelo launcher, enquanto a sessão operacional continuava na .62.
+A correção posterior da reconexão do microfone entrou na .64.
+[Recibo agregado do RPM](../.build/pet-goal-execution-next-r1/release63-hub-notion-20261121/VERIFIED.json).
+
+<a id="voz-tts-stop-2111"></a>
+
+## 21/11 — interromper reprodução de voz local no RPM .63
+
+O próprio RPM .63 sintetizou duas respostas em português com a
+voz local Piper escolhida para o perfil, em X11 e PipeWire privados.
+O ensaio mediu sinal antes da interrupção. As respostas tinham
+cerca de 12,4 s e tocavam há cerca de 1,1 s. O botão da escuta
+contínua e o comando nativo Stop de uma sessão explícita
+interromperam o áudio. A paragem do leitor foi observada após
+131 ms e 67 ms, respetivamente. São observações individuais em
+ambiente virtual. Não medem a latência de hardware.
+
+Em ambos os percursos a captura fechou, a gravação virtual ficou em
+silêncio e o texto completo permaneceu na conversa. O reinício
+preservou as mensagens e o ID. Cada perfil emitiu um único pedido
+ao servidor Ollama sintético e um único pedido de reprodução local.
+Um stream WebKit silencioso pode aparecer no arranque. A verificação
+do reinício usou os eventos de reprodução e o sinal PCM. O primeiro
+ensaio com monitor desligado e o segundo com a suposição errada
+sobre o stream de arranque foram conservados.
+
+O ensaio não usou hardware físico nem inferência real. Pronúncia
+humana, inglês, fala mista e Bluetooth continuam por verificar.
+[Recibo com os dois percursos](../.build/voice-stop-20261121/VERIFIED.json).
+
+<a id="voz-reconexao-2111"></a>
+
+## 21/11 — reconexão do microfone da escuta contínua
+
+No RPM .62, um ensaio em X11 privado abriu a captura no microfone
+virtual escolhido. Depois de retirar e recriar esse dispositivo,
+o stream continuou a apontar para o identificador PipeWire antigo.
+A preferência de escuta ficou ligada. Foi preciso desligá-la e
+ligá-la para voltar a ouvir. As duas frases deliberadas produziram
+dois pedidos ao servidor Ollama sintético. Após desligar a escuta e
+reiniciar, foram recuperadas as mesmas mensagens. A política do
+fixture respeitou o destino nativo pedido por cada stream.
+[Referência .62](../.build/hotword-reconnect-20261121/rpm62-serial-policy-b/RESULT.json).
+
+A fonte posterior reconhece que a captura deixou de entregar
+amostras. Retira o stream antigo e tenta recuperar durante cerca de
+30 segundos, mantendo a preferência e as verificações de autoridade.
+A reabertura exige o mesmo identificador nativo. Começa uma nova
+sequência de escuta e conserva o contexto das respostas concluídas.
+O comportamento da entrada predefinida continua a seguir a política
+do sistema.
+
+A compilação privada retomou a captura cerca de 590 ms após o
+regresso do microfone virtual selecionado. Recusou um dispositivo
+com o mesmo nome e outro identificador. Duas frases processadas
+pelo Whisper local produziram dois pedidos ao Ollama sintético.
+O segundo pedido recebeu o contexto do primeiro. Desligar a escuta
+durante a segunda espera impediu a reabertura e a repetição de
+pedidos. O reinício preservou o histórico e a preferência desligada.
+A .63 já estava congelada quando esta correção entrou na fonte.
+Microfone físico, Bluetooth e reprodução de voz ficaram fora do
+ensaio.
+[Verificação nativa e hashes](../.build/hotword-reconnect-final-20261121/VERIFIED.json).
+
+<a id="miniaturas-visiveis-2111"></a>
+
+## 21/11 — desenho das miniaturas visíveis
+
+O RPM 62 e a compilação de referência desenharam miniaturas com o
+canvas escondido pelo CSS. Na fonte posterior, o renderer conserva
+essas miniaturas e só as desenha quando têm uma caixa de layout.
+
+A janela nativa privada passou barra compacta, galeria, detalhe e
+retorno à galeria. Os contadores registaram zero desenhos escondidos.
+Todos os canvases visíveis tinham píxeis pintados em cada vista.
+Passaram também os tipos e os testes dirigidos do ciclo de frames e
+da entrada da barra. O ganho de CPU/PSS em produção está por medir.
+[Prova nativa e fontes](../.build/mini-visible-20261121/VERIFIED.json).
+
+<a id="hub-cpu-issue1-2111"></a>
+
+## 21/11 — CPU do Hub estático em Wayland
+
+O Coucou oficial 0.5.0 agenda outro frame enquanto tem canvases no Hub
+visível. Três rondas privadas de 18 s na .44 observaram o mesmo
+comportamento. O cabeçalho de General desenhou os dois canvases cerca
+de 57 vezes por segundo cada. Ao fechar a janela, o Hub manteve o
+mesmo processo e deixou de os desenhar. O ensaio correu em Sway com
+renderização por software e perfil sintético. O companion não estava
+visível nessas rondas.
+
+O código local conserva o desenho inicial, a animação em repouso e a
+resposta ao ponteiro e teclado. Entre interações, o renderizador
+aguarda pelo menos 80 ms antes de voltar a pedir um frame. Ao ocultar
+a janela cancela o frame e o temporizador. Esta alteração está fora
+da .62 instalada.
+
+| Executável | CPU com Hub visível | CPU com Hub oculto | Frames/s em repouso | PSS visível |
+| --- | ---: | ---: | ---: | ---: |
+| .44 | 456,56% | 58,99% | 57,45 | 926,87 MiB |
+| .62 | 460,05% | 57,74% | 57,47 | 927,97 MiB |
+| Desenvolvimento corrigido | 127,87% | 47,91% | 10,45 | 967,90 MiB |
+
+Valores medianos de três janelas de 18 s por estado, com 100% por
+núcleo e processos principais estáveis. As três rondas visíveis da
+variante ficaram abaixo das três da .44 e da .62. Todos os estados
+ocultos tiveram zero desenhos no cabeçalho. O ponteiro repôs 56,77
+frames/s. A janela passou navegação para Dicionário, ocultação e
+reabertura em General. A comparação usa o compositor privado por
+software e inclui as diferenças entre pacote e desenvolvimento.
+A memória visível medida foi superior na compilação corrigida.
+[Rondas .44](../.build/issue1-cpu-20261121/rpm44-rounds-b/RESULT.json) ·
+[Rondas .62](../.build/issue1-cpu-20261121/rpm62-rounds-a/RESULT.json) ·
+[Rondas corrigidas](../.build/issue1-cpu-20261121/development-rounds-a/RESULT.json).
+
+Um ensaio funcional separado na .62 já confirmou três janelas de
+23 desenhos/s com o pet ocupado e movimento ligado e três de um
+desenho/s com movimento desligado. A notificação foi dispensada e
+as duas ações de revisão encaminharam os IDs certos pelo barramento
+nativo. No ensaio funcional havia uma compilação em paralelo e só
+foram registados desenhos e efeitos, sem medição de CPU.
+
+Com o pet ocupado, três rondas de 12 s por estado compararam .44
+e desenvolvimento no mesmo compositor. A mediana de CPU passou
+de **528,79% para 204,44%** com o Hub visível, uma redução de 61%.
+Com o Hub oculto passou de 107,15% para 114,23%, com intervalos
+sobrepostos de 104,64–128,73% e 111,45–127,77%. O pet manteve
+cerca de 23 desenhos/s. Na compilação corrigida, desligar o
+movimento reduziu essa cadência para cerca de um desenho/s. O
+novo evento do relay produziu um desenho em 67 ms com movimento
+desligado. Uma notificação foi dispensada, e as duas ações de
+revisão encaminharam exatamente os respetivos IDs originais.
+
+Com o Hub oculto e sem pet ocupado, a atribuição por processo
+isolou 36,59% de um núcleo no WebKit da barra de pets na .62 e
+35,52% no desenvolvimento. O WebKit dos companions ficou abaixo
+de 0,2% nessa observação. Cerca de 2 880 desenhos de miniaturas
+ocultas em 12 s passaram a zero. A miniatura visível da barra
+continuou a ser desenhada. A medição de atribuição, de uma janela
+por binário, não estabelece um ganho material de CPU para a barra.
+
+O issue foi fechado após estas verificações. A correção existe
+na fonte e num binário privado. A versão operacional é a .62.
+O compositor, o perfil e o renderer por software limitam a
+extrapolação da CPU, da memória e do custo de GPU para a estação.
+[Recibo agregado](../.build/issue1-cpu-20261121/VERIFIED.json) ·
+[Issue #1](https://github.com/PedroMglo/coucou/issues/1).
+
+### Confirmação com os próprios RPMs
+
+Três rondas curtas de 4 s por estado, com o mesmo observador e sem
+companion visível, confirmaram a redução no RPM .63. Em Sway privado
+por software, a CPU mediana do Hub visível passou de 359,14% na .62
+para 102,79% na .63, com 100% por núcleo. Todas as rondas da .63
+ficaram abaixo de todas as da .62. Com o Hub oculto, as medianas
+foram 28,10% e 26,85%, e os dois executáveis registaram zero desenhos
+no cabeçalho. A .63 manteve cerca de 10,4 frames/s em repouso e
+voltou a 61,2 frames/s com interação.
+
+Com um companion Codex ocupado, três rondas de 12 s por estado
+compararam diretamente a .62 e a .64. Com o Hub visível, a
+mediana passou de 523,49% para 222,25% de um núcleo, menos
+57,5%. Com o Hub oculto, as medianas foram 129,69% e 128,34%.
+O companion manteve cerca de 23 desenhos/s nos dois RPMs. Na .64,
+o Hub passou de cerca de 10,4 para 55,7 frames/s com o ponteiro.
+Passaram navegação para Dicionário, ocultação e reabertura.
+[Rondas .62/.64 com companion](../.build/station-boot-bd97006a-issue1/PACKAGED-BUSY-VERIFIED.json).
+
+No ensaio funcional da .64, desligar o movimento limitou o
+companion ocupado a cerca de um desenho/s. Um evento novo do
+relay produziu um desenho em 63 ms. Foi dispensado um aviso, e
+as duas revisões foram encaminhadas para as sessões respetivas.
+[Percurso dos avisos na .64](../.build/station-boot-bd97006a-issue1/packaged-companions64-a/RESULT.json).
+
+O GitHub confirma o estado fechado como concluído. A sessão
+observada continuava a executar a .62, apesar de o launcher já
+selecionar a .63. As rondas curtas medem a diferença entre pacotes no
+compositor de ensaio. Mantêm-se abertas as medições no Hyprland da
+estação e o custo residual da barra de pets.
+[Medições e estado do issue](../.build/station-boot-bd97006a-issue1/PACKAGE-ISSUE1-VERIFIED.json).
+
+<a id="rpm62-nativo-2111"></a>
+
+## RPM 62 — foco, Cal.com, diff e preservação
+
+O binário de `0.5.1-mochi.62` passou duas séries de cinco aberturas de
+sessão em X11 privado com o relay real. Cada série também distinguiu
+uma ligação sem origem utilizável, que abriu a pasta. No Hyprland
+isolado, passou o terminal certo por backend e o botão na conversa.
+
+O cartão Cal.com mostrou o erro de ligação no executável empacotado.
+O pacote contém o pedido por ordem de início. A leitura bem-sucedida,
+os dados inválidos e a projeção móvel têm prova no ensaio de
+desenvolvimento com HTTP sintético. A janela da .62 também encaminhou
+ao capturador do editor o caminho exato de um ficheiro com espaços e
+Unicode a partir de um diff recebido pelo relay. O ficheiro manteve
+os bytes e o botão Voltar regressou à vista da sessão.
+
+As regras 6/7 passaram revisão, sucessão, renovação, três respostas
+HTTP sintéticas, Stop, reinício e abertura do histórico restaurado
+com execução recusada. Um ensaio independente leu a cópia de um perfil
+sintético criado pela .44. A .62 restaurou os onze ficheiros byte a
+byte. A .44 recuperou a mesma cópia num perfil separado.
+
+O pacote foi extraído para um prefixo privado para estes ensaios. A
+mesma versão foi depois instalada e a página Pets abriu no perfil
+operacional. A validação de voz e telefone físicos continua em aberto.
+[Recibo dos ensaios](../.build/pet-goal-execution-next-r1/release62-calcom-x11-20261121/DELIVERY-TECHNICAL.json) ·
+[Entrega instalada](PETS-INSTALLED-DELIVERY-62.md).
+
+<a id="foco-x11-confirmado-2111"></a>
+
+## 21/11 — confirmação do pedido de foco em X11
+
+O observador anterior podia ler o foco entre o registo do pedido e a
+sua aplicação. A comparação passou a esperar pelo foco efetivo antes
+de enviar a tecla. Com o observador corrigido, o RPM 61 e o desenvolvimento
+anterior ainda tiveram uma série cada sem efeito observado.
+
+A alteração espera pela confirmação do servidor X11 antes de fechar a
+ligação que enviou o pedido. Com a variante, duas séries comparáveis
+com o relay real completaram as dez tentativas. A janela certa recebeu
+foco e uma tecla em oito. Nas duas restantes, abriu a pasta pelo
+percurso existente. O ficheiro de produto verificado foi integrado
+depois de congelado o RPM 61. O gestor de janelas EWMH era privado e
+sintético. Falta verificar a alteração no pacote seguinte e no
+ambiente de utilização.
+[Comparação e recibos](../.build/x11-checked-focus-20261121/VERIFIED.json).
+
+<a id="rpm61-nativo-2111"></a>
+
+## RPM 61 — foco do terminal, colagem e revisão 6/7
+
+O binário extraído do RPM privado `0.5.1-mochi.61` conservou o foco
+por backend e sessão em três repetições no Hyprland isolado com WezTerm
+e relay reais. O botão do chat flutuante também focou o terminal. A
+abertura da pasta continuou disponível depois de fechar o terminal e
+quando o relay fechou sem uma origem utilizável. Com o portal real do
+Hyprland sem `RemoteDesktop`, a janela conservou o ditado no clipboard
+e mostrou a indicação para colar manualmente.
+
+No próprio executável, decisões de teste pela janela nativa passaram
+revisão, sucessão, renovação e três respostas HTTP sintéticas. Stop e
+reinício conservaram o saldo cumulativo. O widget de recuperação
+e a janela restaurada passaram. O restauro manteve oito registos
+assinados e três `Goal67`, sem execução nova. O leitor 57 recusou
+a ativação dos formatos novos, preservando os dados.
+
+O X11 privado teve dois ensaios separados com resultado parcial.
+Em cada um, o cliente com processo vivo e as duas primeiras tentativas
+com o relay distributivo focaram a janela e entregaram a tecla. A
+ligação sem origem utilizável abriu a pasta. Na terceira tentativa de
+cada ensaio, a fixture não viu foco nem abertura da pasta, apesar do
+registo de envio de foco no Coucou. A causa continua em verificação.
+
+A versão operacional continua na 44. Os perfis, decisões e HTTP
+destes ensaios foram privados e sintéticos. A aceitação humana e a
+instalação do RPM 61 continuam por realizar.
+[Recibo do pacote](../.build/pet-goal-execution-next-r1/release61-wayland-terminal-20261121/VERIFIED.json) ·
+[Ensaio X11 A](../.build/upstream-parity-20261111/terminal-origin-rpm61-x11-a/RESULT.json) ·
+[Ensaio X11 B](../.build/upstream-parity-20261111/terminal-origin-rpm61-x11-b/RESULT.json).
+
+<a id="relay-origem-2111"></a>
+
+## 21/11 — origem do relay observada ao aceitar dados
+
+Nos três ensaios com o binário de desenvolvimento anterior, os hooks
+Codex e Copilot chegaram, mas o foco não encontrou a janela da sessão.
+Nos três ensaios repetidos com o binário corrigido, o mesmo relay
+distributivo focou o WezTerm certo para cada backend com o mesmo ID.
+Passaram o botão do chat flutuante e a abertura da pasta depois de
+fechar o terminal. Os processos do relay terminaram normalmente.
+
+O ensaio controlado separou duas condições. Com bytes já em fila e
+o peer ainda vivo, a associação sobreviveu à saída do peer antes de
+o backend descodificar o evento. Antes da correção, esse mesmo caso
+abria a pasta. Uma ligação aceite sem bytes, cujo peer saiu antes
+de os enviar, continuou a abrir só a pasta. O backend usa credenciais
+do socket, observa o primeiro ascendente e confirma quando esse
+processo arrancou. A mudança preserva o relay distribuído.
+
+Os ensaios usaram WezTerm real e Hyprland 0.57.2 isolado sobre Mutter.
+O resultado abrange as condições observadas acima. O RPM 61 repetiu
+os percursos no próprio executável, com resultados descritos na
+[validação do pacote](#rpm61-nativo-2111).
+[Ensaios no desenvolvimento](../.build/fast-relay-origin-20261121/NATIVE-DEVELOPMENT-VERIFIED.json).
+
+Passaram 18 testes dirigidos de foco e seleção de sessões. No X11
+privado, o relay distributivo focou a janela em quatro de cinco
+tentativas. A outra abriu apenas a pasta. O ensaio com o peer vivo
+também confirmou a entrega de uma tecla na janela certa.
+[Resultados Rust e X11](../.build/fast-relay-origin-20261121/FOCUSED-SCOPE.json).
+
+<a id="hyprland-foco-2111"></a>
+
+## 21/11 — foco de um terminal Wayland associado à sessão
+
+O oficial 0.5.0 e o RPM 60 abriram a pasta da sessão e conservaram
+o foco na outra janela no Hyprland 0.57.2 isolado. O primeiro binário
+de desenvolvimento focou o WezTerm certo pelo comando nativo e abriu
+a pasta depois de fechar o terminal.
+
+A fonte também liga o botão do chat ao foco nativo pelo backend e ID
+da sessão. O binário privado que integra a alteração, SHA-256
+`8c80b1029635af556c971443d3a644bd1ac486170998c880fee65822302a02fd`,
+separou Codex e Copilot com o mesmo ID. O chat foi aberto pelo comando
+nativo com a sessão externa explícita. O botão «Abrir o terminal desta
+sessão» devolveu o foco ao WezTerm do Codex. O fecho do terminal manteve
+a abertura de pasta pelo comando original. Passaram também os 12
+testes da seleção de sessões em Rust 2021.
+
+A prova com os dois backends combinou o relay distributivo e um evento
+de observação com o peer mantido vivo. A tentativa com relays de saída
+imediata ficou inconclusiva. Em X11, o peer vivo focou a janela e
+recebeu a tecla de teste. O peer terminado abriu apenas a pasta.
+O primeiro caso de relay rápido ficou sem confirmação do efeito.
+Os ensaios decorreram em perfis gerados. O RPM 60 antecede a correção
+e a versão operacional é a 44.
+[Resultados e tentativas](../.build/hyprland-pet-session-focus-20261121-r2/VERIFIED.json).
+
+<a id="rpm60-correspondencia-2111"></a>
+
+## RPM 60 — correspondência de projeto, restauro e erro Stripe
+
+O pacote `0.5.1-mochi.60` foi construído com 1 375 entradas de fonte.
+O SHA-256 do RPM é
+`d2862c873f3e2870c691000a0a8981bd9f81ca3973733bd2143109486eeffbbc`.
+O executável dos ensaios foi extraído num prefixo privado. A instalação
+operacional continua na `0.5.1-mochi.44`.
+
+- O próprio pacote passou a decisão de projeto, a revisão separada
+  do pedido e a adoção pelo Codex como rascunho. A mudança de revisão
+  do projeto bloqueou nova adoção e o reinício preservou o recibo
+  sem repetir chamadas. [Registo nativo](../.build/upstream-parity-20261111/normal60-project-action1/RESULT.json).
+- O restauro inativo reproduziu os bytes do arquivo novo. A janela
+  apresentou o pedido e a proveniência como histórico, com zero chamadas
+  após novo reinício. A 59 recusou a autoridade nova e conservou os
+  dados. A 44 recuperou a cópia anterior em perfil privado.
+  [Manutenção](../.build/pet-goal-execution-next-r1/release60-project-correspondence-20261121/normal60-archives/RESULT.json) ·
+  [Janela histórica](../.build/upstream-parity-20261111/normal60-correspondence-history1/RESULT.json).
+- O Stripe apresentou a falha de ligação no cartão do pacote quando
+  o túnel para o destino configurado foi recusado na rede isolada. A
+  resposta válida, os saldos por moeda e o telefone foram verificados
+  com serviço sintético num binário de desenvolvimento.
+  [Erro no RPM](../.build/wayland-layer-qa-20261120/stripe-transport-normal60-a/RESULT.json) ·
+  [Percurso com saldos](../.build/stripe-balances-20261121/VERIFIED.json).
+- A revisão 6/7 passou o transporte do saldo restante e a renovação
+  finita, cada uma com a sua revisão. A ocorrência automática
+  recuperou de uma interrupção da sondagem e produziu a terceira
+  resposta HTTP sintética. O restauro preservou oito registos
+  assinados. A janela mostrou as respostas históricas, recusou
+  executar e deixou os bytes originais intactos, sem nova inferência.
+  [Execução](../.build/upstream-parity-20261111/normal60-rule67-fresh1/RESULT.json) ·
+  [Restauro](../.build/upstream-parity-20261111/normal60-rule67-preserve1/RESULT.json) ·
+  [Janela histórica](../.build/upstream-parity-20261111/normal60-rule67-restored1/RESULT.json).
+
+As escolhas de teste foram feitas em perfis gerados. A prova não
+regista consentimento humano, uso operacional nem resposta real do
+Stripe. [Manifesto das provas do RPM](../.build/pet-goal-execution-next-r1/release60-project-correspondence-20261121/VERIFIED.json).
+
+<a id="projeto-correspondencia-restauro-2111"></a>
+
+## 21/11 — ensaio de restauro dos recibos de correspondência
+
+O binário privado de desenvolvimento arquivou um perfil sintético
+com o pedido, o objetivo do remetente e o rascunho do destinatário.
+O restauro inativo reproduziu os bytes do arquivo. A quarentena
+validou as assinaturas e preservou os três registos. A admissão com
+`grants: []` deixou o pedido acessível apenas como histórico. A
+janela do destinatário mostrou o texto e a proveniência após o
+reinício, sem controlo de adoção, novas chamadas HTTP ou alterações
+nos bytes protegidos.
+
+O RPM 59 conseguiu ler e restaurar os bytes desse arquivo recente
+em modo inativo. Recusou a prévia da autoridade com
+`unsupportedProfileOrRequest`. O mesmo ensaio restaurou a cópia
+anterior feita pela 44 em dois prefixos privados, um com o leitor
+atual e outro com a própria 44. O arquivo recente foi conservado em
+separado. Isto exercitou o procedimento com perfis gerados. A
+instalação operacional continua na 44.
+[Manutenção](../.build/pet-goal-execution-next-r1/release60-project-correspondence-20261121/rehearsal1/RESULT.json) ·
+[Janela histórica](../.build/upstream-parity-20261111/normal59-correspondence-history1/RESULT.json).
+
+<a id="projeto-correspondencia-2111"></a>
+
+## 21/11 — decisão de projeto até um pedido local revisto
+
+No RPM 59, o projeto só podia usar a nota numa resposta simples. Na
+fonte nova, o catálogo de correspondência com memória permite
+selecionar a nota e propor um pedido entre pets. O binário privado
+confirmou revisão dos dados, proposta assinada, confirmação do texto
+e do destinatário, um recibo e adoção pelo destinatário sem execução.
+Depois de reiniciar, o recibo e o rascunho ficaram iguais e a alteração
+da revisão do projeto bloqueou novos usos. Três chamadas Ollama
+sintéticas, zero chamadas Codex e nenhum perfil operacional usado.
+[Contrato, falhas intermédias e prova](PETS-PROJECT-DECISION-2026-11-17.md#decisao-projeto-correspondencia-2111).
+
+<a id="rpm59-projeto-recorrencia-2111"></a>
+
+## RPM 59 — duas ocorrências da mesma regra de projeto
+
+Num perfil privado novo, foi revista uma regra com uma hora fixa em
+quatro datas civis e orçamento para duas ocorrências. O scheduler
+recuperou a ocorrência do dia anterior e deixou a mais antiga por
+executar. Depois, executou a ocorrência do próprio dia na hora
+prevista, usando o relógio real.
+Houve uma chamada de preparação do objetivo fonte e duas da rotina,
+todas para o provedor sintético em loopback.
+
+Entre as duas ocorrências, o objetivo fonte passou de `paused` para
+`cancelled`. Os pedidos HTTP confirmaram a mudança de estado, com a
+mesma resposta persistida e os critérios ainda por verificar. O
+primeiro relatório conservou a fotografia inicial. Os pedidos da
+rotina não incluíram a nota privada nem o objetivo excluído.
+
+As duas ocorrências usaram a mesma autorização e reservaram uma
+chamada, zero ferramentas e 65 536 bytes cada. Após reinício, os dois
+relatórios abriram na janela, os registos protegidos ficaram iguais e
+o observador D-Bus privado recebeu zero notificações. A regra ficou
+com saldo zero e havia uma data futura que o ensaio não atingiu.
+
+O âmbito é uma recuperação de atraso e uma ocorrência pontual, com
+dados sintéticos. O aviso de preparação diária tem uma autorização
+própria e fica fora deste ensaio silencioso de projetos. Continuam
+abertos o uso prolongado, a utilidade semântica e o seguimento com ação
+autorizada no ambiente operacional. A instalada 44 foi preservada.
+[Execução](../.build/upstream-parity-20261111/normal59-project-recurrence1/RESULT.json) ·
+[Recibo conjunto](../.build/pet-goal-execution-next-r1/release59-service-cards-20261121/PROJECT-RECURRENCE-VERIFIED.json).
+
+<a id="rpm59-flow-portal-2111"></a>
+
+## RPM 59 e oficial 0.5.0 — colagem por portal em Sway privado
+
+Os executáveis exatos passaram três colagens a partir do botão **Colar
+novamente**. O editor GTK, outro processo no mesmo compositor, confirmou
+o foco, as teclas Ctrl+V e os bytes inseridos. O portal de teste recebeu
+a sequência D-Bus e enviou as teclas para o editor por Wayland. Passaram
+reposição do clipboard, preservação de uma cópia concorrente mais
+recente e reapresentação do token sintético depois de reiniciar.
+[Oficial](../.build/wayland-layer-qa-20261120/dictation-portal-official-allow3/RESULT.json) ·
+[RPM 59](../.build/wayland-layer-qa-20261120/dictation-portal-59-allow4/RESULT.json).
+
+Perante recusa, os dois deixaram o texto no clipboard e não enviaram
+teclas. A 59 mostrou como colar manualmente. A consulta independente
+ao portal real GNOME num compositor privado confirmou os métodos de
+teclado e a propriedade `AvailableDeviceTypes`. A consulta não pediu
+consentimento. A aceitação com diálogo real e a estação instalada
+conservam os seus âmbitos em aberto.
+[Recusa no oficial](../.build/wayland-layer-qa-20261120/dictation-portal-official-deny1/RESULT.json) ·
+[Recusa na 59](../.build/wayland-layer-qa-20261120/dictation-portal-59-deny1/RESULT.json) ·
+[Portal GNOME](../.build/wayland-layer-qa-20261120/gnome-private-remote-desktop-probe1/RESULT.json) ·
+[Recibo conjunto](../.build/upstream-parity-20261111/DICTATION-WAYLAND-PORTAL-59-VERIFIED.json).
+
+<a id="rpm59-projeto-ativo-2111"></a>
+
+## RPM 59 — acompanhamento ativo, decisão e pausa do projeto
+
+Dois perfis novos usaram o executável exato do RPM 59, com janela
+Tauri/WebKit, cofre privado e rede limitada a loopback. As escolhas de
+teste passaram pelos controlos nativos de revisão e consentimento.
+
+- **Acompanhamento e decisão.** A rotina observou a resposta persistida
+  de um objetivo escolhido e pediu uma decisão. A escolha revista gerou
+  uma única nota de projeto. O uso dessa nota num trabalho posterior
+  exigiu consentimento próprio. O teste também recusou guardar uma
+  resposta quando os dados originais mudaram. A janela mostrou a resposta
+  registada após reinício. Houve quatro chamadas sintéticas, zero após
+  reiniciar. [Resultado](../.build/upstream-parity-20261111/normal59-project-decision4/RESULT.json).
+- **Pausa e reabertura.** O controlo da janela parou a ocorrência durante
+  o segundo pedido HTTP do ensaio. O objetivo passou por `stopping` e
+  ficou `paused`. A resposta ficou incerta, com uma tentativa e reserva
+  de 65 536 bytes preservadas. Após reiniciar, a janela reabriu o mesmo
+  rascunho com a admissão anterior intacta e zero pedidos adicionais.
+  [Resultado](../.build/upstream-parity-20261111/normal59-project-pause1/RESULT.json).
+
+As primeiras três tentativas pararam em erros do observador, antes de
+concluir o percurso. Os resultados finais cobrem X11 privado e um ciclo
+finito por cenário. Falta verificar o uso prolongado, a comunicação sem
+spam ao longo de várias ocorrências, a resposta a situações reais e a
+aceitação no perfil operacional. A instalada 44 foi preservada.
+[Recibo conjunto](../.build/pet-goal-execution-next-r1/release59-service-cards-20261121/PROJECT-ACTIVE-VERIFIED.json).
+
+<a id="rpm59-servicos-2111"></a>
+
+## RPM 59 — cartões de serviço e leitura histórica do projeto
+
+O pacote `0.5.1-mochi.59` preservou o relay original e os 13 ficheiros
+previstos. O prefixo privado foi verificado a partir de 1 374 ficheiros
+de fonte congelados. A instalação operacional continua na 44.
+[Artefacto e hashes](../.build/pet-goal-execution-next-r1/release59-service-cards-20261121/BUILD.json).
+
+- **Serviços.** Vercel, Resend, Notion e Cal.com mostraram a falha na janela
+  quando os túneis foram recusados. O pacote usou os destinos originais
+  numa rede privada sem rota externa. Os casos de resposta válida, lista
+  vazia e recuperação continuam atestados no binário de desenvolvimento
+  com HTTP local. A troca do n8n passou no próprio RPM com o mesmo ID de
+  dois servidores locais, resposta atrasada, troca de chave e detalhe
+  do erro. [Cartões](../.build/wayland-layer-qa-20261120/service-transport-59-a/RESULT.json) ·
+  [n8n](../.build/upstream-parity-20261111/n8n-same-id-rpm59-a/RESULT.json).
+- **Revisão 6/7.** Passaram a segunda sucessão, a renovação, a recuperação
+  e três respostas HTTP sintéticas. O restauro preservou os oito registos
+  assinados e a janela mostrou as respostas históricas, recusou execução
+  e fez zero chamadas ao modelo após o restauro.
+  [Execução](../.build/upstream-parity-20261111/normal59-rule67-fresh1/RESULT.json) ·
+  [Restauro](../.build/upstream-parity-20261111/normal59-rule67-preserve1/RESULT.json) ·
+  [Janela](../.build/upstream-parity-20261111/normal59-rule67-restored1/RESULT.json).
+- **Histórico de projeto.** O RPM restaurou dados sintéticos de uma cópia
+  anterior. A admissão após restauro atualizou o protocolo de 4 para 5 e
+  o índice de histórico de 3 para 4. O verificador anterior exigia igualdade
+  desses dois ficheiros gerados. A verificação do mesmo restauro confirmou
+  a ligação do índice novo ao anterior, os originais byte a byte e zero
+  autoridade renovada. A janela leu os oito objetivos e as notas, recusou
+  reativar a decisão antiga e manteve os ficheiros após reinício, com zero
+  inferência. [Admissão](../.build/pet-goal-execution-next-r1/release59-service-cards-20261121/restorehistory/VERIFIED.json) ·
+  [Leitura histórica](../.build/upstream-parity-20261111/normal59-project-history1/RESULT.json).
+
+A correção Stripe foi feita depois de congelar o RPM 59.
+[Verificação conjunta](../.build/pet-goal-execution-next-r1/release59-service-cards-20261121/VERIFIED.json).
+
+<a id="rpm58-markdown-2011"></a>
+
+## RPM 58 — exportação e preservação em prefixo privado
+
+O RPM `0.5.1-mochi.58` foi compilado com a receita Fedora e as
+dependências bloqueadas. A verificação do prefixo privado confirmou
+1 374 ficheiros de fonte, 13 ficheiros no pacote e o relay original.
+A primeira compilação ficou sem recibo terminal e sem RPM. A repetição
+reutilizou o mesmo arquivo de fontes verificado.
+[Artefacto e hashes](../.build/pet-goal-execution-next-r1/release58-markdown-20261120/BUILD.json).
+
+- **Exportação.** Pela janela nativa, uma nota com título de 575 bytes
+  produziu dois Markdown distintos, com título e transcrição completos.
+  Um ficheiro existente conservou os bytes. A janela apresentou a falha
+  de escrita numa pasta sem permissão. Dois PNG de resumo de 1080×1920
+  conservaram conteúdo idêntico em ficheiros distintos.
+  [Markdown](../.build/upstream-parity-20261111/notes-rpm58-export-long1/RESULT.json) ·
+  [PNG](../.build/upstream-parity-20261111/recap-rpm58-shared-export1/RESULT.json).
+- **Restauro e reversão em perfis de teste.** Dos dados de uma cópia
+  gerada pela versão 44, o 58 restaurou 11 ficheiros byte a byte. A 44
+  recuperou a mesma cópia noutro perfil. Um arquivo separado do 58
+  permitiu restaurar a nota longa e conservar os ficheiros exportados.
+  [Cópias e restauro](../.build/pet-goal-execution-next-r1/release58-markdown-20261120/archive-transition/RESULT.json).
+- **Revisão 6/7.** Passaram a segunda sucessão, a renovação finita e a
+  resposta automática após recuperação. O restauro preservou oito
+  registos assinados e os três objetivos com respostas HTTP sintéticas.
+  A janela restaurada mostrou as respostas antigas, recusou execução
+  e fez zero pedidos de inferência.
+  [Execução](../.build/upstream-parity-20261111/normal58-rule67-fresh1/RESULT.json) ·
+  [Restauro](../.build/upstream-parity-20261111/normal58-rule67-preserve1/RESULT.json) ·
+  [Janela](../.build/upstream-parity-20261111/normal58-rule67-restored1/RESULT.json).
+- **Biblioteca de conversas.** O 58 preservou a proveniência dos anexos
+  após reinício, com um pedido Ollama sintético. A versão 44 recusou
+  essa biblioteca de formato 8 e conservou os bytes. A reversão
+  testada usa a cópia pré-atualização e conserva em separado os dados
+  novos. [Anexos](../.build/attachment-coverage-20261118/corrected/rpm58-local1/RESULT.json) ·
+  [Leitor 44](../.build/pet-goal-execution-next-r1/release58-markdown-20261120/format8-reader44-from58-1/RESULT.json).
+
+A instalação operacional continua na 44. Os perfis eram sintéticos e a
+manutenção não concedeu autoridade para executar trabalho antigo.
+[Verificação conjunta](../.build/pet-goal-execution-next-r1/release58-markdown-20261120/VERIFIED.json).
+
+<a id="rpm57-percursos-2011"></a>
+
+**20/11 — validação do RPM 57 em perfis privados.**
+O RPM `1db6ec3b…` contém o executável `0b131c1d…`. O pacote e o
+arquivo de fontes conferem com 1374 ficheiros congelados, o relay
+original e os 13 ficheiros do RPM. O primeiro empacotamento parou
+por falta da ligação às dependências TypeScript locais do Copilot.
+A repetição com a dependência existente terminou.
+
+- **Voz e notas.** O microfone indisponível abriu as definições pelo
+  aviso. A seleção explícita, o ditado local, a colagem e o reinício
+  passaram. O Notetaker passou a captação com dois canais e a nota
+  só com microfone. O resumo manual e o automático usaram apenas
+  o modelo escolhido. Sem modelo, houve zero pedidos. O restauro
+  inativo do perfil gerado preservou as duas notas e sete ficheiros
+  byte a byte. [Ditado](../.build/upstream-parity-20261111/rpm57-mic-recovery1/RESULT.json) ·
+  [Resumo](../.build/upstream-parity-20261111/notes-rpm57-summary-selected1/RESULT.json) ·
+  [Restauro](../.build/pet-goal-execution-next-r1/release57-notetaker-20261120/archive-restore-notes/RESULT.json).
+- **Desktop.** Em Wayland privado, passaram a primeira criação dos
+  pets, a geometria da barra, a ocultação e o reinício. O centro
+  preservou o pedido Codex sintético até ao Stop. No Hyprland da
+  estação, em HOME e D-Bus privados, o centro passou abrir, manter a
+  vista mapeada durante configuração e recolher por pedido explícito.
+  [Wayland privado](../.build/wayland-layer-qa-20261120/rpm57-wayland-bar1/RESULT.json) ·
+  [Hyprland](../.build/upstream-parity-20261111/normal57-centre-hyprland1/RESULT.json).
+- **Revisão 6/7.** Passaram a segunda sucessão, a renovação finita,
+  a recuperação e três respostas HTTP sintéticas. O restauro
+  preservou oito registos assinados e três objetivos. A janela
+  mostrou as respostas históricas e recusou execução, sem repetir
+  a inferência após reinício. [Percurso](../.build/upstream-parity-20261111/normal57-rule67-fresh1/RESULT.json) ·
+  [Preservação](../.build/upstream-parity-20261111/normal57-rule67-preserve1/RESULT.json) ·
+  [Janela restaurada](../.build/upstream-parity-20261111/normal57-rule67-restored1/RESULT.json).
+
+A versão 44 continua instalada. Os ensaios usaram perfis e decisões
+gerados. Hardware, perfil operacional e aceitação humana têm âmbitos
+próprios. A exportação de títulos longos pertence à fonte posterior.
+[RPM](../.build/release-checkpoints/Coucou-0.5.1-mochi.57-native-1db6ec3b36312c03.rpm) ·
+[Recibo consolidado](../.build/pet-goal-execution-next-r1/release57-notetaker-20261120/VERIFIED.json).
+
+<a id="notetaker-exportacao-titulos-longos-2011"></a>
+
+**20/11 — exportação Markdown com títulos longos e nomes ocupados.**
+No oficial 0.5.0 e no binário anterior do fork, uma nota sintética
+com título de 575 bytes permanecia legível, mas o sistema recusava o
+nome do ficheiro e a vista não mostrava a falha. No binário corrigido
+`142ef470`, o nome do ficheiro é encurtado sem cortar caracteres. O
+título completo e a transcrição continuam no Markdown.
+
+O Notetaker usa agora a mesma criação exclusiva já usada pelo resumo
+semanal. Um documento pré-existente conservou os bytes e as duas
+exportações receberam nomes distintos. Ao retirar a permissão de
+escrita apenas da pasta descartável, o aviso ficou legível junto ao
+botão. O resumo semanal continuou a gravar dois PNG de 1080×1920,
+com nomes distintos e conteúdo idêntico.
+
+Foram usadas notas geradas e X11 privado. O lançamento do gestor de
+ficheiros foi observado por um auxiliar local, na pasta de teste.
+A correção está na árvore de desenvolvimento, depois do congelamento
+da fonte do RPM 57. A suíte de traduções também passou nessa árvore
+depois de retirar duas entradas obsoletas e conservar a etiqueta em
+uso no formato reconhecido pelo teste.
+[Oficial](../.build/upstream-parity-20261111/notes-official-export-long1/RESULT.json) ·
+[Fork anterior](../.build/upstream-parity-20261111/notes-dev-export-long-baseline1/RESULT.json) ·
+[Percurso corrigido](../.build/upstream-parity-20261111/notes-dev-export-long-visual2/RESULT.json) ·
+[Resumo semanal](../.build/upstream-parity-20261111/recap-dev-shared-export1/RESULT.json).
+
+<a id="rpm56-centro-hyprland-2011"></a>
+
+**20/11 — centro do RPM 56 no Hyprland da estação.**
+Com o Hyprland desbloqueado, o executável empacotado `b55fecab9`
+abriu o centro no primeiro pedido. A atualização em segundo plano
+manteve a mesma vista mapeada. O fecho explícito voltou ao modo
+compacto e duas invocações por linha de comandos alternaram a
+mesma instância. As definições do perfil descartável conservaram-se.
+
+O ensaio usou HOME e D-Bus privados, sem atalhos globais, teclas,
+som, clipboard ou capturas da sessão. A primeira execução passou
+as transições, mas a verificação final do guião comparou a árvore
+de trabalho. A repetição conferiu os ficheiros da fonte congelada
+antes e depois. O ensaio comprova a navegação e o estado nativo da
+superfície. A instalação operacional e a aceitação humana mantêm
+âmbito próprio.
+[Recibo](../.build/upstream-parity-20261111/normal56-centre-hyprland2/RESULT.json).
+
+<a id="notetaker-modelo-exato-2011"></a>
+
+**20/11 — o resumo da chamada usa apenas o modelo escolhido.**
+O oficial 0.5.0 e o RPM 56 enviaram a mesma transcrição sintética
+duas vezes. Quando o modelo configurado devolveu HTTP 503, ambos
+pediram o resumo a outro modelo e mostraram o resultado sem indicar
+a troca. O ensaio usou um gateway Anthropic local e uma chave de teste.
+
+Na compilação corrigida `fb0fb1ff`, cada ação explícita fez um só
+pedido ao modelo configurado. A primeira falha mostrou o modelo e
+o erro. Um segundo pedido concorrente foi recusado. Uma repetição
+explícita bem-sucedida guardou o resumo e uma tentativa posterior
+falhada conservou-o após reinício. Sem modelo configurado, o fluxo
+pediu uma escolha e fez zero pedidos. O resumo automático também
+fez um só pedido, mostrou a falha e preservou a transcrição.
+
+A página explica que a gravação e a transcrição são locais e que o
+resumo Claude envia a transcrição ao serviço Anthropic configurado.
+O teste dos dois canais e a leitura da nota anterior voltaram a passar
+no mesmo executável. A verificação de tipos passou. A suíte de
+traduções reproduz a falha preexistente nos três textos dos pets de
+desktop. As novas entradas têm tradução nas nove línguas do catálogo.
+O ensaio não usou contas reais nem quota. A validação do RPM sucessor
+e a entrega operacional continuam pendentes.
+[Oficial](../.build/upstream-parity-20261111/notes-official-summary-fallback1/RESULT.json) ·
+[RPM 56](../.build/upstream-parity-20261111/notes56-summary-fallback1/RESULT.json) ·
+[Modelo selecionado](../.build/upstream-parity-20261111/notes-dev-summary-selected1/RESULT.json) ·
+[Sem modelo](../.build/upstream-parity-20261111/notes-dev-summary-missing1/RESULT.json) ·
+[Automático](../.build/upstream-parity-20261111/notes-dev-summary-auto1/RESULT.json) ·
+[Controlo de dois canais](../.build/upstream-parity-20261111/notes-final-two-channel1/RESULT.json).
+
+<a id="notetaker-so-microfone-2011"></a>
+
+**20/11 — notas de chamadas quando só o microfone tem sinal.**
+No Coucou oficial 0.5.0 e no RPM 56, a nota com voz no microfone e
+uma faixa de áudio do computador em silêncio foi transcrita, exportada
+e reaberta após reinício. A vista da nota e o Markdown omitiam a cobertura.
+O RPM 56 também concluiu a nota num perfil sem saída de áudio virtual.
+O WAV do sistema recebeu amostras a zero, pelo que a presença do
+ficheiro não demonstrava que o som do computador tivesse sido capturado.
+
+O binário corrigido `4a1e4ab1` assinalou a nota com áudio só do
+microfone no aviso, na vista e na exportação Markdown. O ensaio de
+controlo com duas vozes conservou os dois intervenientes e ficou sem
+o aviso de áudio parcial. A escolha da fonte, o som capturado e o
+processamento local continuam no percurso existente. Uma nota anterior
+sem informação de cobertura abriu e conservou os bytes originais.
+
+O aviso é antecipado quando a captura opcional não arranca. A análise
+final também reconhece uma faixa vazia ou inteiramente a zero. O ensaio
+nativo cobriu as amostras a zero e o controlo com sinal, em X11 e PipeWire
+privados e Parakeet local. As primeiras tentativas pararam na seleção de
+duas fontes com o mesmo nome, no WebDriver ou num limite incorreto para
+o tamanho de um WAV silencioso. Os recibos dessas tentativas foram
+preservados. A prova cobre áudio sintético, sem resumos por API. O
+empacotamento e as gravações físicas têm aceitação própria.
+[Oficial](../.build/upstream-parity-20261111/notes-official-silent3/RESULT.json) ·
+[RPM 56](../.build/upstream-parity-20261111/notes56-silent4/RESULT.json) ·
+[Sem saída virtual no 56](../.build/upstream-parity-20261111/notes56-no-output3/RESULT.json) ·
+[Só microfone](../.build/upstream-parity-20261111/notes-dev-no-output1/RESULT.json) ·
+[Duas fontes](../.build/upstream-parity-20261111/notes-dev-two-channel1/RESULT.json).
+
+<a id="ditado-microfone-indisponivel-2011"></a>
+
+**20/11 — recuperação do ditado após perder o microfone escolhido.**
+Com um nome de microfone inexistente guardado e uma fonte virtual
+predefinida, o oficial 0.5.0 abriu a fonte predefinida. O RPM 56 recusou
+essa substituição, manteve a preferência e recuperou depois de escolher
+explicitamente a outra fonte. O aviso do 56 não tinha acesso direto às
+definições e a opção ausente aparecia como uma escolha normal.
+
+O binário de desenvolvimento `484cbc09` mostra o microfone guardado
+como indisponível e abre as definições do Flow pelo botão do aviso.
+O botão mantém a preferência anterior até à escolha de uma fonte.
+Passaram o clique no controlo WebKit do aviso, a escolha no seletor,
+o áudio sintético com Parakeet local, a inserção no destino de teste,
+a reposição do clipboard e a leitura da mesma preferência e histórico
+após reinício. As duas vistas foram confirmadas nas imagens privadas.
+
+A alteração abrange dois ficheiros de produto e reutiliza o aviso,
+a rota de definições e o seletor existentes. A troca de fonte continua
+explícita. A prova cobre X11 e PipeWire privados. A correção está
+integrada na árvore de desenvolvimento e aguarda empacotamento e
+aceitação no ambiente operacional.
+[Comparação](../.build/mic-recovery-20261120/BASELINE.json) ·
+[Percurso corrigido](../.build/upstream-parity-20261111/dev-mic-recovery-render1/RESULT.json).
+
+<a id="rpm56-percursos-2011"></a>
+
+**20/11 — verificação privada do RPM 56.**
+RPM `8cd59cfae315c6bd…`, executável empacotado `b55fecab968543b64…`.
+O pacote Fedora confere com a fonte congelada de 1374 ficheiros, o
+relay original e os 13 ficheiros do RPM. A extração e os ensaios
+decorreram em prefixos privados. A primeira compilação interrompeu-se
+antes do empacotamento. A repetição da mesma fonte terminou e produziu
+os recibos do RPM e do executável.
+[Artefacto](../.build/release-checkpoints/Coucou-0.5.1-mochi.56-native-8cd59cfae315c6bd.rpm) ·
+[Composição](../.build/pet-goal-execution-next-r1/release56-current-parity-20261120/BUILD.json) ·
+[Recibo consolidado](../.build/pet-goal-execution-next-r1/release56-current-parity-20261120/VERIFIED.json).
+
+- **Pets e centro.** Em Wayland privado com Sway headless, o RPM
+  confirmou a criação adiada da janela, a espera pela geometria da
+  barra, a primeira ativação, ocultação e reinício. O centro manteve-se
+  aberto com o mesmo pedido sintético. O Stop encerrou-o e a conversa
+  reabriu sem o pedido. [Recibo](../.build/wayland-layer-qa-20261120/rpm56-wayland-bar1/RESULT.json).
+- **Anexos Ollama e Anthropic.** Em X11 privado, o arrasto de ficheiros
+  gerados, a conversa por HTTP sintético e o reinício conservaram a
+  cobertura por cópia, sem repor autorizações de leitura. O backup e o
+  restauro inativo preservaram os 12 ficheiros byte a byte, incluindo
+  a biblioteca de conversas versão 8.
+  [Ollama](../.build/attachment-coverage-20261118/corrected/rpm56-local1/RESULT.json) ·
+  [Anthropic](../.build/attachment-covers-api-20261118/rpm56-anthropic1/RESULT.json) ·
+  [Restauro](../.build/pet-goal-execution-next-r1/release56-current-parity-20261120/archive-restore/RESULT.json).
+- **Domínios.** O RPM abriu as conversas flutuantes OpenAI e Google AI
+  com identidades e rotas distintas. A mesma chamada para o n8n foi
+  recusada pela regra de domínio antes de abrir a janela. O ensaio
+  usou zero credenciais e zero pedidos aos providers.
+  [Recibo](../.build/attachment-covers-api-20261118/rpm56-api-domains1/RESULT.json).
+- **Reversão para a 44.** Num perfil descartável inicializado pela
+  própria 44, essa versão recusou ler a biblioteca versão 8 produzida
+  pelo 56. O original e a cópia permaneceram intactos. A primeira
+  tentativa parou por falta de admissão do perfil, antes da prova de
+  leitura. Depois de gravar a versão 8, voltar a abrir as conversas
+  na 44 exige um perfil anterior compatível. Os dados novos do 56
+  requerem preservação separada antes de qualquer reversão.
+  A 44 copiou e restaurou inativamente um perfil sintético anterior
+  com 11 ficheiros idênticos. O 56 inspecionou a mesma cópia.
+  [Recusa e hashes](../.build/pet-goal-execution-next-r1/release56-current-parity-20261120/format8-reader44-rpmfixture2/RESULT.json) ·
+  [Cópia anterior compatível](../.build/pet-goal-execution-next-r1/release56-current-parity-20261120/archive-rollback44/RESULT.json).
+- **Vercel.** Uma cópia privada do executável com apenas o endereço
+  do Vercel adaptado ao servidor sintético passou a atualização do
+  cartão, a recuperação de erro e a preservação do detalhe escolhido.
+  O ensaio fez cinco leituras locais e identificou o deploy ausente
+  sem saltar para outro. [Derivação e recibo](../.build/vercel-parity-20261118/rpm56-vercel1/RESULT.json).
+- **Memória no arranque.** Com o Hub aberto em Geral e os pets de
+  desktop desligados, uma execução por RPM em X11 privado mediu
+  376,73 MiB de PSS e seis processos WebKit no 55, e 344,87 MiB
+  e cinco processos no 56. A primeira ativação, reutilização da janela
+  e reinícios ligado e desligado passaram. O par cobre os dois
+  pacotes exatos e este estado de arranque durante seis segundos.
+  [RPM 55](../.build/active-resources-20261118/lazy/rpm55-idle-off1/RESULT.json) ·
+  [RPM 56](../.build/active-resources-20261118/lazy/rpm56-idle-off1/RESULT.json).
+
+<a id="rpm56-regra67-2011"></a>
+
+**20/11 — revisão 6/7 e preservação no mesmo RPM 56.**
+Em X11 privado, o executável `b55fecab968543b64…` confirmou a
+segunda sucessão na mesma vista, a revisão com saldo restante e
+a renovação finita. O fluxo recuperou uma sondagem após perder o
+processo original e conservou a decisão, o prazo e o saldo. Concluiu
+três respostas HTTP sintéticas e recusou repetir uma decisão revogada
+depois de reiniciar.
+
+O backup e o restauro inativo preservaram os formatos de regra 1,
+6, 6, 7 e 7, oito registos assinados e três objetivos. Na janela
+reaberta, o estado e a resposta restaurada estavam visíveis. O runtime
+recusou execução sem nova autoridade e não fez novos pedidos HTTP.
+As escolhas e os dados foram gerados para o ensaio. Continuam
+pendentes aceitação humana, Hyprland na estação e perfil operacional.
+[Revisão e reinício](../.build/upstream-parity-20261111/normal56-rule67-fresh1/RESULT.json) ·
+[Preservação](../.build/upstream-parity-20261111/normal56-rule67-preserve1/RESULT.json) ·
+[Janela restaurada](../.build/upstream-parity-20261111/normal56-rule67-restored1/RESULT.json).
+
+<a id="wayland-pets-centro-2011"></a>
+
+**20/11 — pets de desktop e continuidade do centro em Wayland privado.**
+O binário de desenvolvimento `e3800fd0` arrancou com os pets de
+desktop desligados. Em Sway headless, o rastreio Wayland confirmou
+as superfícies layer-shell do centro e, após a primeira ativação,
+dos pets. O centro ficou expandido durante a configuração em segundo
+plano e ao ligar e desligar os pets. A conversa Codex manteve o seu
+CID e o mesmo pedido pendente durante as duas mudanças. O Stop
+terminou o pedido e o reinício conservou a conversa sem o reabrir.
+Houve um turno sintético, sem resposta à aprovação nem execução
+do comando apresentado.
+
+O modo de barra também passou. A janela aguardou o ficheiro de
+geometria do compositor e mostrou os pets depois de o receber
+no diretório privado. A preferência persistiu nos reinícios ligado
+e desligado. O ensaio usou o executável Sway extraído de um RPM
+Fedora com assinatura verificada, renderer pixman e um output
+headless. O compositor operacional e a instalação ficaram intactos.
+As duas primeiras tentativas pararam ao consultar APIs nativas pela
+janela errada. Os ensaios aceites consultam cada API pela sua janela.
+A aceitação no Hyprland da estação tem âmbito próprio.
+[Percurso e reinício](../.build/wayland-layer-qa-20261120/native-dev-3/RESULT.json) ·
+[Modo de barra](../.build/wayland-layer-qa-20261120/native-dev-bar-1/RESULT.json).
+
+<a id="arranque-pets-desligados-2011"></a>
+
+**20/11 — janela dos pets de desktop adiada quando estão desligados.**
+A composição de desenvolvimento anterior `b65b8f90` criava a janela
+dos companions durante o arranque, mesmo com a preferência desligada.
+A correção `e3800fd0` deixa o compositor responder à consulta de
+suporte e adia o WebKit da janela até à ativação. Um arranque com a
+preferência ligada continua a preparar a janela. Depois de a abrir
+pela primeira vez, desligar esconde a mesma janela durante a sessão.
+
+Nos dois pares de medições privadas, feito o arranque com os pets
+desligados e o Hub aberto em Geral, o WebKit passou de seis para
+cinco processos. A mediana de PSS em seis segundos passou de
+432,38 para 405,42 MiB no primeiro par e de 434,87 para 393,41 MiB
+no segundo. No primeiro par, as janelas mostraram-se mas o pet
+inativo ficou recolhido. No segundo, um evento Vercel sintético
+tornou o pet visível. Passaram a primeira ativação, ocultar e
+voltar a mostrar na mesma janela, reiniciar com a preferência
+ligada e voltar a reiniciar com a preferência desligada. Também
+passou abrir o Hub e o cartão Vercel com a janela ainda adiada.
+
+A comparação usa binários de desenvolvimento do mesmo estado
+funcional e perfis de teste equivalentes em X11. O delta de produto é
+`companions.rs`. Os valores descrevem o arranque com a preferência
+desligada. O RPM 56 tem ensaios próprios em X11 e Wayland privados.
+A aceitação da instalação continua pendente.
+[Prova e amostras](../.build/active-resources-20261118/lazy/VERIFIED.json).
+
+<a id="recursos-ativos-2011"></a>
+
+**20/11 — recursos e resposta durante navegação nativa em X11.**
+Foram medidas duas execuções por binário exato, na ordem 55, 44,
+oficial 0.5.0, oficial 0.5.0, 44 e 55. Cada execução usou um perfil
+gerado, o mesmo Xvfb de 1440×1000 e o Hub de 1100×720. A sequência
+incluiu 6 segundos de Hub parado, 30 transições Dicionário → Snippets
+→ Estilos e 24 transições lista ↔ detalhe Vercel. O cartão recebeu
+os mesmos três deploys por evento nativo sintético.
+
+| Percurso | Binário | PSS (MiB) | CPU (% de um núcleo) | Mediana / p95 até ao segundo frame (ms) |
+| --- | --- | ---: | ---: | ---: |
+| Hub em navegação | Oficial 0.5.0 | 346,28 | 204,72 | 64 / 102 |
+| Hub em navegação | 44 | 380,88 | 104,75 | 65 / 99 |
+| Hub em navegação | RPM 55 | 378,95 | 103,24 | 64 / 97 |
+| Cartão Vercel | Oficial 0.5.0 | 327,09 | 204,33 | 24 / 32 |
+| Cartão Vercel | 44 | 423,93 | 177,42 | 11 / 17 |
+| Cartão Vercel | RPM 55 | 425,14 | 182,94 | 15 / 21 |
+
+Cada PSS é a média das medianas das duas execuções. O cartão oficial
+correu a 720×320 e os cartões do fork a 720×560. O fork teve seis
+processos WebKit e o oficial cinco. O tempo medido começa no clique
+no WebKit e acaba no segundo frame com o conteúdo esperado, validado
+na janela em foco. Não inclui latência do rato ou do protocolo de
+automação. Os contadores CPU incluem a árvore da aplicação e podem
+perder frações inferiores a uma amostra de um auxiliar efémero.
+O ensaio detetou zero builds concorrentes e zero pedidos ao proxy
+privado que bloqueava destinos externos.
+
+A primeira tentativa oficial ficou no Ditado antes de medir. Outra
+teve de alterar a verificação de estabilidade quando um auxiliar de
+imagens terminou. Três execuções adicionais produziram recibos
+com nomes de fase incorretos e ficaram de fora. A série conservou
+as três restantes e completou a ordem inversa. O ensaio complementa
+os arranques em repouso no Hyprland e cobre só estes percursos em
+X11 privado. GPU, energia, uso prolongado e resposta no perfil
+operacional exigem medições próprias.
+[Amostras, intervalos e binários](../.build/active-resources-20261118/series3/VERIFIED.json).
+
+<a id="vercel-1811"></a>
+
+**18/11 — Vercel da atualização ao detalhe.**
+O oficial 0.5.0 e o binário privado anterior `21ff172b` fizeram o GET
+autenticado de deployments a partir do cartão. As duas composições
+mostraram os três deploys terminais, omitiram a entrada em construção
+e mostraram commit, branch, estado e ligação no detalhe. O 401 levou
+ao cartão de erro com controlo para tentar novamente. Ambos mudaram
+silenciosamente o deploy aberto quando chegou outro mais recente.
+
+O binário com a correção, `b65b8f90`, guardou o ID no estado de
+navegação das duas vistas. No ensaio nativo do pet, um novo deploy
+entrou no primeiro lugar e o detalhe continuou no deploy escolhido.
+Quando o deploy escolhido saiu dos resultados, o cartão mostrou
+essa situação e a ação de voltar abriu a lista atualizada. O 401
+voltou a revelar o controlo de atualização. Passaram as duas suítes
+web de cartões e pills e a verificação de tipos.
+
+Os ensaios usaram perfis, Secret Service e X11 privados. Foi
+substituído apenas o literal do destino HTTPS Vercel por um endereço
+HTTP de loopback, com o mesmo caminho e comprimento. A comparação
+confirmou igualdade de todos os bytes fora desse intervalo. Os
+binários originais e a instalação 44 foram preservados. A prova
+cobre o cliente, o percurso nativo, as respostas e a vista. TLS,
+conta real, Wayland e entrega instalada têm âmbito próprio.
+Uma tentativa da composição corrigida chegou ao servidor antes
+de o cartão ficar visível. A repetição aguardou a abertura da vista
+antes de avançar.
+[Oficial](../.build/vercel-parity-20261118/official-3/RESULT.json) ·
+[Fork anterior](../.build/vercel-parity-20261118/current-3/RESULT.json) ·
+[Ensaio corrigido](../.build/vercel-parity-20261118/fixed-2/RESULT.json).
+
+<a id="anexos-api-1811"></a>
+
+**18/11 — janela Anthropic e preparação dos anexos por API.**
+No binário privado anterior, a janela flutuante abriu para o pet
+Anthropic sem conversa disponível. O perfil vazio tinha a rota
+`anthropic` na fábrica e só o campo da conta de runtime estava vazio.
+O binário corrigido `21ff172b` abriu a conversa Anthropic com o modelo
+escolhido no perfil de ensaio. Um arrasto GTK entregou quatro cópias:
+texto completo, texto cortado pelo limite agregado, texto acima do
+limite por ficheiro e uma imagem. O gateway HTTP sintético recebeu o
+primeiro texto, o início do segundo e a imagem no próprio bloco de
+imagem. O texto acima do limite e a cauda marcada ficaram de fora.
+
+O histórico associou cada estado ao ID da cópia. Depois de reiniciar
+voltaram a conversa, a resposta, os quatro estados e a distinção
+entre preparação e leitura pelo modelo. O ensaio fez um único POST
+ao gateway privado. A biblioteca 8 manteve o histórico público, sem
+os bytes dos anexos nem a chave sintética, e as cópias continuaram
+sem autorização de leitura ativa após reinício. Uma tentativa anterior
+falhou no guião ao registar o segundo processo. Os processos isolados
+foram encerrados e a repetição completou o percurso.
+
+OpenAI-compatible partilha os limites e o registo de preparação.
+Passaram 33 testes Rust dirigidos de preparação, transporte, isolamento
+e escolha da rota. Passaram também as suítes web de chat e anexos e a
+verificação de tipos. Os testes de transporte ligaram apenas a servidores
+sintéticos locais. A janela também abriu chats OpenAI e Google AI com
+dois CIDs distintos e as rotas esperadas, sem credenciais nem pedidos.
+Pastas e PDFs extraídos sem medição conclusiva conservam a
+incerteza sobre a cobertura. O âmbito nativo acima é Anthropic em
+X11 privado, com gateway e Secret Service do ensaio.
+[Referência anterior](../.build/attachment-covers-api-20261118/baseline-1/RESULT.json) ·
+[Composição corrigida](../.build/attachment-covers-api-20261118/final/build/RESULT.json) ·
+[Ensaio e reinício](../.build/attachment-covers-api-20261118/corrected-2/RESULT.json) ·
+[Abertura OpenAI e Google AI](../.build/attachment-covers-api-20261118/api-open-1/RESULT.json).
+
+<a id="cobertura-anexos-1811"></a>
+
+**18/11 — cobertura textual por cópia no chat local.**
+O binário privado `c3830c44` recebeu dois ficheiros por arrasto de uma
+janela GTK para o chat flutuante Ollama. O pedido HTTP sintético
+incluiu o texto curto, o início do texto longo e a marca de limite.
+O texto longo ficou sem a cauda. A vista mostrou preparação parcial
+e integral junto dos IDs corretos. Após encerrar e reabrir a aplicação,
+as mensagens e os estados reapareceram no mesmo CID. O historial não
+restaurou autorizações de leitura, guardou a conversa pública e houve
+um único POST no ensaio. A ficha continua a indicar que a leitura
+pelo modelo está por confirmar.
+
+A biblioteca escreveu a versão 8 ao guardar a observação. A prévia
+nativa reviu 12 ficheiros no perfil sintético original. A escrita,
+inspeção e restauro inativo conservaram os 12 ficheiros byte a byte,
+incluindo a biblioteca de conversas, sem conceder autoridade. Uma
+prévia anterior recusou a cópia direta do perfil noutro caminho,
+sem alterar dados. Passaram 25 testes Rust dirigidos, as duas suítes
+web de chat e anexos e a verificação de tipos. O leitor aceita
+bibliotecas anteriores. Pastas, PDFs sem indicação conclusiva e
+outros adaptadores requerem validação específica, tal como a
+reversão e aceitação de uma composição normal.
+[Build exata](../.build/attachment-coverage-20261118/corrected/build/RESULT.json) ·
+[Ensaio nativo](../.build/attachment-coverage-20261118/corrected/native-1/RESULT.json) ·
+[Backup e restauro inativo](../.build/attachment-coverage-20261118/corrected/archive-restore/RESULT.json).
+
+**18/11 — diferença entre cópia registada e preparação parcial no 55.**
+Na mesma mensagem, o Ollama sintético recebeu um ficheiro curto e
+a parte inicial de um texto acima do limite do adaptador. O pedido
+incluiu a marca de truncagem e omitiu a cauda marcada. A ficha do
+histórico mostrou ambas as cópias e os respetivos IDs, mas omitiu a
+diferença na preparação. O ensaio confirma a lacuna da vista de chat
+para este percurso. A evidência do pedido diz respeito ao conteúdo
+preparado no Coucou. A leitura e interpretação pelo modelo têm âmbito
+próprio.
+[Recibo do ensaio no RPM 55](../.build/attachment-coverage-20261118/rpm55-coverage-1/RESULT.json).
+
+**18/11 — anexos, sucessão 6/7 e preservação na mesma composição RPM 55.**
+Em X11 privado, o próprio executável passou retirada e recuperação de
+anexos, segunda revisão na mesma vista, três respostas sintéticas,
+recuperação após perda de processo e reinício. A preservação voltou
+a abrir a resposta histórica com 12 payloads originais iguais e
+sem admitir execução. O inventário sintético de backup coincidiu
+com o leitor 44. Hardware e aceitação no perfil operacional têm
+âmbito próprio.
+[Composição, recibos e limites](PETS-INSTALLED-DELIVERY-55.md).
+
+**18/11 — sucessão 6 e revisão 7 verificadas na sucessora privada corrigida.**
+O executável `b8cb607e` abriu na mesma vista uma segunda sucessão após
+revogar a primeira. Preservou o saldo e prazo originais, apresentou
+uma autorização nova desmarcada e recusou a ocorrência já gasta.
+A revisão 7 usou primeiro o saldo remanescente e depois uma renovação
+finita própria. Houve três respostas do servidor Ollama sintético,
+reconciliação de uma sondagem após perda do processo e reinício
+sem repetir a execução nem aceitar a escolha anterior.
+
+No mesmo executável, 13 comandos de preservação e compatibilidade
+conservaram oito registos assinados, três objetivos e os formatos de
+regra 1/6/6/7/7. O restauro manteve os 12 payloads originais. A
+janela abriu a resposta histórica e recusou nova execução sem HTTP.
+As escolhas pertencem ao perfil de teste. A correção ainda precisa
+de validação no próximo pacote e de aceitação operacional autorizada.
+[Provas agrupadas da sucessora privada](../.build/rule-succession-reopen-20261118/VERIFIED.json).
+
+**18/11 — no próprio RPM 54 passaram anexos, centro, visibilidade e restauro 6/7.**
+A sequência dos anexos usou dois pedidos locais sintéticos e confirmou
+o conteúdo efetivamente enviado. Os registos voltaram após reinício
+sem leitura ativa ou repetição. O arquivo 6/7 restaurado pelo 54
+preservou 12 registos e abriu a resposta histórica com execução
+recusada. A segunda sucessão de uma regra nova expôs um bloqueio
+da vista. A correção na fonte voltou a passar a mesma prova de
+interface em fixture e 25 testes dirigidos, incluindo o reconhecimento
+do mesmo pedido quando a confirmação é incerta.
+[Âmbito exato do RPM e limites](PETS-INSTALLED-DELIVERY-54.md).
+
+<a id="retirada-anexos-1811"></a>
+
+**18/11 — retirar um anexo impede o reenvio do seu conteúdo preparado.**
+Executáveis exatos da 44 e do RPM 53, em perfis X11 privados separados.
+O mesmo arrasto GTK entregou dois ficheiros sintéticos e ambos chegaram
+ao primeiro pedido HTTP local. O controlo de retirada deixou uma só
+cópia ativa. No segundo pedido, os dois binários ainda incluíam o
+conteúdo dos dois ficheiros na mensagem histórica do utilizador.
+
+No binário corrigido `f05826d5`, o segundo pedido na mesma conversa e
+no mesmo processo manteve a primeira pergunta e resposta. O conteúdo
+do ficheiro ainda selecionado apareceu uma vez na nova mensagem. O
+ficheiro retirado ficou guardado como cópia histórica, com ID no
+primeiro turno. Os dois registos de anexos conservaram os respetivos
+conjuntos. Os três ensaios aceites fizeram dois pedidos sintéticos cada
+um, sempre ao servidor local explicitamente configurado.
+
+Passaram 15 testes Rust dirigidos. O teste da coleção nativa passou a
+tratar o Spotify como serviço, conforme a regra de domínio em vigor.
+Uma tentativa gráfica do binário corrigido ficou antes do primeiro
+pedido HTTP. O ensaio aceite aguardou as duas cópias visíveis e
+acionou o controlo de envio pelo DOM do WebKit. A causa da primeira
+tentativa ficou por determinar. A correção reutiliza o histórico
+público existente e mantém o formato da biblioteca. O ensaio observou
+o conteúdo dos pedidos preparados pelo Coucou no Ollama sintético.
+Retenção por providers, cobertura de extração e aceitação do pacote
+sucessor continuam em aberto.
+[Recibos, composição e hashes](../.build/attachment-turn-context-20261118/VERIFIED.json).
+
+<a id="anexos-por-pedido-1811"></a>
+
+**18/11 — histórico por pedido com dois anexos e reinício.**
+No executável do RPM 53, um arrasto GTK em X11 privado entregou dois
+ficheiros sintéticos ao chat Ollama. A resposta recebida por HTTP local
+ficou na conversa e o backend conservou dois IDs de cópia no respetivo
+turno. Alterar a primeira origem antes do pedido deixou intactos os
+bytes enviados da cópia. O chat mostrava os nomes no texto da mensagem,
+mas não as referências que permitiam distinguir as cópias.
+
+O binário de desenvolvimento `11614201`, compilado da fonte integrada,
+reabriu o mesmo perfil e o mesmo CID. Um clique no resumo mostrou os
+dois IDs junto ao pedido original. O conjunto de leitura ativa
+continuou vazio. Um segundo pedido sem anexos fez um único POST próprio
+sem os bytes das cópias antigas, com histórico corretamente ordenado.
+O ensaio conservou os dados produzidos no RPM 53 e usou o modelo
+explícito `fixture-free` num servidor local sintético.
+
+Passaram 70 testes TypeScript dirigidos e a verificação de tipos. Estes
+incluem a vista inline, IDs distintos com nomes iguais, mudança de CID,
+origem terminal e uma tentativa interrompida sem mensagens. O ensaio
+nativo anterior ao aceite chegou ao histórico visível, mas comparou a
+mensagem com o texto digitado e falhou por causa do cabeçalho de nomes
+que o backend já guarda. O ensaio aceite compara o texto canónico.
+O laboratório usou o chat flutuante em X11. A composição normal com a
+correção, a cobertura por ficheiro dos conteúdos extraídos, os restantes
+providers e a verificação operacional continuam em aberto no CTX-02.
+[Recibo nativo e hashes](../.build/attachment-history-20261118/native-private-3/RESULT.json).
+
+**18/11 — recursos em repouso do RPM 53 comparados com a 44 e o oficial.**
+Seis arranques nativos em perfis privados no Hyprland, com ordem
+oficial/44/53/53/44/oficial. Cada medição durou cerca de 13 segundos
+após oito segundos de aquecimento. Companions, centro persistente e
+Flow estavam desligados. Sem automação de janelas ou inferência.
+
+| Executável exato | PSS média | CPU média (% de um núcleo) | WebKit | Camada |
+| --- | ---: | ---: | ---: | --- |
+| Oficial 0.5.0 | 416,46 MiB | 105,81 | 5 | 720×320 |
+| 44 operacional, em perfil privado | 464,82 MiB | 1,01 | 6 | 720×560 |
+| RPM 53, em perfil privado | 455,43 MiB | 1,01 | 6 | 720×560 |
+
+A 44 e a 53 tiveram a mesma geometria e contagem de processos. A 53 usou
+9,38 MiB menos de PSS em média nestes arranques.
+A CPU medida foi cerca de 1% de um núcleo em ambas. O 53 usou mais PSS
+do que o oficial neste ensaio, com geometria e quantidade de processos
+diferentes. A CPU do oficial mede esse estado de arranque específico.
+A amostra curta deixa em aberto fluidez durante uso, GPU, energia, fugas
+e comportamento no perfil operacional.
+[Recibos de cada arranque](../.build/operational53-20261118/RESOURCES-VERIFIED.json).
+
+**18/11 — assunto e data do Resend observados completos no RPM 53.**
+No Hyprland real, a captura do interior do cartão sintético mostrou o
+assunto e a data completos. As medidas antes e depois coincidiram, e o
+WebKit reportou a mesma cor corrigida nos dois textos. O ensaio usa só
+um evento nativo sintético. A imagem permanece privada. A medição
+anterior de contraste com cores planas mantém o seu âmbito.
+[Prova e tentativas conservadas](../.build/operational53-20261118/RESEND-VISUAL-VERIFIED.json).
+
+**18/11 — RPM 53 verificado no Hyprland e em X11 privado.**
+O próprio pacote preserva o centro durante a configuração em segundo
+plano e as conversas ao ocultar os pets. Passaram primeira abertura,
+atalho por linha de comandos, reinício, leitura histórica 6/7 e
+prévia de backup sintética. A proposta com hashes e alteração focada
+do sysworkspace está pronta. A instalada continua na 44.
+[Provas, limites e âmbito de entrega](PETS-INSTALLED-DELIVERY-53.md).
+
+**18/11 — RPM 52 validado em X11 privado. Corrigido o fecho do centro em Wayland na fonte posterior.**
+O 52 alternou o centro, guardou a visibilidade dos pets após reinício e
+reabriu o mesmo pedido pendente. No Hyprland, a configuração em segundo
+plano ainda podia fechar o centro no 52. A correção integrada preserva
+a navegação explícita e passou 29 testes dirigidos e um ensaio no
+Hyprland em binário privado. A proposta 52 fica suspensa. A instalada
+continua na 44. [Artefactos, evidência e limites](PETS-INSTALLED-DELIVERY-52.md).
+
+**17/11 — recuperado mostrar/ocultar os pets configurados, em composição privada.**
+O oficial0.5.0 alterna a saída/regresso do seu pet; na privada anterior o atalho
+não tinha efeito. A adaptação usa os pets atuais e a transação de preferências
+existente. Atalho real, controlo Geral, visibilidade nativa, reinício e preservação
+de um pedido Codex sintético/CID passaram, sem aceitar/executar o comando.
+14 Rust dirigidos/64 web/tipos; instalada44 e RPM51 preservados. O binário privado
+12230fac tem versão interna51, mas não é esse RPM. Falta pacote sucessor,
+compositor real e entrega própria; a paridade útil e os49 não estão concluídos.
+[Contrato, comparação, provas e limites](PETS-UPSTREAM-PARITY-2026-11-11.md#desktop-pets-1711).
+
+**17/11 — limite de associação do terminal comparado, sem alteração de produto.**
+No oficial e na privada atual, peer vivo→janela correta/tecla q; criador terminado
+antes do payload→apenas pasta própria. Socket/credenciais/PID nativos, janelas e
+EWMH de QA. A captura/associação existente é igual nos dois. Este limite herdado
+não prova a causa da tentativa anterior com relay rápido, que permanece aberta.
+Zero inferência, atalhos globais ou alterações instaladas. Segue desktopToggle;
+não acrescentar cache/protocolo para resolver uma regressão ainda não demonstrada.
+[Provas e limites](PETS-UPSTREAM-PARITY-2026-11-11.md#relay-lifecycle-1711).
+
+**17/11 — recuperada a alternância abrir/fechar no centro dos pets, em composição privada.**
+O oficial alternou quatro pressões; o RPM51 abriu sempre. A correção consulta o
+contexto nativo e reutiliza a recolha existente, sem usar o modo da vista legada.
+46 web/tipos, compilação e percurso nativo privado passaram, incluindo chamadas
+antigas de abertura e recusa de pet inválido. O RPM51 não contém esta correção.
+Terminal: foco/tecla/pasta passaram no âmbito controlado; fallback com relay rápido
+na privada continua sem causa demonstrada. Instalada44 e RPM49/50/51 preservados.
+[Contrato, comparação e limites](PETS-UPSTREAM-PARITY-2026-11-11.md#ilha-terminal-1711).
+
+**17/11 — RPM51 com a correção dos atalhos verificado, sem instalação.**
+No próprio executável embalado passaram pedido CLI/dono/CID, duas reaberturas sem
+decisão, Stop/retirada e navegação legada equivalente ao oficial0.5.0. Um turno
+RPC sintético, zero modelos reais;44 web/tipos reutilizados por código exato.
+Instalada44 e RPM49/50 preservados. A proposta50 foi sucedida; Wayland real,
+âmbito próprio para entrega operacional, paridade integral e49 continuam abertos.
+[Artefacto, provas, limites e próximo passo](PETS-INSTALLED-DELIVERY-51.md).
+
+**17/11 — atalhos comparados com o oficial; corrigida a reabertura de pedidos CLI.**
+Avançar/recuar entre pets e voltar a permissões/perguntas passaram no oficial0.5.0
+e na composição privada corrigida. No RPM50 congelado, o atalho era recebido mas
+não reabria o pedido CLI ainda ativo. A correção reutiliza o destino existente;
+reabriu o mesmo pedido/CID duas vezes, sem decidir, e deixou de o reabrir após
+Stop.44 testes web/tipos e percursos nativos privados passaram. Instalada44 e
+RPM50 preservados; o RPM50 não contém esta correção. Segue um pacote novo,
+antes de proposta operacional. Sem quota real ou aceitação Wayland/humana/global.
+[Contrato, comparação, provas e limites](PETS-UPSTREAM-PARITY-2026-11-11.md#atalhos-pedidos-cli-1711).
+
+**17/11 — chat do telefone verificado no próprio RPM50, sem alteração de produto.**
+O probe de sete pedidos sob consultas readonly e o ciclo completo TLS/conversa/
+reset/cancelamento/permissão/modelo/503/reinício passaram.14 POSTs sintéticos,
+zero modelo real; instalada44 e RPM50 preservados. As falhas pré-HTTP22/82
+continuam conservadas, com causa não demonstrada; não foram reproduzidas neste
+âmbito50. Não é aceitação prolongada, física, humana ou global.
+[Comparação com oficial0.5.0, provas e limites](ANDROID_LINK.md#phone-chat-normal50).
+
+**17/11 — candidata50 normal preparada e verificada em QA, sem instalação.**
+O executável do RPM50 passou contexto n8n/Codex por domínio, revisão própria de
+uma rotina→captura/contexto12→admissão32→Driver→uma resposta sintética, consulta
+e reinício sem replay. Histórico atual (8 objetivos/4 contextos12, decisões e
+reserva65536) e6/7 antigos passaram leitura/recusas, após18 comandos nativos de
+restauro/quarentena/revisão/ativação com grants[]. Resposta e decisão restaurada
+foram vistas após reinício na captura X11 virtual real e no WebDriver. Instalada44,
+preferências e artefacto49 preservados; sem quota real, aceitação humana ou49
+integrais. Wayland continua bloqueado; a entrega operacional exige âmbito próprio.
+[Artefacto, falhas conservadas, provas e proposta](PETS-INSTALLED-DELIVERY-50.md).
+
+**17/11 — corrigida contenção na preparação e no selo das ocorrências.**
+O binário privado `0ba38c5e…` autentica a listagem fora do bloqueio longo e valida
+stamps antes de a devolver; alterações são explícitas como consulta incompleta.
+O selo pode aguardar Busy anterior à publicação com o mesmo dono/prazo/resultado,
+sem repetir leitura ou inferência.91 Rust dirigidos e79 web/tipos reutilizados.
+Na composição atual, revisão UI→captura→admissão→Driver→resposta sintética e
+reinício passaram sob consultas concorrentes, preservando os registos anteriores.
+O leitor histórico atual também passou recusas/reinício com zero HTTP. A pintura
+pós-reinício no compositor real continua por confirmar: WebKit/DOM legíveis,
+captura física X11 virtual em branco. Instalada44/RPM49 e49 critérios preservados;
+sem publicação, quota real ou aceitação humana/global.
+[Contrato, provas e limites](PETS-PROJECT-DECISION-2026-11-17.md#consultas-e-publicação-da-captura-sob-contenção).
+
+**17/11 — prazo de confirmação corrigido e decisões preservadas em dois restauros nativos.**
+O binário privado `b321a700…` recusa confirmação anterior à revisão ou após120s
+monotónicos, mesmo com UTC parado.7 Rust dirigidos;79 web/tipos reutilizados por
+hashes. O perfil atual com8 objetivos/4 contextos12, escolha, recusa e resultado
+desconhecido passou22 comandos CLI, duas recuperações, UI histórica, recusas de
+nova autoridade e reinícios sem HTTP/replay. A instalação44 e o RPM49 estão intactos.
+Uma tentativa separada ficou na preparação antes de contexto/admissão (seed5);
+a causa está aberta e será investigada antes de novas capacidades. Não certifica
+fiabilidade prolongada, paridade global, entrega instalada/humana ou49 integrais.
+[Provas, cadeia de tentativas e limites](PETS-PROJECT-DECISION-2026-11-17.md#prazo-e-restauro-da-composição-atual).
+
+**17/11 — pedido e resposta de decisão de projeto validados em composição privada atual.**
+A rotina pode pedir uma decisão limitada. A supervisão revê e guarda a resposta
+numa nota de projeto, sem executar a opção ou gastar nova inferência. Dono,
+origem, consentimento e revogação são validados nativamente; outra resposta não
+sobrescreve a nota. Reutilizar a nota num novo objetivo exigiu seleção e revisão
+próprias. UI legível, reinício e zero replay passaram no binário `bbac7a16…`;
+5 Rust/79 web/tipos. Registry2/Goal69/Admission32 conservados, sem novo ledger.
+Instalada44/RPM49 intactos; restauro nativo atual, uso prolongado, ações próprias,
+entrega instalada/humana e49 integrais continuam abertos.
+[Contrato, provas e limites](PETS-PROJECT-DECISION-2026-11-17.md).
+
+**17/11 — corrigida a consulta de ocorrências de projeto sem notas opcionais.**
+A listagem nativa já reconhecia ContextBinding12, mas a vista de progresso só
+aceitava o projeto das notas2 e recusava a consulta. Recusa reproduzida no binário
+anterior; o leitor usa agora o projeto capturado do acompanhamento, com ou sem
+notas, e recusa identidades/revisões inconsistentes.24 web e tipos passaram.
+No binário privado `0a3e9482…`, duas respostas e uma tentativa desconhecida foram
+consultadas na UI nativa e após reinício, com os mesmos ficheiros e zero inferência.
+Instalada44/RPM49 intactos; sem novos formatos, permissões ou aceitação humana.
+[Contrato, provas e limites](PETS-PROJECT-PROGRESS-2026-11-17.md#ocorrências-do-acompanhamento-sem-notas-opcionais).
+
+**17/11 — acompanhamento de objetivos de projeto validado na composição privada atual.**
+Source17/build5/native9 (`14036407…`): escolhas próprias de dados futuros,
+duas ocorrências civis com fotografias distintas, respostas legíveis,
+sucessão6/revisão7, revogação da origem durante HTTP e reinício sem replay.
+71 Rust dirigidos,58 web/tipos; restauro novo em fixtures. Sem quota real,
+instalação ou aceitação humana. AUTO04 integral/pedido de decisão governado,
+uso prolongado e entrega instalada continuam abertos. Instalada44 e RPM49
+preservados. [Contrato, provas e limites](PETS-PROJECT-FOLLOWUP-2026-11-17.md).
+
+**17/11 — progresso por projeto implementado e validado nativamente em perfil privado.**
+Consulta explícita de objetivos ligados por ID, critérios, revisão capturada/atual,
+resposta e resultados desconhecidos. Reutiliza leitores existentes; o chat só lê
+objetivos do pet mostrado. Arquivo, restauro e reinícios passaram sem inferência
+adicional ou alteração dos bytes do runtime. Fontes1342/binário `9a83c8cb…`, fora
+do RPM49/instalada44. Rotina prolongada, atualização de contexto, recorrência e
+entrega integral permanecem abertas. [Provas e limites](PETS-PROJECT-PROGRESS-2026-11-17.md).
+
+**17/11 — preservação/restauro dos projetos validado na composição atual.**
+O binário privado `6873c5e8…`/fontes1340 preservou catálogo, notas, objetivos,
+respostas, incerteza e metadados Codex2 em dois restauros nativos. Um único turno
+Codex sintético, revisão de dados própria, reinícios sem replay e recusa específica
+de execução histórica. Reutiliza manutenção/autoridade existentes; sem novo código
+de produto, instalação ou inferência real. Progresso/recorrência e entrega integral
+continuam abertos. [Provas e limites](PETS-PROJECT-RECOVERY-2026-11-17.md).
+
+**17/11 — projeto ligado a um objetivo limitado, percurso nativo privado validado.**
+A UI escolhe CID de origem/projeto/notas e prepara contexto Dedicated sem copiar
+histórico. Selection2 conserva o projeto completo, além das revisões/hashes das
+notas; uma alteração dos dados com o mesmo número de revisão também é recusada.
+Reutiliza revisão própria, Authority, orçamento e Driver: uma chamada local,
+zero ferramentas. A resposta executou com a vista fechada; retirar a associação
+no segundo HTTP impediu publicar a resposta tardia. Cada objetivo conservou uma
+chamada debitada. A tentativa revogada mantém resultado desconhecido e reserva
+conservadora de65536B; não renova saldo nem retira dados já recebidos pelo motor.
+O controlo de memória Pet/Selection1 também passou. Reinício conservou os hashes
+e não reenviou. Fontes1340, binário privado `6873c5e8…`;36 Rust dirigidos/132 web
+com reutilização/tipos. A revisão6 é legível; a imagem da resposta6 ficou preta.
+A imagem da resposta4 é legível e usa exatamente os mesmos fontes/binário;4 não
+é aceite integralmente. Planeamento/partilha/continuação/recorrência de projeto e
+restauro nativo dos novos dados continuam abertos. Fora do RPM49/instalada44;
+sem inferência real, publicação, alteração do anfitrião ou aceitação humana.
+[Composição, provas, falhas e limites](../.build/project-goal-memory-20261117/VERIFIED.json).
+
+**17/11 — memória de projeto utilizável no pedido manual, validada nativamente.**
+Selecionam-se revisões exatas de notas de um projeto disponível e associado à
+conversa. A revisão nativa apresenta projeto/notas/destino e exige consentimento
+próprio; renomear, arquivar, retirar associação ou alterar dados invalida novos usos.
+Cancelamento/revisão antiga não enviaram HTTP; uma nova revisão enviou só a nota
+escolhida e excluiu notas do pet/outro projeto. Resposta/reinício/recusa após retirada
+passaram no binário privado `0f2b0d8e…`, fontes1339. A resposta fica legível após
+recolher os detalhes confirmados, preservando a seleção; cancelar mantém-nos abertos.
+43 Rust dirigidos e24 web/tipos, com reutilização por hashes; uma inferência e uma
+consulta de metadados, ambas sintéticas. Referências das sessões CLI/revogação
+ativa têm fixtures, não nova aceitação de contas reais. Objetivos de projeto,
+recorrência e restauro nativo dos novos dados continuam abertos. Fora do RPM49 e
+da instalada44; sem publicação, alterações do anfitrião ou aceitação humana.
+[Provas, composição e limites](../.build/project-memory-context-20261117/VERIFIED.json).
+
+**17/11 — projetos e recordações isoladas, percurso nativo privado concluído.**
+A identidade lógica é criada explicitamente por pet; associar a conversa nativa
+é opt-in e conserva a conversa original. Dois projetos, criação/revisão de notas,
+renomeação, associação/retirada, arquivo e dois reinícios passaram no binário
+`adbe95ad…`, fontes1338. Reutiliza catálogo/CAS; não cria ledger ou scheduler.
+42 Rust dirigidos,21 web e TypeScript passaram. A prova gráfica permite ler o
+projeto/estado/associações, mas a imagem da nota está cortada; não fecha aceitação
+gráfica integral. **As notas de projeto ainda não entram em modelos/objetivos**:
+o percurso antigo recusa-as, com controlo positivo nativo para notas do pet.
+Segue seleção/revisão explícita e revogação por revisão/associação, depois objetivos
+e recorrência. AUTO-04/MEM/49 continuam abertos; instalada44/RPM49 intactos.
+A correção de leitura de proveniência histórica está apenas nas fontes atuais;
+a proposta49 contém agora o limite/preflight correspondente.
+[Provas, composição e limitações](../.build/project-memory-20261117/VERIFIED.json).
+
+**17/11 — inbox legível, binário privado atual `6505753c…`, fontes1333.**
+Estado nativo em português, data e critérios nessa observação, JSON exato/recibo
+recolhidos.23 testes web afetados e tipos passaram, incluindo histórico concluído
+sem autoridade atual.819 inputs Rust idênticos; provas dirigidas anteriores mantêm
+âmbito, sem suite repetida. `work-report-readable2` passou UI/consentimento/fila,
+pausa/drenagem com vista fechada, um relatório/um débito, inbox legível e dois
+reinícios sem replay. Imagem X11 atual observada. Zero HTTP/modelos, instalação,
+host ou processos próprios vivos. Primeira tentativa Busy na admissão conservada;
+repetição usa só confirmação da revisão original quando explicitamente permitida.
+Não é restauro nativo novo, aceite humano, RPM49 ou AUTO-04 integral.
+[Provas da leitura e limites](../.build/work-report-readable-20261117/VERIFIED.json).
+
+**17/11 — acompanhamento de decisão, fontes1333 atuais, binário privado `5b7d154d…`.**
+A escolha/consentimento próprios, espera sem lease/recurso, reinício antes do evento,
+pausa/drenagem com Settings fechadas, um relatório/um débito e UI da inbox original
+passaram em `work-followup-decision9`; segundo reinício conservou recibo/hashes e não
+reenviou. Quatro capturas X11 atuais observadas: escolha, âmbito legível, consentimento
+inicialmente vazio/botão desativado e relatório recebido. Zero chamadas de modelo/HTTP.
+
+O teste de lock real falhou Busy antes da correção; passou ao reutilizar o fecho de
+mensagens nativas.25 casos Rust afetados passaram após a correção;17 precisaram de
+loopback que o sandbox inicialmente recusou antes dos cenários. As provas anteriores
+inalteradas mantêm âmbito:76 web; após disposição dos campos,9 afetados e TypeScript
+repetidos. Falhas/parciais1–8 preservados;5 entregou mas não concluiu, sem trace causal
+completo;6/7 tinham o núcleo corrigido, mas o observador da inbox falhou;8 parou na
+admissão anterior à funcionalidade. Não são recibos verdes da tentativa9.
+
+Não certifica todos os estados na janela, recorrência/memória de projeto, aceitação
+humana, instalação ou o RPM49. Formatos/política da fábrica intactos, instalação44
+preservada e nenhum processo de QA próprio vivo.
+[Composição, provas e limites](../.build/work-followup-decision-20261117/VERIFIED.json).
+
+**17/11 — widgets, pós49: prova funcional e cálculo de contraste, sem aceite gráfico.**
+Fontes1333 exatas, binário privado `faaf28c1…`; delta de2 cores CSS e build23,92s.
+n8n usa HTTP local autenticado e Secret Service privado; outros5 widgets usam
+eventos nativos sintéticos. Detalhe/Back/erro/reinício/retirada da chave passaram;
+32 GETs locais entre todos os ensaios,0 inferências ou mutações de serviço.
+As cores também existem no oficial841a81ce. Cálculo de cores planas/alpha nativas:
+assunto2,4426 e data3,9082→6,3026; não inclui gradientes/antialias/composição.
+O limiar de referência para texto pequeno é4,5:1 ([W3C](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html));
+isto não constitui certificação global. Brutos verdes insuficientes e falhas de
+pressupostos do catálogo preservados; imagens X11 cortadas não foram aceites.
+Compositor atual apenas consultado, instalada44 e RPM49 intactos,0 processos
+próprios vivos. Sem novos testes unitários para cores; aceitação gráfica continua aberta.
+[Recibos e qualificações](../.build/service-card-contrast-20261117/VERIFIED.json).
+
+**17/11 — voz pelo botão do dashboard: prova privada pós49, não RPM49.**
+Fontes1333 exatas; binário `ffb3cad0…`,3 testes novos+12 existentes e TypeScript.
+Ollama selecionado/global Codex, companionMode=false/petSystemCenter=false:
+clique XTest→ASR real virtual→2 pedidos de modelo/broker sintéticos→TTS até ao
+fim→Stop XTest no Hub→mesmo CID/configuração após reinício, sem replay. n8n tem
+chat/voz ocultos no DOM nativo; a imagem desse cartão foi captada durante a mola,
+não certifica o widget completo. Entrada LLM e balão de resposta foram observados
+nas imagens.7 tentativas falhadas retidas; a7 chegou à voz, mas procurava o
+balão dos pets flutuantes em vez do Flow.4 pedidos sintéticos no total,0 modelos
+reais/pagos; PCM acima1 não certifica ausência de clipping. Sem processos próprios
+vivos, alteração instalada, hardware ou aceitação humana. Não integra o RPM49.
+[Provas e qualificações](../.build/voice-card-entry-20261116/VERIFIED.json).
+
+**Candidata49 preparada16/11 — não instalada nem autorizada.** O próprio RPM
+passou contexto n8n/Codex por domínio, calendário/reinício/sucessão/revisão/
+renovação,18 comandos de restauro com grants[] e respostas históricas6/7/10,
+e voz com ASR/TTS reais exclusivamente virtuais, modelo sintético e reinício.
+Fontes1332 exatas, dados/identidades/modelos preservados, metadados de suspensão/
+proveniência qualificados. Zero quota de modelo real; sem aceitação humana,
+física, instalada49 ou paridade global. Instalada44/Source35 intacta.
+Substitui a proposta48; exige autorização própria e registo focado/assinado.
+[Artefacto, provas, limites e aplicação proposta](PETS-INSTALLED-DELIVERY-49.md).
+
+**Histórico de desenvolvimento anterior ao RPM49:**
+
+**16/11 — contexto do centro corrigido por domínio, ainda sem RPM normal:**
+um ficheiro de interface passa a consumir contextAction/metrics existentes da
+fábrica. TypeScript e o binário de desenvolvimento `1504ffda…` passaram clique
+nativo entre pets: Codex→n8n mostra o widget próprio sem contagem CLI/chat;
+n8n→Codex mantém Sessões. Imagens observadas, fontes1332 exatas, zero inferências,
+instalada44 intacta. Brutos falhados do observador preservados; menu flutuante não
+verificado nem alterado, sem recertificação global ou aceitação humana.
+[Provas e âmbito](../.build/domain-menu-20261116/VERIFIED.json). O RPM48 anterior
+continua congelado e não contém esta correção; a sua autorização não abrange
+uma composição futura.
+
+**16/11 — diffs do próprio RPM48 verificados em X11 privado:** seis casos
+Write/MultiEdit Codex/Copilot/Gravity, relay/socket/UI reais e linhas/contagens
+iguais às observações do oficial; Back/Escape/centro e retenção23s com controlo
+existente e ponteiro privado passaram. Zero inferências; fontes1332 e instalada44
+intactas. Falha inicial de observação e falta de espaço no compositor conservadas;
+sem correção de produto, aceitação humana, instalada48 ou paridade global.
+[Âmbito, comparação e imagens](../.build/diff-return48-20261116/VERIFIED.json).
+
+**Recursos48,16/11:** oito casos normais Wayland em dois blocos ABBA, PSS legível,
+processos estáveis e0 inferências;78 identidades medidas terminaram. Comparação44/48
+com geometria coincidente deu+0,76 MiB PSS médio, sem aumento de CPU observado.
+A geometria oficial difere; não certificar fluidez/potência/globalidade.
+[Âmbito/dados](../.build/resources48-20261116/VERIFIED.json). Sem alteração instalada.
+
+**Candidata48 preparada16/11 — ainda não instalada.** O RPM normal atual passou
+n8n sem chat/modelos genéricos, conversa Codex sintética, calendários/reinício/
+automático, revisão/sucessão/renovação,13 comandos nativos de preservação e leitura
+restaurada dos formatos6/7 e10 com execução recusada. Provas e falhas qualificadas
+no recibo; sem quota real no RPM, aceitação humana ou paridade global. Instalada44/
+Source35 e preferências preservadas;49 critérios intactos e abertos. A substituição
+requer autorização própria do artefacto e registo Coucou focado/assinado.
+[Âmbito, artefacto, provas e aplicação proposta](PETS-INSTALLED-DELIVERY-48.md).
+
+**16/11 — caso real e leitura nativa passaram, sem certificação geral.**
+O índice global cronológico do domínio calendário conserva todos os eventos da
+DATA e permite selecionar prioridades posteriores. Na SOURCE1/1332 `66807251…`,
+Tauri/HTTP/resposta/reinício/automático e transição de contrato passaram. Uma chamada
+real/gratuita ao mesmo modelo selecionou9h/10h corretamente;85 palavras, coberturas e
+texto exato reaberto pela UI, sem nova inferência. É aceitação desse caso, não uma
+certificação geral. Há custo adicional de entrada/contexto, discriminado no recibo.
+Histórico restaurado formato10 continua legível e sem execução na composição atual.
+Seguem candidata operacional e paridade pertinente; instalada44/Source35 preservada,
+sem nova instalação/publicação/quota paga.49 critérios intactos e abertos.
+[Contrato, provas e limites](PET-RULES.md).
+
+**16/11 — publicação sob contenção passou; semântica real falhou.**
+Source2/1328, binário `e0a381ca…`: quatro testes reais de Store/context/flock
+cobrem Busy, perda de validade, deadline e publicação incerta; não extraem ICS
+nem chamam modelos.19 web/TypeScript passaram. Um erro inicial de compilação do
+teste (Record não implementa igualdade/Debug) foi corrigido comparando serialização;
+o bruto mantém-se. Não conta como falha de produto nem aceitação anterior.
+
+`calendar-link-native1` passou no executável atual: inotify observou o rename e
+um flock SH real impediu o binding por150ms; o header manteve os bytes e o mesmo
+contexto foi depois ligado. Resposta, hash/tentativa, aviso, reinício, execução
+automática no slot original/painéis fechados e timeout de aviso sem replay passaram.
+[Recibo](../.build/rule-calendar-link-20261116/VERIFIED-LINK.json). A causa do
+Stopped anterior não fica certificada por esta prova dirigida.
+
+`calendar-semantic-native1` fez UMA chamada efetiva/gratuita a `gemma3:4b` já
+instalado/selecionado, pelo gateway de QA explicitamente fixo para localhost11434.
+Dados ICS com nonce novo chegaram completos no corpo; o hash/carga liquidada e
+resposta no diálogo coincidem. O modelo inventou pessoas/projeto/horários ausentes
+e não conservou os nomes imprevisíveis: aceitação semântica falhada. O HTTP tinha
+18883B, o máximo anunciado131072 tokens, o contexto alocado4096, e o runner
+processou380 tokens de prompt. Ainda não se provou a seleção/omissão concreta
+feita pelo servidor; não classificar o flag runner truncated0 como prova de entrada
+completa. [Qualificação e diagnóstico](../.build/rule-calendar-link-20261116/SEMANTIC-FAILED-QUALIFICATION.json).
+
+O harness parou numa comparação de texto multilinha com JSON escapado. Validou-se
+a igualdade entre conteúdo do assistant e recibo sobre os registos originais,
+sem repetir inferência ou alterar o resultado bruto. O resumo falhou por razões
+factuais independentes. Aviso nesse ensaio não observado antes do fecho; o caso
+sintético nativo atual tem prova própria. Rede partilhada só para o gateway local
+fixo, sem configurar rede; HOME/Secret Service/display privados, sem credenciais
+pessoais. Sem quota paga/Copilot/GitHub ou aceitação humana/instalada.
+Os13 comandos CLI da unidade anterior continuam prova dos mesmos formatos9/11/30;
+não se repetiram porque este delta não muda formato ou contrato de preservação.
+
+**16/11 — aviso próprio: fontes atuais e provas delimitadas.**
+`.build/rule-result-notification-20261116/VERIFIED-NOTIFICATION.json` referencia
+Source2/1328 e binário `af115262…`.25 Authority em Source1 e14 web/TypeScript
+passaram. O único delta Source1→2 é a guarda de estados finais no envio nativo,
+coberta pelos casos atuais; não se reclama repetir a suite inteira em Source2.
+
+Native2 comprovou manual/automático, corpo/hash, uma chamada/um aviso por
+ocorrência e reinício manual. O resultado bruto do harness continua falhado:
+não mudou a fixture para noReply e depois exigiu timeout. O qualificador conserva
+essa falha e verifica apenas os dois âmbitos concluídos sobre os recibos originais.
+Casos dirigidos posteriores passaram no mesmo binário: consentimento em falta
+recusado nativamente, timeout sem replay, silêncio fora da janela e revogação
+durante HTTP sem resposta tardia/aviso. A revisão gráfica foi observada numa
+captura após o scroll; isto não é aprovação humana ou banner real do desktop.
+
+Native1 parou antes de reservar/chamar o modelo; o scan foi limitado aos estados
+finais de controlo. Native3 passou manual/reinício mas a leitura automática
+posterior ficou Stopped: contexto persistido, objetivo Draft/sem binding. Causa
+não estabelecida; sem segunda leitura ou segundo modelo. Duas tentativas de
+instrumentar o ticket no harness pararam antes de autorizar/inferir e foram
+corrigidas para usar a resposta de preparação nativa real. Todos os brutos ficam
+preservados. Não declarar esses ensaios completos como passados.
+
+13 comandos reais de maintenance2 passaram backup/inspeção/restauro inativo exato,
+quarentena/ativação sem grants, formato9 e recusa do leitor anterior `2714dbe3…`.
+Maintenance1 nem iniciou o produto: o sandbox recusou o socket do bus privado.
+A repetição autorizada teve diretório próprio. Contexto/DATA11/Ref2/Spec30,
+encargos e tentativas de aviso são preservados. Janela restaurada por verificar.
+Instalada44/launcher/definições/pets continuam byte a byte iguais; sem modelo
+real/pago, host modificado, instalação ou aceitação humana. AUTO-03/49 abertos.
+
+**16/11 — prova atual de inferência por regra com dados próprios.**
+Source1326 `SOURCE5.json`, aplicação de desenvolvimento `2714dbe3…`:
+`.build/rule-calendar-inference-20261116/VERIFIED-INFERENCE.json` identifica
+cada fonte/recibo.23 testes Authority,11 contexto e16 web/TypeScript passaram;
+6 de calendário e5 do escritor têm os âmbitos exatos de reutilização registados.
+O campo `calendarSourceReads0` copiado do primeiro runner não mede o novo
+fixture de calendário; a qualificação explícita corrige essa leitura do recibo.
+
+Native7 passou a resposta manual, bytes HTTP/hash, uma tentativa, contexto/diálogo
+após reinício e resposta automática após o horário revisto com painéis fechados.
+Outro caso passou revogação durante HTTP sem publicar a resposta tardia ou
+repetir.13 comandos da CLI passaram backup/restauro inativo exato/quarentena/
+ativação sem concessões e recusa do leitor anterior. Nenhuma chamada real/paga,
+perfil pessoal copiado, instalação ou aceitação humana. Binário44/launcher/
+definições/pets continuam byte a byte iguais à observação inicial.
+
+Falhas anteriores conservadas: import do teste, recusa Spec30 no matcher de
+planos (corrigida com regressão), espera de observação do harness, ordenação JSON
+incorreta no verificador, lista de consultas Busy e bloqueio real da consulta
+de diálogo (corrigido com11 testes). Não foram convertidas retroativamente em
+aceitação. A imagem atual dos controlos de captura/admissão foi observada.
+
+Faltam notificação deduplicada, semântica de modelo com dados novos, ciclo das
+regras com dados futuros, janela nativa restaurada e entrega da composição.
+As provas anteriores abaixo mantêm os seus limites.
+
+**16/11 — verificação atual da captura própria por ocorrência.**
+Fontes1326 e binário de desenvolvimento `eb183dcf…` selados no recibo privado
+`.build/rule-calendar-materialization-20261116/VERIFIED-CAPTURE.json`.
+21 testes Rust de Authority,38 web distintos,15 web afetados repetidos e
+TypeScript final passaram. A aplicação Tauri/WebKit e o worker real, com perfil,
+ecrã e rede privados, prepararam três calendários sintéticos: uma fonte completa,
+uma com32eventos e cobertura parcial, uma indisponível. O controlo mostra esses
+limites e mantém admissão de modelo desativada. A imagem foi observada.
+
+A tentativa negativa com lock real do catálogo não criou reserva/leitura. O
+reinício preservou os bytes do contexto, objetivo e autoridade; observar a captura
+concluída com os ficheiros de entrada ausentes não voltou a extrair dados.
+Revogação recusou preparação; zero chamadas de modelo e zero processos próprios
+vivos no fim. Os ensaios anteriores foram preservados, incluindo Busy de consulta,
+erros do verificador e a falha confirmada que levou a preparar metadados antes
+da única leitura. Não equivalem a testes todos passados retroativamente.
+
+Limites: corpo real/autoridade filha/modelo/notificação, RPM atual/instalada,
+backup/restauro/leitor anterior e aceitação humana ainda não validados para
+esta unidade. Binário44, launcher, definições e pets da instalação ficaram
+byte a byte iguais à observação inicial. [Contrato](PET-RULES.md).
+
+**14/11 — candidata atual validada em privado:** novo RPM47 `ebc550c8…` inclui a retirada móvel; menu/política/HTTP-TLS/reinício/históricos passaram sem novas inferências. [Proposta e limites](PETS-INSTALLED-DELIVERY-RETIRED-MOBILE.md). Instalação44 preservada; proposta42 substituída.
+
+**14/11 — retirada móvel:** correção integrada;38 web/53 hub Rust/TypeScript passados, ainda sem pacote/instalação. [Âmbito, falhas e provas](PETS-UPSTREAM-PARITY-2026-11-11.md).
+
+<!-- publication-restart42-20261114 -->
+**14/11/2026 — publicação nativa após reinício verificada no mesmo RPM47/42.**
+O handle80845 já não existia; o recibo do primeiro probe era terminal, com
+falha ao observar o interruptor após reinício e sem processos próprios vivos.
+Um novo ensaio dirigido, com instrumentação do interruptor e sem alterar os
+fontes de produto, passou HTTP/TLS, publicação do cartão n8n e reinício.
+O frame `services` chegou 105,22 ms após `pong` inicialmente e 159,53 ms após
+reinício. `pong` não é barreira da publicação pendente do renderer; esperar o
+evento real resolve o critério de observação do snapshot vazio neste percurso.
+Históricos sintéticos Codex/n8n ficaram exatos; zero novos turnos de modelo,
+quota, perfis pessoais ou alterações instaladas. Fontes42 continuam iguais.
+
+Prova privada: `.build/upstream-parity-20261111/PUBLICATION-RESTART42-VERIFIED.json`.
+As duas falhas anteriores permanecem: o timeout intermédio do interruptor não
+foi reproduzido nem declarado corrigido. É validação nativa dirigida em X11 e
+rede privados; não é aceitação humana, Android físico, instalada ou global49.
+Próximo: revisão própria do pacote47/42 e preservação, mantendo a auditoria
+funcional por domínio. Sem commits, push ou substituição da instalação.
+<!-- end-publication-restart42-20261114 -->
+
+<!-- domain-header42-20261113 -->
+**Fonte42/normal47 em preparação; instalada35/44 preservada.** A revisão do
+cabeçalho encontrou “Sessões deste pet” nos serviços, apesar de a fábrica já
+retirar esse controlo. A negativa usou o cabeçalho real e falhou nessa asserção;
+o controlo LLM passou. A42 faz o componente existente respeitar
+`presentation.sessions`, com um ficheiro de produto e o seu teste alterados.
+102 testes frontend e TypeScript passam; os64 testes Rust da40 são reutilizados
+porque todos os fontes Rust/fábrica/defaults são iguais. Sem novo formato,
+permissão, modelo, provider, conta ou migração. Conversas antigas preservadas.
+
+O RPM47/41 compilado fica arquivado, sem proposta/instalação: não contém a
+correção do cabeçalho. O build47/42 está em curso; ainda não é aceitação nativa
+deste pacote. Os recibos40 mantêm o seu âmbito privado anterior. Próximo:
+validar o executável final e a apresentação usando controlos nativos existentes,
+depois preparar revisão própria de entrega. Sem commits do fork/push/merge.
+<!-- end-domain-header42-20261113 -->
+
+<!-- factory-domain40-20261113 -->
+**Validação privada40 concluída:**98 testes frontend e64 testes Rust dirigidos
+passaram; o binário88 foi compilado com1323 inputs exatos. No próprio nativo,
+n8n recusou abrir chat/listar modelos/enviar mensagem, conservou o workflow na
+UI funcional e no TLS, erro/retirada/reinício e todo o registo de conversa antiga
+semeado a partir de QA. Um turno sintético ocorreu apenas no pet LLM Codex;
+resposta/mesmo CID/reinício sem replay passaram. Duas atestações de isolamento;
+processos/containers privados encerrados. Instalada35/44, settings/pets/launcher
+e relay verificados iguais. FACTORY-DOMAIN40-VERIFIED.json fixa os recibos.
+
+Limites: a imagem do serviço está escura; o gate DOM capturou workflow e chat/
+diagnóstico ocultos, sem aceitação gráfica legível. A imagem Codex foi observada
+antes do turno. Não se repetiram nativamente todos os serviços/Spotify, outras
+provas conservam fonte/âmbito. Sem conta/quota real, inferência paga, Android
+físico, aceitação humana/instalada ou integral49. Não há novo pacote normal com40.
+Segue preparar artefacto normal/revisão de entrega própria e continuar a auditoria
+de adequação por domínio. Normal45/46 preservadas;46/39 foi ultrapassada pela
+regra do proprietário e não será instalada como se incluísse40.
+<!-- end-factory-domain40-20261113 -->
+
 <!-- publication-handoff-20261111 -->
 **Estado 11/11/2026:** Revisão governada7 implementada na cadeia Authority comum: carryRemaining conserva saldo/limites/validade; renewFiniteAllocation exige decisão própria e nova alocação finita, sem somar saldo antigo. Só slots futuros à aprovação; consumo histórico permanece visível. Core Rust, web1566, fábrica e build58 passaram nos âmbitos descritos. Aceitação Tauri/HTTP, hardware, migração completa7 e entrega instalada pendentes. Publicação autorizada uma vez; parar depois do push. [Passagem integral de contexto](../coucou-migration/HANDOFF-CONTINUIDADE-INTEGRAL-2026-11-11.md). Os estados antigos abaixo conservam data e âmbito; não reativam permissões substituídas.
 
@@ -2580,3 +4371,783 @@ H3D2 B3A2 privado: original2990 terminal0 (11casos DATA/writer/publicação); or
 Verificado pela CLI nativa nos quatro estados gerados queued/completed/uncertain-no-dispatch/retired-orphan com `ExecutionStart/nativeSystemPlan`: política suspensa, autoridade histórica em quarentena, replay recusado e orçamento original conservado no restauro. Reutiliza produtores/verificadores de preservação existentes e a privada36; os efeitos de Som usam só grafo virtual. A prova não substitui Tauri/dispatcher/reinício ou crash real. [Contrato, âmbito e limites](../.build/pet-goal-execution-next-r1/system-requested-preservation/CONTRACT.json).
 
 Privada36 passou52 recibos de manutenção nativa e o verificador de runtime restaurado. Os artefactos JSON originais dos quatro estados (7/14/9/7) conservaram os bytes; só o protocolo de autoridade migrou de1 para histórico2 com hash, para impedir execução restaurada. A43 recusou a nova variante nos três objetivos admitidos. O rascunho órfão6 sem admissão contém apenas um Grant48 revogado compatível, que a43 lê como histórico autêntico; não concede execução. A asserção de QA que exigia recusa também deste histórico foi corrigida, conservando os resultados originais e retomando pelos recibos exatos. [Provas e limites](../.build/pet-goal-execution-next-r1/system-requested-preservation/VERIFIED.json). Isto não fecha o dispatcher/Tauri real, reinício operacional, áudio físico ou entrega instalada.
+
+
+## Chat do telefone e HTTP local —12/11/2026, Source25
+
+Contrato: [ANDROID_LINK.md](ANDROID_LINK.md). Comparação oficial identificada,
+classificações e limites: [matriz](PETS-UPSTREAM-PARITY-2026-11-11.md).
+O cliente conserva os status reais401/403/404/429/503; a indicação de modelo
+não instalado mantém-se. Números no corpo privado não substituem o status.
+Não há retry, fallback ou exposição do corpo ao telefone.
+
+Três filtros Rust dirigidos passaram: `local_http_errors_keep_the_observed_status`,
+`stream_errors_say_what_happened` e `phone_link::chat_backend::tests`. A compilação
+privada84/Source25 passou UI/modelo explícito, TLS com pin, sete POSTs sintéticos,
+contexto/reset, cancelamento e desligar a permissão com EOF no upstream antes da
+cauda tardia, retirada de modelo e reinício sem replay. Um503 com401 no corpo
+privado devolveu apenas `provider` e a mensagem fixa. Recibo:
+`.build/upstream-parity-20261111/PHONE-CHAT-SOURCE25-PARTIAL.json`.
+
+O RPM próprio Source25 também passou o mesmo percurso com sete POSTs sintéticos,
+verificação independente e imagens inspecionadas antes de libertar os gates.
+Recibo final: `.build/upstream-parity-20261111/PHONE-CHAT-SOURCE25-VERIFIED.json`.
+Payload13/ELF/fontes/relay passaram no prefixo privado; não houve substituição instalada. Uma recusa intermitente pré-HTTP
+em Source22/diagnóstico82 continua aberta: os sucessos posteriores não a fecham.
+Sem Android físico, aceitação humana, alterações instaladas ou inferência paga.
+Os49 critérios integrais permanecem abertos.
+
+
+## Contenção de leitura no chat interativo — Source29,12/11/2026
+
+[Contrato](PET-INFERENCE-BINDING.md). A regressão negativa26 falhou como esperado
+na confusão Busy/Changed. Fixtures28 provaram espera com zero HTTP, envio único
+no destino original após libertar, Stop e mudança de destino sem envio, retirada
+permanente, exclusão física e prazo estrito. A fence assíncrona recusou antes de
+HTTP/capture e foi chamada uma vez. Os três ficheiros de implementação/teste
+mantêm hashes idênticos em29; não se reutiliza essa prova como integração inteira.
+
+Feedback/classificador/wire têm provas próprias29. Privada85 e RPM29 passaram
+separadamente UI/TLS/sete POSTs sintéticos, consultas readonly, contexto/reset,
+busy fixo, cancelamento, retirada de permissões/modelo e reinício sem replay.
+Recibo: `.build/upstream-parity-20261111/INFERENCE-READER-SOURCE29-VERIFIED.json`.
+A GUI não forçou o mutex; essa prova é de fixtures. A causa nativa do episódio
+intermitente anterior não foi confirmada; continua aberta. Instalada43 intacta,
+sem inferência real/paga ou aceitação humana/instalada/global49.
+
+
+## Código/diff no compositor real — Source29,12/11/2026
+
+O RPM normal29 passou os percursos atuais com perfis gerados: Codex/hook Edit,
+cartão e botão→diff antes/depois legível→retorno confirmado pelo DOM; Ollama/
+modelo explícito/um HTTP sintético→cinco linhas de código legíveis→fechar/reiniciar
+no mesmo perfil→mesmo CID/mensagens/código, sem replay. Tauri/WebKit e compositor
+reais, PID/endereço exatos e observação antes dos cliques. A reconciliação da
+janela auxiliar foi feita por APIs nativas existentes, sem patch/capacidade nova.
+
+Recibo `.build/upstream-parity-20261111/GRAPHICAL-CODE-DIFF-SOURCE29-VERIFIED.json`.
+Capturas privadas/hashes, preparação falhada e ensaio parcialmente sobreposto
+preservados. Cópia visível, não invocada no clipboard pessoal; abertura normal
+sem target não certifica sessão fixada. Mesma instalada43 por hashes/processo,
+sem recursos de QA remanescentes. Nenhuma aceitação humana/instalada/global49,
+hardware, todos os providers ou6/7 atuais é inferida desta prova.
+
+
+## Revisão/sucessão6/7 e restauro — normal Source29,12/11/2026
+
+Prova atual: `.build/upstream-parity-20261111/RULE67-SOURCE29-VERIFIED.json`.
+UI/IPC reais em perfil gerado, três respostas sintéticas, saldo/prazo originais,
+recuperação após kill do backend, Stop/reinício sem replay. Uma reserva/admissão
+já gravada após Busy foi reconciliada sem nova alocação; resultado inicial e
+guard errado de preparação conservados como falhados, causa exata não atribuída.
+
+Backup/restauro CLI e abertura nativa do restauro: oito registos assinados,
+três objetivos67, formatos1/6/6/7/7 e12 payloads originais iguais; resposta
+histórica legível, execução recusada, zero HTTP no restauro. Treze recibos CLI,
+sem autoridade renovada. Zero inferência real/paga e sem delta de produção.
+Instalada43/processo/preferências/fábrica intactos; QA próprio encerrado.
+Escolhas automatizadas de QA não constituem aprovação humana nem aceitação
+instalada/global49. Prova19 conserva apenas o seu âmbito histórico.
+
+
+## Permissões/perguntas e resumo/partilha — compositor Source29,12/11
+
+`COMPOSITOR-DECISIONS-RECAP-SOURCE29-VERIFIED.json`: cartões reais legíveis,
+recusa e opção exata no socket original, reinício sem pedidos/inferência.
+Resumo/partilha completos, atividade corrente por hooks, PNG1080×1920 com/sem
+projeto e ocultação/histórico/imagem mantidos após reinício. PNG atual Wayland
+não é igual ao oficial anterior X11; conteúdo/layout/privacidade observados,
+sem paridade de pixels entre backends. Falhas QA conservadas, nenhuma mudança
+de produção ou permissões. Seis runtimes próprios limpos; instalada43 intacta.
+Sem modelos/clipboard pessoal/aceitação humana/instalada/global49 ou teste do
+disparo automático de segunda-feira. Entrega instalada preparada em documento
+próprio, sujeita ao âmbito explícito do proprietário.
+
+
+## Recursos Source29 e controlo nativo de cartões de serviço —12/11
+
+Quatro casos X11 atuais passaram; `RESOURCES-SOURCE29-VERIFIED.json` fixa o
+cenário, médias362,018/411,476MiB e limites. Arranque normal Wayland recusado
+antes de processo porque a sessão estava bloqueada; não extrapolar para idle,
+GPU/potência/fluidez/instalada. Sem otimização especulativa de arranque.
+
+`service-cards-official2`: GET sintético/cofre real privado/Refresh/detalhe/
+retorno/erro n8n passaram. `service-cards-source29-before2`: mesmo poller e
+credenciais saudáveis, cartão visível e Refresh ausentes. Source30 corrige a
+composição UI; sete testes novos falharam antes e passaram depois, juntamente
+com os testes dirigidos existentes de cartão, eventos/hooks, telefone e GitHub
+retirado. Build normal atual a decorrer; isto ainda não é aceitação nativa da
+correção ou ligação a serviços reais. Nenhuma quota ou instalação alterada.
+
+
+### Cartões de serviço recuperados —12/11, Source30
+
+Regressão confirmada com executáveis reais: o oficial0.5.0 mostra o cartão n8n,
+Refresh, resultado e detalhe; o normal Source29 recebe os mesmos dados pelo
+poller nativo mas não oferece cartão/Refresh no resumo do pet. A correção
+reutiliza os seis renderers existentes nesse resumo: n8n, Vercel, Notion,
+Resend, Cal.com e Stripe. Identidade, chat e configuração permanecem acessíveis;
+não ativa pets no perfil operacional. GitHub continua temporariamente retirado.
+
+Normal Source30 compilado e verificado no prefixo privado com o instalador
+existente:13 payloads, relay/Copilot, ELF e arquivo de fontes. O percurso n8n
+passou duas vezes com Secret Service real e API loopback sintética: guardar
+credenciais, reiniciar, clicar Refresh, seis GETs autenticados, sucesso/detalhe/
+retorno/erro. O mesmo perfil reiniciou sem repetir resultado; retirar as chaves
+interrompeu leituras e mostrou falta de configuração após novo reinício.
+Nenhuma mutação de workflow, inferência ou conta real. Os outros cinco serviços
+passaram projeção de fixtures no renderer nativo, incluindo detalhe/retorno
+Vercel; isso não prova as suas APIs remotas. Typecheck e testes dirigidos passaram.
+
+**Limite gráfico explícito:** foram inspecionadas capturas legíveis de Vercel
+lista/detalhe, erro/falta de chave n8n e Stripe. O detalhe de sucesso n8n continua
+recortado e uma captura Notion ficou preta no X11 privado, apesar de DOM,
+geometria e controlos funcionais. Foco e espera de desenho corrigiram um frame
+Vercel desatualizado, sem resolver todos os cortes. Não há aceitação gráfica
+integral nem novo workaround no produto. Falta observação no compositor real
+quando a sessão estiver desbloqueada, além de APIs/instalada/hardware aplicáveis.
+
+Recibo `SERVICE-CARDS-SOURCE30-VERIFIED.json`, fontes1323 e delta de quatro
+ficheiros face a29; sem alteração de backend, autoridade, wire ou formato
+persistente. As provas29 de6/7/código/decisões continuam com fonte/âmbito próprios.
+Instalada43, processo, binário, preferências e fábrica verificados intactos;
+processos e runtimes privados destes ensaios encerrados. A proposta instalada29
+é um artefacto diferente e não autoriza substituir implicitamente por30.
+Objetivo integral/49 critérios ativos, sem commits/pushes/merges.
+
+
+## Servidor personalizado — controlo oficial/Source30,12/11
+
+`CUSTOM-SOURCE30-BASELINE-VERIFIED.json`: o oficial completou ligação/chave/UI/
+modelo/SSE com uma resposta sintética. No modo de pets30 a ligação ficou guardada,
+mas o motor não estava disponível na conversa. Perfis/cofre/rede privados;
+instalada43 intacta. As três falhas de preparação ficaram conservadas, sem
+inferência real. A correção posterior31 está em validação e não está aceite:
+uma revisão de código identificou ordem incorreta na captura de geração/chave
+LM Studio, a repor antes de aceitar a composição. Os testes dirigidos passaram
+nos seus âmbitos; build ou fixtures não fecham este percurso nativo.
+
+
+### Servidor personalizado recuperado por pet —12/11, Source33
+
+O oficial0.5.0 completou ligação/chave/modelo e resposta SSE sintética. O
+normal30 guardava a ligação mas não oferecia o motor na conversa do pet.
+A correção reutiliza o transporte OpenAI-compatible e o binding/CAS/editor
+existentes, nos dois pets que já admitem escolha de motor. Não cria pets,
+ledger, formato estrutural ou concessões. Mantém dono, identidades, permissões
+e contas Codex/Copilot/Gravity; Guardian conserva o contrato anterior.
+
+O normal atual passou pela UI: ligar com chave sintética no Secret Service,
+“Configurar num pet”, revisão/confirmar motor/endereço/modelo/referência de
+credencial, resposta autenticada com código e reinício no mesmo perfil/CID.
+O código/resposta e o erro após retirar a chave foram inspecionados legíveis
+na conversa flutuante X11. Retirar a chave recusou novo envio, sem HTTP anónimo,
+outro motor/modelo ou replay. Os outros pets mantiveram configuração/permissões;
+a biblioteca Codex tinha apenas metadados vazios, sem mensagens ou chamadas.
+A escolha admite destino remoto explícito; os testes nativos usaram só loopback,
+sem provar TLS/contas remotas ou qualidade de modelos reais.
+
+Treze recibos CLI atuais completaram backup/restauro inativo byte a byte,
+preparação independente de autoridade de perfil sem grants, revisão de
+configuração e ativação com zero grants. O leitor30 permite a revisão opaca de
+backup, sem interpretar o motor, mas recusou ativação sem alterar payloads.
+Reinício da app no perfil original e preservação CLI são provas distintas;
+não se declara ensaiada a janela do perfil restaurado.
+
+Os cartões de serviço também passaram novamente neste executável: seis GETs
+n8n autenticados, detalhe/retorno/erro/reinício/retirada da chave, mais cinco
+projeções de fixtures. APIs remotas desses cinco não certificadas. Sucesso n8n
+continua recortado no X11 privado, embora erro/detalhe sejam legíveis; falta
+observação no compositor real desbloqueado. Nenhum workaround de pintura.
+
+**Composição auditável:** a compilação normal pertence a Source32. O wrapper
+falhou a igualdade integral porque foi editado apenas `docs/PET-FACTORY.md`
+durante a build; resultado original conservado como falso. Todos os inputs de
+código/runtime/build/recursos são iguais. Source33 alinha o arquivo completo de
+fontes com esse documento, verifica novamente13 payloads/ELF/relay/Copilot e
+usa o mesmo RPM, sem alegar recompilação. A prova nativa acima é própria do
+executável atual. O protótipo31 ficou sem aceitação depois de uma revisão
+identificar ordem de captura de credencial LM Studio; corrigida antes desta
+compilação, com testes de metadados próprios passados.
+
+Falhas de QA conservadas: campo abaixo do viewport, expectativa incorreta de
+biblioteca sem metadados, recusa indevidamente esperada no backup opaco e ramo
+de autoridade histórico aplicado a perfil sem grants. A continuação CLI usou
+os mesmos recibos/pair e não repetiu efeitos concluídos. Uma expectativa antiga
+de teste Sistema foi corrigida segundo bloco de produção comprovadamente igual
+a30 e contrato de arranque finito assinado; não se alterou essa política.
+
+Recibo `CUSTOM-SOURCE33-VERIFIED.json`. Instalada43/processo/binário/preferências/
+fábrica intactos, QA próprio encerrado e runtimes temporários próprios limpos.
+Sem inferência real/paga ou publicação. Compatibilidade HTTP não prova voz,
+ferramentas ou tarefas autónomas deste motor; o catálogo mantém essas barreiras.
+Provas29 de6/7/código/diff/decisões/resumo e provas22 de voz conservam as suas
+composições e âmbitos. Sem aceitação humana/instalada/global49. A autorização
+pendente para o artefacto29 não autoriza33. O objetivo integral permanece ativo.
+
+
+### Compositor33 — capturas recusadas e âmbito preservado
+
+A sessão voltou a estar desbloqueada, mas as capturas do cartão estavam tapadas
+pela galeria operacional43. A atribuição inicial à app de QA foi corrigida:
+o inventário exato mostrou `coucou-pet-control` do PID2631834, enquanto o
+auxiliar do PID190540 de QA já estava oculto. O WebKit próprio renderizava o
+cartão IDLE completo; isso não prova visibilidade real do sucesso ou cliques
+através de outra layer. Nenhuma das capturas tapadas foi aceite.
+
+Há apenas o monitor eDP-1 ativo,1440×900 lógicos, sem região/monitor alternativo
+selecionado pelo guard. A tentativa de deslocação foi recusada antes de arrancar
+qualquer app. Não se ocultou a galeria operacional, alterou o monitor/política
+global ou inventou aceitação gráfica. Os três ensaios terminaram, os seus
+runtimes próprios foram limpos e não ficaram layers/janelas/PIDs próprios.
+Processo/binário/preferências/fábrica43 conservados.
+
+`COMPOSITOR-SERVICES33-QUALIFICATION.json` conserva imagens, falhas, correção da
+atribuição e integridade. A visibilidade atual dos serviços fica pendente até
+existir área sem sobreposição; não repetir tentativas equivalentes nessa
+condição. A próxima dependência independente é a aceitação técnica6/7 da
+candidata33 e a preparação da entrega atual com âmbito explícito.
+
+
+### Revisão/sucessão6/7 e preservação na candidata atual —12/11, Source33
+
+`RULE67-SOURCE33-VERIFIED.json` comprova agora o executável normal atual, sem
+delta de produção: revisão nativa própria, saldo herdado sem aumentar limites,
+renovação finita explícita, três respostas HTTP sintéticas e recuperação após
+interrupção real do backend. A sondagem gasta, decisão, reserva e prazo originais
+foram conservados; não houve repetição daquele IO. O Hub fechado manteve o
+backend e a resposta automática ocorreu com a alocação finita revista.
+
+O primeiro ensaio terminou com `ruleAuthority:Busy` na revogação final, depois
+das três respostas. O resultado falhado foi preservado. A continuação no mesmo
+perfil/endpoint/composição revogou a decisão exata, cancelou uma revisão sem
+confirmá-la e reiniciou: zero novo HTTP e objetivos/consumos originais iguais.
+Não foi identificado o writer exato da contenção e isto não encerra o episódio
+pré-HTTP do telefone. A revogação final foi exercida por IPC nativo; não se
+inventa aqui um clique humano no botão ou consentimento pessoal.
+
+Treze comandos CLI preservaram oito registos assinados, três objetivos67 e os
+formatos1/6/6/7/7. Restauro inativo exato, autoridade histórica em quarentena,
+ativação sem grants; a build57 recusou ativação sem mudar payloads. O próprio
+normal33 abriu o restauro, mostrou resposta histórica e recusou execução:
+zero objetivo novo/inferência e12 payloads originais iguais. O registo nativo
+de recuperação foi conservado e comparado. Não foi repetida a segunda época
+de restauro, cuja prova anterior conserva o seu âmbito.
+
+Capturas de revisão6/carry7/renovação/recuperação e resposta restaurada foram
+inspecionadas tecnicamente. Perfis e escolhas são inteiramente de QA; nenhuma
+aprovação humana, chamada real/paga, instalação ou alteração do anfitrião.
+Instalada43 com o mesmo processo/binário/settings/fábrica; QA próprio fechado.
+Não é paridade integral ou aceitação dos49 critérios. Prosseguir as componentes
+úteis e a entrega autorizada, sem voltar a aperfeiçoar esta infraestrutura.
+
+
+### Cartões de serviço no compositor atual —12/11, Source33
+
+`COMPOSITOR-SERVICES33-VERIFIED.json`:12 etapas nativas no Hyprland real,
+com perfil/HOME/cofre privados, mesma candidata normal33 e zero delta de
+produção. A sessão mudou independentemente para DP-5 ultrawide3440×1440.
+O inventário identificou área lateral livre: só o anchor da própria superfície
+QA foi reposicionado pelo comando existente. A galeria/app43, monitores e
+políticas globais não foram alterados. As tentativas sobrepostas anteriores
+continuam conservadas e não foram promovidas a sucessos.
+
+n8n:22 GET locais autenticados no poller real, botão Refresh, resultado de
+sucesso/detalhe/Back, erro/detalhe, reinício sem repetir resultado e retirada
+de chave com estado explícito e zero novas leituras. Sem workflow, POST de
+serviço, inferência ou quota. Notion/Vercel/Resend/Cal.com/Stripe: projeções de
+eventos nativos sintéticos; deployment/detalhe/Back Vercel também observados.
+Não são provas HTTP ou contas remotas desses cinco serviços.
+
+Cada captura da região real foi inspecionada antes do próximo controlo, com
+PID/camada e ausência de interseção de outra camada registados. As superfícies
+ficaram completas; texto secundário do Resend permaneceu pouco contrastado.
+Aceita-se este percurso funcional/apresentação, não qualidade visual geral,
+semântica de todas as capacidades do pet, aceitação humana ou instalada.
+Processos/drivers/cofre/camadas QA encerrados, runtime próprio removido e
+instalada43 com processo/binário/settings/fábrica/launcher iguais. Capturas são
+privadas, não versionadas. Próximo: entrega atual no âmbito autorizado e
+restantes componentes úteis; não é necessário novo workaround de pintura.
+
+
+### Write/MultiEdit e vistas por pet —12/11, Source33
+
+`HOOK-FORMATS-SOURCE33-VERIFIED.json`: seis comparações nativas com o oficial
+pinned, usando o seu relay real, socket e campos normalizados Codex/Copilot/
+Gravity. O mesmo ID de sessão foi usado nos três pets; linhas, nomes de ficheiro
+e contagens coincidiram integralmente.33 passou Ctrl+E/Escape, centro e regresso
+às sessões após Stop, incluindo Codex além dos5,2s de limpeza do original.
+Os nomes Write/MultiEdit foram payloads sintéticos no contrato canónico: não
+prova que cada IDE real emita esses formatos nem executou escrita/ferramenta.
+Todos os caminhos de ficheiros desses eventos permaneceram ausentes; zero HTTP
+ou inferência. Parser/vista/testes de diffs continuam iguais aos do original.
+
+O ensaio oficial terminou falhado no regresso tardio, depois dos seis formatos
+válidos. A UI mostrou Codex idle; o Stop original limpa a tarefa/diffs após5,2s.
+A expectativa de retenção adicional pertencia ao harness da arquitetura dos
+pets. Resultado/erro/DOM/código fonte foram conservados; não se converteu o
+resultado global original em verde nem se inventou uma regressão do fork.
+
+Cinco capturas X11 atuais mostram código legível; Codex MultiEdit ficou
+recortado. Um único percurso separado no compositor real, pelo controlo
+existente Ver última alteração, mostrou as quatro linhas/+2/−2 e Back completos.
+A imagem X11 continua sem aceitação; não é equivalência global de backends.
+Nenhum workaround de pintura, novo ledger, delta de produção ou recompilação.
+QA próprio/containers/camadas encerrados e runtime falhado próprio removido;
+instalada43 com o mesmo processo/binário/settings/fábrica/launcher.
+
+Próximo inventário: as cinco operações originais de voz continuam declaradas
+no broker comum (`pills`, `music`, `service_info`, `open_app`, `prepare_email`).
+Isto ainda é evidência de fontes, não aceitação nativa desses efeitos. A voz do
+original chama Claude/Haiku e tenta o modelo de chat após falhar; não usa o
+servidor custom configurado. Portanto, a ausência atual de voz custom não é,
+por si, perda comprovada do original. O roteamento atual continua explícito;
+o fallback observado no código original não satisfaz a decisão do proprietário.
+Comparar os percursos governados existentes antes de acrescentar capacidade.
+
+
+### Operações originais por voz no broker —12/11, Source33
+
+`VOICE-OPERATIONS-SOURCE33-VERIFIED.json`: dois percursos nativos atuais com
+HOME/XDG/X11/microfone/saída exclusivamente privados. Whisper real reconheceu
+áudio sintético, Ollama local sintético propôs a operação, o broker devolveu
+recibo e a segunda ronda gerou a resposta falada por Edge na saída virtual.
+`services.snapshot` devolveu leitura; `desktop.launch` com permissão desligada
+foi recusado com permissionDenied/notDispatched. Os quatro grants de efeitos
+do pet estavam explicitamente falsos. Nenhuma aplicação, email ou efeito de
+sistema real foi executado; zero modelos/quota reais ou pagos. ASR local e TTS
+Edge gratuito são workers reais, não mocks da captura ou injeção de transcript.
+
+Consulta e continuação da recusa passaram Stop/reinício com CID/mensagens
+conservados e sem novo pedido. O primeiro ensaio da recusa confirmou o broker,
+mas terminou com áudio zero depois de esperar uma ligação genérica e4s. Esse
+resultado permanece falhado e a causa exata da ausência de playback não foi
+atribuída ao produto. A continuação reutilizou perfil/endpoint e preservou os
+dois enunciados existentes; um novo turno próprio de QA fez apenas duas rondas
+sintéticas, aguardou o callback nativo de início e amostras reais antes de Stop.
+São seis rondas sintéticas no total. Não se reciclaram consentimentos/grants
+nem se fez reset do histórico. O áudio inicial continua sem aceitação.
+
+O primeiro recibo da consulta herdou metadados hostSystemReads:false e
+buildRecord:null do helper antigo; qualificação explícita conserva o recibo e
+corrige a interpretação: foram lidos quatro campos não secretos ASR/TTS e
+inventário de processos, com binário/SHA/argumento/fonte33 verificados. Não se
+repetiu o percurso só para corrigir esses campos. A montagem do verificador
+foi ajustada a humanApproval:false, presente também nas falhas; não transforma
+flag ausente humanAcceptance em aprovação humana.
+
+As cinco operações originais e a declaração web_search de Claude continuam
+no catálogo; a presença é evidência de fontes. Este incremento não certifica
+ativar/remover pets, música, abrir app permitida, preparar email, pesquisa web,
+autoridade granular por subplugin/operação/recurso, modelos/providers reais,
+voz física/Bluetooth, qualidade/fluidez geral ou instalada. O snapshot partilhado
+existente não é por esta prova certificado como filtragem granular de recursos.
+
+QA/servidores de áudio/drivers/containers encerrados; runtime falhado próprio
+removido, perfis/áudios/recibos privados preservados e instalada43 com o mesmo
+processo/binário/settings/fábrica/launcher. Zero delta de produção ou instalação.
+Próximo: efeitos restantes apenas em fixtures privadas, reutilizando broker,
+launcher/mailto e MPRIS existentes; entrega33 continua dependente do âmbito
+explícito já pedido. Todos os49 critérios mantêm aceitação própria em aberto.
+
+
+### Voz: cinco operações em fixtures com HOME atestado — Source33
+
+`VOICE-EFFECTS-SOURCE33-VERIFIED.json` substitui a aceitação atual das operações
+de voz anteriormente ligada ao helper que não isolava HOME.15 runners antigos
+permanecem privados e conservados; o seu comportamento pode ter prova própria,
+mas não certifica o isolamento de HOME declarado. O erro foi identificado pela
+não descoberta da aplicação privada de QA. XDG/áudio estavam isolados; leituras
+de metadados em HOME não foram excluídas. A instalação43 foi comparada nos seus
+processo/binário/settings/fábrica/launcher; não se inventa integridade universal
+de HOME ou da configuração de todas as ferramentas. Dados antigos não foram
+importados para os novos testes.
+
+Agora há12 atestados de ambiente nos processos nativos próprios, antes da
+utilização e após reinício: HOME/XDG/XAUTHORITY/DISPLAY/áudio/D-Bus privados,
+roots de credenciais pessoais de CLI retiradas. Referências ASR/TTS com tilde
+foram resolvidas para os mesmos ficheiros já escolhidos; cache de modelos em
+modo offline, sem novos downloads. Pesos/runtimes existentes do projeto foram
+partilhados por referência explícita. As duas respostas de cada turno vieram
+do provider Ollama sintético local; ASR Whisper e Edge gratuitos foram reais,
+com gravação/reprodução exclusivamente virtual e sem transcript injetado.
+
+Seis casos atuais: services.snapshot/readOnly sem sessões/planos/serviços
+pessoais; pets.roster/list sem mudar configuração; desktop.launch permitido
+com ficheiro desktop privado verificado, lançador real e janela GTK própria
+observada; mail.prepare com URI/assunto Unicode/corpo multilinha exatos num
+capturador local sem abrir correio ou enviar; spotify.control/Play num D-Bus
+privado, com uma chamada e Playing observados; desktop.launch recusado por
+permissionDenied antes do despacho. Só o grant existente necessário foi ligado
+no pet de QA, outros efeitos desligados. Os recibos mantêm effectVerified:false;
+a observação da janela/leitor é evidência independente da fixture, não uma
+certificação dos efeitos no mundo real.
+
+Conversas/CIDs e efeitos conservaram-se no reinício; sem replay.12 rondas
+sintéticas nos casos aceites. Falhas anteriores desta unidade conservadas:
+app1 com HOME herdado não despachou; snapshot-home2 com HOME correto recusou
+iniciar por caminhos de runtime ainda com tilde, antes de inferência; music-home1
+fez um Play no leitor privado, mas o provider de QA exigiu JSON num ACK que pode
+ser textual. O novo music-home2 usou outro bus/leitor e não voltou ao alvo antigo.
+Não se transformaram esses resultados globais em sucessos nem se atribuiu uma
+regressão ao produto por uma asserção errada do harness.
+
+QA/fixtures/servidores/containers encerrados e só runtimes temporários próprios
+removidos; perfis/áudios/recibos privados preservados. Fonte33/pacote/instalada43
+intactos, sem commit/publicação. O catálogo e estes caminhos comuns preservam
+valor original dentro da arquitetura dos pets; não certificam todos os comandos
+por voz, mutações do roster, granularidade subplugin/operação/recurso, modelos/
+providers/contas reais, pesquisa web, serviços reais, hardware/Bluetooth ou uso
+instalado. Outros49 critérios e a entrega instalada conservam gates próprios.
+
+
+### Recuperação da alteração do pet principal por voz — Source35,13/11
+
+Na33, o ensaio nativo mudou Antigravity→Codex mas retirou a própria origem de
+voz antes da segunda resposta, do histórico e do TTS. Esse resultado falhado
+continua conservado (`VOICE-ROSTER33-REGRESSION.json`). A35 reutiliza o CAS
+nativo do roster: catálogo só resolve nomes; só o commit confirmado do próprio
+turno pode avançar a sua testemunha, se o pet que responde continuar ativo.
+Escritas gerais/externas, dono substituído, cancelamento anterior ao despacho,
+falha de persistência e retirada do próprio pet não renovam a captura.
+
+Na candidata normal35, entrada no menu nativo do Ollama→microfone virtual→
+Whisper real→proposta Ollama sintética→resolução do catálogo/CAS→recibo aceite→
+resposta→Edge real/saída virtual→Stop→reinício passou. O TTS foi observado no
+início e gravado durante dois segundos antes de Stop; a conclusão natural da
+frase completa não foi certificada. Só mainPill mudou;
+Ollama continuou ativo, configuração completa dos pets/modelo/provider/CID
+conservaram-se. Mesmo CID antes do turno, depois e após reiniciar; sem replay.
+Uma segunda sessão privada confirmou permissionDenied antes de desktop.launch,
+com capturadores locais que impediriam qualquer abertura pessoal inesperada.
+Quatro atestados de ambiente dos processos próprios e quatro rondas de modelo
+sintético. Zero chamadas a modelos de conversa reais/pagos, áudio físico ou
+aceitação humana. A proposta
+sintética da ação não mede compreensão de comandos por um modelo real.
+
+`VOICE-ROSTER-SOURCE35-VERIFIED.json` fixa os recibos/áudio/imagem/limites. Quatro
+famílias dirigidas passaram. Dois testes antigos usavam custom como identidade
+de pet e foram recusados pela autorização de fontes: o adaptador não é um pet.
+A fixture passou a usar um dono declarado no mesmo endpoint/modelo sintético,
+sem alterar a política de produção. Falhas de compilação/QA anteriores foram
+retidas; o protótipo34 não foi compilado como candidata. Build35 nova e exata,
+1323 inputs; sem reutilização documental do pacote32/33. Instalada43 conserva
+processo/binário/settings/fábrica/launcher. Sem instalação, alteração do anfitrião,
+commit ou publicação. As provas anteriores mantêm fonte/âmbito próprios.
+
+Outras variantes de roster, entrada/fluidez instalada, hardware/Bluetooth,
+providers/serviços reais e os49 critérios globais continuam abertos. Próximo:
+gate6/7/preservação na mesma35 e proposta instalada concreta; manter a fonte
+congelada e evitar novas abstrações ou recompilações sem defeito confirmado.
+
+
+### Revisão/preservação6/7 na candidata35 —13/11
+
+`RULE67-SOURCE35-VERIFIED.json`: o cenário nativo atual passou na primeira
+execução, com revisão/sucessão6, carry do saldo original, renovação explícita
+de uma alocação finita, três respostas HTTP sintéticas, Hub fechado, interrupção
+real do backend/recuperação da sondagem com decisão/saldo/prazo originais,
+revogação e reinício sem replay. Não foram criadas novas concessões para
+contornar falhas. A contenção antiga33 conserva a qualificação própria.
+
+Treze comandos CLI atuais de revisão/backup/inspeção/restauro/quarentena/ativação
+preservaram8 registos assinados,3 Goal67, formatos1/6/6/7/7 e12 payloads originais
+exatos. A janela nativa restaurada mostrou a resposta histórica e recusou
+execução: zero HTTP/novo objetivo/renovação de autoridade. Capturas atuais foram
+inspecionadas; painéis e limites legíveis, parte inferior do formulário fora
+do viewport, sem certificação de toda a apresentação. HOME/XDG/D-Bus privados
+atestados nos processos; QA encerrado e instalada43 intacta.
+
+É aceitação técnica de perfis gerados; escolhas de QA não são consentimento
+humano. Não fecha instalada, hardware, contas/efeitos reais nem49 critérios.
+A fonte35/pacote mantêm-se congelados, sem nova compilação ou código nesta
+unidade. Próximo: conclusão natural da fala e proposta concreta instalada35;
+não repetir o percurso6/7/preservação sem novo delta/defeito que o justifique.
+
+
+### Frase falada completa e reabertura sem replay — Source35,13/11
+
+`VOICE-NATURAL-SOURCE35-VERIFIED.json`: a gravação privada contém a frase
+completa “Resposta sintética de voz confirmada.”, reconhecida independentemente
+com os mesmos pesos Whisper locais, sem prompt, vocabulário ou língua forçados.
+O grafo conservado mostra que o Node de reprodução GStreamer terminou e surgiu
+um novo microfone antes de Stop/terminação pela QA. A reabertura só de leitura
+do mesmo perfil manteve o CID anterior ao turno, duas mensagens, settings e
+configuração inteira dos pets; zero nova ação/modelo. Sem terceiro pedido de voz.
+
+Os dois ensaios globais originais permanecem falhados. O primeiro observador
+comparava coucou com o nome real Coucou. O segundo comparava só o número41;
+o Node41/serial203 já terminara e um Link41/serial257 reutilizara o ID. O teste
+já ultrapassara a espera do estado listening antes dessa falha; não foi guardada
+uma captura DOM após a fala. A aceitação técnica deriva dos grafos/áudio
+conservados e da continuação nativa de leitura, não de reescrever RESULT como
+sucesso. O observador futuro usa tipo/id/serial e o dono gst-launch-1.0; só
+preflight, sem repetir a mutação. A captura da resposta visível foi inspecionada.
+
+ASR de entrada/TTS foram reais, áudio exclusivamente virtual, modelo de conversa
+sintético; reconhecimento da gravação em CPU, com o mesmo modelo escolhido,
+sem mudar preferências. Stop explícito depois do fim natural não foi repetido;
+a prova atual separada de interrupção/Stop/reinício conserva o seu âmbito.
+Sem aceitação física, timbre/latência comparados com o oficial, contas reais,
+humana, instalada ou global49. QA encerrado, dados/gravações conservados,
+instalada43 intacta; nenhuma alteração de código/compilação/host/publicação.
+
+[Proposta instalada35](PETS-INSTALLED-DELIVERY-SOURCE35.md): artefacto exato,
+backup específico, quatro fontes/patch da estação e13 payloads verificados
+pelo instalador existente em prefixo só do projeto. Aplicação e exceção de
+registo assinado em sysworkspace aguardam âmbito explícito do proprietário.
+
+<!-- code-diff-source35-20261113 -->
+### Código/diffs na composição atual — Source35,13/11
+
+`HOOK-FORMATS-SOURCE35-VERIFIED.json`: seis casos sintéticos Write/MultiEdit
+atravessaram o relay oficial real, socket e UI nativos de Codex/Copilot/Gravity.
+Linhas/contagens iguais às seis observações nativas do oficial0.5.0/841a81ce;
+Ctrl+E/Escape, centro, seleção por pet/sessão e regresso ao Codex depois dos5,2s
+passaram na35. O ensaio oficial completo continua falhado no regresso tardio:
+essa retenção não fazia parte do comportamento original.
+
+Cinco imagens privadas X11 são legíveis; Codex MultiEdit X11 recortado continua
+sem aceitação. Uma captura separada da camada35 no Hyprland real mostrou o
+ficheiro e as quatro linhas/+2/−2, sem outra camada de nível igual ou superior
+sobreposta. Esta imagem foi observada e aceite tecnicamente. O ensaio gráfico
+completo ficou **falhado** depois: o controlo Back já não existia após cerca de22s
+de espera pela observação. O código fecha cartões e limpa a seleção do diff ao
+sair do modo expandido, mas o instante/causa exatos não foram instrumentados;
+não se declara regressão nova nem sucesso integral desse ensaio. O regresso
+funcional tem a prova separada dos seis casos nativos, sem promoção a Back no
+compositor. As tentativas sem área livre/prazo de observação também ficam
+preservadas; `CODE-DIFF35-COMPOSITOR{1,2,3}-QUALIFICATION.json`.
+
+Dois ambientes nativos35 tiveram HOME/XDG/bus próprios atestados. Zero IDE,
+ferramenta, modelo ou ficheiro de código executado; os caminhos dos eventos são
+apenas metadados inexistentes.1323 inputs atuais e artefactos exatos; QA próprio
+encerrado e cinco verificações da instalação43 intactas. Nenhuma alteração de
+produção/build/instalação/publicação. Não certifica todos os formatos de IDEs
+reais, persistência de diffs após reinício, aceitação humana ou global49.
+<!-- end-code-diff-source35-20261113 -->
+
+<!-- installed35-delivery-20261113 -->
+### Recursos da composição normal atual no Hyprland — Source35,13/11
+
+`RESOURCES-SOURCE35-VERIFIED.json`: quatro arranques normais, pela ordem
+oficial/35/35/oficial, com HOME/XDG/bus privados atestados, sem WebDriver,
+interação de janelas, chat ou áudio. Depois de8s,25 amostras durante cerca de13s.
+PSS final médio: oficial384,11MiB;35,422,49MiB; diferença **+38,38MiB** e um
+WebKit adicional (4→5). CPU medida: oficial102,17% de um núcleo;35,0,63%.
+
+Os conjuntos de processos mantiveram identidade e terminaram. São observações
+delimitadas: camadas720×320 no oficial e720×560 no fork, possível oclusão pelas
+camadas operacionais43 e restante atividade do anfitrião. Não provam a causa da
+diferença de CPU, equivalência geral de recursos, energia/GPU, fuga de memória,
+fluidez ou experiência instalada prolongada. O custo extra não é, por si só,
+uma regressão confirmada ou motivo para nova infraestrutura. Esta prova não
+substitui a medição29/X11, que mantém o seu cenário específico.
+
+### Entrega instalada Source35/44 —13/11
+
+Autorização explícita do proprietário recebida para o artefacto35 proposto e
+registos focados assinados Coucou em sysworkspace; fork/push/merge continuam
+suspensos. O primeiro registo `16d53be` passou hooks e assinatura YubiKey antes
+da substituição. Índice de outras sessões preservado. O registo final é tratado
+em separado pelo recibo `installed-source35-delivery/HOST-SIGNED-REGISTRATION.json`.
+
+A43 tinha outro PID após reinício observado, sem causa atribuída ao agente.
+Só o seu Quit nativo revisto foi enviado; terminal externo Codex preservado.
+Backup específico Coucou, com fingerprint observado, verificado pelos leitores43
+e35. Prefixo43 conservado; instalador restrito publicou44, gestor HOME aplicou
+exclusivamente `.local/bin/coucou` e guardou backup transacional. Nenhum serviço
+ou compositor recarregado. Processo1127174/startTicks18236395, dono D-Bus e
+executável87400570… confirmados no perfil normal; sem automação de arranque.
+
+`installed-source35-delivery/INSTALLED44-TECHNICAL.json`:49 ficheiros existentes,
+48 com estado igual, só log alterado, nenhum ausente/novo; modelo grande por
+metadados. Settings/pets JSON integrais iguais, incluindo seleção, modelos,
+destinos, nomes/aliases e permissões; seis caminhos de integração e relay
+preservados. Hub original com histórico/ditado e versão44 e página Pets atual
+observados em capturas privadas da janela real. Só se navegou para Pets;
+nenhum formulário de configuração, grant ou pedido de inferência foi aplicado.
+
+O instalador releu os13 payloads como `already verified`; plano HOME terminou
+com0 alterações. Check estrutural da estação e24 testes Coucou passaram.
+Uma primeira invocação parcial de testes usou o entry point de imports errado;
+o teste DMS não carregou nesse comando. O discovery normal passou, sem mudar
+código ou repetir ensaios nativos. Não houve quota real Copilot/GitHub nem
+inferência de conversa de teste. Provas QA35 de voz/regras/diffs mantêm os seus
+âmbitos; entregar o mesmo binário não é repetir esses percursos no perfil pessoal.
+Áudio físico/Bluetooth, contas reais, fluidez instalada prolongada, aceitação
+humana e restantes49 critérios continuam abertos. Backup e capturas não são
+versionados. Reverter launcher não desfaz migrações de dados.
+<!-- end-installed35-delivery-20261113 -->
+
+<!-- real-free-local-voice35-20261113 -->
+### Conversa de voz com o modelo local real gratuito — Source35,13/11
+
+`VOICE-LOCAL-REAL-SOURCE35-VERIFIED.json`: menu do pet privado→Whisper/áudio
+virtual→modelo já instalado e escolhido `gemma3:4b` no Ollama local→resposta
+correta em pt-PT a23+8→TTS→fim natural do recurso/retoma da escuta→Stop e
+reinício com o mesmo CID/duas mensagens, sem outro pedido. Um único HTTP real
+local,6,94s incluindo carga;1092 tokens de entrada e37 de saída declarados pelo
+servidor. A resposta foi «Trinta e um, meu caro, é a soma de vinte e três com
+oito, sem demora.» Sem ação proposta; permissões de ação do perfil gerado
+estavam falsas. Proxy encaminhou bytes reais sem resposta fabricada, redirect,
+fallback ou download; não mudou keepalive nem perfil operacional/Codex.
+
+A observação de TTS usa identidade tipo/ID/serial e guardou a fase nativa
+`listening` depois do fim. A transcrição independente da gravação completa
+**não passou**: «E um, meu caro, é a soma de23,8, sem demora.» Não confirma a
+primeira palavra nem toda a frase; não está determinada perda de áudio ou erro
+de reconhecimento. Ambos os resultados brutos ficam conservados: percurso
+nativo0, leitor ASR estrito1. Não se repete a conversa/ASR para obter verde e
+não se certifica a qualidade acústica completa. A bolha de resposta privada
+foi observada legível; sem aceitação humana ou áudio físico.
+
+Duas instâncias nativas com HOME/XDG/bus próprios atestados. QA encerrado;
+instalação44/PID1127174, binário, settings/pets, launcher e relay iguais.
+1323 inputs exatos; nenhum delta de produto ou nova instalação. Esta unidade
+usa a autorização original de testes gratuitos num perfil independente; não
+é teste de inferência do perfil pessoal nem consumo Copilot/GitHub/pago.
+Nomes legados SYNTHETIC/FIXTURE e parte da descrição bruta do helper permanecem
+qualificados no agregado: os recibos de wire/modelo/usage são de inferência real
+local. Não promovem para35 os cinco efeitos antigos33 ou aceitação global49.
+<!-- end-real-free-local-voice35-20261113 -->
+
+<!-- phone-admission36-20261113 -->
+### Recusa local da admissão apresentada como falha de rede — Source36
+
+O classificador oficial0.5.0/841a81ce atribui `unreachable` a erros locais sem
+status HTTP; não tinha o novo guard comum de inferência do fork. A35 acrescenta
+a admissão capturada, mas o consumidor do telefone só reconhecia algumas
+recusas nativas como ocupação. O erro real «A configuração de inferência está
+ocupada.» e o do snapshot do perfil caíam na regra genérica de rede.
+
+A prova negativa bloqueia apenas o mutex de uma fonte `Settings` privada,
+chama o `Captured::capture` de produção e verifica que a recusa inicial não
+é uma falha de provider. Falhou exatamente `Unreachable` vs `Busy`; não foi
+falha de compilação/ambiente. A36 reconhece as duas mensagens nativas de
+ocupação no classificador existente e mantém o campo de diagnóstico na
+categoria `configurationBusy`. A admissão continua recusada e nenhum HTTP
+é iniciado por essa prova. Nenhuma espera/repetição, destino, modelo, conta,
+autoridade ou política foi alterado.
+
+Onze testes dirigidos passaram e a build privada86 da Source36/1323 inputs
+exatos completou o percurso real UI/TLS/HTTP do telefone: sete respostas
+sintéticas, continuação/reset, cancelamento/Busy, revogação/desconexão,
+modelo retirado, histórico desktop separado e reinício sem replay.128 leituras
+concorrentes de `phone_chat_status`, sem escrita/falha. Duas atestações do
+processo confirmam HOME/XDG/roots de credenciais e Secret Service privados;
+namespace de rede diferente, só interface loopback. Controlos observados antes
+de ativar ligação e modelo. QR superior parcialmente fora do viewport na
+segunda captura não é aceitação integral do seu layout.
+
+`PHONE-SOURCE36-VERIFIED.json` fixa os recibos e limites. A contenção inicial
+não foi forçada no ensaio nativo; a causa é demonstrada pelo teste dirigido do
+produtor real, e o transporte Busy existente foi observado nativamente numa
+ronda concorrente. Isso não atribui retroativamente os episódios22/82 à mesma
+causa; continuam conservados/em aberto. Não houve modelo real/pago, Android
+físico, conta remota, aceitação humana ou alteração instalada. Só
+`phone_link/chat_backend.rs` difere da35; QA encerrado e instalação35 intacta.
+A36 está implementada/integrada na árvore e validada em fixtures/nativamente
+em desenvolvimento; falta pacote normal e entrega autorizada própria.
+<!-- end-phone-admission36-20261113 -->
+
+## Normal45/Source37 — chat do telefone e pacote exatos,13/11
+
+FORK45-SOURCE37-BUILD.json fixa compilação nova474,17s,1323 inputs intactos,
+RPM e91116b940d243d581eb27c72aac8463f2a725c8db240bc661a11191c338fdbe e
+binário empacotado8c49d5201067ddc65c1d8afe7e81f5a8fccf70a6f02d5f671ce78419266fd3c2.
+13 payloads permitidos, transformação única UNK→RPM, relay/recursos Copilot
+preservados, ELF/arquivo verificados pelo instalador restrito existente apenas
+no prefixo de QA. Sem instalação, alteração global ou upgrade de dependências.
+
+PHONE-NORMAL45-SOURCE37-VERIFIED.json: phone-chat-normal45-source37-2, exit0;
+UI/modelo explícito/TLS com pin/7 HTTPs sintéticos/112 consultas de leitura,
+continuação/reset/Stop/Busy/revogação/retirada do modelo/desktop isolado/
+reinício sem replay. Duas atestações reais do ambiente privado, capturas
+observadas e limpeza de processos/serviços/contentor comprovada. O primeiro
+arranque normal45 de QA falhou antes da app por bloqueio da sandbox ao Podman;
+xvfb.log e STARTUP-QUALIFICATION.json conservados, sem defeito de produto inferido.
+
+Mesmo backend36: reutilizam-se controlo negativo da captura real e11 testes
+dirigidos; cinco metadados de versão apenas36→37. A contenção inicial não é
+forçada na prova gráfica; causa dos episódios22/82 não encerrada. Sem Android
+físico/humano/aceitação instalada ou inferência real/paga. Instalada35/44 e
+settings/pets/launcher/relay iguais;43 preservada. Patch/proposta45 preparados
+só no projeto; não autorizados nem aplicados à estação. Depois deste ensaio, o
+registo final35 foi concluído em1462828, assinatura verificada/índice preservado.
+
+## Perguntas móveis — oficial0.5.0 / normal45 Source37,13/11
+
+PHONE-QUESTIONS-SOURCE37-VERIFIED-COMPARISON.json compara phone-questions-official-3
+e phone-questions-normal45-source37-1, ambos exit0, com o mesmo RUNNER.py e os
+executáveis pinned a0c01c3c…/8c49d520…. Cada um completou dois AskUserQuestion
+gerados, mesmos textos/opções e respostas Unicode simples/múltiplas ao socket
+nativo original; dez fronteiras de recusa/capacidade/replay, retirada/reativação
+e reinício. HTTPs de inferência0; sem IDE/modelo real ou decisão humana.
+PRIVATE-DECISION-ROUTE.json confirma Coucou no perfil de QA do fork; não
+altera o encaminhamento operacional nem certifica consentimento biométrico.
+
+UI real do telefone observada antes dos efeitos, TLS com certificado pinned,
+Secret Service/rede/ecrã/HOME/XDG/roots de credenciais privados. Duas atestações
+reais de ambiente por composição. Wire e respostas exatas, barreiras ping/pong,
+estado após reinício e limpeza de todas as quatro tentativas conservados.
+PHONE-QUESTIONS37-CLEANUP.json e INSTALLED35-AFTER-PHONE-QUESTIONS37.json.
+
+Tentativas oficiais1/2 continuam exit1: referência DOM invalidada após um
+toggle e navegação inicial emitida que não saiu de Dictation após reinício.
+A segunda conservou as duas respostas exatas mas não foi aceite no reinício.
+O observador passou a ler estado do controlo atomicamente e a usar o botão
+visível Android phone; não houve retry cego de autoridade, respostas ou modelo.
+A tentativa3 completou; o fork usou exatamente esse mesmo observador.
+Não se transformam as falhas em regressões de produto nem em passes globais.
+
+Classificação: preservado neste percurso nativo com telefone e hook sintéticos.
+Sem alteração de código necessária. Não é APK/Android físico/biometria,
+contas/IDE reais, uso instalado, aceitação humana ou conclusão49.
+Fonte37/1323 inputs intactos; instalada35/44/settings/pets/launcher/relay iguais,
+sem prefixo pessoal45. Autorização45 continua pendente; registos35 concluídos.
+
+## Cartão móvel n8n / contexto de conversa — Source38,13/11
+
+PHONE-N8N-SOURCE38-VERIFIED.json: duas negativas do contrato handler/exportador
+na37,33 testes existentes de baseline,37 dirigidos depois (dois novos no
+repositório e repetição separada das duas negativas) e negativa nativa no
+RPM45/37, corrigida na privada87/38. Apenas phone-services.ts e dois testes;
+nenhum Rust, formato, permissão, broker, scheduler ou fallback novo.
+Build87: TS4,41s/bundle2,27s/app83,59s,1323 inputs intactos, identidade dev;
+binário215ba7c8ec73658366270810356caa4531497c517390c14c78395fdc5891b90c.
+
+37 negative4 usou HTTP n8n autenticado, modelo fixture-free, programa sintético
+atestado no launcher/app e um turno/conversa/task reais do backend. Seleção
+pelo pet-session-select com tuple verdadeiro, sem atribuir State. Desktop DOM
+tinha workflow; TLS welcome/sessions/pong confirmou ausência do cartão.
+AssertionError esperado. Texto de modelo exposto só nas fixtures, não afirmado
+nativamente nem no perfil pessoal. A conversa flutuante sozinha tinha passado.
+
+38 private1 passou o mesmo input de seleção, snapshot antes/depois igual ao
+workflow, erro sem detalhe/saída/texto de modelo nos frames de serviços, off
+desconectou, chave/pin/preferências persistiram, evento104 chegou após reinício
+e o contador do app-server ficou em um. UI/API existentes e dados gerados;
+sem conta/IDE real, inferência real/paga ou quota Copilot/GitHub. Duas
+atestações de ambiente/launcher, rede só loopback e Secret Service privado.
+PHONE-N8N38-CLEANUP.json verifica todas as sete tentativas; instalação35 e
+settings/pets/launcher/relay iguais, RPM45 original intacto.
+
+Qualificações:37 attempt1 recusou antes do turno por PATH instalado depois do
+WebDriver; executável real de metadados não excluído, mas HOME/credenciais/rede
+privados e nenhuma inferência.37 attempt2 passou conversa flutuante, não a
+seleção no publisher; attempt3 não tinha barreira pong, não é a negativa aceite.
+Oficial1/2 passaram base/erro/retirada, falharam snapshot após reinício, mesmo
+na segunda com prontidão de navegação/evento104. Causa exata aberta; sem terceira
+repetição. A38 passou gate DOM transitório, mas snapshot após screenshot vazio;
+não há aceitação de cartão graficamente legível. Primeira consolidação falhou
+essa exigência tardia, qualificação/verificador anterior preservados. Imagem
+inicial inspecionada depois do avanço na mesma chamada, sem aceitação visual
+prévia; modelo observado separadamente antes do turno. Não é Android físico,
+biometria, uso instalado/humano ou conclusão49. Preparar normal46 próprio.
+
+
+### Rotina de projeto: aceitação privada delimitada17/11
+
+Source4/build2/native5 passaram duas ocorrências reais, sucessão6, revisão7, revogação durante HTTP, débito conservador e reinício.54 Rust dirigidos,105 web/tipos; restauro novo em fixtures. Tentativas anteriores e filtros sem testes estão explicitamente excluídos. Sem inferência real, alteração instalada ou aceitação humana.
+[Fontes, provas e limitações](PETS-PROJECT-RULE-2026-11-17.md).

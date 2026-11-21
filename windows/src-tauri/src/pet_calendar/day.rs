@@ -14,6 +14,12 @@ pub(super) struct Day {
     #[serde(default="default_limit")] limit:usize,
 }
 fn default_limit()->usize{32}
+/// A reviewed recurrence supplies an explicit civil date, never model text.
+/// Reuse the same sealed IANA/DST resolver as the ordinary calendar day tool.
+pub(crate)fn explicit(date:&str,time_zone:&str,reference:&str,current:impl Fn()->bool)->Result<Query,&'static str>{
+    if civil_date(date).is_none(){return Err("invalidWindow");}
+    Day::parse(json!({"date":date,"timeZone":time_zone}))?.resolve(reference,current)
+}
 fn civil_date(s:&str)->Option<NaiveDate>{
     if s.len()!=10||!s.bytes().enumerate().all(|(i,b)|if i==4||i==7{b==b'-'}else{b.is_ascii_digit()}){return None;}
     NaiveDate::parse_from_str(s,"%Y-%m-%d").ok().filter(|d|(1..=9999).contains(&d.year()))

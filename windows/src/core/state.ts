@@ -15,7 +15,7 @@ import { DEFAULT_OUTFIT, type Outfit } from "../mochi/wardrobe";
 import { pillColor } from "./pill-colors";
 import { Spotify, musicPlaying } from "./spotify";
 import { PetSessions,sessionKey } from './pet-sessions';
-import type {DroppedFile} from './bridge';
+import type {DroppedFile,IntegrationUpdate} from './bridge';
 export type PetFile=Pick<DroppedFile,'name'|'path'>&Partial<DroppedFile>;
 
 export type AgentSource = "claudeCode" | "n8n" | "agent";
@@ -112,6 +112,8 @@ export interface IntegrationInfo {
   error: string | null;
   loaded: boolean;
   configured: boolean;
+  /** Last native notification, with the existing notification lifetime. Never a model reply. */
+  activity?: IntegrationUpdate['event'];
 }
 
 export interface Settings {

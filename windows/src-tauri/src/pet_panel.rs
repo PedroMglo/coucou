@@ -37,12 +37,21 @@ fn geometry(width:f64,height:f64,x:f64,y:f64)->(f64,f64,f64,f64){
  (w,h,(x-w/2.0).clamp(8.0,(width-w-8.0).max(8.0)),y.clamp(8.0,(height-h-8.0).max(8.0)))
 }
 #[tauri::command]
-pub async fn pet_panel_open(app:AppHandle,x:f64,y:f64,pet:Option<String>,section:Option<String>)->Result<(),String>{
+pub async fn pet_panel_open(app:AppHandle,x:f64,y:f64,pet:Option<String>,section:Option<String>,toggle:Option<bool>)->Result<(),String>{
  if !x.is_finite()||!y.is_finite(){return Err("Posição inválida para a gestão dos pets.".into());}
  if pet.as_ref().is_some_and(|id|!crate::pet_config::defaults().pets.contains_key(id)){return Err("Pet desconhecido.".into());}
  if !crate::pet_control::valid_section(&section){return Err("Secção desconhecida.".into());}
  let inline=cfg!(target_os="linux")||{let shared=app.state::<crate::Shared>();let s=shared.settings.lock().unwrap();s.companion_mode&&s.pet_control_bar};
- if inline{return crate::pet_control::open_section(app,pet,section).await;}
+ if inline{
+  if toggle.unwrap_or(false){
+   // The legacy island's renderer mode does not describe this native centre.
+   // Reuse the same accepted-context and collapse path as its close control.
+   let context=crate::pet_native_binding::manager(&app).and_then(|m|m.current()).and_then(|c|c.context())
+    .map_err(|_|"A navegação da ilha ainda não está disponível.")?;
+   if matches!(context.mode,crate::pet_native_binding::ipc::Mode::Expanded{..}){hide(&app);return Ok(());}
+  }
+  return crate::pet_control::open_section(app,pet,section).await;
+ }
  let context=Context{pet,section};*app.state::<Panel>().0.lock().unwrap()=context.clone();
  let win=app.get_webview_window(LABEL).ok_or("O painel dos pets não está disponível nesta sessão.")?;
  let screen=crate::island::screen_info(&app,&app.state::<crate::Shared>().settings.lock().unwrap().screen);

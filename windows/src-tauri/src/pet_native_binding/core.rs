@@ -188,6 +188,24 @@ impl Core {
         if target.system()&&!s.enabled{return Err(self.error(ErrorCode::SystemDisabled,&s));}
         match self.start(&mut s,target,String::new(),None)? {Begin::Plan(p,c)=>Ok((p,c)),_=>unreachable!()}
     }
+    /// Reconcile the compact strip without replacing pending or open navigation.
+    pub(crate) fn begin_compact_configuration(
+        &self,
+        enabled: bool,
+    ) -> Result<(Option<Plan>, Context), Failure> {
+        let mut state = self.lock()?;
+        if !state.alive {
+            return Err(self.error(ErrorCode::Unavailable, &state));
+        }
+        let target = if enabled { Mode::Compact } else { Mode::Inactive };
+        if state.pending.is_some() || state.mode.expanded() || state.mode == target {
+            return Ok((None, self.context_of(&state)));
+        }
+        match self.start(&mut state, target, String::new(), None)? {
+            Begin::Plan(plan, context) => Ok((Some(plan), context)),
+            _ => unreachable!(),
+        }
+    }
     fn start(&self,s:&mut State,target:Mode,intent_id:String,request:Option<NavigationRequest>)->Result<Begin,Failure>{
         // Pending/Other is a real backend policy transition, not fake GTK hide.
         self.revoke_purpose();s.hint.keyboard=false;self.bump(s)?;

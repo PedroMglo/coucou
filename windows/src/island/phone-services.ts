@@ -7,6 +7,8 @@
 
 import type { PhoneLinkService } from "../core/bridge";
 import { State } from "../core/state";
+import { petRetired } from "../core/pet-factory";
+import { stripePaymentAmount } from "../core/stripe";
 import { t } from "../i18n/i18n";
 
 const obj = (id: string): Record<string, unknown> => (State.integrations[id]?.data ?? {}) as Record<string, unknown>;
@@ -26,7 +28,6 @@ export function ago(value: unknown, now = Date.now()): string {
   return t("{n}d", { n: Math.floor(secs / 86400) });
 }
 
-const money = (cents: unknown) => (Number(cents ?? 0) / 100).toFixed(2);
 const compact = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 type Builder = (now: number) => PhoneLinkService | null;
@@ -38,14 +39,20 @@ function usable(id: string): boolean {
 
 const BUILDERS: Record<string, Builder> = {
   integration_stripe: (now) => {
-    const d = obj("integration_stripe");
+    const available = list("integration_stripe", "balances").flatMap((balance) => (
+      typeof balance.currency === "string" && typeof balance.available === "string"
+        ? [`${balance.available} ${balance.currency.toUpperCase()}`] : []
+    ));
+    const joined = available.join(" · ");
+    // Match the phone's headline limit without cutting a currency amount in half.
+    const headline = joined.length > 40 ? `${available[0]} · +${available.length - 1}` : joined;
     return {
       id: "integration_stripe", title: "Stripe",
-      headline: `${money(d.balance)} ${String(d.currency ?? "eur").toUpperCase()}`,
-      reason: t("Payments"),
+      headline: headline || "—",
+      reason: t("Available balance"),
       items: list("integration_stripe", "payments").slice(0, 3).map((p) => ({
         label: p.status === "succeeded" ? t("Payment") : t("Payment failed"),
-        detail: `+${money(p.amount)} · ${ago(p.createdAt, now)}`,
+        detail: `${stripePaymentAmount(p)} · ${ago(p.createdAt, now)}`,
       })),
     };
   },
@@ -105,13 +112,16 @@ const BUILDERS: Record<string, Builder> = {
   },
   integration_n8n: () => {
     const task = State.tasks.find((x) => x.id === "integration_n8n");
-    if (!task || (task.state !== "finished" && task.state !== "error")) return null;
+    const activity = State.integrations.integration_n8n?.activity;
+    if (!task || !activity) return null;
+    // The selected task may be the pet's assistant conversation. Only the
+    // native integration notification describes a workflow and its lifetime.
     // The workflow's name and whether it worked; the error text stays on the computer.
     return {
       id: "integration_n8n", title: "n8n",
-      headline: task.state === "finished" ? t("Success") : t("Failed"),
+      headline: activity.success ? t("Success") : t("Failed"),
       reason: t("Workflow"),
-      items: task.steps[0] ? [{ label: task.steps[0], detail: "" }] : [],
+      items: activity.label ? [{ label: activity.label, detail: "" }] : [],
     };
   },
 };
@@ -120,7 +130,7 @@ const BUILDERS: Record<string, Builder> = {
 export function serviceCards(now = Date.now()): PhoneLinkService[] {
   const cards: PhoneLinkService[] = [];
   for (const [id, build] of Object.entries(BUILDERS)) {
-    if (id !== "integration_n8n" && !usable(id)) continue;
+    if (petRetired(id) || (id !== "integration_n8n" && !usable(id))) continue;
     const card = build(now);
     if (card) cards.push(card);
   }

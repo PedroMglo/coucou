@@ -67,3 +67,15 @@ test('the existing pet management view saves and clears only the reviewed bindin
   assert.deepEqual(f.calls.filter(c=>!['pet_configuration','pet_roster','pet_inference_set'].includes(c.command)),[]);
  }finally{internals.invoke=original;PetPreferences.update(previous);}
 });
+
+test('custom server review keeps the logical pet, exact endpoint and credential; another adapter cannot use that credential',async()=>{
+ const original=internals.invoke,previous=PetPreferences.config,f=fixture();internals.invoke=f.invoke;
+ try{
+  const editor=new PetInferenceEditor(f.hooks);editor.show(f.doc,'ai_ollama');assert.ok(editor.backend.children.some(n=>n.value==='custom'));
+  fill(editor,'custom','qa-custom-model');editor.endpoint.value='https://models.example.invalid/v1';editor.credential.value='configuredCustomEndpoint';editor.prepare(false);
+  assert.match(editor.details.textContent,/HTTPS/);assert.match(editor.details.textContent,/OpenAI-compatible, vinculada/);assert.equal(f.calls.length,0);
+  await editor.apply();assert.equal(f.doc.config.pets.ai_ollama.inference.backend,'custom');assert.equal(f.doc.config.pets.ai_ollama.provider,'ollama');assert.equal(f.doc.config.pets.agent_codex.inference,undefined);
+  PetPreferences.update(f.doc.config);assert.equal(profileSummary('ollama','other-model'),'OpenAI-compatible · qa-custom-model');
+  editor.show(f.doc,'ai_ollama');fill(editor,'lmstudio','fixture');editor.credential.value='configuredCustomEndpoint';const count=f.calls.length;editor.prepare(false);await editor.apply();assert.equal(f.calls.length,count);assert.equal(editor.review,null);
+ }finally{internals.invoke=original;PetPreferences.update(previous);}
+});

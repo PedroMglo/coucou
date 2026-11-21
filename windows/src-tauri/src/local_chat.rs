@@ -11,17 +11,31 @@
 // somewhere else: that address is the only place this module talks to.
 
 use std::time::{Duration, Instant};
+use crate::attachment_history::{Coverage, Preparation};
 #[path="lmstudio.rs"]pub(crate)mod lmstudio;
+#[path="local_chat_runtime_ollama.rs"]mod runtime_ollama;
+pub(crate)fn validate_runtime_body(server:&Server,model:&str,body:&Value)->Result<(),String>{if server.id=="ollama"{runtime_ollama::validate(server,model,body)}else{Ok(())}}
+pub(crate)fn runtime_path(server:&Server)->&'static str{if server.id=="ollama"{"api/chat"}else{"v1/chat/completions"}}
+pub(crate)fn ollama_runtime_contract()->(&'static str,u64,Option<&'static str>){
+ #[cfg(target_os="linux")]let brief=Some(crate::pet_calendar::brief::CONTRACT);
+ #[cfg(not(target_os="linux"))]let brief=None;
+ (runtime_ollama::CONTRACT,runtime_ollama::MAX_CONTEXT,brief)
+}
 use std::sync::{Mutex,atomic::{AtomicU64,Ordering}};
 static LMSTUDIO_KEY_GENERATION:AtomicU64=AtomicU64::new(2);
 static LMSTUDIO_KEY_EDIT:Mutex<()>=Mutex::new(());
+static CUSTOM_KEY_GENERATION:AtomicU64=AtomicU64::new(2);
+static CUSTOM_KEY_EDIT:Mutex<()>=Mutex::new(());
 pub(crate)fn lmstudio_key_generation()->u64{LMSTUDIO_KEY_GENERATION.load(Ordering::Acquire)}
-fn edit_lmstudio_key(operation:impl FnOnce()->Result<(),String>)->Result<(),String>{
-    let _guard=LMSTUDIO_KEY_EDIT.lock().map_err(|_|"O cofre está ocupado.")?;
-    LMSTUDIO_KEY_GENERATION.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|n.checked_add(2).map(|_|n+1)).map_err(|_|"Limite de credenciais atingido.")?;
-    let result=operation();LMSTUDIO_KEY_GENERATION.fetch_add(1,Ordering::AcqRel);result
+pub(crate)fn custom_key_generation()->u64{CUSTOM_KEY_GENERATION.load(Ordering::Acquire)}
+fn edit_server_key(provider:&str,operation:impl FnOnce()->Result<(),String>)->Result<(),String>{
+    let(generation,edit)=match provider{"lmstudio"=>(&LMSTUDIO_KEY_GENERATION,&LMSTUDIO_KEY_EDIT),"custom"=>(&CUSTOM_KEY_GENERATION,&CUSTOM_KEY_EDIT),_=>return Err("Servidor de credenciais desconhecido.".into())};
+    let _guard=edit.lock().map_err(|_|"O cofre está ocupado.")?;
+    generation.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|n.checked_add(2).map(|_|n+1)).map_err(|_|"Limite de credenciais atingido.")?;
+    let result=operation();generation.fetch_add(1,Ordering::AcqRel);result
 }
-pub(crate)fn clear_lmstudio_key()->Result<(),String>{edit_lmstudio_key(||secrets::clear(LMSTUDIO_KEY))}
+pub(crate)fn clear_lmstudio_key()->Result<(),String>{edit_server_key("lmstudio",||secrets::clear(LMSTUDIO_KEY))}
+pub(crate)fn clear_custom_key()->Result<(),String>{edit_server_key("custom",||secrets::clear(CUSTOM_KEY))}
 
 use reqwest::Url;
 use serde::Serialize;
@@ -80,9 +94,7 @@ pub fn set_server_key(provider:&str,typed_url: &str,key: &str)->Result<(),String
     }
     let bound = BoundKey { url: url.as_str().trim_end_matches('/').to_string(), key: key.trim().to_string() };
     let value = serde_json::to_string(&bound).map_err(|e| e.to_string())?;
-    if provider=="lmstudio"{
-        edit_lmstudio_key(||secrets::set(slot,&value))
-    }else{secrets::set(slot,&value)}
+    edit_server_key(provider,||secrets::set(slot,&value))
 }
 
 /// The key, if it was entered for exactly this address.
@@ -110,17 +122,31 @@ pub(crate)fn server_for_target(target:&crate::pet_inference::Target)->Result<Ser
     let key=match target.choice.credential{
         crate::pet_inference::CredentialReference::None=>None,
         crate::pet_inference::CredentialReference::ConfiguredLmstudioEndpoint=>Some(secrets::get(LMSTUDIO_KEY).and_then(|s|key_for(&s,&url)).ok_or("A credencial escolhida não está disponível para este endpoint exato. Não foi usada outra credencial ou ligação anónima.")?),
+        crate::pet_inference::CredentialReference::ConfiguredCustomEndpoint=>Some(custom_key_for(&url).ok_or("A credencial escolhida não está disponível para este endpoint exato. Não foi usada outra credencial ou ligação anónima.")?),
     };
-    Ok(Server{id:target.choice.backend.key(),name:if target.choice.backend==crate::pet_inference::Backend::Ollama{"Ollama"}else{"LM Studio"},url:target.choice.endpoint.clone(),key})
+    Ok(Server{id:target.choice.backend.key(),name:match target.choice.backend{crate::pet_inference::Backend::Ollama=>"Ollama",crate::pet_inference::Backend::Lmstudio=>"LM Studio",crate::pet_inference::Backend::Custom=>"OpenAI-compatible server"},url:target.choice.endpoint.clone(),key})
 }
 pub(crate)fn server_for_capture(captured:&crate::pet_inference::Captured)->Result<Server,String>{
     captured.check()?;
+    let server=resolve_captured_server(captured)?;
+    captured.check()?;Ok(server)
+}
+fn resolve_captured_server(captured:&crate::pet_inference::Captured)->Result<Server,String>{
     let server=if let Some(target)=&captured.explicit{server_for_target(target)?}else{
         let url=net::normalise_server_url(&captured.endpoint)?;
         let key=match captured.adapter{"lmstudio"=>secrets::get(LMSTUDIO_KEY).and_then(|s|key_for(&s,&url)),"custom"=>custom_key_for(&url),_=>None};
         Server{id:captured.adapter,name:match captured.adapter{"ollama"=>"Ollama","lmstudio"=>"LM Studio",_=>"OpenAI-compatible server"},url:captured.endpoint.clone(),key}
     };
-    captured.check()?;Ok(server)
+    Ok(server)
+}
+/// Interactive preparation may await a busy reader, keeping the admitted
+/// target and physical hold. The single-use dispatch/authority fence is later.
+async fn server_for_capture_while(captured:&crate::pet_inference::Captured,current:impl Fn()->bool)->Result<Server,String>{
+    let until=Instant::now()+Duration::from_secs(6);
+    captured.wait_current(&current,until).await?;
+    let server=resolve_captured_server(captured)?;
+    captured.wait_current(&current,until).await?;
+    Ok(server)
 }
 pub(crate)fn metadata_auth_for_capture(captured:&crate::pet_inference::Captured)->Result<lmstudio::MetadataAuth,String>{
     if captured.adapter!="lmstudio"{return Err("Este destino não usa metadados LM Studio.".into());}
@@ -245,46 +271,112 @@ fn parse_models(body: &Value) -> Option<Vec<String>> {
 /// What a dropped file adds to the first message: text inline (cut), anything
 /// else by name only.
 pub(crate) fn file_note(name: &str, path: &str) -> String {
-    if std::path::Path::new(path).is_dir(){return crate::pet_documents::folder_text::note(name,std::path::Path::new(path));}
-    regular_file_note(name,path)
+    attachment_note(name, path).text
 }
-pub(crate) fn regular_file_note(name:&str,path:&str)->String{
-    if matches!(crate::pet_documents::policy::format(path,false),crate::pet_documents::policy::Format::Binary|crate::pet_documents::policy::Format::Image){return format!("File: {name}\nContent unavailable or unsupported for text extraction; do not infer its contents.");}
-    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-    let binary = matches!(ext.as_str(), "pdf" | "jpg" | "jpeg" | "png" | "gif" | "webp");
-    // Read no more than the inline limit can use (4 bytes per character at most).
-    let text = if ext=="pdf" {match crate::document_text::pdf(path){Ok(text)=>Some(text),Err(error)=>return format!("File: {name}\nDocument unavailable: {error}. Tell the user honestly; do not infer its contents.")}} else if binary { None } else { read_prefix(path, MAX_INLINE_CHARS * 4) };
-    match text {
-        Some(text) if !text.is_empty() => {
-            let mut body: String = text.chars().take(MAX_INLINE_CHARS).collect();
-            if body.len() < text.len() {
-                body.push_str("\n[truncated]");
-            }
-            format!("File: {name}\nFile contents:\n{body}")
-        }
-        _ => format!("File: {name}\nContent unavailable or unsupported; do not infer its contents."),
+pub(crate) fn regular_file_note(name: &str, path: &str) -> String {
+    regular_attachment_note(name, path).text
+}
+
+struct AttachmentNote {
+    text: String,
+    coverage: Option<Coverage>,
+    body_start: usize,
+    body_end: usize,
+}
+
+impl AttachmentNote {
+    fn without_body(text: String, coverage: Option<Coverage>) -> Self {
+        Self { text, coverage, body_start: 0, body_end: 0 }
+    }
+
+    fn fit(self, budget: &mut crate::pet_documents::content::Budget) -> (String, Option<Coverage>) {
+        let (text, kept) = budget.bounded_text(self.text);
+        (text, crate::pet_documents::content::text_coverage(kept, self.body_start, self.body_end, self.coverage))
     }
 }
 
-/// The first `limit` bytes of a file as UTF-8 text (a character cut in half at
-/// the end is dropped), or None for a file that is not text.
-fn read_prefix(path: &str, limit: usize) -> Option<String> {
-    crate::pet_documents::content::text_prefix(path,limit)
+pub(crate) fn bounded_attachment_note(name: &str, path: &str, budget: &mut crate::pet_documents::content::Budget) -> (String, Option<Coverage>) {
+    attachment_note(name, path).fit(budget)
+}
+
+fn attachment_note(name: &str, path: &str) -> AttachmentNote {
+    let file = std::path::Path::new(path);
+    if file.is_dir() {
+        return AttachmentNote::without_body(crate::pet_documents::folder_text::note(name, file), None);
+    }
+    regular_attachment_note(name, path)
+}
+
+fn regular_attachment_note(name: &str, path: &str) -> AttachmentNote {
+    use crate::pet_documents::policy::{format, Format};
+    let unavailable = |text| AttachmentNote::without_body(text, Some(Coverage::Unavailable));
+    let (input, clipped, decoded_plain_text) = match format(path, false) {
+        Format::Image | Format::Binary | Format::Folder => return unavailable(format!(
+            "File: {name}\nContent unavailable or unsupported for text extraction; do not infer its contents."
+        )),
+        Format::Pdf => match crate::document_text::pdf(path) {
+            Ok(text) => (text, false, false),
+            Err(error) => return unavailable(format!(
+                "File: {name}\nDocument unavailable: {error}. Tell the user honestly; do not infer its contents."
+            )),
+        },
+        // A UTF-8 character needs at most four bytes.
+        Format::Text => match crate::pet_documents::content::text_prefix(path, MAX_INLINE_CHARS * 4) {
+            Some((text, clipped)) => (text, clipped, true),
+            None => (String::new(), false, true),
+        },
+    };
+    if input.is_empty() {
+        return unavailable(format!("File: {name}\nContent unavailable or unsupported; do not infer its contents."));
+    }
+    let mut text = format!("File: {name}\nFile contents:\n");
+    let body_start = text.len();
+    text.extend(input.chars().take(MAX_INLINE_CHARS));
+    let body_end = text.len();
+    let partial = clipped || body_end - body_start < input.len();
+    if partial {
+        text.push_str("\n[truncated]");
+    }
+    let coverage = if partial { Some(Coverage::Partial) }
+        else if decoded_plain_text { Some(Coverage::Full) }
+        else { None };
+    AttachmentNote { text, coverage, body_start, body_end }
 }
 
 pub(crate) fn user_text(first: bool, context: Option<&ChatContext>, query: &str) -> String {
-    match context.filter(|c| first || c.has_files()) {
+    prepare_text(first, context, query).0
+}
+
+fn prepare_text(first: bool, context: Option<&ChatContext>, query: &str) -> (String, Vec<Preparation>) {
+    let mut preparation = vec![];
+    let text = match context.filter(|c| first || c.has_files()) {
         Some(ChatContext::File { name, path }) => format!("{}\n\n{query}", file_note(name, path)),
         Some(ChatContext::Window { app_name, title, url }) => {
             format!("{}\n\n{query}", chat::window_line(app_name, title, url.as_deref()))
         }
-        Some(ChatContext::Files{files})=>{
-            let mut budget=crate::pet_documents::content::Budget::default();let mut notes=vec![];
-            for (index,file) in files.iter().enumerate(){let (name,path)=(file.name.as_str(),file.path.as_str());notes.push(file.label(index));let note=if budget.available(){file_note(name,path)}else{crate::pet_documents::content::unavailable(name,"combined extraction deadline")["text"].as_str().unwrap().into()};notes.push(budget.text(note));}
-            notes.push(query.into());notes.join("\n\n")
+        Some(ChatContext::Files { files }) => {
+            let mut budget = crate::pet_documents::content::Budget::default();
+            let mut notes = vec![];
+            for (index, file) in files.iter().enumerate() {
+                notes.push(file.label(index));
+                let (text, coverage) = if budget.available() {
+                    bounded_attachment_note(&file.name, &file.path, &mut budget)
+                } else {
+                    let unavailable = crate::pet_documents::content::unavailable(&file.name, "combined extraction deadline");
+                    AttachmentNote::without_body(unavailable["text"].as_str().unwrap_or_default().into(), Some(Coverage::Unavailable))
+                        .fit(&mut budget)
+                };
+                if let Some(coverage) = coverage {
+                    preparation.push(Preparation { id: file.id.clone(), coverage });
+                }
+                notes.push(text);
+            }
+            notes.push(query.into());
+            notes.join("\n\n")
         }
         None => query.to_string(),
-    }
+    };
+    (text, preparation)
 }
 
 pub(crate) struct PreparedUser { pub text: String, calendar: Option<crate::pet_calendar::Note>, documents:crate::pet_documents::Request }
@@ -297,9 +389,11 @@ pub(crate) async fn user_text_for_turn(chat: &Chat, turn: &crate::chat::Turn, co
     let documents=crate::pet_documents::Request::capture_async(chat,turn,context).await?;
     let calendar = crate::pet_calendar::note_async(chat, turn, context).await?;
     let ordinary=crate::pet_calendar::ordinary_context(context);let (first,question)=(turn.first,query.to_string());
-    let base=tokio::task::spawn_blocking(move||user_text(first,ordinary.as_ref(),&question)).await.map_err(|_|"A preparação dos anexos foi interrompida.".to_string())?;
+    let (base, preparation)=tokio::task::spawn_blocking(move||prepare_text(first,ordinary.as_ref(),&question)).await.map_err(|_|"A preparação dos anexos foi interrompida.".to_string())?;
     let text=crate::pet_calendar::prepend_text(calendar.as_ref(),base);
-    documents.validate_contents().await?;Ok(PreparedUser { text, calendar,documents })
+    documents.validate_contents().await?;
+    chat.record_attachment_preparation(turn, preparation)?;
+    Ok(PreparedUser { text, calendar,documents })
 }
 
 fn request_body(model: &str, system: &str, history: &[Value], user: &Value) -> Value {
@@ -368,7 +462,7 @@ async fn send_inner(
     let lease=chat.lease(&turn);
     let _lease=if let Some(app)=app{lease.broadcast(app,&query)}else{lease};
     let captured=turn.captured_inference();
-    let resolved=captured.as_ref().map(|c|server_for_capture(c)).transpose()?;let server=resolved.as_ref().unwrap_or(server);
+    let resolved=if let Some(captured)=&captured{Some(server_for_capture_while(captured,||chat.is_current(&turn)).await?)}else{None};let server=resolved.as_ref().unwrap_or(server);
     if captured.as_ref().and_then(|c|c.explicit.as_ref()).is_some_and(|t|t.choice.model!=model){return Err("O modelo não corresponde ao binding capturado; o pedido não foi redirecionado.".into());}
     let base=base_url(server)?;
     let identity = if let Some(captured)=&captured{
@@ -421,7 +515,11 @@ async fn send_inner(
     prepared.validate_contents().await?;
     let mut capture = None;
     let streamed = tokio::select! {
-        result=stream_bounded_captured(&base, server.key.as_deref(), model, &body, capture_origin.as_ref(), &mut capture, |text|{if prepared.validate().is_ok()&&chat.is_current(&turn){if let Some(app)=app {chat.publish_delta(app,&turn,&text);}if let Some(activity)=&activity{activity.update("message",text.rsplit("\n\n").next().unwrap_or(&text));}on_delta(text);}},MAX_ANSWER,false,||{chat.check_new_effect()?;if !chat.is_current(&turn){return Err(crate::net::CANCELLED.into());}turn.check_inference()})=>Some(result),
+        result=stream_bounded_captured(&base, server.key.as_deref(), model, &body, capture_origin.as_ref(), &mut capture, |text|{if prepared.validate().is_ok()&&chat.is_current(&turn){if let Some(app)=app {chat.publish_delta(app,&turn,&text);}if let Some(activity)=&activity{activity.update("message",text.rsplit("\n\n").next().unwrap_or(&text));}on_delta(text);}},MAX_ANSWER,false,||async{
+            if let Some(captured)=&captured{captured.wait_current(||chat.is_current(&turn),Instant::now()+Duration::from_secs(6)).await?;}
+            // A preference write/review during the wait cannot authorize IO.
+            chat.check_new_effect()?;if !chat.is_current(&turn){return Err(crate::net::CANCELLED.into());}Ok(())
+        })=>Some(result),
         _=async {while chat.is_current(&turn) && prepared.validate().is_ok() {tokio::time::sleep(Duration::from_millis(50)).await;}}=>None,
     };
     // The select futures have been dropped before accessing capture again.
@@ -475,13 +573,21 @@ pub(crate)struct RuntimeReply{pub reply:ChatReply,pub accepted_output_bytes:u64,
 /// Exact actual request, owned by the native caller before budget reservation.
 /// It is deliberately not Clone/Deserialize and is neither consent nor an IO
 /// permit. Dropping it abandons this turn; a body copied from JSON cannot send.
-pub(crate)struct PreparedRuntimeRequest{chat:Chat,turn:crate::chat::Turn,lease:crate::chat::TurnLease,server:Server,model:String,query:String,user:Value,body:Value,origin:Option<CaptureOrigin>}
+pub(crate)struct PreparedRuntimeRequest{chat:Chat,turn:crate::chat::Turn,lease:crate::chat::TurnLease,server:Server,model:String,query:String,user:Value,body:Value,origin:Option<CaptureOrigin>,#[cfg(target_os="linux")]calendar_brief:Option<crate::pet_calendar::brief::Brief>}
 impl PreparedRuntimeRequest{
+ #[cfg(target_os="linux")]
+ pub(crate)fn select_calendar_brief(&mut self,context:&crate::pet_calendar::goal::Context,count:Option<u8>)->Result<(),String>{
+  if self.server.id!="ollama"{return Err("Este contrato factual exige o adaptador Ollama local revisto; nenhum destino alternativo foi usado.".into());}
+  let brief=crate::pet_calendar::brief::Brief::capture(context,count)?;let mut input:Value=serde_json::from_str(self.user["content"].as_str().ok_or("Falta o pedido original.")?).map_err(|_|"O pedido original não corresponde ao objetivo.")?;
+  input.as_object_mut().ok_or("Pedido original inválido.")?.insert("calendarFactualReply".into(),brief.prompt());self.user["content"]=json!(serde_json::to_string(&input).map_err(|_|"Formato factual inválido.")?);
+  let messages=self.body["messages"].as_array_mut().ok_or("Faltam as mensagens originais.")?;*messages.last_mut().ok_or("Falta o pedido original.")?=self.user.clone();self.body["format"]=brief.schema();runtime_ollama::configure(&mut self.body)?;self.calendar_brief=Some(brief);Ok(())
+ }
  pub(crate)fn body(&self)->&Value{&self.body}
  pub(crate)fn select_peer_context(&mut self,history:Option<&crate::pet_runtime::peer_round_history::Captured>,own_memory:Option<Value>)->Result<(),String>{
   let old=self.body["messages"].as_array().filter(|m|m.len()>=3).ok_or("O corpo peer não contém identidade/dados/pedido.")?;
-  let mut messages=vec![old[0].clone()];if let Some(memory)=own_memory{if memory["role"]!="user"||!memory["content"].is_string(){return Err("A memória própria não corresponde ao contexto nativo.".into());}messages.push(memory);}if let Some(history)=history{messages.extend(history.messages().iter().cloned());}messages.extend(old[old.len()-2..].iter().cloned());self.body["messages"]=Value::Array(messages);Ok(())
+  let mut messages=vec![old[0].clone()];if let Some(memory)=own_memory{if memory["role"]!="user"||!memory["content"].is_string(){return Err("A memória própria não corresponde ao contexto nativo.".into());}messages.push(memory);}if let Some(history)=history{messages.extend(history.messages().iter().cloned());}messages.extend(old[old.len()-2..].iter().cloned());self.body["messages"]=Value::Array(messages);if self.server.id=="ollama"{runtime_ollama::configure(&mut self.body)?;}Ok(())
  }
+ pub(crate)fn validate_runtime_context(&self)->Result<(),String>{if self.server.id=="ollama"{runtime_ollama::validate(&self.server,&self.model,&self.body)}else{Ok(())}}
  pub(crate)fn server(&self)->&Server{&self.server}
  pub(crate)fn turn_binding(&self)->Option<(String,u64)>{self.chat.usage_origin(&self.turn)}
  /// Logical turn witness survives an authenticated physical resource yield.
@@ -497,8 +603,9 @@ pub(crate)fn prepare_runtime_request(chat:&Chat,server:&Server,model:&str,query:
  let identity=chat.capture_local_identity(&turn,config,crate::pet_config::pet_id(provider).ok_or("O pet do modelo mudou.")?)?;
  let user=json!({"role":"user","content":model_input});let mut body=request_body(model,&chat::system_prompt_for_pet(&identity,false),&turn.history,&user);
  if let Some(memory)=memory{let messages=body.get_mut("messages").and_then(Value::as_array_mut).filter(|m|!m.is_empty()).ok_or("O pedido do objetivo é inválido.")?;messages.insert(messages.len()-1,memory);}
+ if server.id=="ollama"{runtime_ollama::configure(&mut body)?;}
  let origin=chat.usage_capture_origin(&turn);let server=Server{id:server.id,name:server.name,url:server.url.clone(),key:server.key.clone()};
- Ok(PreparedRuntimeRequest{chat:chat.clone(),turn,lease,server,model:model.into(),query,user,body,origin})
+ Ok(PreparedRuntimeRequest{chat:chat.clone(),turn,lease,server,model:model.into(),query,user,body,origin,#[cfg(target_os="linux")]calendar_brief:None})
 }
 pub(crate)async fn send_runtime_once(app:Option<&AppHandle>,chat:&Chat,server:&Server,model:&str,query:String,model_input:String,fence:&impl RuntimeFence,config:&crate::pet_config::Configuration)->Result<RuntimeReply,String>{
  if !fence.current(){return Err("O objetivo deixou de estar pronto.".into());}
@@ -507,20 +614,29 @@ pub(crate)async fn send_runtime_once(app:Option<&AppHandle>,chat:&Chat,server:&S
 }
 pub(crate)async fn send_runtime_prepared(app:Option<&AppHandle>,chat:&Chat,prepared:PreparedRuntimeRequest,fence:&impl RuntimeFence)->Result<RuntimeReply,String>{
  if !fence.current()||fence.provider()!=prepared.turn.provider||!chat.is_current(&prepared.turn){return Err("O objetivo ou o pedido preparado deixou de estar atual.".into());}
+ #[cfg(target_os="linux")]let calendar_brief=prepared.calendar_brief.clone();
+ #[cfg(target_os="linux")]let publish_raw=calendar_brief.is_none();
+ #[cfg(not(target_os="linux"))]let publish_raw=true;
  let PreparedRuntimeRequest{turn,lease,server,model,query,user,body,origin,..}=prepared;
  let _lease=if let Some(app)=app{lease.broadcast(app,&query)}else{lease};let base=base_url(&server)?;
  let mut capture=None;
  let result=tokio::select!{
-  result=stream_bounded_captured(&base,server.key.as_deref(),&model,&body,origin.as_ref(),&mut capture,|text|{if fence.current()&&chat.is_current(&turn){if let Some(app)=app{chat.publish_delta(app,&turn,&text);}}},fence.output_limit(),true,||{turn.check_inference()?;fence.before_send_to(&server,&model,&body)})=>result,
+   result=stream_runtime_captured(&server,&model,&body,origin.as_ref(),&mut capture,|text|{if publish_raw&&fence.current()&&chat.is_current(&turn){if let Some(app)=app{chat.publish_delta(app,&turn,&text);}}},fence.output_limit(),||async{turn.check_inference()?;fence.before_send_to(&server,&model,&body)})=>result,
   _=async{loop{if !fence.current()||!chat.is_current(&turn){break;}tokio::time::sleep(Duration::from_millis(50)).await;}}=>Err("A execução foi interrompida.".into()),
  };
- let answer=match result{Ok(answer)=>answer,Err(error)=>{finish_text_capture(&mut capture,AttemptOutcome::Failed);return Err(error);}};
+ #[allow(unused_mut)]let mut answer=match result{Ok(answer)=>answer,Err(error)=>{finish_text_capture(&mut capture,AttemptOutcome::Failed);return Err(error);}};
  if !fence.current()||!chat.is_current(&turn){finish_text_capture(&mut capture,AttemptOutcome::Cancelled);return Err("A execução foi interrompida.".into());}
  if !answer.protocol_complete{finish_text_capture(&mut capture,AttemptOutcome::Failed);return Err("O stream terminou sem confirmação do protocolo; não repetir automaticamente.".into());}
  if answer.text.is_empty(){finish_text_capture(&mut capture,AttemptOutcome::Failed);return Err(t("No response text."));}
+ #[cfg(target_os="linux")]if let Some(brief)=calendar_brief{match brief.render(&answer.text,fence.output_limit()){Ok(text)=>{answer.accepted_output_bytes=answer.accepted_output_bytes.max(text.len()as u64);answer.text=text;},Err(error)=>{finish_text_capture(&mut capture,AttemptOutcome::Failed);return Err(error);}}}
+ if !fence.current()||!chat.is_current(&turn){finish_text_capture(&mut capture,AttemptOutcome::Cancelled);return Err("A execução foi interrompida.".into());}
  chat.commit_observed_reply(&turn,user,json!({"role":"assistant","content":answer.text}),&query,&answer.text)?;
  finish_text_capture(&mut capture,AttemptOutcome::Completed);crate::pet_usage::record(app,chat,&turn,answer.usage);
  Ok(RuntimeReply{reply:ChatReply{text:answer.text},accepted_output_bytes:answer.accepted_output_bytes,_turn_lease:_lease})
+}
+
+async fn stream_runtime_captured<F:std::future::Future<Output=Result<(),String>>>(server:&Server,model:&str,body:&Value,origin:Option<&CaptureOrigin>,capture:&mut Option<Capture>,on_delta:impl FnMut(String),max_output:usize,before_send:impl FnOnce()->F)->Result<MeasuredReply,String>{
+ if server.id=="ollama"{runtime_ollama::stream(server,model,body,origin,capture,on_delta,max_output,before_send).await}else{let base=base_url(server)?;stream_bounded_captured(&base,server.key.as_deref(),model,body,origin,capture,on_delta,max_output,true,before_send).await}
 }
 
 /// Calendar reads use actual non-streamed function-call envelopes. A measured
@@ -712,11 +828,11 @@ async fn stream_measured_captured(
     capture: &mut Option<Capture>,
     mut on_delta: impl FnMut(String),
 ) -> Result<MeasuredReply, String> {
-    stream_bounded_captured(base,key,model,body,origin,capture,&mut on_delta,MAX_ANSWER,false,||Ok(())).await
+    stream_bounded_captured(base,key,model,body,origin,capture,&mut on_delta,MAX_ANSWER,false,||async{Ok(())}).await
 }
-async fn stream_bounded_captured(
+async fn stream_bounded_captured<F:std::future::Future<Output=Result<(),String>>>(
     base:&Url,key:Option<&str>,model:&str,body:&Value,origin:Option<&CaptureOrigin>,capture:&mut Option<Capture>,
-    mut on_delta:impl FnMut(String),max_output:usize,require_local:bool,before_send:impl FnOnce()->Result<(),String>,
+    mut on_delta:impl FnMut(String),max_output:usize,require_local:bool,before_send:impl FnOnce()->F,
 )->Result<MeasuredReply,String>{
     if max_output==0||max_output>MAX_ANSWER{return Err("Limite de resposta inválido.".into());}
     let began=Instant::now();let mut usage=crate::pet_usage::Usage::default();
@@ -729,13 +845,13 @@ async fn stream_bounded_captured(
     // One guard per actual dispatch attempt, after request construction and
     // metadata discovery. No credentials, prompts or response bytes are kept.
     crate::settings::effect_allowed()?;
-    before_send()?;
+    before_send().await?;
     *capture = Some(Capture::begin(origin, model));
     let mut reply = client.execute(request).await.map_err(|_| unreachable(base))?;
 
     let status = reply.status();
     if status.as_u16() == 404 {
-        return Err(tf("{model} isn't installed. Pick another model above the chat box.", &[("model", model)]));
+        return Err(format!("HTTP 404: {}", tf("{model} isn't installed. Pick another model above the chat box.", &[("model", model)])));
     }
     if !status.is_success() {
         let body = net::read_capped(reply, net::MAX_ERROR_BODY).await.unwrap_or_default();
@@ -745,7 +861,9 @@ async fn stream_bounded_captured(
             if let Some(capture) = capture { capture.observe_oai(&value); }
         }
         let detail = net::error_detail(&body);
-        return Err(if detail.is_empty() { format!("HTTP {}", status.as_u16()) } else { detail });
+        // Keep the actual transport status even when the server supplies text.
+        // The phone classifies this prefix and never forwards the private body.
+        return Err(if detail.is_empty() { format!("HTTP {}", status.as_u16()) } else { format!("HTTP {}: {detail}", status.as_u16()) });
     }
 
     let mut accumulated = String::new();
@@ -925,12 +1043,37 @@ mod tests {
     fn stream_errors_say_what_happened() {
         let u = serve_once("404 Not Found", "Content-Length: 2\r\n", b"{}".to_vec());
         let err = block_on(stream(&url(&u), None, "unknown-model", &json!({}), |_| {})).unwrap_err();
-        assert_eq!(err, "unknown-model isn't installed. Pick another model above the chat box.");
+        assert_eq!(err, "HTTP 404: unknown-model isn't installed. Pick another model above the chat box.");
         let body = br#"{"error":{"message":"context too long"}}"#;
         let u = serve_once("400 Bad Request", &format!("Content-Length: {}\r\n", body.len()), body.to_vec());
-        assert_eq!(block_on(stream(&url(&u), None, "m", &json!({}), |_| {})).unwrap_err(), "context too long");
+        assert_eq!(block_on(stream(&url(&u), None, "m", &json!({}), |_| {})).unwrap_err(), "HTTP 400: context too long");
         let u = serve_once("200 OK", "", b"data: {\"error\":{\"message\":\"crashed\"}}\n".to_vec());
         assert_eq!(block_on(stream(&url(&u), None, "m", &json!({}), |_| {})).unwrap_err(), "crashed");
+    }
+
+    #[test]
+    fn local_http_errors_keep_the_observed_status_for_the_private_phone_boundary() {
+        for (status, detail) in [
+            ("503 Service Unavailable", "private provider detail contains 401"),
+            ("401 Unauthorized", "private provider detail contains 503"),
+            ("429 Too Many Requests", ""),
+        ] {
+            let body = json!({"error":{"message":detail}}).to_string();
+            let endpoint = serve_once(status, &format!("Content-Length: {}\r\n", body.len()), body.into_bytes());
+            let error = block_on(stream(&url(&endpoint), None, "fixture-model", &json!({}), |_| {})).unwrap_err();
+            assert!(error.starts_with(&format!("HTTP {}", &status[..3])));
+            if !detail.is_empty() { assert!(error.ends_with(detail)); }
+        }
+    }
+
+    #[tokio::test]
+    async fn asynchronous_dispatch_fence_is_called_once_and_can_refuse_before_http_or_capture() {
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();listener.set_nonblocking(true).unwrap();
+        let base=url(&format!("http://{}",listener.local_addr().unwrap()));let calls=std::sync::atomic::AtomicUsize::new(0);let mut capture=None;
+        let result=stream_bounded_captured(&base,None,"fixture",&json!({}),None,&mut capture,|_|{},MAX_ANSWER,true,||async{
+            calls.fetch_add(1,std::sync::atomic::Ordering::AcqRel);tokio::time::sleep(Duration::from_millis(1)).await;Err("synthetic native fence refusal".into())
+        }).await;
+        assert_eq!(result.err().unwrap(),"synthetic native fence refusal");assert_eq!(calls.load(std::sync::atomic::Ordering::Acquire),1);assert!(capture.is_none());assert!(matches!(listener.accept(),Err(e)if e.kind()==std::io::ErrorKind::WouldBlock));
     }
 
     #[test]
@@ -968,6 +1111,28 @@ mod tests {
     fn attachment_collection_keeps_multiple_texts_and_folder_contents_on_later_turns(){
         let fixture=crate::pet_documents::fixtures::Files::new();fixture.write("a.txt",b"first sentinel");fixture.write("b.txt",b"second sentinel");fixture.write("folder/nested.txt",b"folder sentinel");let context=fixture.context(&[("a.txt","same.txt"),("b.txt","same.txt"),("folder","folder")]);let text=user_text(false,Some(&context),"compare all");
         for sentinel in ["first sentinel","second sentinel","folder sentinel","fixture-1","fixture-2","fixture-3"]{assert!(text.contains(sentinel),"{sentinel}");}assert!(text.ends_with("compare all"));
+    }
+
+    #[test]
+    fn prepared_text_coverage_tracks_content_bounds_by_copy_id() {
+        let files = crate::pet_documents::fixtures::Files::new();
+        files.write("literal.txt", b"Literal [truncated] marker.");
+        files.write("long.txt", "🦊".repeat(MAX_INLINE_CHARS + 1).as_bytes());
+        let context = files.context(&[("literal.txt", "same.txt"), ("long.txt", "same.txt")]);
+        let (text, preparation) = prepare_text(false, Some(&context), "compare");
+        let item = |id: &str, coverage| Preparation { id: id.into(), coverage };
+        assert!(text.contains("Literal [truncated] marker."));
+        assert!(text.contains("\n[truncated]"));
+        assert_eq!(preparation, vec![item("fixture-1", Coverage::Full), item("fixture-2", Coverage::Partial)]);
+
+        files.write("exact.txt", "🦊".repeat(MAX_INLINE_CHARS).as_bytes());
+        let context = files.context(&[("exact.txt", "one.txt"), ("exact.txt", "two.txt"),
+            ("exact.txt", "three.txt"), ("literal.txt", "four.txt")]);
+        let (text, preparation) = prepare_text(false, Some(&context), "compare");
+        assert!(text.contains("combined text limit"));
+        assert!(!text.contains("Literal [truncated] marker."));
+        assert_eq!(preparation, vec![item("fixture-1", Coverage::Full), item("fixture-2", Coverage::Full),
+            item("fixture-3", Coverage::Partial), item("fixture-4", Coverage::Unavailable)]);
     }
 
     #[test]

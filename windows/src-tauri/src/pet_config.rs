@@ -96,6 +96,12 @@ pub fn require_active(id:&str)->Result<(),String>{
 pub fn require_active_provider(provider:&str)->Result<(),String>{
  if let Some(id)=integration_pet(provider){require_active(id)?;}Ok(())
 }
+/// Domain eligibility is separate from preserved account/profile metadata.
+pub fn require_inference_provider(provider:&str)->Result<(),String>{
+ require_active_provider(provider)?;
+ if integration_pet(provider).and_then(blueprint).is_some_and(|b|!b.features.inference){return Err("Este pet representa uma aplicação ou serviço, sem conversa ou modelos de IA. Usa as suas funções próprias.".into());}
+ Ok(())
+}
 pub fn path()->PathBuf {crate::settings::config_dir().join("pets.json")}
 pub fn service_ids()->impl Iterator<Item=&'static str>{blueprints().filter(|p|p.service).map(|p|p.id.as_str())}
 pub fn service(id:&str)->bool {blueprint(id).is_some_and(|p|p.service)}
@@ -103,7 +109,7 @@ pub fn pet_id(provider:&str)->Option<&'static str>{factory::for_task_provider(pr
 pub fn integration_pet(provider:&str)->Option<&'static str>{factory::for_provider(provider)}
 impl Configuration {
  pub fn uses_optional_assistant(&self,id:&str)->bool{
-  self.pets.get(id).zip(blueprint(id)).is_some_and(|(p,b)|b.runtime.assistant_adapter.is_some_and(|adapter|b.configured_adapter(&p.provider)==Some(adapter)))
+  self.pets.get(id).zip(blueprint(id)).is_some_and(|(p,b)|b.features.inference&&b.runtime.assistant_adapter.is_some_and(|adapter|b.configured_adapter(&p.provider)==Some(adapter)))
  }
  pub fn local_execution_for(&self,pet_id:&str)->LocalExecution{self.pets.get(pet_id).and_then(|p|p.local_execution.clone()).unwrap_or_default()}
  pub fn local_execution(&self)->LocalExecution{self.local_execution_for("ai_ollama")}
@@ -240,7 +246,7 @@ impl Configuration {
   addressed.first().filter(|(_,id,p)|retired(id)||p.provider.is_empty()).map(|(_,_,p)|p.name.clone())
  }
  pub fn select(&self,provider:&str,requested:&str,query:&str)->Result<Selection,String> {
-  require_active_provider(provider)?;let id=pet_id(provider).ok_or("Este pet não tem perfil de modelos.")?;let p=self.pets.get(id).ok_or("Falta o perfil deste pet.")?;
+  require_inference_provider(provider)?;let id=pet_id(provider).ok_or("Este pet não tem perfil de modelos.")?;let p=self.pets.get(id).ok_or("Falta o perfil deste pet.")?;
   if let Some(target)=crate::pet_inference::Target::configured(self,id)?{
    if !requested.is_empty()&&requested!="@default"&&requested!=target.choice.model{return Err("Este pet tem um modelo explícito. Revê o binding do pet antes de escolher outro modelo.".into());}
    return Ok(Selection{model:target.choice.model,effort:String::new(),mode:"binding".into()});
@@ -309,10 +315,14 @@ pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revisi
   assert!(c.select("gemini-cli","@reasoning","olá").is_err());assert!(c.select("claude-cli","@fast","olá").is_err());
   assert_eq!(c.select("codex","chosen-model","olá").unwrap().mode,"manual");
  }
- #[test]fn every_callable_pet_has_two_profiles_and_keeps_its_own_spoken_owner(){
+ #[test]fn configured_inference_pets_have_two_profiles_and_keep_their_spoken_owner(){
   let c=defaults();let aliases:BTreeMap<_,_>=c.pets.iter().filter(|(id,p)|id.as_str()=="integration_spotify"||!p.provider.is_empty()).map(|(id,p)|(if service(id){id.clone()}else{p.provider.clone()},p.aliases.clone())).collect();
   for pet in crate::voice::dialogue::Pet::ALL {
    let owner=pet.provider();let id=pet_id(owner).unwrap();
+   if !blueprint(id).unwrap().features.inference {
+    assert!(c.select(owner,"@fast","olá").is_err(),"{id}");
+    continue;
+   }
    if retired(id)||c.pets[id].provider.is_empty(){continue;}
    for mode in ["@fast","@reasoning"] {assert!(!c.select(owner,mode,"olá").unwrap().model.is_empty(),"{id}");}
    for name in std::iter::once(&c.pets[id].name).chain(&c.pets[id].aliases) {
@@ -350,20 +360,34 @@ pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revisi
  use super::*;
  #[test]fn optional_assistant_configuration_keeps_native_grants_and_rejects_another_account(){
   let mut c=defaults();let before=c.pets["integration_spotify"].permissions.clone();
-  c.pets.get_mut("integration_spotify").unwrap().provider="codex".into();validate(&c).unwrap();assert!(c.uses_optional_assistant("integration_spotify"));assert_eq!(c.pets["integration_spotify"].permissions,before);
+  c.pets.get_mut("integration_spotify").unwrap().provider="codex".into();validate(&c).unwrap();assert!(!c.uses_optional_assistant("integration_spotify"));assert_eq!(c.pets["integration_spotify"].permissions,before);
   c.pets.get_mut("integration_spotify").unwrap().provider="copilot".into();assert!(validate(&c).is_err());
  }
  #[test]fn spoty_retains_identity_and_profiles_without_an_llm_backend(){
   let config=defaults();let pet=&config.pets["integration_spotify"];assert!(pet.provider.is_empty());assert!(pet.aliases.iter().any(|a|a=="spoty"));
-  validate(&config).unwrap();assert!(config.select("integration_spotify","@fast","pausa").is_err());assert!(!config.uses_optional_assistant("integration_spotify"));assert_eq!(crate::cli_chat::backend("integration_spotify"),Some("codex"));
+  validate(&config).unwrap();assert!(config.select("integration_spotify","@fast","pausa").is_err());assert!(!config.uses_optional_assistant("integration_spotify"));assert_eq!(crate::cli_chat::backend("integration_spotify"),None);
   assert!(matches!(crate::voice::dialogue::parse("Spoty, silenciar sistema"),crate::voice::dialogue::Command::Select(crate::voice::dialogue::Pet::Spotify,ref query)if query=="silenciar sistema"));
  }
  #[test]fn legacy_spotify_backend_models_and_grants_are_preserved_without_overwriting_private_file(){
   let dir=std::env::temp_dir().join(format!("coucou-spoty-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
   std::fs::create_dir(&dir).unwrap();let path=dir.join("pets.json");let mut config=defaults();let p=config.pets.get_mut("integration_spotify").unwrap();p.provider="codex".into();p.name="Som pessoal".into();p.aliases.push("audio pessoal".into());let fast=p.fast.clone();let grants=p.permissions.clone();
   let bytes=serde_json::to_vec(&config).unwrap();std::fs::write(&path,&bytes).unwrap();let doc=read_at(&path).unwrap();let pet=&doc.config.pets["integration_spotify"];
-  assert_eq!(pet.provider,"codex");assert!(doc.config.uses_optional_assistant("integration_spotify"));assert_eq!(doc.config.select("integration_spotify","@fast","explica a playlist").unwrap().model,fast.model);assert_eq!(pet.name,"Som pessoal");assert!(pet.aliases.iter().any(|a|a=="audio pessoal"));assert_eq!(pet.fast,fast);assert_eq!(pet.permissions,grants);assert_eq!(std::fs::read(&path).unwrap(),bytes);
+  assert_eq!(pet.provider,"codex");assert!(!doc.config.uses_optional_assistant("integration_spotify"));assert!(doc.config.select("integration_spotify","@fast","explica a playlist").is_err());assert_eq!(pet.name,"Som pessoal");assert!(pet.aliases.iter().any(|a|a=="audio pessoal"));assert_eq!(pet.fast,fast);assert_eq!(pet.permissions,grants);assert_eq!(std::fs::read(&path).unwrap(),bytes);
   std::fs::remove_dir_all(dir).unwrap();
+ }
+}
+
+#[cfg(test)]mod domain_feature_tests{
+ use super::*;
+ #[test]fn preserved_service_profiles_do_not_allow_model_selection_or_new_conversation_admission(){
+  let config=defaults();let before=serde_json::to_vec(&config).unwrap();let chat=crate::chat::Chat::default();
+  for id in service_ids(){
+   assert!(crate::assistant_memory::supported(id));assert_eq!(pet_id(id),Some(id));assert!(require_inference_provider(id).is_err());assert_eq!(crate::cli_chat::backend(id),None);
+   for model in ["@fast","@auto","explicit-model"]{assert!(config.select(id,model,"pedido").is_err());}
+   assert!(chat.check_admission(id).is_err());assert!(chat.begin_cli(id,std::sync::Arc::default()).is_err());
+  }
+  for id in ["codex","copilot","antigravity","ollama"]{assert!(require_inference_provider(id).is_ok());}
+  assert_eq!(serde_json::to_vec(&config).unwrap(),before);validate(&config).unwrap();
  }
 }
 
@@ -380,10 +404,10 @@ pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revisi
   assert_eq!(c.unavailable_address("Copilot CLI, ajuda"),None);
  }
  #[test]fn history_classification_and_sibling_models_remain_available(){
-  assert!(service("integration_github"));assert_eq!(crate::cli_chat::backend("integration_github"),Some("codex"));
+  assert!(service("integration_github"));assert_eq!(crate::cli_chat::backend("integration_github"),None);
   assert_eq!(pet_id("integration_github"),Some("integration_github"));
   assert!(crate::assistant_memory::supported("integration_github"));
-  for provider in ["codex","copilot","antigravity","ollama","integration_notion","integration_vercel"]{
+  for provider in ["codex","copilot","antigravity","ollama"]{
    assert!(require_active_provider(provider).is_ok());assert!(defaults().select(provider,"@fast","olá").is_ok(),"{provider}");
   }
   // Before reading HOME preferences or touching a dropped file.

@@ -40,3 +40,28 @@ test('false or a late opening for a changed card never folds the current owner',
   chat.fire('click');State.lastActivity++;finish(true);await flush();assert.equal(closed,0);
  }finally{internals.invoke=invoke;State.petCardsOnly=false;}
 });
+
+
+test('service domains hide unrelated session and chat controls while keeping native configuration',()=>{
+ const before={settings:State.settings,only:State.petCardsOnly,mode:State.mode,pending:State.pendingApproval,tasks:State.tasks,focus:State.focusId};
+ try{
+  State.settings={...DEFAULT_SETTINGS,companionMode:false};State.petCardsOnly=true;State.mode='expanded';State.pendingApproval=null;
+  const header=buildPetCardHeader({collapse(){},setView(){}});const button=label=>header.el.find('button').find(b=>b.getAttribute('aria-label')===label);
+  for(const id of ['integration_n8n','integration_notion','integration_vercel','integration_resend','integration_calcom','integration_stripe','integration_spotify','integration_github','unknown_pet']){
+   State.tasks=[{id,name:id,color:'#2dd4bf',state:'idle',steps:[],stepIndex:0}];State.focusId=id;header.sync();
+   for(const label of ['Sessões deste pet','Conversar com este pet','Anexar documento a este pet'])assert.equal(button(label).hidden,true,id+': '+label);
+   assert.equal(button('Configurar este pet').hidden,false,id);
+  }
+ }finally{State.settings=before.settings;State.petCardsOnly=before.only;State.mode=before.mode;State.pendingApproval=before.pending;State.tasks=before.tasks;State.focusId=before.focus;}
+});
+
+test('LLM domains retain header sessions and chat with the current exact identity',()=>{
+ const before={settings:State.settings,only:State.petCardsOnly,mode:State.mode,pending:State.pendingApproval,tasks:State.tasks,focus:State.focusId};
+ try{
+  State.settings={...DEFAULT_SETTINGS,companionMode:false};State.petCardsOnly=true;State.mode='expanded';State.pendingApproval=null;const header=buildPetCardHeader({collapse(){},setView(){}});
+  for(const id of ['agent_codex','agent_copilot','agent_antigravity','ai_ollama']){
+   State.tasks=[{id,name:id,color:'#2dd4bf',state:'idle',steps:[],stepIndex:0}];State.focusId=id;header.sync();
+   for(const label of ['Sessões deste pet','Conversar com este pet'])assert.equal(header.el.find('button').find(b=>b.getAttribute('aria-label')===label).hidden,false,id);
+  }
+ }finally{State.settings=before.settings;State.petCardsOnly=before.only;State.mode=before.mode;State.pendingApproval=before.pending;State.tasks=before.tasks;State.focusId=before.focus;}
+});

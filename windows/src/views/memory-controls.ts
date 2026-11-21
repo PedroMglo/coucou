@@ -6,7 +6,7 @@ type Transport=Pick<typeof Bridge,'petMemoryList'|'petMemoryMutate'>;
 const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 /** Explicit native-user catalogue. Opening the containing view and changing
  * its owner perform no IO. Selection pins revisions, never mutable records. */
-export function buildMemoryControls(options:{changed?:()=>void;selectionChanged?:()=>void;purpose?:'goal'|'manual';title?:string;transport?:Transport}={}){
+export function buildMemoryControls(options:{changed?:()=>void;catalogChanged?:()=>void;selectionChanged?:()=>void;purpose?:'goal'|'manual'|'rule';title?:string;transport?:Transport}={}){
  const transport=options.transport??Bridge,changed=options.changed??(()=>{});
  let owner:PetMemoryOwner|null=null,selectable=false,alive=true,epoch=0,busy=false,page:PetMemoryPage|null=null,entries:PetMemoryPage['items']=[],editing:PetMemoryEntry|null=null,refreshRequired=true,pageQuery='';
  const selected=new Map<string,PetMemorySelected>();
@@ -26,7 +26,7 @@ export function buildMemoryControls(options:{changed?:()=>void;selectionChanged?
  function draw(){
   load.disabled=busy||!owner;more.hidden=!page?.hasMore;more.disabled=busy||!owner;save.disabled=busy||!owner||refreshRequired;
   editor.disabled=busy||!owner||refreshRequired;query.disabled=busy||!owner;
-  choices.replaceChildren(h('p',{text:selectable?`${selected.size}/16 recordações selecionadas. Revê as revisões antes de ${options.purpose==='manual'?'enviar o pedido':'guardar o objetivo'}.`:`Este destino não suporta seleção de memória ${options.purpose==='manual'?'nesta conversa':'por um objetivo'}. A gestão das recordações continua disponível.`}));
+  choices.replaceChildren(h('p',{text:selectable?`${selected.size}/16 recordações selecionadas. Revê as revisões antes de ${options.purpose==='manual'?'enviar o pedido':options.purpose==='rule'?'guardar a rotina':'guardar o objetivo'}.`:`Este destino não suporta seleção de memória ${options.purpose==='manual'?'nesta conversa':'por um objetivo'}. A gestão das recordações continua disponível.`}));
   for(const reference of selected.values())choices.append(h('p',{},`${reference.id} · revisão ${reference.revision}`,h('button',{type:'button',text:'Retirar da seleção',onclick:()=>{selected.delete(reference.id);options.selectionChanged?.();draw();changed();}})));
   records.replaceChildren();
   for(const view of entries){const entry=view.entry,check=h('input',{type:'checkbox','aria-label':`Selecionar recordação ${entry.title} revisão ${entry.revision}`}) as HTMLInputElement;
@@ -53,7 +53,7 @@ export function buildMemoryControls(options:{changed?:()=>void;selectionChanged?
    // Never replace an already selected revision with the result of an edit.
    resetEditor();refreshRequired=true;tell('Gravação confirmada. Consulta o catálogo para rever a nova revisão.');
   }catch(e){if(alive&&ticket===epoch){refreshRequired=true;tell(`${String(e)} Consulta o catálogo antes de repetir; a gravação pode ter ocorrido.`);}}
-  finally{if(alive&&ticket===epoch){busy=false;draw();}}
+  finally{if(alive&&ticket===epoch){busy=false;options.catalogChanged?.();draw();}}
  }
  async function write(){
   const expiresAt=expiry.value.trim()?Date.parse(expiry.value):null;

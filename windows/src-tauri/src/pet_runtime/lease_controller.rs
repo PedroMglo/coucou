@@ -4,6 +4,7 @@
 #[path="writer.rs"]mod writer;
 pub(in crate::pet_runtime)use writer::{PreparedPeerRound,PeerRoundPublished};
 #[cfg(target_os="linux")]#[path="completion_commit.rs"]mod completion_commit;
+#[cfg(test)]pub(in crate::pet_runtime)use writer::tests::fixture_record_project_result;
 #[cfg(test)]pub(in crate::pet_runtime)use writer::tests::{fixture_with_hook_idle as memory_test_http_fixture_idle,fixture_with_hook_disconnect as memory_test_http_fixture_allow_disconnect,fixture_with_hook as memory_test_http_fixture,stream as memory_test_stream,local_metadata as memory_test_metadata,run as memory_test_run};
 #[cfg(target_os="linux")]#[path="dispatcher.rs"]pub(super)mod dispatcher;
 #[cfg(target_os="linux")]#[path="peer_plan_review.rs"]pub(in crate::pet_runtime)mod peer_plan_review;

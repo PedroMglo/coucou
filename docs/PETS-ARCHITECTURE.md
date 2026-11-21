@@ -1,3 +1,89 @@
+**17/11 — pedido e resposta de decisão de projeto validados em composição privada atual.**
+A rotina pode pedir uma decisão limitada. A supervisão revê e guarda a resposta
+numa nota de projeto, sem executar a opção ou gastar nova inferência. Dono,
+origem, consentimento e revogação são validados nativamente; outra resposta não
+sobrescreve a nota. Reutilizar a nota num novo objetivo exigiu seleção e revisão
+próprias. UI legível, reinício e zero replay passaram no binário `bbac7a16…`;
+5 Rust/79 web/tipos. Registry2/Goal69/Admission32 conservados, sem novo ledger.
+Instalada44/RPM49 intactos; restauro nativo atual, uso prolongado, ações próprias,
+entrega instalada/humana e49 integrais continuam abertos.
+[Contrato, provas e limites](PETS-PROJECT-DECISION-2026-11-17.md).
+
+**17/11 — acompanhamento de objetivos de projeto validado na composição privada atual.**
+Source17/build5/native9 (`14036407…`): escolhas próprias de dados futuros,
+duas ocorrências civis com fotografias distintas, respostas legíveis,
+sucessão6/revisão7, revogação da origem durante HTTP e reinício sem replay.
+71 Rust dirigidos,58 web/tipos; restauro novo em fixtures. Sem quota real,
+instalação ou aceitação humana. AUTO04 integral/pedido de decisão governado,
+uso prolongado e entrega instalada continuam abertos. Instalada44 e RPM49
+preservados. [Contrato, provas e limites](PETS-PROJECT-FOLLOWUP-2026-11-17.md).
+
+**Candidata48 preparada16/11 — ainda não instalada.** O RPM normal atual passou
+n8n sem chat/modelos genéricos, conversa Codex sintética, calendários/reinício/
+automático, revisão/sucessão/renovação,13 comandos nativos de preservação e leitura
+restaurada dos formatos6/7 e10 com execução recusada. Provas e falhas qualificadas
+no recibo; sem quota real no RPM, aceitação humana ou paridade global. Instalada44/
+Source35 e preferências preservadas;49 critérios intactos e abertos. A substituição
+requer autorização própria do artefacto e registo Coucou focado/assinado.
+[Âmbito, artefacto, provas e aplicação proposta](PETS-INSTALLED-DELIVERY-48.md).
+
+**16/11 — índice derivado no domínio; runtime e formatos reutilizados.**
+O índice global cronológico do domínio calendário conserva todos os eventos da
+DATA e permite selecionar prioridades posteriores. Na SOURCE1/1332 `66807251…`,
+Tauri/HTTP/resposta/reinício/automático e transição de contrato passaram. Uma chamada
+real/gratuita ao mesmo modelo selecionou9h/10h corretamente;85 palavras, coberturas e
+texto exato reaberto pela UI, sem nova inferência. É aceitação desse caso, não uma
+certificação geral. Há custo adicional de entrada/contexto, discriminado no recibo.
+Histórico restaurado formato10 continua legível e sem execução na composição atual.
+Seguem candidata operacional e paridade pertinente; instalada44/Source35 preservada,
+sem nova instalação/publicação/quota paga.49 critérios intactos e abertos.
+[Contrato, provas e limites](PET-RULES.md).
+
+**16/11 — persistência robusta não certifica utilidade da inferência.**
+O mesmo writer/contexto e Store toleram Busy de metadados até500ms, dentro do
+prazo original e com revalidação, sem repetir extração. A composição atual passou
+contenção real, resposta, reinício, agendamento e aviso. Formatos/Authority/
+scheduler/saldos mantêm-se. O teste seguinte de semântica no modelo local escolhido
+falhou: dados completos no HTTP, resposta com factos inventados, contexto alocado4096
+perante máximo anunciado131072. O contrato do adaptador deve garantir a capacidade
+efetiva usada ou recusar o envio; essa correção ainda está pendente. Pertence ao
+motor/âmbito LLM e não concede chat a serviços. [Contrato e recibos](PET-RULES.md).
+
+**16/11 — comunicação governada do resultado da rotina, integração parcial.**
+A regra de calendários pode consentir separadamente um aviso fixo do sistema,
+com metadados apenas, sem som, no máximo uma tentativa por ocorrência e dentro
+da janela revista. O runtime reutiliza o scan e a reserva/Authority existentes;
+o recibo do modelo é autenticado antes do envio. Formato9/Policy4 distinguem a
+extensão; os formatos sem aviso mantêm bytes/autoridade originais. Não promove
+permissões de sistema, ferramentas ou inferência por domínio. Os moldes `llm`/
+`application` continuam a delimitar as funcionalidades de cada pet.
+[Contrato, fontes, provas nativas e limites](PET-RULES.md). A aceitação pelo
+serviço não certifica banner visível. A rotina integral permanece parcial:
+captura automática interrompida com contexto ainda sem binding no objetivo,
+semântica de modelo, ciclo das regras, janela restaurada e entrega por fechar.
+
+**16/11 — CTX-04/AUTO-03 em integração parcial:** leitura própria, autoridade
+filha de dados, corpo real e resposta finita manual/automática reutilizam o
+runtime/scheduler/Authority/contexto/escritor existentes. Prova nativa sintética
+inclui horário, reinício, revogação durante HTTP e preservação CLI. Falta a
+notificação deduplicada e a aceitação semântica/operacional; não há nova
+infraestrutura de agendamento ou consentimento de conversa fabricado.
+[Contrato e limites atuais](PET-RULES.md). A entrada14/11 abaixo é histórica.
+
+**14/11 — CTX-04/AUTO-03:** revisão própria de dados futuros da rotina implementada no runtime comum, sem novo scheduler/ledger. A execução com calendários permanece indisponível até materialização, corpo real e aceitação coerentes. [Contrato e limites](PET-RULES.md).
+
+<!-- factory-domain-policy-20261113 -->
+**Regra normativa atual do proprietário —13/11:** as funcionalidades pertencem
+ao domínio do pet. A base comum não atribui chat ou modelos a todos os pets.
+Os moldes existentes `llm`/`application` declaram o limite, que prevalece sobre
+extensões de conta e é aplicado no backend. Serviços representam operações da
+ferramenta; referências antigas a Codex e conversas antigas são dados preservados,
+sem nova inferência. LLMs continuam a exigir adaptador/configuração explícitos.
+Esta regra altera intencionalmente as descrições históricas de assistentes
+Codex genéricos nos serviços abaixo. Ver [fábrica](PET-FACTORY.md#funcionalidades-por-domínio-13112026)
+e [estado/provas atuais](PETS-UPSTREAM-PARITY-2026-11-11.md).
+<!-- end-factory-domain-policy-20261113 -->
+
 <!-- publication-handoff-20261111 -->
 **Alocações/revisões7 — 11/11/2026:** a cadeia pode conter alocações finitas novas, cada uma com decisão própria; o saldo antigo não se soma nem se reabre. A restante continuação deriva apenas a alocação atual. Histórico cumulativo, autoridade antiga revogada e instante mínimo futuro mantêm-se. Pet/runtime/motor/papel e integração nos widgets existentes continuam independentes. [Passagem integral de contexto](../coucou-migration/HANDOFF-CONTINUIDADE-INTEGRAL-2026-11-11.md).
 
@@ -2907,8 +2993,32 @@ cada turno captura um conjunto imutável antes de IO/modelo. Entregas posteriore
 não alteram esse conjunto. Nomes iguais não fundem documentos. Limitar número,
 bytes, extração, tokens, tempo e suporte por provider, declarando cobertura parcial.
 
-O histórico de anexos prova o conjunto capturado, não a leitura de todos os bytes
-pelo modelo. Manifestos e recuperação não concedem leitura automaticamente.
+O histórico de anexos identifica o conjunto capturado. A leitura dos bytes pelo
+modelo tem cobertura própria. No chat inline e no flutuante, a vista mostra um
+resumo recolhido antes da mensagem do pedido, a partir do registo nativo do
+mesmo pet, provider e CID. Um pedido sem par de mensagens guardadas conserva essa
+indicação explícita. O resumo expõe nomes e IDs de cópia e é só de consulta.
+Manifestos, consulta do histórico e recuperação deixam a autorização de leitura
+sob o mesmo controlo explícito da coleção ativa.
+Os adaptadores locais e de API registam a preparação quando conseguem observá-la.
+O resultado fica no mesmo turno e usa o ID de cada cópia. Texto integral,
+parcial e indisponível descrevem o que o Coucou conseguiu preparar sob os
+limites individuais e agregados. Um ficheiro preparado para envio indica que o
+adaptador produziu um bloco com os bytes da cópia dentro do orçamento de
+multimédia. A leitura pelo modelo continua por confirmar.
+Registos antigos e formatos sem medição continuam sem indicação de cobertura.
+A biblioteca de conversas só escreve a versão 8 quando guarda esta informação.
+O leitor conserva as versões anteriores. A versão da autoridade de regras
+segue o seu contrato próprio. Reverter para um leitor anterior requer o backup
+compatível e a análise dos dados escritos desde a atualização.
+Nos pets Anthropic, OpenAI e Google AI, a janela de chat abre a rota API
+declarada pela fábrica. O campo de conta nativa continua reservado ao runtime.
+A configuração da chave e do modelo mantém os seus próprios controlos.
+O pedido de inferência inclui o conteúdo preparado apenas para o turno que
+validou as cópias. Ao concluir o turno, o histórico usado pelos pedidos seguintes
+guarda a pergunta pública e a resposta. Um novo envio dos dados de um anexo
+depende da seleção ativa e da validação desse envio. A conversa conserva o que
+já foi publicado na resposta e os IDs das cópias associadas ao pedido.
 Retirar seleção, apagar conversa, revogar leitura e eliminar cópia são operações
 separadas, com revisão adequada. Conservar cópias referenciadas, partilhadas,
 antigas sem registo ou com recuperação pendente.
@@ -3979,3 +4089,100 @@ H3D2 B3G — contrato privado em implementação: fecho do processo perdido reut
 ## Coleções persistentes de calendários — contrato09/11/2026
 
 Evoluir o catálogo nativo existente para seleção explícita de várias fontes ICS pelo mesmo pet/CID, reutilizando CAS/consentimento e o percurso multicalendário já funcional. Formato1 conserva seleção única e bytes antigos; formato2 explícito suporta até32 fontes persistentes por dono e recusa downgrade. Limite total33 com anexos,8 consultas/128KiB partilhados por turno; nomes/UIDs iguais não fundem fontes. Gestão funcional no chat revê dono/fontes/âmbito antes de guardar e revoga só a associação escolhida. Não cria regras, sincronização de conta, escrita ou autoridade para objetivos/modelos adicionais. [Contrato e aceitação da unidade](../.build/pet-goal-execution-next-r1/persistent-calendar-collections/CONTRACT.json).
+
+### Projetos e memória — contrato de continuação17/11/2026
+
+A auditoria atual confirma `Scope` limitado a pet/conversa e regras com `None` ou
+calendários. `cli_workspaces` é configuração de execução, não catálogo de projetos.
+Reutilizar o catálogo de memória e o writer CAS existentes para projetos explícitos,
+com ID independente, pet dono, nome, revisão e associações a conversas nativas
+existentes. Uma associação é uma decisão de dados; não concede inferência, partilha,
+ferramentas ou execução. Não inferir pertença de uma pasta, título ou modelo.
+
+Primeiro percurso integrado: criar/consultar/renomear/arquivar projeto e associar ou
+retirar conversas reais; gerir notas isoladas no âmbito do projeto, conservando os
+mesmos controles/CAS de memória. Publicação retém as conversas originais antes do
+novo vínculo. O primeiro projeto publica a versão2 do mesmo catálogo; versão1 fica
+compatível e sem nova propriedade serializada quando não há projetos. Leitores
+antigos devem recusar2 sem destruir os dados. IDs de criação determinísticos por
+pet/requestId e CAS impedem duplicação após resposta incerta, sem outro ledger.
+
+Este primeiro percurso não permite selecionar notas de projeto para modelos ou
+objetivos. As capturas atuais devem recusá-las explicitamente. A ativação seguinte
+exige referência revista de projeto/membros, invalidação durável e o mesmo controle
+de contexto/destino/consentimento; não promover as antigas seleções pet/conversa.
+O objetivo completo continua a exigir esse uso efetivo, associação de objetivos e
+acompanhamento recorrente com progresso verificável, sem novo scheduler.
+
+### Seleção manual de memória de projeto — continuação17/11/2026
+
+Reutiliza revisão manual, destino e consentimento de dados existentes. A escolha
+explícita identifica um projeto/revisão e notas/revisões; só um projeto disponível
+e associado ao CID nativo atual pode fornecer notas. A captura inclui o projeto
+completo na revisão e no envelope de dados; verifica de novo projeto, associação,
+notas e destino antes do uso. Renomear, arquivar ou alterar associações invalida
+a revisão anterior. Alterações não relacionadas no catálogo não a substituem.
+
+A referência de nota de projeto conserva `projectRevision`; a proveniência da
+sessão nativa usa versão2 quando inclui este âmbito, e continua legível como
+dados após retirada de associação sem conceder novo uso. O formato antigo
+continua exato sem projetos. Os caminhos de objetivos ainda recusam referências
+de projeto: esta unidade não alarga consentimento manual a objetivos ou partilha.
+
+A composição1339/SOURCE5 passou seleção/revisão manual→HTTP sintético→resposta→
+retirada/reinício. O painel existente recolhe-se só ao confirmar; seleção fica
+preservada e cancelar conserva a expansão. Sessões CLI/proveniência2 e revogação
+ativa foram testadas com fixtures; backup/restauro nativo e objetivos ficam
+pendentes. [Provas e limites](../.build/project-memory-context-20261117/VERIFIED.json).
+
+### Projeto no objetivo limitado — contrato17/11/2026
+
+A próxima unidade liga a seleção explícita de projeto/revisões ao CID público
+nativo original e prepara contexto Dedicated sem copiar histórico. Selection2
+conserva o projeto completo além das referências imutáveis das notas: só a revisão
+do projeto não prova igualdade dos dados após reinício. A revisão própria mostra
+projeto/notas/destino; o contexto completo e o seu hash entram na Authority e no
+orçamento existentes. Selection1 continua exata sem campo de projeto. Não criar
+novos ledgers, scheduler, formatos exteriores de Goal/Admission ou grants apenas
+para transportar esta seleção. O preview novo deve ser distinguível dos antigos.
+
+A primeira integração é uma resposta finita local, uma chamada e zero ferramentas,
+sem planeamento, continuação, dados recebidos, calendários ou divulgação implícita.
+Alterar projeto/associação/notas invalida revisão e usos posteriores; reinício
+preserva resultado e saldo. Os percursos antigos de partilha que só conhecem
+referências de notas continuam a recusar projetos até terem contrato próprio.
+É contrato de implementação, não declaração de aceitação ou entrega instalada.
+
+A unidade1340/SOURCE3 passou UI→seleção/projeto/CID→revisão própria→Authority→
+Driver com vista fechada→HTTP nativo sintético→resposta, retirada em IO, controlo
+legado e reinício sem reenvio. Preview12 é só revisão; grant de dados1 continua
+boundedGoalContext sob o hash completo de Selection2. Box é transparente no JSON.
+A tentativa revogada conserva resultado desconhecido/cobrança conservadora; não
+se afirma conclusão dos critérios. [Provas e limites](../.build/project-goal-memory-20261117/VERIFIED.json).
+
+### Preservação dos dados de projeto — prova17/11/2026
+
+A composição1340 usa os contratos existentes para copiar/restaurar Registry2,
+Selection2 com snapshot completo e NativeContext2 produzido por um turno Codex
+sintético real do adaptador. Não acrescenta formatos ou autoridade. Restaurar
+conserva dados e assinaturas; a contabilidade histórica não afirma continuidade
+completa nem saldo novo. Preferências recuperadas têm revisão de dados própria,
+com as seis componentes suspensas; a conversa histórica continua sem execução
+mesmo depois dessa revisão. Uma nova conversa é uma escolha explícita distinta.
+[Provas, falhas do observador e limites](PETS-PROJECT-RECOVERY-2026-11-17.md).
+
+### Consulta de progresso de projeto — 17/11/2026
+
+Summary transporta apenas a referência explícita do projeto capturado, ou null,
+sem alterar Record/Selection/autoridade persistidos. A UI reutiliza Goal/History/
+Result sob consulta explícita, sem outro índice, ledger ou scheduler. Os quatro
+leitores permitem a janela pet-chat apenas para o pet mostrado; mutação/admissão/
+execução mantêm as janelas anteriores. Resposta não é conclusão, revisão atual
+não substitui o contexto e histórico não prova contabilidade/autoridade atuais.
+[Implementação, percurso nativo atual e limites](PETS-PROJECT-PROGRESS-2026-11-17.md).
+
+
+### Rotina de projeto com revisões fixadas —17/11/2026
+
+A camada de domínio Ollama compõe memória de projeto e recorrência. O consentimento próprio repete apenas o projeto/CID/notas revistos; mudança de dados ou destino bloqueia novo uso até edição/revisão/sucessão. Usa a reserva/captura/Driver comuns, sem outro ledger ou worker. Os nomes legados calendarRead/calendarReadId mantêm-se, com domínio e hash de política próprios. A rotina atual não observa automaticamente todos os objetivos do projeto.
+[Fontes, provas e limitações](PETS-PROJECT-RULE-2026-11-17.md).

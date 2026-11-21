@@ -147,8 +147,12 @@ export async function flowSettingsPage(page: HTMLElement, ctx: HubContext) {
   // ── Microphone ──
   page.append(label(t("Microphone")));
   const mics: [string, string][] = [["", t("System default")], ...status.mics.map((m): [string, string] => [m.name, m.name])];
-  if (prefs.mic && !mics.some(([id]) => id === prefs.mic)) mics.push([prefs.mic, prefs.mic]);
-  page.append(card(row(t("Microphone"), t("The one Coucou listens to for dictation and calls."), select(mics, prefs.mic, (mic) => void ctx.setPrefs((p) => (p.mic = mic))))));
+  const missingMic = prefs.mic !== "" && !mics.some(([id]) => id === prefs.mic);
+  if (missingMic) mics.push([prefs.mic, `${prefs.mic} · ${t("Not available")}`]);
+  const microphone = select(mics, prefs.mic, (mic) => void ctx.setPrefs((p) => (p.mic = mic)));
+  const savedOption = microphone.selectedOptions.item(0);
+  if (missingMic && savedOption) savedOption.disabled = true;
+  page.append(card(row(t("Microphone"), t("The one Coucou listens to for dictation and calls."), microphone)));
 
   // ── Recognition ──
   page.append(label(t("Recognition")));

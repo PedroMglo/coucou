@@ -8,7 +8,7 @@ struct F{path:PathBuf,policy:RulePolicy}impl F{
   let definition=serde_json::from_value(json!({"name":"Bounded daily","intent":"Prepare one response per authorized occurrence","criteria":["Verify actual result"],"schedule":{"kind":"daily","firstDate":"2026-10-24","days":3,"localTime":"09:00","timeZone":"Europe/Lisbon","weekdays":[1,2,3,4,5,6,7],"overlap":"earlier","gap":"skip"},"missed":"skip","graceSeconds":300,"dataScope":"none","limits":{"maxOccurrences":2,"maxModelCalls":2,"maxToolCalls":0,"maxOutputBytes":8192,"occurrenceOutputBytes":4096,"occurrenceTimeoutSeconds":900}})).unwrap();
   let owner=crate::pet_runtime::model::Owner{pet_id:"ai_ollama".into(),provider:"ollama".into(),adapter:"ollama".into(),model_hint:None};let rule=Rule{id:format!("rule-{}","a".repeat(64)),revision:1,owner,state:crate::pet_runtime::rules::State::Draft,created_at:1000,updated_at:1000,definition};
   let schedule={let _s=crate::pet_calendar::TEST_SERIAL.lock().unwrap();crate::pet_calendar::schedule::resolve(&rule.definition.schedule,||true).unwrap()};let first=schedule.slots[0].at.unwrap();let last=schedule.slots.last().unwrap().at.unwrap();
-  let policy=RulePolicy{dispatch:None,schema_version:1,scope:RuleScope::BoundedRuleRecurrenceWithoutSelectedData,rule,payment:crate::pet_runtime::admission::Payment::LocalOnly,destination:crate::pet_memory::context_model::Destination::Server{provider:"ollama".into(),endpoint:"http://127.0.0.1:11434/v1/chat/completions".into(),model:"fixture-free".into()},model:"fixture-free".into(),engine_binding:None,policy_revision:"b".repeat(64),descriptor_semantics:"c".repeat(64),schedule,prepared_at:first-60_000,valid_until:last+900_000};assert!(policy.valid());Self{path,policy}
+  let policy=RulePolicy{project_progress_data:None,project_data:None,calendar_priority_count:None,notification:None,calendar_data:None,dispatch:None,schema_version:1,scope:RuleScope::BoundedRuleRecurrenceWithoutSelectedData,rule,payment:crate::pet_runtime::admission::Payment::LocalOnly,destination:crate::pet_memory::context_model::Destination::Server{provider:"ollama".into(),endpoint:"http://127.0.0.1:11434/v1/chat/completions".into(),model:"fixture-free".into()},model:"fixture-free".into(),engine_binding:None,policy_revision:"b".repeat(64),descriptor_semantics:"c".repeat(64),schedule,prepared_at:first-60_000,valid_until:last+900_000};assert!(policy.valid());Self{path,policy}
  }
  fn root(&self)->PathBuf{self.path.join("consent")}
  fn authority(&self)->Authority{Authority::ensure(&self.root()).unwrap()}
@@ -105,4 +105,152 @@ fn automatic_fixture()->(F,RuleGrant){let mut f=F::new();f.policy.schema_version
  let Ok(raw)=std::env::var("COUCOU_TEMPORAL_FIXTURE_NATIVE")else{return;};let target=PathBuf::from(raw);assert!(target.is_absolute()&&!target.is_symlink());assert_eq!(fs::read(target.join(".qa-temporal-profile")).unwrap(),b"coucou-generated-temporal-status-only");
  let(f,g)=automatic_fixture();assert!(crate::assistant_memory::now()>g.policy.valid_until);let root=target.join("pet-runtime-consent-v1");if root.exists(){assert!(fs::read_dir(&root).unwrap().all(|f|matches!(f.unwrap().file_name().to_str(),Some(".key.json"|".catalog.lock"|".protocol.json"))));}
  let a=Authority::ensure(&root).unwrap();a.issue_rule(&g,g.approved_at,||true).unwrap();let book=target.join("pet-rules.json");if book.exists(){let old:serde_json::Value=serde_json::from_slice(&fs::read(&book).unwrap()).unwrap();assert!(old["rules"].as_array().unwrap().is_empty());}fs::write(&book,serde_json::to_vec(&json!({"version":1,"generation":1,"rules":[g.policy.rule]})).unwrap()).unwrap();fs::set_permissions(&book,fs::Permissions::from_mode(0o600)).unwrap();drop(f);
+}
+
+#[test]fn rule_calendar_selection_cannot_borrow_a_without_selected_data_execution_grant(){
+ let f=F::new();let mut candidate=f.candidate();assert!(candidate.policy.valid());
+ candidate.policy.rule.definition.data_scope=serde_json::from_value(json!({"calendars":{"sources":[{"id":"work","revision":1}]}})).unwrap();
+ assert!(!candidate.policy.valid());assert!(!candidate.valid());
+ assert!(f.authority().issue_rule(&candidate,candidate.approved_at,||true).is_err());
+}
+
+fn future_calendar_candidate(f:&F)->RuleGrant{
+ use crate::pet_runtime::rules::{DataScope,CalendarReference,CalendarPolicy,CalendarOrigin,CalendarConsent};
+ let mut grant=f.candidate();grant.schema_version=8;grant.policy.schema_version=3;grant.policy.scope=RuleScope::BoundedRuleRecurrenceWithFutureCalendarData;
+ grant.policy.rule.definition.data_scope=DataScope::Calendars{sources:vec![CalendarReference{id:"work".into(),revision:2}]};
+ grant.policy.calendar_data=Some(CalendarPolicy{schema_version:1,reader_revision:"a".repeat(64),consent:CalendarConsent::BoundedRuleFutureCalendarData,sources:vec![CalendarOrigin{id:"work".into(),revision:2,name:"Synthetic work calendar".into(),path:"/synthetic/work.ics".into(),enrollment_binding:"b".repeat(64)}],data_class:"nativeCalendarEventsV1".into(),window:"occurrenceCivilDay".into(),max_data_bytes:65536,max_input_bytes:262144,max_capture_seconds:10,max_reads_per_occurrence:1});grant
+}
+
+#[test]fn future_calendar_read_is_owned_once_and_keeps_original_occurrence_partition_after_reopen(){
+ let f=F::new();let a=f.authority();let g=future_calendar_candidate(&f);a.issue_rule(&g,g.approved_at,||true).unwrap();let at=f.at(0);
+ let owned=a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at,||true).unwrap();assert!(owned.current(&a,at+1));
+ let record=a.rule_grant(&g.decision_id).unwrap();assert_eq!(record.reservations.len(),1);let allocation=&record.reservations[0];assert_eq!(allocation.calendar_read.as_ref(),Some(owned.read()));assert_eq!(owned.read().expires_at,at+10000);assert_eq!(allocation.model_calls,1);assert!(allocation.admission.is_none());
+ assert!(a.reserve_rule_occurrence(&g.decision_id,&g.policy.hash().unwrap(),0,at+1,||true).is_err());
+ let bytes=f.bytes(&g);let reopened=Authority::existing(&f.root()).unwrap();assert_eq!(reopened.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at+10001,||true).err(),Some(Failure::RecoveryRequired));assert_eq!(f.bytes(&g),bytes);
+ assert_eq!(reopened.issue_rule(&g,at+10002,||true).unwrap(),record);assert_eq!(f.bytes(&g),bytes);drop(owned);
+ assert_eq!(reopened.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at+10003,||true).err(),Some(Failure::RecoveryRequired));
+}
+
+#[test]fn future_calendar_capture_seals_only_its_goal_and_never_opens_model_dispatch(){
+ use crate::pet_runtime::rules::CalendarReadOutcome;
+ let f=F::new();let a=f.authority();let g=future_calendar_candidate(&f);a.issue_rule(&g,g.approved_at,||true).unwrap();let at=f.at(0);let owned=a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at,||true).unwrap();
+ let goal=model::id_for(&g.policy.goal_spec(0).unwrap());let result=CalendarReadOutcome::Captured{goal_id:goal,context_hash:"c".repeat(64)};
+ assert!(a.finish_rule_calendar_read(&owned,CalendarReadOutcome::Captured{goal_id:"wrong-goal".into(),context_hash:"c".repeat(64)},at+1,||true).is_err());
+ a.finish_rule_calendar_read(&owned,result.clone(),at+2,||true).unwrap();let record=a.rule_grant(&g.decision_id).unwrap();assert!(record.valid());assert_eq!(record.reservations[0].calendar_read.as_ref().unwrap().outcome,Some(result.clone()));assert!(!owned.current(&a,at+3));
+ let bytes=f.bytes(&g);a.finish_rule_calendar_read(&owned,result,at+4,||true).unwrap();assert_eq!(f.bytes(&g),bytes);assert_eq!(a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at+5,||true).err(),Some(Failure::RecoveryRequired));
+ let status=RuleAuthorityStatus::of_at(&record,true,false,at+5);assert_eq!(status.phase,"authorizedNotDispatched");assert!(!status.dispatch_available&&!status.execution_available);assert_eq!(status.committed_model_calls,1);
+ for mutation in ["owner","scope","expiry"]{let mut invalid=record.clone();let read=invalid.reservations[0].calendar_read.as_mut().unwrap();match mutation{"owner"=>read.owner.operation_id="forged".into(),"scope"=>read.scope_hash="d".repeat(64),_=>read.expires_at+=1};assert!(!invalid.valid(),"{mutation}");}
+}
+
+#[test]fn future_calendar_expiry_or_revocation_allows_only_observed_stop_not_success_or_retry(){
+ use crate::pet_runtime::rules::CalendarReadOutcome;
+ let f=F::new();let a=f.authority();let g=future_calendar_candidate(&f);a.issue_rule(&g,g.approved_at,||true).unwrap();let at=f.at(0);let owned=a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at,||true).unwrap();
+ assert!(!owned.current(&a,at+10000));let captured=CalendarReadOutcome::Captured{goal_id:model::id_for(&g.policy.goal_spec(0).unwrap()),context_hash:"e".repeat(64)};assert!(a.finish_rule_calendar_read(&owned,captured,at+10000,||true).is_err());
+ a.revoke_rule("ai_ollama",&g.policy.rule.id,&g.decision_id,at+10001).unwrap();a.finish_rule_calendar_read(&owned,CalendarReadOutcome::Stopped,at+10002,||false).unwrap();let record=a.rule_grant(&g.decision_id).unwrap();assert_eq!(record.phase,RulePhase::Revoked);assert_eq!(record.reservations.len(),1);assert_eq!(record.reservations[0].calendar_read.as_ref().unwrap().outcome,Some(CalendarReadOutcome::Stopped));assert!(a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at+10003,||true).is_err());
+}
+
+#[test]fn future_calendar_uncertain_publication_never_mints_a_second_read_or_partition(){
+ let f=F::new();let mut a=f.authority();let g=future_calendar_candidate(&f);a.issue_rule(&g,g.approved_at,||true).unwrap();let at=f.at(0);
+ a.fault=Fault::AfterGrantPublish;assert!(a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at,||true).is_err());a.fault=Fault::None;let allocated=a.rule_grant(&g.decision_id).unwrap();assert_eq!(allocated.reservations.len(),1);assert!(allocated.reservations[0].calendar_read.is_none());
+ a.fault=Fault::AfterGrantPublish;assert!(a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at+1,||true).is_err());a.fault=Fault::None;let pending=a.rule_grant(&g.decision_id).unwrap();assert_eq!(pending.reservations.len(),1);assert!(pending.reservations[0].calendar_read.is_some());let bytes=f.bytes(&g);
+ assert_eq!(a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at+11000,||true).err(),Some(Failure::RecoveryRequired));assert_eq!(f.bytes(&g),bytes);
+}
+#[test]fn rule_future_calendar_requires_both_own_consents_and_exact_policy_scope(){
+ use crate::pet_runtime::rules::CalendarConsent;let f=F::new();let g=future_calendar_candidate(&f);assert!(g.valid());
+ let data=Some(CalendarConsent::BoundedRuleFutureCalendarData);let scope=Some(RuleScope::BoundedRuleRecurrenceWithFutureCalendarData);
+ assert!(!g.policy.consent_matches(Some(RuleScope::BoundedRuleRecurrenceWithoutSelectedData),data,None));assert!(!g.policy.consent_matches(scope,None,None));assert!(g.policy.consent_matches(scope,data,None));assert!(!f.policy.consent_matches(Some(f.policy.scope),data,None));
+ for mode in ["version","source","bytes","window"]{let mut bad=g.clone();match mode{"version"=>bad.schema_version=7,"source"=>bad.policy.calendar_data.as_mut().unwrap().sources[0].revision+=1,"bytes"=>bad.policy.calendar_data.as_mut().unwrap().max_data_bytes+=1,_=>bad.policy.calendar_data.as_mut().unwrap().window="anyTime".into()};assert!(!bad.valid(),"{mode}");}
+}
+#[test]fn rule_future_calendar_authority_is_durable_revocable_but_cannot_allocate_before_materialization(){
+ let f=F::new();let a=f.authority();let g=future_calendar_candidate(&f);a.issue_rule(&g,g.approved_at,||true).unwrap();assert_eq!(a.rule_grant(&g.decision_id).unwrap(),g);
+ let observed=a.rule_status(&g.policy.rule,true).unwrap();assert!(!observed.dispatch_available);let status=RuleAuthorityStatus::of_at(&a.rule_grant(&g.decision_id).unwrap(),true,false,g.approved_at+1);assert_eq!(status.phase,"authorizedNotDispatched");assert!(!status.dispatch_available);assert_eq!(status.committed_model_calls,0);
+ assert!(a.reserve_rule_occurrence(&g.decision_id,&g.policy.hash().unwrap(),0,f.at(0),||true).is_err());assert!(a.rule_grant(&g.decision_id).unwrap().reservations.is_empty());
+ a.revoke_rule("ai_ollama",&g.policy.rule.id,&g.decision_id,g.approved_at+1).unwrap();let same=a.issue_rule(&g,g.approved_at+2,||true).unwrap();assert_eq!(same.phase,RulePhase::Revoked);assert!(same.reservations.is_empty());
+}
+
+#[test]fn future_calendar_status_requires_explicit_automatic_scope_and_preserves_blocking_state(){
+ let f=F::new();let mut g=future_calendar_candidate(&f);g.policy.dispatch=Some(crate::pet_runtime::rules::DispatchPolicy::bounded());assert!(g.valid());
+ let mut status=crate::pet_runtime::rules::RuleAuthorityStatus::of_at(&g,false,false,f.at(0));
+ status.refresh_configuration(true);assert_eq!(status.phase,"authorizedScheduled");assert!(status.dispatch_available&&!status.execution_available);
+ status.refresh_configuration(false);assert_eq!(status.phase,"configurationChanged");assert!(!status.dispatch_available);
+ for phase in ["revoked","expired","authorityTimeUncertain","restoredSnapshotOnly","reconciliationRequired"]{status.phase=phase;status.refresh_configuration(true);assert_eq!(status.phase,phase);assert!(!status.dispatch_available);}
+ let (_,plain)=automatic_fixture();let mut status=crate::pet_runtime::rules::RuleAuthorityStatus::of_at(&plain,false,false,f.at(0));status.refresh_configuration(true);assert_eq!(status.phase,"authorizedScheduled");assert!(status.dispatch_available&&!status.execution_available);
+}
+#[test]fn future_calendar_materializer_refuses_stale_configuration_without_creating_an_occurrence_or_goal(){
+ use crate::pet_runtime::{rules::calendar_materialization,store::Store};use std::sync::Arc;
+ let f=F::new();let a=Arc::new(f.authority());let g=future_calendar_candidate(&f);a.issue_rule(&g,g.approved_at,||true).unwrap();let before=f.bytes(&g);
+ let goals=f.path.join("goals");Store::ensure(&goals).unwrap();let store=Store::existing_verified(&goals,&f.root()).unwrap().unwrap();let main=crate::chat::Chat::persistent(f.path.join("main.json"));let at=f.at(0);
+ assert!(calendar_materialization::prepare_at(&store,a,&f.path.join("contexts"),&main,&g.decision_id,0,Arc::new(move||at),Arc::new(|_|false)).is_err());assert_eq!(f.bytes(&g),before);assert!(!f.path.join("contexts").exists());assert!(!f.path.join("main.json").exists());
+}
+
+#[test]fn future_calendar_child_binds_own_completed_read_context_destination_and_original_partition(){
+ use crate::pet_runtime::{rules::{occurrences,CalendarConsent,CalendarOrigin,CalendarReadOutcome,DataScope,CalendarReference},store::Store};
+ use crate::pet_memory::context_model::{GoalGrant,GoalConsent};
+ // Existing no-data admission supplies the ordinary reviewed plan/identity;
+ // it is not a transferable execution proof for the second private Authority.
+ let base=F::new();let ba=base.authority();let bg=base.candidate();ba.issue_rule(&bg,bg.approved_at,||true).unwrap();Store::ensure(&base.path.join("goals")).unwrap();let st=Store::existing_verified(&base.path.join("goals"),&base.root()).unwrap().unwrap();let main=crate::chat::Chat::persistent(base.path.join("main.json"));let original=occurrences::admit_at(&st,&ba,&base.path.join("contexts"),&main,&bg.decision_id,0,||base.at(0),|_|true,|g,n|Ok(rule_occurrence_evidence(g,&base.policy,n))).unwrap();let original=st.read(&original.goal_id,"ai_ollama").unwrap();let mut spec=original.admissions[0].spec.clone();
+ let f=F::new();let a=f.authority();let mut g=future_calendar_candidate(&f);let at=f.at(0);
+ let _serial=crate::pet_calendar::TEST_SERIAL.lock().unwrap();let query=crate::pet_calendar::day::explicit("2026-10-24","Europe/Lisbon","2026-10-24T08:00:00Z",||true).unwrap();let(_enrolled,calendars,selected)=crate::pet_calendar::goal::rule_fixture(&spec.goal_id,query,at);
+ g.policy.rule.definition.data_scope=DataScope::Calendars{sources:selected.iter().map(|s|CalendarReference{id:s.id().into(),revision:s.revision()}).collect()};g.policy.calendar_data.as_mut().unwrap().sources=selected.iter().map(|s|CalendarOrigin{id:s.id().into(),revision:s.revision(),name:s.name().into(),path:s.path().into(),enrollment_binding:s.binding()}).collect();assert_eq!(g.policy.calendar_data.as_ref().unwrap().consent,CalendarConsent::BoundedRuleFutureCalendarData);assert!(g.valid());a.issue_rule(&g,g.approved_at,||true).unwrap();
+ spec.schema_version=30;spec.context.schema_version=11;spec.context.calendars=Some(calendars.clone());spec.context_hash=model::fingerprint(&spec.context).unwrap();spec.memory_data=Some(GoalGrant{schema_version:11,consent:GoalConsent::BoundedRuleFutureCalendarData,destination:g.policy.destination.clone(),max_input_bytes:262144,calendar_selection:Some(calendars.selection),received_request:None});spec.approved_at=at+3;
+ let owned=a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at,||true).unwrap();assert!(a.rule_grant(&g.decision_id).unwrap().reference(&a.rule_grant(&g.decision_id).unwrap().reservations[0]).is_err());
+ a.finish_rule_calendar_read(&owned,CalendarReadOutcome::Captured{goal_id:spec.goal_id.clone(),context_hash:spec.context_hash.clone()},at+1,||true).unwrap();let parent=a.rule_grant(&g.decision_id).unwrap();let allocation=&parent.reservations[0];spec.rule_occurrence=Some(parent.reference(allocation).unwrap());assert!(spec.binding_format()&&spec.finite_response()&&spec.execution_requested());assert!(crate::pet_runtime::plans::matches(&original,&spec),"the new own-DATA admission must retain the ordinary exact reviewed plan");assert!(parent.child_matches(allocation,&spec));
+ let before=f.bytes(&g);
+ for mode in ["read","context","scope","dataConsent","destination","source","budget","deadline","legacySpec"]{
+  let mut bad=spec.clone();match mode{"read"=>bad.rule_occurrence.as_mut().unwrap().calendar_read_id=Some(nonce().unwrap()),"context"=>{bad.context.seed_hash="f".repeat(64);bad.context_hash=model::fingerprint(&bad.context).unwrap();},"scope"=>bad.rule_occurrence.as_mut().unwrap().schema_version=1,"dataConsent"=>bad.memory_data.as_mut().unwrap().consent=GoalConsent::BoundedGoalContext,"destination"=>if let crate::pet_memory::context_model::Destination::Server{endpoint,..}=&mut bad.memory_data.as_mut().unwrap().destination{*endpoint="http://127.0.0.1:19001/v1/chat/completions".into();},"source"=>{bad.memory_data.as_mut().unwrap().calendar_selection.as_mut().unwrap().query.limit+=1;},"budget"=>bad.budget.max_model_calls=2,"deadline"=>bad.budget.deadline_at+=1,_=>bad.schema_version=29};
+  assert!(!parent.child_matches(allocation,&bad),"{mode}");assert!(a.bind_rule_admission(&bad,at+4,||true).is_err(),"{mode}");assert_eq!(f.bytes(&g),before,"{mode}");
+ }
+ a.bind_rule_admission(&spec,at+4,||true).unwrap();let bound=a.rule_grant(&g.decision_id).unwrap();assert_eq!(bound.schema_version,8);assert_eq!(bound.reservations.len(),1);assert!(bound.reservations[0].admission.as_ref().unwrap().matches(&spec));let bytes=f.bytes(&g);a.bind_rule_admission(&spec,at+5,||true).unwrap();assert_eq!(f.bytes(&g),bytes);a.rule_admission_current_unlocked(&spec,at+6).unwrap();let reopened=Authority::existing(&f.root()).unwrap();reopened.rule_admission_current_unlocked(&spec,at+7).unwrap();reopened.revoke_rule("ai_ollama",&g.policy.rule.id,&g.decision_id,at+8).unwrap();assert!(reopened.rule_admission_current_unlocked(&spec,at+9).is_err());
+}
+
+#[test]fn future_calendar_metadata_reuses_owned_bounded_probes_only_after_its_completed_capture(){
+ use crate::pet_runtime::rules::{CalendarReadOutcome,DispatchPolicy};
+ let f=F::new();let a=f.authority();let mut g=future_calendar_candidate(&f);g.policy.dispatch=Some(DispatchPolicy::bounded());assert!(g.valid());a.issue_rule(&g,g.approved_at,||true).unwrap();let at=f.at(0);let owned=a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at,||true).unwrap();let occurrence=g.policy.occurrence_id(0).unwrap();
+ assert!(a.begin_owned_rule_probe(&g.decision_id,&occurrence,at+1,||true).is_err());let goal=model::id_for(&g.policy.goal_spec(0).unwrap());a.finish_rule_calendar_read(&owned,CalendarReadOutcome::Captured{goal_id:goal,context_hash:"d".repeat(64)},at+2,||true).unwrap();
+ for n in 0..3{
+  let now=at+3+n*30002;let p=a.begin_owned_rule_probe(&g.decision_id,&occurrence,now,||true).unwrap();assert!(p.current(&a));a.rule_probe_current(&g.decision_id,&occurrence,p.probe(),now+1).unwrap();a.finish_rule_probe(&g.decision_id,&occurrence,p.probe(),false,now+1).unwrap();
+ }
+ assert!(a.begin_owned_rule_probe(&g.decision_id,&occurrence,at+100000,||true).is_err());let state=a.rule_grant(&g.decision_id).unwrap();assert_eq!(state.schema_version,8);assert_eq!(state.reservations.len(),1);assert_eq!(state.reservations[0].readiness.len(),3);assert_eq!(state.reservations[0].calendar_read.as_ref().unwrap().id,owned.read().id);assert!(a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at+100001,||true).is_err());
+}
+
+#[test]fn future_calendar_notification_is_own_explicit_bounded_policy_and_legacy_bytes_remain_unchanged(){
+ use crate::pet_runtime::rules::NotificationPolicy;
+ let f=F::new();let a=f.authority();let legacy=future_calendar_candidate(&f);let encoded=serde_json::to_value(&legacy).unwrap();assert!(encoded["policy"].get("notification").is_none());assert_eq!(serde_json::from_value::<RuleGrant>(encoded.clone()).unwrap(),legacy);
+ let mut g=legacy.clone();g.policy.notification=Some(NotificationPolicy::bounded());assert!(!g.valid(),"old policy/authority versions cannot carry notification consent");g.policy.schema_version=4;g.schema_version=9;assert!(g.valid());
+ for kind in ["channel","body","priority","sound","count","window","oldVersion","noData"]{let mut bad=g.clone();let p=bad.policy.notification.as_mut().unwrap();match kind{"channel"=>p.channel="externalWebhook".into(),"body"=>p.content="calendarText".into(),"priority"=>p.priority="urgent".into(),"sound"=>p.silent=false,"count"=>p.max_per_occurrence=2,"window"=>p.max_delay_millis+=1,"oldVersion"=>bad.schema_version=8,_=>{bad.policy.calendar_data=None;bad.policy.rule.definition.data_scope=crate::pet_runtime::rules::DataScope::None;}}assert!(!bad.valid(),"{kind}");assert!(a.issue_rule(&bad,bad.approved_at,||true).is_err(),"{kind}");}
+ a.issue_rule(&g,g.approved_at,||true).unwrap();let before=f.bytes(&g);let reopened=Authority::existing(&f.root()).unwrap();assert_eq!(reopened.rule_grant(&g.decision_id).unwrap(),g);assert_eq!(f.bytes(&g),before);assert_eq!(serde_json::to_value(legacy).unwrap(),encoded);
+}
+#[test]fn notification_window_intersects_original_deadline_and_never_rolls_forward(){
+ use crate::pet_runtime::rules::NotificationPolicy;
+ let f=F::new();let a=f.authority();let g=f.candidate();a.issue_rule(&g,g.approved_at,||true).unwrap();let mut r=a.reserve_rule_occurrence(&g.decision_id,&g.policy.hash().unwrap(),0,f.at(0),||true).unwrap();let p=NotificationPolicy::bounded();assert_eq!(p.until(&r),r.at+300000);r.deadline_at=r.at+60000;assert_eq!(p.until(&r),r.at+60000);r.reserved_at=r.at+59000;assert_eq!(p.until(&r),r.at+60000,"late readiness or re-observation must not create a later notice window");
+}
+
+#[test]fn project_progress_policy_has_distinct_own_consent_and_allows_no_notes_but_no_self_observation(){
+ use crate::pet_runtime::{project_goal_observation::{Selection,Reference},rules::{ProjectProgressPolicy,ProjectConsent,DataScope}};
+ let f=F::new();let mut p=f.policy.clone();let project=crate::pet_memory::projects::Project{id:crate::pet_memory::context_model::digest(&serde_json::to_vec(&("coucou-memory-project-v1","ai_ollama","progress-policy")).unwrap())[..32].into(),pet_id:"ai_ollama".into(),creation_request_id:"progress-policy".into(),revision:1,name:"Reviewed progress".into(),conversation_ids:vec!["original-source".into()],enabled:true,created_at:100,updated_at:100};
+ let refs=vec![Reference{goal_id:format!("g-{}","f".repeat(64)),spec_hash:"a".repeat(64)}];
+ p.rule.definition.data_scope=DataScope::ProjectProgress{source_conversation_id:"original-source".into(),project:crate::pet_memory::context_model::SelectedProject{id:project.id.clone(),revision:1},goals:refs.clone(),include_latest_response:true,notes:vec![]};p.schema_version=7;p.scope=RuleScope::BoundedRuleRecurrenceWithProjectGoalProgress;
+ p.project_progress_data=Some(ProjectProgressPolicy{schema_version:1,consent:ProjectConsent::BoundedRuleProjectGoalProgressData,selection:Selection{schema_version:1,project,source_conversation_id:"original-source".into(),goals:refs,include_latest_response:true},notes:None,max_data_bytes:131072,max_input_bytes:262144,max_capture_seconds:10,max_reads_per_occurrence:1});
+ assert!(p.valid());assert!(p.selected_data());assert!(p.consent_matches(Some(p.scope),None,Some(ProjectConsent::BoundedRuleProjectGoalProgressData)));assert!(!p.consent_matches(Some(p.scope),None,Some(ProjectConsent::BoundedRulePinnedProjectData)));assert!(!p.consent_matches(Some(p.scope),None,None));assert!(p.calendar_options(Some(1),false).is_err());assert!(p.calendar_options(None,true).is_err());p.calendar_options(None,false).unwrap();assert_eq!(p.schema_version,7);
+ let mut grant=f.candidate();grant.policy=p.clone();grant.schema_version=grant.required_version();assert_eq!(grant.schema_version,12);assert!(grant.valid());let a=f.authority();a.issue_rule(&grant,grant.approved_at,||true).unwrap();assert_eq!(a.rule_grant(&grant.decision_id).unwrap(),grant);
+ let target=model::id_for(&p.goal_spec(0).unwrap());p.project_progress_data.as_mut().unwrap().selection.goals[0].goal_id=target.clone();if let DataScope::ProjectProgress{goals,..}=&mut p.rule.definition.data_scope{goals[0].goal_id=target;}assert!(!p.valid(),"reject self-monitoring before spending an occurrence capture");
+}
+
+#[test]fn captured_data_seal_waits_for_the_same_native_reader_without_extracting_again(){
+ use crate::pet_runtime::rules::{CalendarReadOutcome,calendar_materialization::seal_capture};
+ let f=F::new();let a=f.authority();let g=future_calendar_candidate(&f);a.issue_rule(&g,g.approved_at,||true).unwrap();let at=f.at(0);let owned=a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at,||true).unwrap();let original=owned.read().clone();
+ let goal=model::id_for(&g.policy.goal_spec(0).unwrap());let output=CalendarReadOutcome::Captured{goal_id:goal,context_hash:"e".repeat(64)};
+ let reader=a.lock_shared().unwrap();let release=std::thread::spawn(move||{std::thread::sleep(std::time::Duration::from_millis(180));drop(reader);});
+ let result=seal_capture(&a,&owned,output.clone(),&||at+1,&||true);release.join().unwrap();assert!(result.is_ok(),"a prepublication reader stranded a completed capture: {result:?}");
+ let saved=a.rule_grant(&g.decision_id).unwrap();assert_eq!(saved.reservations.len(),1);let allocation=&saved.reservations[0];let read=allocation.calendar_read.as_ref().unwrap();assert_eq!(read.id,original.id);assert_eq!(read.prepared_at,original.prepared_at);assert_eq!(read.expires_at,original.expires_at);assert_eq!(read.outcome,Some(output));assert!(allocation.admission.is_none());assert_eq!(allocation.model_calls,1);assert_eq!(a.rule_status(&g.policy.rule,true).unwrap().remaining_occurrences,Some(1));
+}
+#[test]fn captured_data_seal_does_not_retry_an_uncertain_publication(){
+ use crate::pet_runtime::rules::{CalendarReadOutcome,calendar_materialization::seal_capture};
+ let f=F::new();let mut a=f.authority();let g=future_calendar_candidate(&f);a.issue_rule(&g,g.approved_at,||true).unwrap();let at=f.at(0);let owned=a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at,||true).unwrap();let output=CalendarReadOutcome::Captured{goal_id:model::id_for(&g.policy.goal_spec(0).unwrap()),context_hash:"e".repeat(64)};
+ a.fault=Fault::AfterGrantPublish;assert_eq!(seal_capture(&a,&owned,output.clone(),&||at+1,&||true),Err(model::Error::StorageUnavailable));a.fault=Fault::None;let saved=a.rule_grant(&g.decision_id).unwrap();assert_eq!(saved.reservations.len(),1);let read=saved.reservations[0].calendar_read.as_ref().unwrap();assert_eq!(read.outcome,Some(output));assert_eq!(read.id,owned.read().id);assert_eq!(read.finished_at,Some(at+1));assert!(saved.reservations[0].admission.is_none());
+}
+#[test]fn captured_data_seal_cannot_extend_the_original_read_deadline_while_waiting(){
+ use crate::pet_runtime::rules::{CalendarReadOutcome,calendar_materialization::seal_capture};use std::sync::{Arc,atomic::{AtomicU64,Ordering}};
+ let f=F::new();let a=f.authority();let g=future_calendar_candidate(&f);a.issue_rule(&g,g.approved_at,||true).unwrap();let at=f.at(0);let owned=a.begin_owned_rule_calendar(&g.decision_id,&g.policy.hash().unwrap(),0,at,||true).unwrap();let before=f.bytes(&g);let now=Arc::new(AtomicU64::new(at+1));let moved=now.clone();let reader=a.lock_shared().unwrap();let release=std::thread::spawn(move||{std::thread::sleep(std::time::Duration::from_millis(140));moved.store(at+10000,Ordering::Release);std::thread::sleep(std::time::Duration::from_millis(40));drop(reader);});
+ let result=seal_capture(&a,&owned,CalendarReadOutcome::Captured{goal_id:model::id_for(&g.policy.goal_spec(0).unwrap()),context_hash:"e".repeat(64)},&||now.load(Ordering::Acquire),&||true);release.join().unwrap();assert!(result.is_err());assert_eq!(f.bytes(&g),before);assert_eq!(owned.read().expires_at,at+10000);
 }

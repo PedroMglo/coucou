@@ -23,7 +23,7 @@ pub(crate)fn due(g:&RuleGrant,prior:&[RuleReservation],future_after:u64,store:&S
  let at=g.policy.schedule.slots[index].at.ok_or(Error::Conflict)?;let id=g.policy.occurrence_id(index).ok_or(Error::Conflict)?;
  if at<=future_after||prior.iter().any(|r|r.occurrence_id==id){return Ok(None);}
  if let Some(r)=g.reservations.iter().find(|r|r.occurrence_id==id){
-  if now>=r.deadline_at{return Ok(None);}if r.readiness.iter().any(|p|p.finished_at.is_none()){return Err(Error::Conflict);}
+  if now>=r.deadline_at{return Ok(None);}if r.calendar_read.as_ref().is_some_and(|read|!matches!(&read.outcome,Some(CalendarReadOutcome::Captured{..}))){return Err(Error::Conflict);}if r.readiness.iter().any(|p|p.finished_at.is_none()){return Err(Error::Conflict);}
   if let Some(saved)=&r.admission{let goal=store.read(&saved.goal_id,&g.policy.rule.owner.pet_id)?;return Ok(goal.admissions.is_empty().then_some(index));}
   return Ok(Some(index));
  }
@@ -70,9 +70,17 @@ pub(in crate::pet_runtime)async fn inspect_admitted(app:&AppHandle,goal:&Record,
 
 async fn prepare(app:&AppHandle,root:&std::path::Path,authority:&std::path::Path,parent:RuleGrant,index:usize)->model::Result<()>{
  let p=&parent.policy;if !policy_current(app,p){return Err(Error::Conflict);}let store=Store::ensure_native(root)?;let a=Authority::existing(authority).map_err(Failure::control_error)?;let main=app.state::<Chat>();
- let contexts=crate::settings::config_dir().join("pet-runtime-contexts-v1");let goal=occurrences::prepare_draft(&store,&contexts,&main,&parent,index,&crate::assistant_memory::now,||policy_current(app,p))?;
+ let contexts=crate::settings::config_dir().join("pet-runtime-contexts-v1");
+ let goal=if p.selected_data(){
+  let owner=app.clone();let task_root=root.to_owned();let context_root=contexts.clone();let authority_root=authority.to_owned();let decision=parent.decision_id.clone();let main=main.inner().clone();
+  let prepared=tauri::async_runtime::spawn_blocking(move||{
+   let store=Store::ensure_native(&task_root)?;let a=Arc::new(Authority::existing(&authority_root).map_err(Failure::control_error)?);
+   super::calendar_materialization::prepare_at(&store,a,&context_root,&main,&decision,index,Arc::new(crate::assistant_memory::now),Arc::new(move|p|policy_current(&owner,p)))
+  }).await.map_err(|_|Error::StorageUnavailable)??;
+  store.read(&prepared.goal_id,&p.rule.owner.pet_id)?
+ }else{occurrences::prepare_draft(&store,&contexts,&main,&parent,index,&crate::assistant_memory::now,||policy_current(app,p))?};
  if !goal.admissions.is_empty(){return Ok(());}if goal.state!=State::Draft{return Err(Error::Conflict);}
- let allocation=a.reserve_rule_occurrence(&parent.decision_id,&p.hash()?,index,crate::assistant_memory::now(),||policy_current(app,p)).map_err(Failure::control_error)?;
+ let allocation=if p.selected_data(){a.rule_grant(&parent.decision_id).map_err(Failure::control_error)?.reservations.into_iter().find(|r|Some(&r.occurrence_id)==p.occurrence_id(index).as_ref()).ok_or(Error::Conflict)?}else{a.reserve_rule_occurrence(&parent.decision_id,&p.hash()?,index,crate::assistant_memory::now(),||policy_current(app,p)).map_err(Failure::control_error)?};
  if allocation.readiness.iter().any(|p|p.finished_at.is_none()){return Err(Error::Conflict);}
  if !evidence(app,&goal,None).is_ok_and(|e|e.rule_binding(p)){
   let until=Instant::now()+Duration::from_millis(allocation.deadline_at.saturating_sub(crate::assistant_memory::now()).min(6000));
@@ -96,9 +104,11 @@ pub(in crate::pet_runtime)fn tick(app:AppHandle,root:PathBuf,authority:PathBuf){
   if keys.is_empty(){return;}
   let Ok(a)=Authority::existing(&authority)else{return;};let Ok(store)=Store::ensure_native(&root)else{return;};let mut prepared=0;
   for rule in keys{
-   let Ok(Some(decision))=a.rule_decision_for(&rule.owner.pet_id,&rule.id)else{continue;};let Ok(parent)=a.rule_grant(&decision)else{note(&rule.id,"reconciliationRequired",Some(Error::Conflict));continue;};if parent.policy.rule!=rule||parent.policy.dispatch.is_none(){continue;}
+   let decision=match a.rule_decision_for(&rule.owner.pet_id,&rule.id){Ok(Some(id))=>id,Ok(None)=>{note(&rule.id,"notAuthorized",None);continue;},Err(e)=>{note(&rule.id,"authorityUnavailable",Some(e.control_error()));continue;}};let Ok(parent)=a.rule_grant(&decision)else{note(&rule.id,"reconciliationRequired",Some(Error::Conflict));continue;};if parent.policy.rule!=rule{note(&rule.id,"definitionChanged",Some(Error::Conflict));continue;}
+   if parent.phase==RulePhase::Active&&parent.policy.notification.is_some(){let owner=app.clone();let notice_root=root.clone();let notice_authority=authority.clone();let g=parent.clone();let _=tauri::async_runtime::spawn_blocking(move||super::notification::deliver(&owner,&notice_root,&notice_authority,&g)).await;}
+   if parent.policy.dispatch.is_none(){continue;}
    let Ok(bounds)=a.rule_execution_bounds(&decision)else{note(&rule.id,"lineageReconciliationRequired",Some(Error::Conflict));continue;};
-   let index=match due(&parent,&bounds.prior,bounds.future_after,&store,crate::assistant_memory::now()){Ok(Some(i))=>i,Ok(None)=>continue,Err(e)=>{note(&rule.id,"decisionOrRecoveryRequired",Some(e));continue;}};
+   let index=match due(&parent,&bounds.prior,bounds.future_after,&store,crate::assistant_memory::now()){Ok(Some(i))=>i,Ok(None)=>{note(&rule.id,"noEligibleOccurrence",None);continue;},Err(e)=>{note(&rule.id,"decisionOrRecoveryRequired",Some(e));continue;}};
    if prepared>=2{break;}prepared+=1;note(&rule.id,"preparing",None);
    match prepare(&app,&root,&authority,parent,index).await{Ok(())=>note(&rule.id,"admitted",None),Err(e)=>note(&rule.id,"blocked",Some(e))}
   }

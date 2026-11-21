@@ -14,8 +14,10 @@ use std::time::Duration;
 use reqwest::Url;
 use serde_json::{json, Value};
 
+use crate::attachment_history::{Coverage, Preparation};
 use crate::chat::{self, Chat, ChatContext, ChatReply, ModelInfo};
 use crate::i18n::{t, tf};
+use crate::pet_documents::content::{Budget, Part, text_coverage, unavailable};
 use crate::{net, secrets};
 
 /// Credential store entry of the Anthropic API key.
@@ -64,14 +66,15 @@ fn models_endpoint(messages: &Url) -> Url {
 
 /// The user's content blocks for one turn. File / window context rides along
 /// with the first message only, exactly like ClaudeService.chat().
-fn user_content(first: bool, context: Option<&ChatContext>, query: &str) -> Vec<Value> {
+fn prepared_content(first: bool, context: Option<&ChatContext>, query: &str) -> (Vec<Value>, Vec<Preparation>) {
     let mut content: Vec<Value> = Vec::new();
+    let mut preparation = vec![];
     if first||matches!(context,Some(ChatContext::Files{..})) {
-        let mut budget=crate::pet_documents::content::Budget::default();
+        let mut budget = Budget::default();
         match context {
             Some(ChatContext::File { name, path }) => {
-                if let Some(block) = file_block(path) {
-                    content.push(block);
+                if let Some(part) = file_block(path) {
+                    content.push(part.into_block());
                 }
                 content.push(json!({ "type": "text", "text": format!("File: {name}") }));
             }
@@ -79,18 +82,34 @@ fn user_content(first: bool, context: Option<&ChatContext>, query: &str) -> Vec<
                 let line = chat::window_line(app_name, title, url.as_deref());
                 content.push(json!({ "type": "text", "text": line }));
             }
-            Some(ChatContext::Files{files})=>{
-                for (index,file) in files.iter().enumerate(){
-                    let (name,path)=(file.name.as_str(),file.path.as_str());content.push(json!({"type":"text","text":file.label(index)}));
-                    if !budget.available(){content.push(crate::pet_documents::content::unavailable(name,"combined extraction deadline"));continue;}
-                    if std::path::Path::new(path).is_dir(){content.push(json!({"type":"text","text":budget.text(crate::local_chat::file_note(name,path))}));continue;}
-                    match file_block(path){
-                        Some(part)=>content.push(budget.block(part,name)),
-                        None if crate::pet_documents::policy::format(path,false)==crate::pet_documents::policy::Format::Pdf=>match crate::document_text::pdf(path){
-                            Ok(text)=>content.push(json!({"type":"text","text":budget.text(format!("File: {name}\n{text}"))})),
-                            Err(error)=>content.push(crate::pet_documents::content::unavailable(name,&error)),
-                        },
-                        None=>content.push(crate::pet_documents::content::unavailable(name,"unsupported format, size or unreadable copy")),
+            Some(ChatContext::Files { files }) => {
+                for (index, file) in files.iter().enumerate() {
+                    let (name, path) = (file.name.as_str(), file.path.as_str());
+                    content.push(json!({"type":"text","text":file.label(index)}));
+                    let (block, coverage) = if !budget.available() {
+                        (unavailable(name, "combined extraction deadline"), Some(Coverage::Unavailable))
+                    } else if std::path::Path::new(path).is_dir() {
+                        let (text, coverage) = crate::local_chat::bounded_attachment_note(name, path, &mut budget);
+                        (json!({"type":"text","text":text}), coverage)
+                    } else if let Some(part) = file_block(path) {
+                        let (block, coverage) = part.fit(&mut budget, name);
+                        (block, Some(coverage))
+                    } else if crate::pet_documents::policy::format(path, false) == crate::pet_documents::policy::Format::Pdf {
+                        match crate::document_text::pdf(path) {
+                            Ok(body) => {
+                                let prefix = format!("File: {name}\n");
+                                let (text, kept) = budget.bounded_text(format!("{prefix}{body}"));
+                                let coverage = text_coverage(kept, prefix.len(), prefix.len() + body.len(), None);
+                                (json!({"type":"text","text":text}), coverage)
+                            }
+                            Err(error) => (unavailable(name, &error), Some(Coverage::Unavailable)),
+                        }
+                    } else {
+                        (unavailable(name, "unsupported format, size or unreadable copy"), Some(Coverage::Unavailable))
+                    };
+                    content.push(block);
+                    if let Some(coverage) = coverage {
+                        preparation.push(Preparation { id: file.id.clone(), coverage });
                     }
                 }
             }
@@ -98,7 +117,7 @@ fn user_content(first: bool, context: Option<&ChatContext>, query: &str) -> Vec<
         }
     }
     content.push(json!({ "type": "text", "text": query }));
-    content
+    (content, preparation)
 }
 
 fn request_body(model: &str, system: &str, history: &[Value], user: &Value) -> Value {
@@ -169,16 +188,18 @@ async fn send_resolved(chat:&Chat,model:&str,query:String,context:Option<ChatCon
     let documents=crate::pet_documents::Request::capture_async(chat,&turn,context.as_ref()).await?;
     let calendar = crate::pet_calendar::note_async(chat, &turn, context.as_ref()).await?;
     let ordinary=crate::pet_calendar::ordinary_context(context.as_ref());let (first,question)=(turn.first,query.clone());
-    let content=tokio::task::spawn_blocking(move||user_content(first,ordinary.as_ref(),&question)).await.map_err(|_|"A preparação dos anexos foi interrompida.".to_string())?;
+    let (content, preparation)=tokio::task::spawn_blocking(move||prepared_content(first,ordinary.as_ref(),&question)).await.map_err(|_|"A preparação dos anexos foi interrompida.".to_string())?;
     let user=crate::pet_calendar::prepend_message(calendar.as_ref(),json!({"role":"user","content":content}))?;
     let mut body = request_body(model, &chat::system_prompt(true), &turn.history, &user);
     chat.append_selected_memory(chat::ANTHROPIC,&query,&crate::pet_memory::context_model::Destination::Api{provider:chat::ANTHROPIC.into(),endpoint:endpoint.to_string(),model:model.into()},Some(key),body["messages"].as_array_mut().unwrap())?;
     let mut calendar_tools = crate::pet_calendar::wire::Session::new(calendar.as_ref(),crate::pet_calendar::wire::Format::Claude);
     if let Some(tools) = &calendar_tools {tools.prepare(&mut body)?;}
 
+    let mut preparation = Some(preparation);
     let response = loop {
         documents.validate_contents().await?;
         crate::pet_calendar::validate(calendar.as_ref())?;
+        if let Some(preparation) = preparation.take() { chat.record_attachment_preparation(&turn, preparation)?; }
         let response = net::while_current(
             || chat.is_current(&turn) && documents.validate().is_ok() && crate::pet_calendar::validate(calendar.as_ref()).is_ok()
                 && calendar_tools.as_ref().is_none_or(|tools|tools.validate().is_ok()),
@@ -303,7 +324,7 @@ fn parse_models(json: &Value) -> Vec<ModelInfo> {
 
 /// PDF → document block, image → image block, text/code → inline text.
 /// Mirrors readFileAsBlock() in ClaudeService.swift.
-fn file_block(path: &str) -> Option<Value> {
+fn file_block(path: &str) -> Option<Part> {
     if crate::pet_documents::policy::format(path,false)==crate::pet_documents::policy::Format::Binary{return None;}
     let ext = std::path::Path::new(path)
         .extension()
@@ -322,10 +343,11 @@ fn file_block(path: &str) -> Option<Value> {
 
     if let Some((block_type, media)) = media_type {
         let bytes = crate::pet_documents::content::bytes(path,crate::pet_documents::content::MAX_MEDIA)?;
-        return Some(json!({
+        if bytes.is_empty() { return None; }
+        return Some(Part::Media(json!({
             "type": block_type,
             "source": { "type": "base64", "media_type": media, "data": base64(&bytes) },
-        }));
+        })));
     }
 
     let len = std::fs::metadata(path).ok()?.len();
@@ -333,7 +355,7 @@ fn file_block(path: &str) -> Option<Value> {
         return None;
     }
     let text = crate::pet_documents::content::text(path,MAX_INLINE_TEXT as usize)?;
-    Some(json!({ "type": "text", "text": format!("File contents:\n{text}") }))
+    Some(Part::Text(text))
 }
 
 /// Small standalone base64 encoder — not worth another dependency.
@@ -359,21 +381,26 @@ fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn user_content(first: bool, context: Option<&ChatContext>, query: &str) -> Vec<Value> {
+        prepared_content(first, context, query).0
+    }
     #[test]
     fn anthropic_folder_context_uses_the_shared_text_and_media_policy(){
         let files=crate::pet_documents::fixtures::Files::new();files.write("folder/nested/notes.md",b"anthropic folder sentinel");files.write("folder/archive.zip",b"binary format even when UTF8");
         let context=files.context(&[("folder","Folder")]);let content=user_content(false,Some(&context),"use folder");let text=serde_json::to_string(&content).unwrap();assert!(text.contains("anthropic folder sentinel"));assert!(text.contains("unsupported for text extraction"));assert!(!text.contains("binary format even when UTF8"));
         files.write("legacy.zip",b"readable but unsupported archive");assert!(file_block(files.root.join("legacy.zip").to_str().unwrap()).is_none());
-        let policy:Value=serde_json::from_str(include_str!("../documents.policy.json")).unwrap();for extension in policy["images"].as_array().unwrap(){let name=format!("image.{}",extension.as_str().unwrap());files.write(&name,b"synthetic image bytes");assert_eq!(file_block(files.root.join(&name).to_str().unwrap()).unwrap()["type"],"image","{name}");}
+        let policy:Value=serde_json::from_str(include_str!("../documents.policy.json")).unwrap();for extension in policy["images"].as_array().unwrap(){let name=format!("image.{}",extension.as_str().unwrap());files.write(&name,b"synthetic image bytes");assert_eq!(file_block(files.root.join(&name).to_str().unwrap()).unwrap().into_block()["type"],"image","{name}");}
     }
     #[test]
     fn attachment_collection_keeps_native_document_image_and_text_blocks_on_later_turns(){
         let fixture=crate::pet_documents::fixtures::Files::new();fixture.write("report.pdf",b"synthetic PDF payload");fixture.write("image.png",b"synthetic image payload");fixture.write("notes.txt",b"synthetic text payload");let context=fixture.context(&[("report.pdf","report"),("image.png","image"),("notes.txt","notes")]);
-        let parts=user_content(false,Some(&context),"compare sources");assert_eq!(parts.len(),7);assert!(parts[0]["text"].as_str().unwrap().contains("fixture-1"));assert_eq!(parts[1]["type"],"document");assert_eq!(parts[1]["source"]["data"],base64_for(b"synthetic PDF payload"));assert!(parts[2]["text"].as_str().unwrap().contains("fixture-2"));assert_eq!(parts[3]["type"],"image");assert!(parts[5]["text"].as_str().unwrap().contains("synthetic text payload"));assert_eq!(parts[6]["text"],"compare sources");
+        let (parts, coverage)=prepared_content(false,Some(&context),"compare sources");assert_eq!(parts.len(),7);assert!(parts[0]["text"].as_str().unwrap().contains("fixture-1"));assert_eq!(parts[1]["type"],"document");assert_eq!(parts[1]["source"]["data"],base64_for(b"synthetic PDF payload"));assert!(parts[2]["text"].as_str().unwrap().contains("fixture-2"));assert_eq!(parts[3]["type"],"image");assert!(parts[5]["text"].as_str().unwrap().contains("synthetic text payload"));assert_eq!(parts[6]["text"],"compare sources");
+        assert_eq!(coverage.iter().map(|item| item.coverage).collect::<Vec<_>>(), [Coverage::Encoded, Coverage::Encoded, Coverage::Full]);
     }
     #[test]
     fn attachment_media_over_the_budget_is_explicitly_unavailable(){
-        let fixture=crate::pet_documents::fixtures::Files::new();fixture.write("large.pdf",&vec![b'x';crate::pet_documents::content::MAX_MEDIA+1]);let context=fixture.context(&[("large.pdf","large")]);let parts=user_content(true,Some(&context),"q");assert_eq!(parts[1]["type"],"text");assert!(parts[1]["text"].as_str().unwrap().contains("content unavailable"));assert_eq!(parts.last().unwrap()["text"],"q");
+        let fixture=crate::pet_documents::fixtures::Files::new();fixture.write("large.pdf",&vec![b'x';crate::pet_documents::content::MAX_MEDIA+1]);let context=fixture.context(&[("large.pdf","large")]);let (parts, observed)=prepared_content(true,Some(&context),"q");assert_eq!(parts[1]["type"],"text");assert!(parts[1]["text"].as_str().unwrap().contains("content unavailable"));assert_eq!(parts.last().unwrap()["text"],"q");
+        assert_eq!(observed, vec![Preparation { id: "fixture-1".into(), coverage: Coverage::Unavailable }]);
     }
 
     #[tokio::test]

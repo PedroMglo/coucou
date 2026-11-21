@@ -26,11 +26,11 @@ impl RuleSuccessionSource{
   let head=self.head();
   if let Some((policy,mode))=&self.revision_policy{
    if !model::token(decision)||self.chain.iter().any(|(g,_)|g.decision_id==decision)||self.chain.iter().any(|(g,_)|now<g.updated_at)||now<policy.prepared_at||now>=policy.valid_until||!policy.schedule.slots.iter().any(|s|s.at.is_some_and(|at|at>now)){return Err(Failure::Changed);}
-   let g=RuleGrant{schema_version:7,kind:head.kind,decision_id:decision.into(),revision:decision.into(),policy:policy.clone(),phase:RulePhase::Active,approved_at:now,updated_at:now,revoked_at:None,reservations:vec![],intent_retirements:vec![],succession:None,revision_authority:Some(RuleRevisionAuthority{schema_version:1,mode:*mode,root_decision_id:self.chain[0].0.decision_id.clone(),predecessor_decision_id:head.decision_id.clone(),generation:self.chain.len().try_into().map_err(|_|Failure::Capacity)?,source_hash:self.hash.clone(),predecessor_commitments_hash:head.commitments_hash().map_err(|_|Failure::Invalid)?,future_after:now})};if !g.valid(){return Err(Failure::Invalid);}return Ok(g);
+   let mut g=RuleGrant{schema_version:7,kind:head.kind,decision_id:decision.into(),revision:decision.into(),policy:policy.clone(),phase:RulePhase::Active,approved_at:now,updated_at:now,revoked_at:None,reservations:vec![],intent_retirements:vec![],succession:None,revision_authority:Some(RuleRevisionAuthority{schema_version:1,mode:*mode,root_decision_id:self.chain[0].0.decision_id.clone(),predecessor_decision_id:head.decision_id.clone(),generation:self.chain.len().try_into().map_err(|_|Failure::Capacity)?,source_hash:self.hash.clone(),predecessor_commitments_hash:head.commitments_hash().map_err(|_|Failure::Invalid)?,future_after:now})};g.schema_version=g.required_version();if !g.valid(){return Err(Failure::Invalid);}return Ok(g);
   }
   if !model::token(decision)||self.chain.iter().any(|(g,_)|g.decision_id==decision)||self.chain.iter().any(|(g,_)|now<g.updated_at)||now>=head.policy.valid_until{return Err(Failure::Changed);}
-  let g=RuleGrant{schema_version:6,kind:head.kind,decision_id:decision.into(),revision:decision.into(),policy:head.policy.clone(),phase:RulePhase::Active,approved_at:now,updated_at:now,revoked_at:None,reservations:vec![],intent_retirements:vec![],revision_authority:None,succession:Some(RuleSuccession{schema_version:1,root_decision_id:self.chain[0].0.decision_id.clone(),predecessor_decision_id:head.decision_id.clone(),generation:self.chain.len().try_into().map_err(|_|Failure::Capacity)?,source_hash:self.hash.clone(),predecessor_commitments_hash:head.commitments_hash().map_err(|_|Failure::Invalid)?})};
-  if !g.valid(){return Err(Failure::Invalid);}Ok(g)
+  let mut g=RuleGrant{schema_version:6,kind:head.kind,decision_id:decision.into(),revision:decision.into(),policy:head.policy.clone(),phase:RulePhase::Active,approved_at:now,updated_at:now,revoked_at:None,reservations:vec![],intent_retirements:vec![],revision_authority:None,succession:Some(RuleSuccession{schema_version:1,root_decision_id:self.chain[0].0.decision_id.clone(),predecessor_decision_id:head.decision_id.clone(),generation:self.chain.len().try_into().map_err(|_|Failure::Capacity)?,source_hash:self.hash.clone(),predecessor_commitments_hash:head.commitments_hash().map_err(|_|Failure::Invalid)?})};
+  g.schema_version=g.required_version();if !g.valid(){return Err(Failure::Invalid);}Ok(g)
  }
  pub(in crate::pet_runtime)fn revision_preview(&self)->serde_json::Value{
   let policy=self.policy();let mode=self.revision_policy.as_ref().map(|(_,m)|*m);let allocation=&self.chain[self.allocation_start].0;let used=self.chain.iter().skip(self.allocation_start).map(|(g,_)|g.reservations.len()).sum::<usize>();let old_remaining=usize::from(allocation.policy.rule.definition.limits.max_occurrences)-used;let renew=mode==Some(RuleRevisionMode::RenewFiniteAllocation);
@@ -57,9 +57,14 @@ impl Authority{
  /// Native7 owns its distinct mode and exact proposed policy. Pending7 is ACKed
  /// only under that mode;6 cannot be used to approve a fresh finite allocation.
  pub(in crate::pet_runtime)fn prepare_rule_revision(&self,policy:&RulePolicy,mode:RuleRevisionMode,now:u64)->Result<RuleSuccessionSource>{
+  self.prepare_rule_revision_options(policy,mode,crate::pet_runtime::rules::CalendarCountUpdate::Keep,None,now)
+ }
+ pub(in crate::pet_runtime)fn prepare_rule_revision_options(&self,policy:&RulePolicy,mode:RuleRevisionMode,count:crate::pet_runtime::rules::CalendarCountUpdate,notice:Option<bool>,now:u64)->Result<RuleSuccessionSource>{
   if !policy.valid()||policy.prepared_at>now{return Err(Failure::Invalid);}let _lock=self.lock_shared()?;let family=self.rule_family_unlocked(&policy.rule.owner.pet_id,&policy.rule.id)?.ok_or(Failure::Missing)?;let head=family.head()?;
   if family.historical||head.phase!=RulePhase::Revoked{return Err(Failure::RecoveryRequired);}if family.chain.iter().any(|g|now<g.updated_at)||family.chain.len()>=64{return Err(Failure::Changed);}
-  let mut selected=policy.clone();let pending=match(family.pending_successor.as_ref(),family.pending.as_slice()){
+  let mut proposed=policy.clone();let count=match count{crate::pet_runtime::rules::CalendarCountUpdate::Keep=>if proposed.calendar_data.is_some(){head.policy.calendar_priority_count}else{None},crate::pet_runtime::rules::CalendarCountUpdate::Unbounded=>None,crate::pet_runtime::rules::CalendarCountUpdate::Set(n)=>Some(n)};
+  proposed.calendar_options(count,notice.unwrap_or(head.policy.notification.is_some()&&proposed.calendar_data.is_some())).map_err(|_|Failure::Invalid)?;
+  let policy=&proposed;let mut selected=policy.clone();let pending=match(family.pending_successor.as_ref(),family.pending.as_slice()){
    (None,[])=>None,
    (Some(g),[(name,p)])if g==p&&g.phase==RulePhase::Active&&g.revision_authority.as_ref().is_some_and(|r|r.mode==mode)=>{
     let mut normalized=policy.clone();normalized.prepared_at=g.policy.prepared_at;if normalized!=g.policy{return Err(Failure::Changed);}let(body,stamp)=self.rule_record_data(name)?.ok_or(Failure::Missing)?;if body!=*g{return Err(Failure::Changed);}selected=g.policy.clone();Some((name.clone(),body,stamp))

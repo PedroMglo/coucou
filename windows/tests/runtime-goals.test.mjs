@@ -378,3 +378,10 @@ test('funded planning reviews its exact incoming reservation and own DATA, inclu
   const missing=structuredClone(g);missing.executionContext.receivedRequest=undefined;await assert.rejects(a.preparePlanning(missing,bounds,limits,'missing-source',false,'peerDelegationIterationV1'),/seleção exata|consentimento R43/);assert.ok(!f.calls.some(([name])=>['confirm','claim','respond','start-driver'].includes(name)));
  }
 });
+
+test('own project creation pins original source CID project and note revisions without a model or work authorization',async()=>{
+ const f=fixture(),a=new RuntimeGoalActions(()=>{},f.transport),original={...input,conversationId:'original-native-cid'},memory=[{id:'project-note',revision:3}],project={id:'original-project',revision:4};const work=a.create(original,[{description:'Prepare one answer',postcondition:'Persisted answer'}],memory,'inference',undefined,project);original.conversationId='changed-native-cid';memory[0].revision=99;project.revision=99;await work;const prepared=f.calls.find(c=>c[0]==='context')[1];assert.equal(prepared.mode,'dedicated');assert.deepEqual(prepared.selectedMemory,[{id:'project-note',revision:3}]);assert.deepEqual(prepared.selectedProject,{id:'original-project',revision:4});assert.equal(f.calls.find(c=>c[0]==='create')[1].conversationId,'original-native-cid');assert.ok(!f.calls.some(c=>['claim','respond','start-driver','authorize','metadata'].includes(c[0])));
+});
+test('project own-goal source is required and cannot be mixed with literal execution or calendars before any write',async()=>{
+ for(const mode of ['source','literal','calendar']){const f=fixture(),a=new RuntimeGoalActions(()=>{},f.transport);await assert.rejects(a.create({...input,conversationId:mode==='source'?null:'original-cid'},[],[{id:'project-note',revision:1}],mode==='literal'?'deterministic':'inference',mode==='calendar'?{selected:[],query:{}}:undefined,{id:'original-project',revision:1}),/projeto, notas e conversa de origem/);assert.deepEqual(f.calls,[]);}
+});

@@ -1,3 +1,5 @@
+**14/11 — projeção móvel:** a retirada declarada na fábrica aplica-se também aos cartões e à seleção efetiva dos serviços do telefone, incluindo cache e seleções antigas; não apaga preferências/dados nem retira ferramentas GitHub separadamente autorizadas.
+
 <!-- rule-probe-recovery-20261110 -->
 **Infraestrutura comum10/11/2026:** a recuperação de prontidão pertence ao runtime/Authority e conserva binding/identidade por pet; não acrescenta permissões por molde. A fábrica e a projeção de compatibilidade não mudaram nesta unidade. A validação usa Ollama HTTP sintético, mantendo LM Studio adiado e os restantes contratos/limites dos providers. [Contrato, fontes e limites](PET-RULES.md#recuperação-de-prontidão10112026--aceitação-parcial).
 
@@ -7,6 +9,32 @@
 **Extensão em integração, 09/11/2026:** catálogo26 com System Guardian independente e sem motor/grants herdados. A configuração inclui catalogRevision1; cada identidade nova declara introducedIn na fábrica. O resolvedor nativo acrescenta em memória apenas identidades posteriores à revisão reconhecida, com permissões/modelos/ferramentas vazios. Não recria uma identidade ausente num catálogo já reconhecido, não aceita revisão futura e não substitui os25 perfis existentes. O snapshot pets.default.json é gerado pelo script existente. A consulta de Saúde usa o mesmo writer/captura revogável de Sistema, com grant próprio Health/Observe/HostHealth e controlo funcional no editor existente; não habilita inferência, TaskRuntime ou ProviderModel para Saúde. Ver [contrato Guardian](SYSTEM-GUARDIAN-ARCHITECTURE.md#12-primeira-unidade-operacional-de-saúde-09112026-em-implementação). As entradas anteriores conservam o contexto histórico.
 
 # Pet factory
+
+## Funcionalidades por domínio —13/11/2026, reafirmadas16/11
+
+Por instrução do proprietário, recuperar uma funcionalidade do Coucou oficial
+exige que ela faça sentido para o pet representado. Os moldes existentes
+`llm` e `application` são a camada de domínio: `features.inference` pertence
+apenas a essa camada. A base comum, as extensões de conta e os pets individuais
+não podem emitir essa regra. A base conserva identidade, configuração, contexto,
+memória, sessões históricas, objetivos e mecanismos comuns do runtime.
+
+O domínio LLM admite conversa e modelos quando existe o adaptador/configuração
+necessário. O domínio aplicação/serviço conserva as suas operações próprias;
+não obtém conversa, modelos, métricas de inferência ou execução por um LLM de
+uma extensão de conta. Spotify conserva os controlos nativos de música/som e
+a voz determinística. n8n conserva a observação de execuções/workflows. Criar,
+editar e executar workflows pelo pet continua a exigir implementação e prova
+próprias; uma conta Codex não demonstra essas capacidades.
+
+O resolvedor aplica o limite do domínio depois das extensões; UI, capacidades
+nativas, admissão de conversa e listagem/seleção de modelos seguem esse limite.
+As referências antigas de conta/modelo e os aliases de dono ficam preservados
+para leitura e recuperação. Não há migração de preferências nem eliminação de
+conversas: conservar dados históricos não ativa inferência no serviço.
+A separação está implementada e tem prova nativa nas composições40/42, com os limites registados na auditoria de paridade. A instalação44/Source35 mantém
+o comportamento anterior até uma entrega própria autorizada. Entradas antigas
+abaixo que descrevem assistentes genéricos nos serviços são contexto histórico.
 
 **R8 C2 F1 — fecho e continuação no mesmo backend integrados localmente1062 (03/11):** o DrainProof original sela o fecho no mesmo Grant13 antes de publicar o Goal19. ACK apenas publica o alvo exato já assinado. Reference4/Spec7/Goal20 permitem nova revisão sem modelo após fecho confirmado, preservando recibos e encargos; Closed sozinho, Uncertain, cancelamento e JSON não concedem continuação. Native343 comprovou dois fechos/três admissões no mesmo processo, UI, reinício/ACK e leitor C1 anterior; native344 comprovou restauro/ativação com o mesmo binário, apenas como dados históricos. [Contrato](PET-DETERMINISTIC-RUNTIME.md), [composição](../.build/pet-goal-execution-next-r1/integration1062-native-controlled-continuation-r8c2/FINAL-CHECKPOINT.json) e [provas/limites](../.build/pet-goal-execution-next-r1/NATIVE-CONTROLLED-CONTINUATION-R8C2-FINAL-VERIFICATION-F1.json). Segue C3: revisão explícita de planos/passos expirados sem reenviar os cobertos, por mecanismos comuns.43+6requisitos integrais preservados/abertos; instalação32 inalterada, sem commits/push/merge/host/quota. As composições anteriores abaixo são histórico.
 
@@ -28,13 +56,13 @@ Resolution order is **base → mold → extension → pet override**. Nested obj
 
 - `base.preferences` and `base.presentation`: shared profile structure/mode and presentation. Stable identity, provider and access policy are prohibited here and in molds/extensions.
 - `molds.llm`: LLM-family differences. Provider-specific models and local/native execution remain explicit.
-- `molds.application`: application-family differences, including no agent session/model UI unless an extension explicitly supports it.
-- `extensions.codex-account`: shared configured Codex model profiles and profile/session presentation, used by the Codex pet and service assistants.
+- `molds.application`: application/service operations. Domain policy excludes LLM chat/model/session UI, even when a legacy account extension remains configured.
+- `extensions.codex-account`: configured Codex account defaults. Historical references on service pets remain readable; this extension cannot grant inference or override the domain limit.
 - `pets[id].preferences`: required explicit stable name/aliases, configured provider and initial integration grants; optional per-pet local-execution policy and model overrides. These protected fields cannot be inherited.
 - `pets[id].routing`: explicit existing chat/voice/task adapter metadata; never inferred from a mold or an AI-looking name.
 - `pets[id].presentation`: specific controls or card labels. Spoty keeps its music/audio route and two relevant access fields.
 
-GitHub and the other configured service assistants remain application pets even though their implementation uses a Codex account. Spoty remains application-only: no new LLM chat, model picker, task execution or session route is created by the factory.
+Service pets remain application pets even when they retain a historical Codex account reference. Only integration_github is temporarily retired; its data stays preserved. Spoty remains application-only: no new LLM chat, model picker, task execution or session route is created by the factory.
 
 The TypeScript resolver is `windows/src/core/pet-factory.ts`. Current consumers are provider lookup, task ownership/names, profile lookup, capabilities, the pet gallery and pet settings. Gallery avatar size, radius, gap, context action, metrics and labels come from the same resolved presentation. The existing shared chat/approval renderers, hover logic, native adapters and habitat remain in their existing modules. The overview avatar slot is reserved metadata and is not wired in this candidate, to avoid the concurrent hotfix.
 
@@ -53,7 +81,7 @@ Change the shared base for every pet, or the relevant mold for that family. For 
 }
 ```
 
-An instance can override one field without copying its mold. An application adapter that supports model-backed work can opt into its existing explicit extension. A new integration still needs its actual native adapter, platform/catalog entry and any provider contract registration; a template does not manufacture implementation or credentials.
+An instance can override one field without copying its mold. An application adapter cannot obtain LLM chat merely by opting into an account extension. A real LLM domain capability requires its own reviewed contract and implementation. A new integration still needs its actual native adapter, platform/catalog entry and any provider contract registration; a template does not manufacture implementation or credentials.
 
 Model defaults are specific to each provider or the named account extension. Changing a generic mold never swaps a pet's CLI/account. Runtime saved names, aliases, model choices, grants and local-execution policies retain their existing read/save/validation paths; the factory performs no bulk rewrite or migration of user files.
 
@@ -82,7 +110,7 @@ The integration, frontend and backend owners contributed the following boundarie
 | State and card shell | One vocabulary for idle, working, needs approval, needs information, finished and error; shared header action slots for Sessions, Configure and Close, plus scrolling/content slots. Approval/question ownership must win over home/terminal metadata. Do not duplicate or modify the concurrent hover/header/overview/CSS hotfix. |
 | Asynchronous feedback | Carry exact pet + runtime target + request, fence late results and retain current focus. A template must never invent a session ID, conversation ID, source or native authority. |
 | LLM conversation | Fast/reasoning/auto structure is reusable; actual model availability is provider-specific and an explicit selected model wins. Chat, history and drafts retain the full runtime SessionTarget and origin. Native global history is not the pet's library; observed terminals are not active turns; unknown usage remains null rather than false zero. |
-| Application extension | Explicit app actions and attachment/plugin slots; Spoty owns its own music/PC-audio controls. MPRIS observation is not System permission. Service assistants may reuse the LLM profile/chat implementation while keeping application/logical ownership distinct from physical Codex. |
+| Application extension | Explicit app actions and attachment/plugin slots; Spoty owns its own music/PC-audio controls. MPRIS observation is not System permission. The application domain excludes generic LLM chat/model/session controls; a historical account reference cannot grant them. Existing history stays preserved. |
 | Settings and drafts | Preserve provider-specific dirty/version guards, retained drafts and unknown/present/absent secret state; saving or displaying a mold never opens an approval or starts work. |
 | Voice | Obtain the canonical current config.name for each request. Do not replace speech words, force a language, or turn learned recognition aliases into the spoken owner name. Current voice and lexicon implementations are unchanged. |
 | Runtime access | Public capability/availability and a dated native snapshot are observations, not authorization. System operations retain original Prepared, current context/fence, owner/producer, TTL and actual writer checks. Always Allow remains untouched; email stays Ollama-only by default. |
@@ -98,3 +126,77 @@ A identidade para trabalho nativo passa por `Blueprint::runtime_identity_adapter
 ## Coleções de calendário — adoção comum09/11/2026
 
 A gestão usa `buildCalendarSources` nos dois compositores geridos e o broker comum `pet_sources`; não há implementação ou permissões especiais para Codex/Ollama. Identidade é PetId/CID da fábrica, distinta de conta/modelo, e a resolução não ativa modelos. O suporte de gestão NativeUser é separado da consulta realmente disponível no adaptador/turno. [Contrato e limites](PET-CALENDAR-SOURCES.md).
+
+### Recuperação OpenAI-compatible —12/11, validação em curso
+
+A fábrica passa a declarar `custom` nos `inferenceAdapters` dos dois pets que
+já admitem Ollama/LM Studio. É uma escolha explícita do motor da conversa, com
+servidor/modelo/referência de credencial próprios; não é outra conta nativa nem
+outro pet. As escolhas e grants continuam proibidos nos templates, e os defaults
+serializados, identidades, aliases e permissões mantêm-se. Guardian e contas
+Codex/Copilot/Gravity conservam os contratos anteriores.
+
+O editor e a revisão comuns fazem a escolha; a ligação global nas definições
+não a distribui aos pets. No modo de pets, “Configurar num pet” abre essa gestão.
+Desligar uma ligação global também não apaga uma escolha explícita do pet; a
+remoção da chave impede envios que a exijam. O transporte original compatível é
+reutilizado. O catálogo não promove capacidades de ferramentas ou tarefas
+apenas por aceitar HTTP OpenAI-compatible. As novas variantes são recusadas por
+leitores anteriores; a preservação e a janela nativa estão ainda por validar.
+
+### Roster por voz: continuação da própria gravação
+
+Os nomes continuam a ser resolvidos pelo catálogo e controlos existentes. Nos
+turnos de voz, a alteração é agora aplicada pelo mesmo CAS nativo do roster,
+sob o writer de preferências, com a origem capturada verificada antes da
+persistência. Só o commit confirmado dessa operação pode avançar a testemunha
+do próprio turno, se o pet que responde continuar ativo. Retirar esse pet não
+autoriza outra ronda de inferência ou reprodução. Identidade, modelo, conversa, configuração dos pets e seleção
+de áudio continuam capturados; uma gravação geral, substituição do dono,
+alteração externa, cancelamento anterior ao despacho ou falha de persistência
+não renova a captura. A resposta usa o recibo normal do broker e o histórico
+existente. Não há novo formato persistente, grant ou ledger. A validação nativa
+e a experiência instalada têm gates separados; consultar os recibos atuais.
+
+### Rotinas com notas de projeto fixadas — contrato17/11/2026
+
+A camada de domínio de inferência pode compor uma rotina local Ollama com memória
+de projeto. O runtime comum conserva scheduler, autoridade, reserva, execução e
+persistência; não dá chat ou inferência aos pets de serviços. A seleção contém
+um projeto, CID público original e revisões exatas de notas desse projeto.
+A revisão tem consentimento próprio de repetição, além da recorrência e do seu
+saldo finito; consentimentos manuais ou de objetivo único não são promovidos.
+Cada ocorrência usa uma captura, uma chamada e zero ferramentas. Mudanças de
+projeto, associação, nota ou destino bloqueiam novos usos; edição/revisão/sucessão
+existentes são a via de atualização. O contrato não autoriza escolher futuras
+revisões automaticamente nem considerar critérios cumpridos por haver resposta.
+A implementação está em validação privada; não certifica instalação ou AUTO04.
+
+
+### Acompanhamento dos objetivos do projeto — contrato17/11/2026
+
+A camada de domínio de inferência local Ollama pode escolher objetivos próprios
+por identidade/definição, com última resposta finita opcional e notas opcionais.
+O consentimento próprio de progresso futuro não deriva de chat, objetivo único
+ou notas fixadas. A fábrica não acrescenta esta superfície a aplicação/serviço,
+n8n ou observador sem inferência; o Guardian conserva apenas a autoridade revista.
+A base comum transporta os dados e mantém scheduler/autoridade/execução/recuperação,
+sem transformar a opção do domínio em capacidade universal dos pets.
+
+Mudanças normais entram na próxima fotografia, não refrescam a atual. A resposta
+continua dependente dos dados originais que a produziram; não permite encaminhar
+texto revogado, executar sugestões ou verificar critérios por inferência.
+[Contrato, provas atuais e limites](PETS-PROJECT-FOLLOWUP-2026-11-17.md).
+
+
+### Pedido de decisão como dados de projeto — domínio local,17/11
+
+A faceta de acompanhamento local Ollama/Context12/Admission32 pode formular
+uma pergunta limitada quando o formato foi escolhido na intenção revista da
+rotina. A resposta do utilizador é uma nota ordinária de projeto, com revisão
+própria; não concede execução, conclusão, partilha ou inferência. Esta condição
+é verificada no backend por origem/recibo/contexto, além da UI. Não se acrescenta
+uma capacidade universal à base dos pets, chat a serviços/n8n ou domínio de
+inferência a observadores. O runtime/persistência/CAS existentes são reutilizados.
+Outros motores mantêm os seus percursos anteriores; não há fallback de provider.
+[Provas e limites](PETS-PROJECT-DECISION-2026-11-17.md).

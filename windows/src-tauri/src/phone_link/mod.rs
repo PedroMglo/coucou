@@ -128,7 +128,7 @@ impl server::Features for TauriFeatures {
     fn services(&self) -> Vec<String> {
         // Only ids the link knows, whatever the file held.
         let ticked = self.app.state::<Shared>().settings.lock().unwrap().phone_services.clone();
-        hub::SERVICE_IDS.iter().filter(|id| ticked.iter().any(|t| t == *id)).map(|id| id.to_string()).collect()
+        hub::SERVICE_IDS.iter().filter(|id| hub::service_available(id) && ticked.iter().any(|t| t == *id)).map(|id| id.to_string()).collect()
     }
 }
 
@@ -614,7 +614,7 @@ pub struct ServicesStatus {
 #[tauri::command]
 pub fn phone_services_status(shared: State<Shared>) -> ServicesStatus {
     let ticked = shared.settings.lock().unwrap().phone_services.clone();
-    ServicesStatus { services: hub::SERVICE_IDS.iter().filter(|id| ticked.iter().any(|t| t == *id)).map(|id| id.to_string()).collect() }
+    ServicesStatus { services: hub::SERVICE_IDS.iter().filter(|id| hub::service_available(id) && ticked.iter().any(|t| t == *id)).map(|id| id.to_string()).collect() }
 }
 
 /// "Show these services on the phone". None by default, read-only. A change disconnects the phones once so they
@@ -628,7 +628,7 @@ pub fn phone_services_set(
     services: Vec<String>,
 ) -> Result<ServicesStatus, String> {
     only_settings(&window)?;
-    let allowed: Vec<String> = hub::SERVICE_IDS.iter().filter(|id| services.iter().any(|s| s == *id)).map(|id| id.to_string()).collect();
+    let allowed: Vec<String> = hub::SERVICE_IDS.iter().filter(|id| hub::service_available(id) && services.iter().any(|s| s == *id)).map(|id| id.to_string()).collect();
     commit_preferences(&app, &link, &shared, Change::Services(allowed.clone()))?;
     link.hub.kick_all("closed", "services setting changed");
     log::line(format!("phone link: {} service(s) on the phone", allowed.len()));

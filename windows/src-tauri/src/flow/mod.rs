@@ -392,7 +392,7 @@ fn begin(app: &AppHandle, flow: &Arc<Flow>) -> Option<Listening> {
                 "mic",
                 "#FF6B6B",
                 t("Coucou can't hear you: the microphone is not allowed or not available."),
-                None,
+                Some((t("Open Settings"), "openSettings")),
                 8,
             );
             None
@@ -509,6 +509,7 @@ pub struct FlowStatus {
     keys: String,
     has_claude_key: bool,
     voice_provider_ready: bool,
+    hotword_capture: crate::voice::HotwordCapture,
     mics: Vec<audio::InputDevice>,
     platform: &'static str,
     /// Coucou started with the computer.
@@ -532,6 +533,7 @@ pub fn flow_status(app: AppHandle, flow: State<Arc<Flow>>) -> FlowStatus {
         },
         has_claude_key: cleanup::has_key(),
         voice_provider_ready: crate::voice::provider_ready(&app),
+        hotword_capture: crate::voice::hotword_capture(),
         mics: audio::input_devices(),
         platform: if cfg!(windows) { "windows" } else { "linux" },
         autostarted: crate::launched_at_login(),
@@ -760,7 +762,8 @@ pub fn pill_action(app: AppHandle, flow: State<Arc<Flow>>, action: String, id: O
     match action.as_str() {
         "dictate" => {
             if flow.running.lock().unwrap().is_none() {
-                // Dictation off: the pill only shows for a call or a message.
+                // Pet menus also expose Flow while dictation is disabled or not ready.
+                crate::show_hub(&app, Some("dictation"));
                 return;
             }
             flow.send(KeyEvent::HandsFree);

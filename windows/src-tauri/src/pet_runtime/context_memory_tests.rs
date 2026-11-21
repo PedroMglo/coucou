@@ -1,3 +1,4 @@
+#[path="project_goal_memory_tests.rs"]mod project_tests;
 use super::*;
 #[path="memory_goal_execution_tests.rs"]mod execution_tests;
 #[path="memory_review_tests.rs"]mod review_tests;
@@ -22,7 +23,7 @@ impl Drop for Fixture{fn drop(&mut self){let _=fs::remove_dir_all(&self.root);}}
  let f=Fixture::new();let main=f.main();f.write(vec![Fixture::record("selected","ai_ollama",None)]);let mut g=Fixture::goal(Context::Unbound);
  let(b,private)=f.prepare(&g,&main,Mode::Dedicated,Some(&[Fixture::selected("selected")])).unwrap();Fixture::bind(&mut g,b.clone());
  let t=private.begin("ollama");private.commit(&t,json!({"role":"user","content":"Own instruction"}),json!({"role":"assistant","content":"Saved answer"}),"Own instruction","Saved answer").unwrap();
- assert!(matches!(read_snapshot(&f.contexts(),&g),Err(Error::Busy)));drop(t);drop(private);f.write(vec![]);
+ let(_,passive)=read_snapshot(&f.contexts(),&g).unwrap();assert_eq!(passive.messages[1]["content"],"Saved answer");assert!(g.admissions.is_empty(),"passive data observation is not an execution grant");drop(t);drop(private);f.write(vec![]);
  let journal=f.contexts().join(&g.id).join(JOURNAL);let before=fs::read(&journal).unwrap();let catalog=fs::read(f.catalog()).unwrap();
  assert!(open_at(&f.contexts(),&g,&main,&f.catalog()).is_err());let(binding,snapshot)=read_snapshot(&f.contexts(),&g).unwrap();assert_eq!(binding,b);assert_eq!(snapshot.source_messages,2);assert_eq!(snapshot.messages[1]["content"],"Saved answer");
  let mut foreign=g.clone();foreign.execution_context.as_mut().unwrap().conversation_id="foreign-cid".into();assert!(read_snapshot(&f.contexts(),&foreign).is_err());

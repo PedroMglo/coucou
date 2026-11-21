@@ -13,6 +13,7 @@ const { DEFAULT_SETTINGS, State } = await import("../src/core/state.ts");
 const {rememberDialogue}=await import("../src/core/chat-dialogue.ts");
 const {PROVIDERS}=await import("../src/core/providers.ts");
 const {PetFactory}=await import("../src/core/pet-factory.ts");
+const {SessionChat}=await import('../src/core/session-chat.ts');
 
 /** What the mocked Rust side answers, by command. */
 let answers;
@@ -35,6 +36,7 @@ beforeEach(() => {
   State.chatHistory = [];
   State.stateOverride = null;
   State.chatBusyProviders.clear();
+  State.chatFeedback.clear();
   State.preparedChat=null;
   State.view = "prompt";
   State.droppedFile = null;
@@ -45,6 +47,72 @@ beforeEach(() => {
 const $ = (cls) => view.el.querySelector(cls);
 const chips = () => view.el.find(".picker-chip").map((c) => c.textContent);
 const models = () => view.el.find(".picker-model").map((m) => m.textContent);
+
+const attachmentTurn = (id, index, phase, messagesAdded, conversationId='attachments-cid') => ({
+  id, provider:'ollama', petId:'ai_ollama', conversationId, messageIndex:index, messagesAdded, phase,
+  started:1, updated:2,
+  attachments:[
+    {id:'original-a',name:'<igual>.txt',kind:'file',size:3,entries:1,sequence:1},
+    {id:'original-b',name:'<igual>.txt',kind:'file',size:4,entries:1,sequence:2},
+  ],
+});
+const attachmentMessages = [
+  {role:'user',content:'Read the two copies'},
+  {role:'assistant',content:'Synthetic reply'},
+  {role:'user',content:'A later unrelated question'},
+  {role:'assistant',content:'Unrelated reply'},
+];
+
+test('inline chat shows the exact historical copies next to their request and hides them when the CID changes',async()=>{
+  State.settings={...DEFAULT_SETTINGS,chatProvider:'ollama'};State.focusId='ai_ollama';State.mode='expanded';
+  const first = {...attachmentTurn('first',0,'done',2), preparation:[
+    {id:'original-b',coverage:'partial'},{id:'original-a',coverage:'full'},
+  ]};
+  let snapshot={id:'attachments-cid',messages:attachmentMessages,busy:false,
+    attachmentHistory:[first,attachmentTurn('foreign',2,'done',2,'different-cid')]};
+  answers.chat_conversation=()=>snapshot;
+  view=buildPrompt(()=>{});view.sync();await flush();view.sync();
+  const log=$('.chat-log'),card=log.children[0];
+  assert.equal(card.tagName,'DETAILS');
+  assert.equal(card.find('summary')[0].textContent,'Anexos deste pedido (2)');
+  assert.equal(log.children[1].textContent,'Read the two copies');
+  assert.deepEqual(card.find('code').map(code=>code.textContent),['original-a','original-b']);
+  assert.deepEqual(card.find('li').map(row=>row.find('span').at(-1).textContent),
+    ['Texto preparado na íntegra','Texto preparado parcialmente']);
+  assert.match(card.textContent,/Leitura pelo modelo por confirmar/);
+  assert.equal(card.find('button').length,0);
+  assert.equal(card.find('img').length,0);
+  assert.equal(log.find('.chat-attachment-history').length,1);
+  snapshot={id:'different-cid',messages:attachmentMessages,busy:false,attachmentHistory:[]};
+  await emit('assistant-history-changed','ollama');await flush();view.sync();
+  assert.equal(log.find('.chat-attachment-history').length,0);
+  assert.deepEqual(sent('pet_document_renew'),[]);
+});
+
+test('floating chat keeps interrupted attachment evidence distinct from later messages and does not show it in terminal sessions',async()=>{
+  State.settings={...DEFAULT_SETTINGS,chatProvider:'ollama'};
+  const records=[attachmentTurn('first',0,'done',2),attachmentTurn('interrupted',2,'interrupted',0),attachmentTurn('invalid-pair',1,'done',2)];
+  const target={petId:'ai_ollama',provider:'ollama',origin:'mochi',sessionId:'attachments-cid',conversationId:'attachments-cid'};
+  const session=new SessionChat({
+    history:async t=>({target:t,messages:attachmentMessages.map((m,i)=>({...m,id:String(i)})),attachmentHistory:structuredClone(records),busy:false,capabilities:{history:true,send:true,cancel:true}}),
+    send:async()=>assert.fail('Opening history must not send'),cancel:async()=>false,
+  },()=>floating?.sync());
+  const floating=buildPrompt(()=>{},session);
+  await session.select(target);
+  const log=floating.el.querySelector('.chat-log'),cards=log.find('.chat-attachment-history');
+  assert.equal(cards.length,2);
+  assert.equal(log.children[3],cards[1]);
+  assert.equal(log.children[4].textContent,'A later unrelated question');
+  assert.match(cards[1].textContent,/pedido sem mensagens guardadas.*Pedido interrompido/);
+  assert.doesNotMatch(cards[1].textContent,/Texto preparado/);
+  cards[0].open=true;
+  await session.refresh();
+  assert.equal(log.find('.chat-attachment-history')[0],cards[0]);
+  assert.equal(cards[0].open,true);
+  await session.select({...target,origin:'external'});
+  assert.equal(log.find('.chat-attachment-history').length,0);
+  assert.deepEqual(sent('pet_document_renew'),[]);
+});
 
 test('an interrupted inline conversation displays its canonical original request without inventing messages',async()=>{
  State.settings={...DEFAULT_SETTINGS,chatProvider:'ollama'};State.focusId='ai_ollama';State.mode='expanded';State.chatHistory=[];
@@ -215,6 +283,26 @@ test("Antigravity selects models from its signed-in CLI account", async () => {
   assert.equal(State.settings.chatModels.antigravity,"claude-sonnet-4-6");
 });
 
+test('a failed provider response remains visible after canonical history refresh without retrying',async()=>{
+ State.settings={...State.settings,chatProvider:'codex'};
+ answers.chat_conversation={id:'failed-code-response',messages:[],busy:false,turn:0};view.sync();await flush();view.sync();
+ answers.chat_send=()=>{throw Error('Resposta sintética incompleta; não repetir automaticamente.');};
+ $('.chat-input').value='Mostrar código';$('.chat-input').fire('input');$('.send-btn').fire('click');await flush();await flush();view.sync();
+ emit('assistant-history-changed','codex');await flush();view.sync();
+ assert.equal($('.chat-feedback').hidden,false);assert.match($('.chat-feedback').textContent,/Resposta sintética incompleta/);
+ assert.equal(sent('chat_send').length,1);assert.deepEqual(State.chatHistory,[]);
+ assert.equal(State.settings.chatProvider,'codex');
+});
+
+test('a floating session retains its failed response message after refresh and isolates it from another conversation',async()=>{
+ State.settings={...DEFAULT_SETTINGS,chatProvider:'codex'};State.focusId='agent_codex';
+ const a={petId:'agent_codex',provider:'codex',origin:'mochi',sessionId:'failed-floating'},b={...a,sessionId:'other-floating'};let floating,sends=0;
+ const session=new SessionChat({history:async target=>({target,messages:[],busy:false,capabilities:{history:true,send:true,cancel:false}}),send:async()=>{sends++;throw Error('Resposta sintética incompleta.');}},()=>floating?.sync());
+ floating=buildPrompt(()=>{},session);await session.select(a);await session.send('Mostrar código');await session.refresh();floating.sync();
+ assert.equal(floating.el.querySelector('.chat-feedback').hidden,false);assert.match(floating.el.querySelector('.chat-feedback').textContent,/Resposta sintética incompleta/);assert.equal(sends,1);
+ assert.deepEqual(session.snapshot.messages,[]);await session.select(b);floating.sync();assert.doesNotMatch(floating.el.querySelector('.chat-feedback').textContent,/Resposta sintética incompleta/);
+});
+
 test("a CLI turn can be stopped without showing a failure screen", async () => {
   State.settings = { ...State.settings, chatProvider: "codex" };
   answers.chat_conversation={id:'stop-exact',messages:[],busy:false,turn:0};view.sync();await flush();view.sync();
@@ -368,11 +456,15 @@ test('a Codex attachment cannot be sent with Gravity and a late copy keeps its o
 });
 
 
-test("all seven conversational service pets restore only their own public conversation",async()=>{
- State.settings={...DEFAULT_SETTINGS,companionMode:true,chatProvider:"ollama"};
+test("service pets never restore or send through the global LLM fallback in either pet surface",async()=>{
  const owners=["integration_github","integration_n8n","integration_notion","integration_vercel","integration_resend","integration_calcom","integration_stripe"];
- answers.chat_conversation=({provider})=>({id:`dialogue-${provider}`,messages:[{role:"user",content:`saved ${provider}`},{role:"assistant",content:`reply ${provider}`}]});
- for(const pet of owners){State.focusId=pet;State.chatHistory=[];view.sync();await flush();view.sync();assert.deepEqual(State.chatHistory.map(m=>m.content),[`saved ${pet}`,`reply ${pet}`]);}
+ await flush();calls.length=0;
+ for(const cardsOnly of [false,true]){
+  State.settings={...DEFAULT_SETTINGS,companionMode:!cardsOnly,chatProvider:"ollama"};State.petCardsOnly=cardsOnly;
+  for(const pet of owners){State.focusId=pet;view.sync();await flush();view.sync();assert.equal($('.chat-bar').hidden,true);$('.chat-input').value='must not fall back';$('.send-btn').fire('click');await flush();}
+ }
+ State.petCardsOnly=false;
+ assert.deepEqual(sent('chat_conversation'),[]);assert.deepEqual(sent('chat_models'),[]);assert.deepEqual(sent('pet_document_contexts'),[]);
  assert.equal(State.settings.chatProvider,"ollama");assert.deepEqual(sent("chat_send"),[]);
 });
 

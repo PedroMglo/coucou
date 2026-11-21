@@ -249,10 +249,13 @@ async fn pet_roster_settings_patch(
         .map_err(|_| "Esta janela não pode alterar os pets ativos.".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let shared = app.try_state::<Shared>().ok_or("As preferências ainda não estão disponíveis.")?;
+        let roster_changed=matches!(&request,pet_roster_settings::Request::SetMain{..}|pet_roster_settings::Request::SetActive{..});
         pet_roster_settings::apply_with(&shared.settings, request, settings::save, |fresh| {
             let _ = app.emit("settings-changed", fresh);
-            integrations::settings_saved(&app, &fresh.active_integrations);
-            spotify::sync(&app, &fresh.active_integrations);
+            if roster_changed{
+                integrations::settings_saved(&app, &fresh.active_integrations);
+                spotify::sync(&app, &fresh.active_integrations);
+            }
         }).map_err(|err| {
             if err.kind() == std::io::ErrorKind::InvalidInput { return err.to_string(); }
             log::line(format!("could not save pet roster: {err}"));
@@ -421,10 +424,11 @@ fn open_in_vscode(path: Option<String>) -> bool {
 /// folder in VS Code, as before.
 #[tauri::command]
 fn open_session(session_id: Option<String>, path: Option<String>) -> bool {
-    let Some(owners) = session_id.as_deref().and_then(session_window::lookup) else {
+    let Some(session) = session_id.as_deref().and_then(|id| session_window::lookup(None, id)) else {
         return open_in_vscode(path);
     };
-    let folder = path.as_deref().map(session_window::folder_name).unwrap_or_default().to_string();
+    let owners = session.owners;
+    let folder = path.as_deref().map(session_window::folder_name).unwrap_or(&session.folder).to_string();
     #[cfg(windows)]
     {
         if platform::focus_session_window(&owners, &folder) {
@@ -767,7 +771,7 @@ fn secret_set(app: AppHandle, key: String, value: String) -> Result<(), String> 
 #[tauri::command]
 fn secret_clear(app: AppHandle, key: String) -> Result<(), String> {
     let had = key == "github-token" && secrets::present(&key);
-    if key==local_chat::LMSTUDIO_KEY{local_chat::clear_lmstudio_key()}else{secrets::clear(&key)}?;
+    match key.as_str(){local_chat::LMSTUDIO_KEY=>local_chat::clear_lmstudio_key(),local_chat::CUSTOM_KEY=>local_chat::clear_custom_key(),_=>secrets::clear(&key)}?;
     if key == claude::KEY {
         voice::sync(&app);
     }
@@ -1054,6 +1058,9 @@ pub fn run() {
             pet_runtime::rules::authority_api::pet_runtime_rule_authority_status,
             pet_runtime::rules::authority_api::pet_runtime_rule_authority_revoke,
             pet_runtime::rules::occurrences::pet_runtime_rule_occurrence_admit,
+            pet_runtime::rules::calendar_materialization::pet_runtime_rule_calendar_prepare,
+            #[cfg(target_os="linux")]
+            pet_runtime::project_goal_observation::pet_runtime_project_goal_observation_prepare,
             pet_runtime::rules::pet_runtime_rules,
             pet_runtime::rules::pet_runtime_rule_save,
             pet_runtime::rules::pet_runtime_rule_preview,
@@ -1072,6 +1079,14 @@ pub fn run() {
             pet_runtime::pet_runtime_prepare_received_goal,
             pet_runtime::pet_runtime_received_work,
             pet_runtime::pet_runtime_work_report_draft,
+            #[cfg(target_os="linux")]
+            pet_runtime::project_decision::pet_runtime_project_decision_read,
+            #[cfg(target_os="linux")]
+            pet_runtime::project_decision::pet_runtime_project_decision_prepare,
+            #[cfg(target_os="linux")]
+            pet_runtime::project_decision::pet_runtime_project_decision_confirm,
+            #[cfg(target_os="linux")]
+            pet_runtime::project_decision::pet_runtime_project_decision_cancel,
             pet_runtime::pet_runtime_delegations,
             pet_runtime::pet_runtime_peer_feedback,
             pet_runtime::pet_runtime_prepare_delegation_withdrawal,
@@ -1147,6 +1162,8 @@ pub fn run() {
             pet_sources::pet_source_configuration_save,
             pet_memory::pet_memory_list,
             pet_memory::pet_memory_mutate,
+            pet_memory::projects::pet_memory_project_list,
+            pet_memory::projects::pet_memory_project_mutate,
             pet_draft_mode,
             #[cfg(target_os="linux")]pet_drafts::pet_draft_read,
             #[cfg(target_os="linux")]pet_drafts::pet_draft_write,
@@ -1360,7 +1377,7 @@ pub fn run() {
             desktop::setup(&handle);
             companions::setup(&handle);
             pet_control::create(&handle);
-            pet_chat::create(&handle);
+            pet_chat::setup(&handle);
             pet_presence::setup(&handle);
             flow::setup(&handle);
             notes::setup(&handle);

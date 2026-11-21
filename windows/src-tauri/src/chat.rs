@@ -651,7 +651,7 @@ impl Chat {
     }
     fn reserve_with_resource(&self,provider:&str,expected:Option<&str>,deadline:Option<std::time::Instant>,owned:Option<(&str,Arc<crate::pet_resources::Hold>)>)->Result<ConversationReservation,String>{
         let provider=if provider.is_empty(){ANTHROPIC}else{provider};
-        crate::pet_config::require_active_provider(provider)?;
+        crate::pet_config::require_inference_provider(provider)?;
         if self.admission.is_some(){return Err("The CLI request was cancelled.".into());}
         if self.disk_error {return Err("A biblioteca local não pôde ser lida. O ficheiro original foi preservado para recuperação.".into());}
         if let Some((goal_id,hold))=&owned{if !self.goal_context_current(goal_id)||hold.provider_for(&self.resources)!=Some(provider){return Err("O owner do contexto ou recurso do objetivo mudou.".into());}}
@@ -680,7 +680,7 @@ impl Chat {
         let mut matching=all.pets.values().flat_map(|c|c.tasks.iter()).filter(|task|task.id==id);
         let task=matching.next().cloned().ok_or("A tarefa já não está no histórico local.")?;
         if matching.next().is_some(){return Err("O identificador da tarefa é ambíguo. A retoma foi recusada.".into());}
-        crate::pet_config::require_active_provider(&task.provider)?;
+        crate::pet_config::require_inference_provider(&task.provider)?;
         #[cfg(target_os="linux")]if let Some(history)=&self.restored_history{crate::pet_data::bootstrap::write_allowed().map_err(|_|"O perfil de dados está indisponível.")?;history.task_allowed(&task.provider,&task.id,task.conversation_id.as_deref(),task.session_id.as_deref()).map_err(|_|crate::pet_data::restored_history::NOTICE.to_string())?;}
         task.resume_prompt()?;
         let provider=task.provider.clone();
@@ -744,7 +744,7 @@ impl Chat {
 
     pub fn check_admission(&self,provider:&str)->Result<(),String>{
         if self._context_guard.as_ref().is_some_and(|g|!g.current()){return Err("O contexto original do objetivo mudou.".into());}
-        crate::pet_config::require_active_provider(provider)?;
+        crate::pet_config::require_inference_provider(provider)?;
         let Some(ticket)=&self.admission else{return Ok(());};
         if ticket.provider!=provider||ticket.cancel.load(Ordering::Acquire)||ticket.resource.upgrade().is_none_or(|r|!r.current()){return Err("The CLI request was cancelled.".into());}
         let all=self.inner.lock().unwrap();
@@ -987,7 +987,7 @@ impl Chat {
     }
 
     fn start(&self,provider:&str,cancel:Arc<AtomicBool>,exclusive:bool)->Result<Turn,String> {
-        crate::pet_config::require_active_provider(provider)?;
+        crate::pet_config::require_inference_provider(provider)?;
         {let all=self.inner.lock().map_err(|_|"A conversa está indisponível.")?;if let Some(c)=all.pets.get(provider){self.restored_turn_allowed(provider,&c.id,c.session.as_ref().map(|s|s.id.as_str()))?;}}
         if !self.selected_memory_current(provider){return Err("A memória selecionada foi alterada ou revogada. Revê a seleção antes de enviar.".into());}
         #[cfg(target_os="linux")]if let Some(memory)=&self.selected_memory{memory.claim_turn().map_err(|_|"Esta revisão de memória já foi utilizada. Faz uma nova revisão para outro pedido.".to_string())?;}
@@ -1069,6 +1069,27 @@ impl Chat {
         if c.observability_task_epoch==Some(turn.epoch){record.task_id=c.tasks.last().map(|t|t.id.clone());}
         c.attachment_history.push(record);c.attachment_epoch=Some(turn.epoch);c.updated=crate::assistant_memory::now();
         self.persist_checked(&next)?;*all=next;Ok(())
+    }
+    pub(crate) fn record_attachment_preparation(&self, turn: &Turn, items: Vec<crate::attachment_history::Preparation>) -> Result<(), String> {
+        if items.is_empty() { return Ok(()); }
+        let mut all = self.inner.lock().unwrap();
+        self.flush_pending(&mut all)?;
+        let mut next = all.clone();
+        let record = next.pets.get_mut(&turn.provider)
+            .filter(|c| c.epoch == turn.epoch && !turn.cancel.load(Ordering::Acquire)
+                && c.active.as_ref().is_some_and(|flag| Arc::ptr_eq(flag, &turn.cancel))
+                && c.turn_cancel.as_ref().is_some_and(|flag| Arc::ptr_eq(flag, &turn.cancel)))
+            .and_then(|c| c.attachment_record(turn.epoch))
+            .filter(|r| r.phase == crate::attachment_history::Phase::Pending && r.preparation_valid(&items))
+            .ok_or("A preparação já não corresponde aos anexos deste turno.")?;
+        if !record.preparation.is_empty() {
+            return if record.preparation == items { Ok(()) }
+                else { Err("A preparação deste turno já foi registada.".into()) };
+        }
+        record.preparation = items;
+        self.persist_checked(&next)?;
+        *all = next;
+        Ok(())
     }
     pub(crate) fn usage_origin(&self,turn:&Turn)->Option<(String,u64)>{
         if turn.cancel.load(Ordering::Acquire){return None;}
@@ -1155,7 +1176,14 @@ impl Chat {
         let Some(c)=all.pets.get_mut(&turn.provider).filter(|c|c.epoch==turn.epoch && !turn.cancel.load(Ordering::Relaxed)) else{return Err("Esta resposta já não pertence ao turno ativo da conversa.".into());};
         self.restored_turn_allowed(&turn.provider,&c.id,c.session.as_ref().map(|s|s.id.as_str()))?;
         c.check_attachment_commit(turn.epoch)?;
-        if let Some(record)=c.attachment_record(turn.epoch){record.finish(crate::attachment_history::Phase::Done,Some(2));}
+        // Prepared attachment content belongs to the turn that revalidated it.
+        // The public question is sufficient for later inference history.
+        let user = if let Some(record) = c.attachment_record(turn.epoch) {
+            record.finish(crate::attachment_history::Phase::Done, Some(2));
+            json!({"role":"user","content":user_text})
+        } else {
+            user
+        };
         if finish_task{
             if let Some(task)=c.tasks.last_mut(){task.update("done",answer);record_terminal(&mut c.request_history,task,Some(2));}
             c.task_saved=Some(std::time::Instant::now());
@@ -1255,7 +1283,12 @@ impl Chat {
         for r in &mut task.local_execution{match r.state{crate::local_tasks::types::ReceiptState::Proposed=>r.finish(crate::local_tasks::types::ReceiptState::Skipped,None),crate::local_tasks::types::ReceiptState::Starting=>{r.state=crate::local_tasks::types::ReceiptState::Unknown;r.cause=Some(crate::local_tasks::types::ReceiptCause::CleanupUnconfirmed);},_=>{}}}
         task.update(phase.phase(),text);task.result=text.chars().take(8000).collect();let origin=Self::task_origin(Some(task));
         record_terminal(&mut c.request_history,task,Some(if phase==LocalTerminal::Stopped{0}else{2}));
-        if let Some(record)=c.attachment_record(scope.turn.epoch){record.finish(crate::attachment_history::Phase::terminal(phase.phase()).unwrap(),Some(if phase==LocalTerminal::Stopped{0}else{2}));}
+        let user = if let Some(record) = c.attachment_record(scope.turn.epoch) {
+            record.finish(crate::attachment_history::Phase::terminal(phase.phase()).unwrap(), Some(if phase==LocalTerminal::Stopped{0}else{2}));
+            json!({"role":"user","content":plain})
+        } else {
+            user
+        };
         c.updated=crate::assistant_memory::now();
         // A stopped turn keeps its factual status/receipts, without persisting
         // an interrupted assistant message as a completed public dialogue.
@@ -1298,8 +1331,13 @@ mod local_task_journal_tests {
             let path=private_path();let chat=Chat::persistent(path.clone());let(scope,lease)=task(&chat);
             chat.capture_attachment_history(&scope.turn,vec![crate::attachment_history::Reference{id:"same-copy".into(),name:"synthetic.txt".into(),kind:"file".into(),size:3,entries:1,sequence:1}]).unwrap();
             if phase==LocalTerminal::Stopped{assert!(chat.cancel_task(&scope.task_id));}
-            finish(&chat,&scope,phase);drop(lease);let disk=crate::assistant_memory::load(&path).unwrap();let saved=&disk.pets["ollama"];let record=&saved.attachment_history[0];
-            assert_eq!(record.task_id.as_deref(),Some(scope.task_id.as_str()));assert_eq!(record.phase,crate::attachment_history::Phase::terminal(phase.phase()).unwrap());assert_eq!(record.messages_added,if phase==LocalTerminal::Stopped{0}else{2});assert_eq!(saved.messages.len(),record.messages_added);clean(&path);
+            chat.commit_local_terminal(&scope,phase,json!({"role":"user","content":"prepared copy bytes"}),"public question","factual public answer").unwrap();
+            drop(lease);let disk=crate::assistant_memory::load(&path).unwrap();let saved=&disk.pets["ollama"];let record=&saved.attachment_history[0];
+            assert_eq!(record.task_id.as_deref(),Some(scope.task_id.as_str()));assert_eq!(record.phase,crate::attachment_history::Phase::terminal(phase.phase()).unwrap());assert_eq!(record.messages_added,if phase==LocalTerminal::Stopped{0}else{2});assert_eq!(saved.messages.len(),record.messages_added);
+            let next=chat.begin_cli("ollama",Arc::default()).unwrap();
+            let _lease=chat.lease(&next);
+            assert_eq!(next.history,saved.messages);
+            clean(&path);
         }
     }
     #[test]fn cancelled_admission_and_completion_cannot_mint_success(){
@@ -1523,7 +1561,7 @@ pub async fn send_for_phone(
 /// address): nothing is sent anywhere before that.
 pub async fn models(settings: &Settings, provider: &str) -> Result<Vec<ModelInfo>, String> {
     crate::settings::effect_allowed()?;
-    crate::pet_config::require_active_provider(provider)?;
+    crate::pet_config::require_inference_provider(provider)?;
     let config=match crate::pet_config::read_existing(){Ok(c)=>Some(c),Err(error)if crate::pet_inference::managed_provider(provider)&&provider!="custom"=>return Err(error),Err(_)=>None};
     let observation=config.as_ref().and_then(|c|crate::pet_capabilities::begin_catalog_configured(settings,provider,c));
     let result=models_resolved(settings,provider,config.as_ref()).await;
@@ -1531,8 +1569,12 @@ pub async fn models(settings: &Settings, provider: &str) -> Result<Vec<ModelInfo
 }
 async fn models_resolved(settings:&Settings,provider:&str,config:Option<&crate::pet_config::Configuration>)->Result<Vec<ModelInfo>,String>{
     if let Some(target)=config.map(|c|crate::pet_inference::Target::for_provider(c,provider)).transpose()?.flatten(){
-        let auth=local_chat::lmstudio::target_auth(&target);let server=local_chat::server_for_target(&target)?;
-        if server.id=="lmstudio"{return Ok(local_chat::lmstudio::catalog_scoped(&server,auth,||true).await?.models());}
+        // Capture authentication generation before reading the secret, as in
+        // the LM Studio path before custom bindings were added. A key edit
+        // during lookup must invalidate the original metadata observation.
+        let auth=if target.choice.backend==crate::pet_inference::Backend::Lmstudio{Some(local_chat::lmstudio::target_auth(&target)?)}else{None};
+        let server=local_chat::server_for_target(&target)?;
+        if let Some(auth)=auth{return Ok(local_chat::lmstudio::catalog_scoped(&server,auth,||true).await?.models());}
         return local_chat::models(&server).await;
     }
     if provider=="copilot" {return crate::copilot_adapter::models().await;}
@@ -1715,17 +1757,17 @@ mod tests {
     }
 
     #[test]
-    fn service_work_owns_its_session_and_never_reuses_another_pet_or_external_cli_context() {
+    fn inference_pets_on_the_same_backend_keep_their_own_sessions() {
         let chat=Chat::default();
-        let codex=chat.begin_cli("codex",Arc::default()).unwrap();let _codex=chat.lease(&codex);
-        chat.start_task(&codex,"query","/tmp","codex","fast",None).unwrap();chat.remember_session(&codex,"codex-own","/tmp",false);
-        let service=chat.begin_cli("integration_spotify",Arc::default()).unwrap();let _service=chat.lease(&service);
-        assert!(service.first && service.history.is_empty() && service.session.is_none());
-        chat.start_task(&service,"play","/tmp","codex","fast",None).unwrap();chat.remember_session(&service,"spotify-own","/tmp",false);
-        assert_eq!(chat.hook_owner("codex","spotify-own").as_deref(),Some("integration_spotify"));
-        assert_eq!(chat.hook_owner("codex","codex-own").as_deref(),Some("codex"));assert!(chat.hook_owner("codex","external").is_none());
-        assert!(chat.cancel_task(&chat.tasks().into_iter().find(|t|t.provider=="integration_spotify").unwrap().id));
-        assert!(!codex.cancel.load(Ordering::Relaxed));assert!(service.cancel.load(Ordering::Relaxed));
+        let gravity=chat.begin_cli("antigravity",Arc::default()).unwrap();let _gravity=chat.lease(&gravity);
+        chat.start_task(&gravity,"query","/tmp","antigravity","fast",None).unwrap();chat.remember_session(&gravity,"gravity-own","/tmp",false);
+        let gemini=chat.begin_cli("gemini-cli",Arc::default()).unwrap();let _gemini=chat.lease(&gemini);
+        assert!(gemini.first && gemini.history.is_empty() && gemini.session.is_none());
+        chat.start_task(&gemini,"query","/tmp","antigravity","fast",None).unwrap();chat.remember_session(&gemini,"gemini-own","/tmp",false);
+        assert_eq!(chat.hook_owner("antigravity","gemini-own").as_deref(),Some("gemini-cli"));
+        assert_eq!(chat.hook_owner("antigravity","gravity-own").as_deref(),Some("antigravity"));assert!(chat.hook_owner("antigravity","external").is_none());
+        assert!(chat.cancel_task(&chat.tasks().into_iter().find(|t|t.provider=="gemini-cli").unwrap().id));
+        assert!(!gravity.cancel.load(Ordering::Relaxed));assert!(gemini.cancel.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -2580,11 +2622,11 @@ mod durable_request_history_tests {
         assert_eq!(chat.conversation_id("codex").unwrap(),current);assert_eq!(serde_json::to_value(chat.tasks()).unwrap(),before);
         assert_eq!(chat.restore_conversation("codex",&cid).unwrap().request_history,archived.request_history);
     }
-    #[test]fn logical_pet_ownership_is_kept_separate_from_its_codex_engine(){
-        let chat=Chat::default();let(cid,_)=stopped(&chat,"integration_notion","codex","notion origin");stopped(&chat,"codex","codex","codex origin");
-        let view=chat.read_conversation("integration_notion",&cid).unwrap();let event=&view.request_history[0];
-        assert_eq!(event.provider,"integration_notion");assert_eq!(event.pet_id,"integration_notion");assert_eq!(event.conversation_id,cid);
-        assert!(chat.read_conversation("codex",&cid).is_err());assert_eq!(chat.conversation("codex").unwrap().request_history[0].query,"codex origin");
+    #[test]fn logical_pet_ownership_is_kept_separate_from_its_gravity_engine(){
+        let chat=Chat::default();let(cid,_)=stopped(&chat,"gemini-cli","antigravity","gemini origin");stopped(&chat,"antigravity","antigravity","gravity origin");
+        let view=chat.read_conversation("gemini-cli",&cid).unwrap();let event=&view.request_history[0];
+        assert_eq!(event.provider,"gemini-cli");assert_eq!(event.pet_id,crate::pet_config::pet_id("gemini-cli").unwrap());assert_eq!(event.conversation_id,cid);
+        assert!(chat.read_conversation("antigravity",&cid).is_err());assert_eq!(chat.conversation("antigravity").unwrap().request_history[0].query,"gravity origin");
     }
     #[test]fn late_terminal_callback_from_a_cannot_relabel_b(){
         let chat=Chat::default();let a=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&a);
@@ -2985,7 +3027,7 @@ mod process_census_chat_tests {
  #[test]fn reserved_turn_is_distinct_from_running_and_has_no_native_alias(){let chat=Chat::default();let _reservation=chat.reserve_conversation("codex",None).unwrap();let work=chat.process_census_live_work(&[binding("codex","codex")]);assert_eq!(work.rows.len(),1);assert_eq!(work.rows[0].phase,"reserved");assert!(work.rows[0].native_session_id.is_none());}
  #[test]fn only_native_session_seen_in_this_live_epoch_is_exposed(){let chat=Chat::default();let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);chat.remember_session(&turn,SID,"/synthetic",false);let work=chat.process_census_live_work(&[binding("codex","codex")]);assert_eq!(work.rows[0].native_session_id.as_deref(),Some(SID));drop(lease);let next=chat.begin_cli("codex",Arc::default()).unwrap();let _lease=chat.lease(&next);let work=chat.process_census_live_work(&[binding("codex","codex")]);assert!(work.rows[0].native_session_id.is_none());}
  #[test]fn cancelled_and_completed_work_is_not_live(){let chat=Chat::default();let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);turn.cancel.store(true,Ordering::Release);assert!(chat.process_census_live_work(&[binding("codex","codex")]).rows.is_empty());drop(lease);assert!(chat.process_census_live_work(&[binding("codex","codex")]).rows.is_empty());}
- #[test]fn service_logical_owner_and_disabled_binding_are_preserved(){let chat=Chat::default();let turn=chat.begin_cli("integration_notion",Arc::default()).unwrap();let _lease=chat.lease(&turn);chat.remember_session(&turn,SID,"/synthetic",false);let mut b=binding("integration_notion","codex");let work=chat.process_census_live_work(&[b.clone()]);assert_eq!(work.rows[0].owner,"integration_notion");assert_eq!(work.rows[0].native_provider.as_deref(),Some("codex"));b.enabled=false;assert!(chat.process_census_live_work(&[b]).rows.is_empty());}
+ #[test]fn logical_owner_and_disabled_binding_are_preserved(){let chat=Chat::default();let turn=chat.begin_cli("gemini-cli",Arc::default()).unwrap();let _lease=chat.lease(&turn);chat.remember_session(&turn,SID,"/synthetic",false);let mut b=binding("gemini-cli","antigravity");let work=chat.process_census_live_work(&[b.clone()]);assert_eq!(work.rows[0].owner,"gemini-cli");assert_eq!(work.rows[0].native_provider.as_deref(),Some("antigravity"));b.enabled=false;assert!(chat.process_census_live_work(&[b]).rows.is_empty());}
  #[test]fn a_busy_library_is_unavailable_not_zero(){let chat=Chat::default();let _guard=chat.inner.lock().unwrap();let work=chat.process_census_live_work(&[binding("codex","codex")]);assert_eq!(work.status,"unavailable");assert_eq!(work.reason.as_deref(),Some("libraryBusy"));}
 }
 
@@ -3001,7 +3043,7 @@ mod process_census_chat_tests {
  #[test]fn mismatched_current_turn_evidence_is_unknown_instead_of_idle(){let chat=Chat::default();let turn=chat.begin_cli("codex",Arc::default()).unwrap();let _lease=chat.lease(&turn);chat.inner.lock().unwrap().pets.get_mut("codex").unwrap().active=Some(Arc::default());assert_eq!(state(&chat,"codex"),"unknown");assert!(chat.process_census_live_work(&[binding("codex")]).rows.is_empty());}
  #[test]fn failed_library_context_cannot_report_idle_or_current_work(){let mut chat=Chat::default();chat.conversation_id("codex").unwrap();chat.disk_error=true;assert_eq!(state(&chat,"codex"),"unknown");}
  #[test]fn disabled_and_duplicate_bindings_do_not_inflate_conversation_counts(){let chat=Chat::default();chat.conversation_id("codex").unwrap();let b=binding("codex");let mut disabled=b.clone();disabled.enabled=false;assert!(chat.process_census_live_work(&[disabled]).session_states.unwrap().rows.is_empty());assert_eq!(chat.process_census_live_work(&[b.clone(),b]).session_states.unwrap().rows.len(),1);}
- #[test]fn state_projection_covers_independent_ai_and_service_owners_without_models(){let chat=Chat::default();for owner in ["codex","copilot","antigravity","ollama","integration_notion"]{chat.conversation_id(owner).unwrap();assert_eq!(state(&chat,owner),"idle");let turn=chat.begin_cli(owner,Arc::default()).unwrap();let lease=chat.lease(&turn);assert_eq!(state(&chat,owner),"busy");drop(lease);assert_eq!(state(&chat,owner),"idle");}}
+ #[test]fn state_projection_covers_independent_inference_owners_without_model_calls(){let chat=Chat::default();for owner in ["codex","copilot","antigravity","ollama","gemini-cli"]{chat.conversation_id(owner).unwrap();assert_eq!(state(&chat,owner),"idle");let turn=chat.begin_cli(owner,Arc::default()).unwrap();let lease=chat.lease(&turn);assert_eq!(state(&chat,owner),"busy");drop(lease);assert_eq!(state(&chat,owner),"idle");}}
  #[test]fn busy_library_reports_unknown_source_not_zero_sessions(){let chat=Chat::default();chat.conversation_id("codex").unwrap();let _lock=chat.inner.lock().unwrap();let work=chat.process_census_live_work(&[binding("codex")]);assert_eq!(work.status,"unavailable");assert!(work.session_states.is_none());}
 }
 

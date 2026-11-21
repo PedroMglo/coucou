@@ -37,6 +37,7 @@ const MAX_GRANT_BYTES:usize=128*1024;
 #[path="authority_restored_future.rs"]pub(in crate::pet_runtime)mod restored_future;
 #[path="authority_rules.rs"]pub(in crate::pet_runtime)mod rules;
 #[path="authority_rule_readiness.rs"]mod rule_readiness;
+#[path="authority_rule_notification.rs"]mod rule_notification;
 #[path="authority_rule_probe_recovery.rs"]mod rule_probe_recovery;
 pub(in crate::pet_runtime)use rule_probe_recovery::RuleProbeRecoverySource;
 #[path="authority_rule_intent_retirement.rs"]mod rule_intent_retirement;
@@ -101,7 +102,7 @@ impl Authority{
         if parent.rename(&setup,&parent,name,true).is_err(){return Self::existing(path);}
         parent.sync().map_err(|_|Failure::Uncertain)?;Self::existing(path)
     }
-    fn fence(&self)->Result<()>{
+    pub(super)fn fence(&self)->Result<()>{
         self.restoration_raw_fence()?;restoration::fence(self)
     }
     fn restoration_raw_fence(&self)->Result<()>{
@@ -115,7 +116,7 @@ impl Authority{
     }
     /// Proof observations may coexist. Every mutation keeps the exclusive lock;
     /// both modes retain the same key/directory/lock-inode fences.
-    fn lock_shared(&self)->Result<Guard>{self.lock_mode(false)}
+    pub(in crate::pet_runtime)fn lock_shared(&self)->Result<Guard>{self.lock_mode(false)}
     fn lock_mode(&self,write:bool)->Result<Guard>{
         self.fence()?;let file=self.dir.open_file(".catalog.lock",if write{libc::O_RDWR}else{libc::O_RDONLY}).map_err(|_|Failure::Unsafe)?.ok_or(Failure::Missing)?;
         // Wait only to acquire this original descriptor before any mutation.

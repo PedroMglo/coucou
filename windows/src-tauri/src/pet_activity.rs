@@ -117,10 +117,10 @@ pub fn codex_progress(value: &Value) -> Option<(&'static str, String)> {
         assert!(chat.commit_observed_reply(&turn,json!({}),json!({}),"late","late").is_err());
         assert!(chat.tasks().is_empty());
     }
-    #[test] fn service_target_keeps_its_logical_owner_and_unknown_provider_is_not_ollama() {
-        let chat=crate::chat::Chat::default();let turn=chat.begin_cli("integration_notion",Arc::default()).unwrap();let _lease=chat.lease(&turn);
+    #[test] fn target_keeps_the_logical_inference_owner_and_unknown_provider_has_no_pet() {
+        let chat=crate::chat::Chat::default();let turn=chat.begin_cli("gemini-cli",Arc::default()).unwrap();let _lease=chat.lease(&turn);
         let context=Context::capture(chat,turn,false);let target=context.target.unwrap();
-        assert_eq!(target.pet_id,"integration_notion");assert_eq!(target.provider,"integration_notion");
+        assert_eq!(target.pet_id,crate::pet_config::pet_id("gemini-cli").unwrap());assert_eq!(target.provider,"gemini-cli");
         assert_eq!(pet("lmstudio"),"ai_lmstudio");assert_eq!(pet("unknown-provider"),"");
     }
     #[test] fn long_public_reply_keeps_the_persistence_warning_visible() {

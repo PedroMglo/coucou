@@ -673,29 +673,6 @@ fn decode_base64(data: &str) -> Option<Vec<u8>> {
 
 const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'];
 
-/// Writes `bytes` as `<stem>.png` in `dir`, or `<stem> (2).png`… when that name
-/// is taken. An existing file is never replaced.
-fn write_unique(dir: &Path, stem: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
-    for n in 1..1000 {
-        let name = if n == 1 { format!("{stem}.png") } else { format!("{stem} ({n}).png") };
-        let path = dir.join(name);
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                let written = file.write_all(bytes).and_then(|()| file.sync_all());
-                drop(file);
-                if let Err(err) = written {
-                    let _ = std::fs::remove_file(&path);
-                    return Err(err);
-                }
-                return Ok(path);
-            }
-            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err),
-        }
-    }
-    Err(std::io::Error::new(ErrorKind::AlreadyExists, "too many recap images with this name"))
-}
-
 /// The PNG the page rendered, checked and written to the first pictures folder
 /// that exists.
 fn save_png(dirs: &[PathBuf], data: &str, week: &str) -> Result<PathBuf, String> {
@@ -715,7 +692,7 @@ fn save_png(dirs: &[PathBuf], data: &str, week: &str) -> Result<PathBuf, String>
     } else {
         "Coucou weekly recap".to_string()
     };
-    write_unique(dir, &stem, &bytes)
+    platform::write_unique_export(dir, &stem, "png", &bytes)
         .map_err(|err| crate::i18n::tf("Could not save the image: {error}", &[("error", &err.to_string())]))
 }
 

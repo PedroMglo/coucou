@@ -8,16 +8,19 @@ use std::collections::{BTreeMap,BTreeSet};
 pub enum RuntimeKind {Llm,Service,Observer}
 #[derive(Clone,Copy,Debug,Deserialize,PartialEq,Eq)]
 #[serde(rename_all="camelCase")]
-pub enum Adapter {Codex,Copilot,Antigravity,Ollama,Lmstudio,Spotify}
-impl Adapter {pub fn key(self)->&'static str{match self{Self::Codex=>"codex",Self::Copilot=>"copilot",Self::Antigravity=>"antigravity",Self::Ollama=>"ollama",Self::Lmstudio=>"lmstudio",Self::Spotify=>"spotify"}}}
+pub enum Adapter {Codex,Copilot,Antigravity,Ollama,Lmstudio,Custom,Spotify}
+impl Adapter {pub fn key(self)->&'static str{match self{Self::Codex=>"codex",Self::Copilot=>"copilot",Self::Antigravity=>"antigravity",Self::Ollama=>"ollama",Self::Lmstudio=>"lmstudio",Self::Custom=>"custom",Self::Spotify=>"spotify"}}}
 #[derive(Clone,Debug,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Runtime {pub kind:RuntimeKind,pub adapter:Option<Adapter>,#[serde(default)]pub assistant_adapter:Option<Adapter>,#[serde(default)]pub inference_adapters:Vec<Adapter>}
 #[derive(Clone,Debug,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Routing {pub chat:Option<String>,pub voice:Option<String>,pub execute:bool,pub task_provider:Option<String>,pub role:Option<String>,pub task_name:Option<String>}
+#[derive(Clone,Debug,Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DomainFeatures {pub inference:bool}
 #[derive(Clone,Debug)]
-pub struct Blueprint {pub id:String,pub introduced_in:u32,pub service:bool,pub retired:bool,pub runtime:Runtime,pub routing:Routing,expected_provider:String}
+pub struct Blueprint {pub id:String,pub introduced_in:u32,pub service:bool,pub retired:bool,pub features:DomainFeatures,pub runtime:Runtime,pub routing:Routing,expected_provider:String}
 impl Blueprint {
     pub fn configured_adapter(&self,provider:&str)->Option<Adapter>{
         if self.runtime.adapter==Some(Adapter::Lmstudio){return (provider=="lmstudio").then_some(Adapter::Lmstudio);}
@@ -60,8 +63,9 @@ pub(super)fn parse(source:&Value,config:&super::Configuration)->Result<BTreeMap<
         let rt=raw.get("runtime").ok_or_else(invalid)?;
         if rt.get("kind").is_none()||rt.get("adapter").is_none(){return Err(invalid());}
         let runtime:Runtime=serde_json::from_value(rt.clone()).map_err(|_|invalid())?;
+        if runtime.adapter==Some(Adapter::Custom){return Err(invalid());}
         if !runtime.inference_adapters.is_empty()&&(runtime.kind!=RuntimeKind::Llm||!matches!(runtime.adapter,None|Some(Adapter::Ollama|Adapter::Lmstudio))
-            ||runtime.inference_adapters.len()>2||runtime.inference_adapters.iter().any(|a|!matches!(a,Adapter::Ollama|Adapter::Lmstudio))
+            ||runtime.inference_adapters.len()>3||runtime.inference_adapters.iter().any(|a|!matches!(a,Adapter::Ollama|Adapter::Lmstudio|Adapter::Custom))
             ||runtime.inference_adapters.iter().map(|a|a.key()).collect::<BTreeSet<_>>().len()!=runtime.inference_adapters.len()){return Err(invalid());}
         let r=raw.get("routing").ok_or_else(invalid)?;
         if !["chat","voice","execute","taskProvider","role","taskName"].iter().all(|k|r.get(k).is_some()){return Err(invalid());}
@@ -69,6 +73,8 @@ pub(super)fn parse(source:&Value,config:&super::Configuration)->Result<BTreeMap<
         if [&routing.role,&routing.task_name].into_iter().flatten().any(|s|s.trim().is_empty()||s.len()>256||s.chars().any(char::is_control)){return Err(invalid());}
         let service=raw.get("service").and_then(Value::as_bool).ok_or_else(invalid)?;
         let mold=raw.get("mold").and_then(Value::as_str).ok_or_else(invalid)?;
+        if raw.get("features").is_some(){return Err(invalid());}
+        let features:DomainFeatures=serde_json::from_value(source["molds"][mold]["features"].clone()).map_err(|_|invalid())?;
         if (runtime.kind==RuntimeKind::Service)!=(mold=="application")||service&&runtime.kind!=RuntimeKind::Service{return Err(invalid());}
         let provider=&config.pets.get(id).ok_or_else(invalid)?.provider;
         for route in [&routing.chat,&routing.voice,&routing.task_provider].into_iter().flatten(){
@@ -88,7 +94,8 @@ pub(super)fn parse(source:&Value,config:&super::Configuration)->Result<BTreeMap<
                 if runtime.kind==RuntimeKind::Llm&&routing.chat.is_none()||runtime.kind!=RuntimeKind::Llm&&routing.chat.is_some(){return Err(invalid());}}
         }
         let retired=raw["retired"].as_bool().unwrap_or(false);if retired{routing.execute=false;}
-        entries.insert(id.clone(),Blueprint{id:id.clone(),introduced_in,service,retired,runtime,routing,expected_provider:provider.clone()});
+        if !features.inference{routing.chat=None; if runtime.adapter!=Some(Adapter::Spotify){routing.voice=None;} routing.execute=false;}
+        entries.insert(id.clone(),Blueprint{id:id.clone(),introduced_in,service,retired,features,runtime,routing,expected_provider:provider.clone()});
     }
     // A route may be repeated for the same owner in different channels, never for another pet.
     let ids:BTreeSet<_>=entries.keys().collect();if ids.len()!=config.pets.len(){return Err(invalid());}Ok(entries)

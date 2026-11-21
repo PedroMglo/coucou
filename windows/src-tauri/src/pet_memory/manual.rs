@@ -1,6 +1,6 @@
 //! Explicit human data consent for manual requests. A review grants neither
 //! agent permissions nor autonomous work. Native sessions have a durable fence.
-use super::{context::{Accepted,Capture,Prepared,Reviews,Ticket},context_model::{Destination,Selected,Decision}};
+use super::{context::{Accepted,Capture,Prepared,Reviews,Ticket},context_model::{Destination,Selected,SelectedProject,Decision}};
 use crate::{chat::Chat,settings::Settings,pet_config::Configuration};
 use std::sync::{Arc,Mutex,OnceLock};
 
@@ -57,7 +57,7 @@ fn current_owner(chat:&Chat,config:&Configuration,provider:&str,cid:&str)->Resul
 }
 
 #[tauri::command]
-pub(crate)async fn pet_memory_context_prepare(window:tauri::WebviewWindow,shared:tauri::State<'_,crate::Shared>,chat:tauri::State<'_,Chat>,provider:String,conversation_id:String,query:String,selected_model:Option<String>,selected:Vec<Selected>,context:Option<crate::chat::ChatContext>,document_sequence:Option<u64>)->Result<Ticket,String>{
+pub(crate)async fn pet_memory_context_prepare(window:tauri::WebviewWindow,shared:tauri::State<'_,crate::Shared>,chat:tauri::State<'_,Chat>,provider:String,conversation_id:String,query:String,selected_model:Option<String>,selected:Vec<Selected>,project_selection:Option<SelectedProject>,context:Option<crate::chat::ChatContext>,document_sequence:Option<u64>)->Result<Ticket,String>{
  if !super::allowed(window.label()){return Err(failure("window"));}
  // Same ordering as chat_send: admission pins the CID before effective model
  // selection. All preparation is local; no model request or file mutation.
@@ -68,7 +68,7 @@ pub(crate)async fn pet_memory_context_prepare(window:tauri::WebviewWindow,shared
  tauri::async_runtime::spawn_blocking(move||{
   let config=crate::pet_config::read_existing()?;let pet=current_owner(&chat,&config,&provider,&conversation_id)?;
   let resolved=resolve(&chat,&settings,&config,&query)?;let now=crate::assistant_memory::now();
-  let capture=Capture::at(&super::path(),pet,&conversation_id,&selected,now).map_err(failure)?;
+  let capture=Capture::at_manual(&super::path(),pet,&conversation_id,&selected,project_selection.as_ref(),now).map_err(failure)?;
   let context_hash=super::context::request_context_hash(context.as_ref(),document_sequence).map_err(failure)?;
   let prepared=Prepared::new(capture,resolved.destination,query,resolved.credential,now).and_then(|p|p.with_request_context(context_hash)).map_err(failure)?;
   reviews().lock().map_err(failure)?.insert(&label,prepared,crate::assistant_memory::now()).map_err(failure)
@@ -95,7 +95,7 @@ pub(crate)fn accept(window:&str,chat:&Chat,settings:&Settings,query:&str,context
   let mut config=crate::pet_config::defaults();
   for p in ["ollama","anthropic","openai","google"]{assert!(owner(&config,p).is_ok());}
   for p in ["codex","copilot","antigravity"]{assert!(owner(&config,p).is_ok());}
-  config.pets.get_mut("integration_notion").unwrap().provider="codex".into();assert!(owner(&config,"integration_notion").is_ok());config.pets.get_mut("integration_notion").unwrap().provider.clear();
+  config.pets.get_mut("integration_notion").unwrap().provider="codex".into();assert!(owner(&config,"integration_notion").is_err(),"a service-only domain cannot borrow a chat route from a provider setting");config.pets.get_mut("integration_notion").unwrap().provider.clear();
   assert!(owner(&config,"lmstudio").is_err());config.pets.get_mut("ai_lmstudio").unwrap().provider="lmstudio".into();assert_eq!(owner(&config,"lmstudio").unwrap(),"ai_lmstudio");
   for p in ["custom","openrouter","gemini-cli","claude-cli","integration_github","integration_notion","unknown"]{assert!(owner(&config,p).is_err(),"{p}");}
  }

@@ -2,11 +2,11 @@
 // out loud, and what leaves the computer. Port of the Mac's Settings → Voice.
 
 import { h, clear } from "../../views/dom";
-import { t } from "../../i18n/i18n";
-import { Bridge } from "../../core/bridge";
+import { N_, t } from "../../i18n/i18n";
+import { Bridge, onEvent } from "../../core/bridge";
 import { invoke } from "@tauri-apps/api/core";
 import { FlowBridge } from "../../core/flow";
-import type { VoiceOutput } from "../../core/flow";
+import type { FlowStatus, VoiceOutput } from "../../core/flow";
 import type { HubContext } from "../shell";
 import { button, card, divider, label, row, segmented, toggle } from "../ui";
 import { modelsControl, recognitionControl } from "./flowsettings";
@@ -15,6 +15,45 @@ import {PetPreferences,profileProvider,isServiceProvider} from '../../mochi/pet-
 const ELEVEN = "elevenlabs-api-key";
 /** Where secrets.rs keeps the keys on this OS (same words as Notch → Chat). */
 const KEY_STORE = navigator.userAgent.includes("Windows") ? "Windows Credential Manager" : "Secret Service (GNOME Keyring, KWallet)";
+
+const HOTWORD_MESSAGES = {
+  inactive: N_("Continuous listening is inactive."),
+  starting: N_("Opening the microphone for continuous listening…"),
+  listening: N_("Microphone active for continuous listening."),
+  recovering: N_("Waiting for the selected microphone to return…"),
+};
+
+function watchHotwordCapture(ctx: HubContext, note: HTMLElement, initial: FlowStatus) {
+  let disposed = false;
+  let revision = 0;
+  let unlisten: (() => void) | undefined;
+  const draw = (status: FlowStatus) => {
+    const capture = status.prefs.voice ? status.hotwordCapture : undefined;
+    note.hidden = capture === undefined;
+    note.dataset.hotwordCapture = capture ?? "";
+    note.textContent = capture ? t(HOTWORD_MESSAGES[capture]) : "";
+  };
+  const refresh = async () => {
+    const current = ++revision;
+    const status = await FlowBridge.status();
+    if (status && !disposed && current === revision) draw(status);
+  };
+  const previous = ctx.onLeave;
+  ctx.onLeave = () => {
+    disposed = true;
+    unlisten?.();
+    previous?.();
+  };
+  draw(initial);
+  void onEvent("voice-hotword-capture", () => void refresh()).then((stop) => {
+    if (disposed) {
+      stop();
+      return;
+    }
+    unlisten = stop;
+    void refresh();
+  });
+}
 
 function elevenKey(): HTMLElement {
   const box = h("div", { style: "display:flex;align-items:center;gap:8px" });
@@ -55,9 +94,11 @@ export async function voicePage(page: HTMLElement, ctx: HubContext) {
       button(t("Talk to Mochi"), () => void FlowBridge.pillAction("voice"), "primary")),
   ));
   page.append(label(t("Listening")));
+  const captureStatus = h("div", { class: "hub-note", role: "status" });
   const main = card(
     row(t("Listen for « OK Coucou »"), t("The microphone stays open; only what follows « OK Coucou » goes further."),
       toggle(prefs.voice, (on) => void ctx.setPrefs((p) => (p.voice = on)).then(() => ctx.navigate("voice")))),
+    captureStatus,
     divider(),
     await recognitionControl(ctx,()=>ctx.navigate('voice')),
     divider(),
@@ -70,6 +111,7 @@ export async function voicePage(page: HTMLElement, ctx: HubContext) {
   }
   main.append(h("div", { class: "hub-note", text: t("Continuous listening keeps Bluetooth headphones in call mode. Turn it off to keep stereo between conversations.") }));
   page.append(main);
+  watchHotwordCapture(ctx, captureStatus, status);
 
   if (boot) {
     const settings = boot.settings;

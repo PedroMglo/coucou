@@ -5,6 +5,8 @@
 // brought forward by the best way the desktop offers:
 //   * KDE Plasma on Wayland: a tiny KWin script, loaded over D-Bus, finds the
 //     window by process ID, activates it, reports back and is unloaded;
+//   * Hyprland on Wayland: the instance socket identifies and focuses the
+//     mapped window of the session's process;
 //   * an X11 session (or an XWayland window): EWMH — `_NET_CLIENT_LIST` and
 //     `_NET_WM_PID` to find it, a `_NET_ACTIVE_WINDOW` request to the window
 //     manager to raise it, over the x11rb that global-hotkey already brings;
@@ -13,9 +15,9 @@
 // GNOME on Wayland has no such door for native windows: nothing is found, and
 // the caller opens the folder in VS Code as before.
 //
-// Everything handed to a script or a command is a number read from /proc of a
-// process we found ourselves (or our own D-Bus name, checked); nothing from a
-// hook payload. Commands get their arguments one by one, never through a shell.
+// Window ownership comes from /proc. Scripts receive the process ID and a
+// validated compositor address or our checked D-Bus name. The hook's folder
+// only helps rank a process's windows. No command runs through a shell.
 // This all runs off the UI thread (lib.rs `open_session`).
 
 use std::collections::HashMap;
@@ -24,6 +26,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use serde_json::Value;
+
+use super::hyprland;
 use crate::session_window::{self, Proc};
 
 // ── The process tree ──────────────────────────────────────────────────────────
@@ -31,7 +36,7 @@ use crate::session_window::{self, Proc};
 /// One process of ours: its parent and name from /proc. PID 1 and processes of
 /// another user (sshd, a display manager, sudo) are not ours, which ends any
 /// walk there.
-fn read_proc(pid: u32, uid: u32) -> Option<Proc> {
+fn read_proc_stat(pid: u32, uid: u32) -> Option<String> {
     if pid <= 1 {
         return None;
     }
@@ -39,9 +44,17 @@ fn read_proc(pid: u32, uid: u32) -> Option<Proc> {
     if std::fs::metadata(&dir).ok()?.uid() != uid {
         return None;
     }
-    let stat = std::fs::read_to_string(format!("{dir}/stat")).ok()?;
-    let (exe, parent) = session_window::parse_stat(&stat)?;
+    std::fs::read_to_string(format!("{dir}/stat")).ok()
+}
+
+fn read_proc(pid: u32, uid: u32) -> Option<Proc> {
+    let (exe, parent) = session_window::parse_stat(&read_proc_stat(pid, uid)?)?;
     Some(Proc { parent, exe })
+}
+
+fn proc_start(stat: &str) -> Option<u64> {
+    // Field 22 (starttime). The process name can contain spaces and parentheses.
+    stat.rsplit_once(')')?.1.split_ascii_whitespace().nth(19)?.parse().ok()
 }
 
 fn my_uid() -> u32 {
@@ -51,11 +64,51 @@ fn my_uid() -> u32 {
 /// The ancestors of a process, nearest first, below the top of the tree.
 pub fn process_ancestors(pid: u32) -> Vec<u32> {
     let uid = my_uid();
+    collect_ancestors(pid, |pid| read_proc(pid, uid))
+}
+
+/// A snapshot of the sender and the start time of its parent, taken while
+/// the peer is still readable in /proc. Kept only until the hook is decoded.
+pub struct RelayOrigin {
+    relay: u32,
+    process: Proc,
+    parent_start: u64,
+}
+
+impl RelayOrigin {
+    pub fn capture(relay: u32) -> Option<Self> {
+        let uid = my_uid();
+        let process = read_proc(relay, uid)?;
+        let parent_start = proc_start(&read_proc_stat(process.parent, uid)?)?;
+        Some(Self { relay, process, parent_start })
+    }
+
+    pub fn ancestors(self) -> Vec<u32> {
+        let uid = my_uid();
+        let Some(stat) = read_proc_stat(self.process.parent, uid) else { return Vec::new() };
+        if proc_start(&stat) != Some(self.parent_start) {
+            return Vec::new();
+        }
+        let Some((exe, parent)) = session_window::parse_stat(&stat) else { return Vec::new() };
+        let witnessed_parent = Proc { parent, exe };
+        collect_ancestors(self.relay, |pid| {
+            if pid == self.relay {
+                Some(self.process.clone())
+            } else if pid == self.process.parent {
+                Some(witnessed_parent.clone())
+            } else {
+                read_proc(pid, uid)
+            }
+        })
+    }
+}
+
+fn collect_ancestors(pid: u32, mut read: impl FnMut(u32) -> Option<Proc>) -> Vec<u32> {
     let mut procs = HashMap::new();
     let mut current = pid;
     // The relay, its ancestors, and the one that ends the walk.
     for _ in 0..session_window::MAX_DEPTH + 2 {
-        let Some(p) = read_proc(current, uid) else { break };
+        let Some(p) = read(current) else { break };
         let parent = p.parent;
         procs.insert(current, p);
         if procs.contains_key(&parent) {
@@ -105,19 +158,23 @@ fn linked_chain(owners: &[u32], procs: &[Option<Proc>]) -> Vec<(u32, String)> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Method {
     KWin,
+    Hyprland,
     X11,
 }
 
 /// Best first. On Plasma's Wayland session KWin sees every window, native or
 /// XWayland; elsewhere EWMH is the standard way, with KWin's script as a
 /// second try on Plasma's X11 session.
-fn methods(session_type: &str, wayland_display: &str, display: &str, desktop: &str) -> Vec<Method> {
+fn methods(session_type: &str, wayland_display: &str, display: &str, desktop: &str, hyprland: bool) -> Vec<Method> {
     let wayland = session_type.eq_ignore_ascii_case("wayland") || !wayland_display.trim().is_empty();
     let x11 = !display.trim().is_empty();
     let kde = desktop.split(':').any(|d| d.eq_ignore_ascii_case("kde"));
     let mut out = Vec::new();
     if kde && wayland {
         out.push(Method::KWin);
+    }
+    if hyprland && wayland {
+        out.push(Method::Hyprland);
     }
     if x11 {
         out.push(Method::X11);
@@ -144,11 +201,13 @@ pub fn focus_session_window(owners: &[u32], folder: &str) -> bool {
         &env("WAYLAND_DISPLAY"),
         &env("DISPLAY"),
         &env("XDG_CURRENT_DESKTOP"),
+        std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some(),
     )
     .into_iter()
     .any(|method| {
         let done = match method {
             Method::KWin => kwin::activate(&pids, folder),
+            Method::Hyprland => focus_hyprland(&pids, folder).is_some(),
             Method::X11 => x11::activate(&pids, folder),
         };
         if done {
@@ -157,6 +216,49 @@ pub fn focus_session_window(owners: &[u32], folder: &str) -> bool {
         done
     });
     tab || raised
+}
+
+fn hyprland_window<'a>(clients: &'a Value, pids: &[u32], folder: &str) -> Option<(&'a str, u32)> {
+    let windows: Vec<_> = clients
+        .as_array()?
+        .iter()
+        .filter_map(|window| {
+            if window["mapped"].as_bool() != Some(true) || window["xwayland"].as_bool() != Some(false) {
+                return None;
+            }
+            let pid = u32::try_from(window["pid"].as_u64()?).ok()?;
+            let address = window["address"].as_str()?;
+            let hex = address.strip_prefix("0x")?;
+            if hex.is_empty()
+                || hex.len() > 16
+                || !hex.bytes().all(|b| b.is_ascii_hexdigit())
+                || hex.bytes().all(|b| b == b'0')
+            {
+                return None;
+            }
+            let title = window["title"].as_str().unwrap_or_default().to_owned();
+            Some(((address, pid), pid, title))
+        })
+        .collect();
+    session_window::choose_window(pids, &windows, folder).copied()
+}
+
+fn focus_hyprland(pids: &[u32], folder: &str) -> Option<()> {
+    let socket = hyprland::socket_path().ok()?;
+    let clients: Value = serde_json::from_slice(&hyprland::request(&socket, "j/clients").ok()?).ok()?;
+    let (address, pid) = hyprland_window(&clients, pids, folder)?;
+    // Recheck the live window inside the compositor before focusing it. The
+    // selection sent here has an address from Hyprland and a PID from /proc.
+    let command = format!(
+        "eval local w=hl.get_window('address:{address}'); \
+         if w and w.pid=={pid} and w.mapped and not w.xwayland then \
+         hl.dispatch(hl.dsp.focus({{window=w}})) end"
+    );
+    hyprland::request(&socket, &command).ok()?;
+    let active: Value =
+        serde_json::from_slice(&hyprland::request(&socket, "j/activewindow").ok()?).ok()?;
+    (active["address"].as_str() == Some(address) && active["pid"].as_u64() == Some(u64::from(pid)))
+        .then_some(())
 }
 
 /// Runs a helper with nothing attached and a time limit; true when it exits 0.
@@ -261,8 +363,7 @@ mod x11 {
         // Source 2: a pager acting for the user, which window managers honour
         // over their focus-stealing prevention. Timestamp 0: "now".
         let ev = ClientMessageEvent::new(32, target, active, [2, 0, 0, 0, 0]);
-        conn.send_event(false, root, to_root, ev)?;
-        conn.flush()?;
+        conn.send_event(false, root, to_root, ev)?.check()?;
         Ok(true)
     }
 }
@@ -503,16 +604,35 @@ mod tests {
     fn the_best_way_comes_first_for_each_desktop() {
         use Method::*;
         // Plasma on Wayland: KWin sees everything; XWayland as a second try.
-        assert_eq!(methods("wayland", "wayland-0", ":0", "KDE"), [KWin, X11]);
-        assert_eq!(methods("", "wayland-0", "", "KDE"), [KWin]);
+        assert_eq!(methods("wayland", "wayland-0", ":0", "KDE", false), [KWin, X11]);
+        assert_eq!(methods("", "wayland-0", "", "KDE", false), [KWin]);
+        assert_eq!(methods("wayland", "wayland-0", ":0", "Hyprland", true), [Hyprland, X11]);
         // Plasma on X11: EWMH, then KWin.
-        assert_eq!(methods("x11", "", ":0", "KDE"), [X11, KWin]);
+        assert_eq!(methods("x11", "", ":0", "KDE", false), [X11, KWin]);
         // Any X11 session.
-        assert_eq!(methods("x11", "", ":0", "XFCE"), [X11]);
+        assert_eq!(methods("x11", "", ":0", "XFCE", true), [X11]);
         // GNOME on Wayland: only XWayland windows can be reached.
-        assert_eq!(methods("wayland", "wayland-0", ":0", "ubuntu:GNOME"), [X11]);
-        assert_eq!(methods("wayland", "wayland-0", "", "GNOME"), []);
-        assert_eq!(methods("tty", "", "", ""), []);
+        assert_eq!(methods("wayland", "wayland-0", ":0", "ubuntu:GNOME", false), [X11]);
+        assert_eq!(methods("wayland", "wayland-0", "", "GNOME", false), []);
+        assert_eq!(methods("tty", "", "", "", false), []);
+    }
+
+    #[test]
+    fn hyprland_only_selects_a_valid_mapped_native_window_of_the_session() {
+        let clients = serde_json::json!([
+            {"address":"0xa1","pid":39,"title":"project","mapped":true,"xwayland":false},
+            {"address":"0xb1","pid":42,"title":"project","mapped":true,"xwayland":true},
+            {"address":"0xb2","pid":42,"title":"project","mapped":false,"xwayland":false},
+            {"address":"0xb'","pid":42,"title":"project","mapped":true,"xwayland":false},
+            {"address":"0x00","pid":42,"title":"project","mapped":true,"xwayland":false},
+            {"address":"0xc1","pid":42,"title":"other","mapped":true,"xwayland":false},
+            {"address":"0xc2","pid":42,"title":"project","mapped":true,"xwayland":false},
+            {"address":"0xd1","pid":43,"title":"project","mapped":true,"xwayland":false}
+        ]);
+        assert_eq!(hyprland_window(&clients, &[41, 42, 43], "project"), Some(("0xc2", 42)));
+        assert_eq!(hyprland_window(&clients, &[43, 42], "project"), Some(("0xd1", 43)));
+        assert_eq!(hyprland_window(&clients, &[41], "project"), None);
+        assert_eq!(hyprland_window(&serde_json::json!({}), &[42], "project"), None);
     }
 
     #[test]
@@ -539,6 +659,19 @@ mod tests {
         assert_eq!(linked.len(), found.len());
         assert!(!found.contains(&me) && !found.contains(&1));
         assert!(still_linked(&[u32::MAX - 1]).is_empty());
+    }
+
+    #[test]
+    fn a_captured_relay_parent_survives_the_child_being_reaped() {
+        let mut relay = Command::new("sleep").arg("30").spawn().unwrap();
+        let observed = RelayOrigin::capture(relay.id());
+        let mut stale = RelayOrigin::capture(relay.id()).unwrap();
+        relay.kill().unwrap();
+        relay.wait().unwrap();
+        assert!(process_ancestors(relay.id()).is_empty());
+        assert_eq!(observed.unwrap().ancestors().first(), Some(&std::process::id()));
+        stale.parent_start += 1;
+        assert!(stale.ancestors().is_empty());
     }
 
     #[test]

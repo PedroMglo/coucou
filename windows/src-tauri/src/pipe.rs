@@ -118,7 +118,7 @@ pub fn start(app: AppHandle) {
             };
             let connected = std::mem::replace(&mut server, next);
             let app = app.clone();
-            tauri::async_runtime::spawn(async move { handle(app, connected).await });
+            tauri::async_runtime::spawn(async move { handle(app, connected, relay_ancestors).await });
         }
     });
 }
@@ -162,14 +162,45 @@ pub fn start(app: AppHandle) {
                 }
             };
             // Only the relay run by our own user may drive the island.
-            if !matches!(stream.peer_cred(), Ok(c) if c.uid() == uid) {
-                log::line("refused a relay connection from another user");
-                continue;
-            }
+            let peer = match stream.peer_cred() {
+                Ok(peer) if peer.uid() == uid => peer,
+                _ => {
+                    log::line("refused a relay connection from another user");
+                    continue;
+                }
+            };
+            let origin = if relay_data_waiting(&stream) {
+                peer.pid()
+                    .and_then(|pid| u32::try_from(pid).ok())
+                    .and_then(crate::platform::RelayOrigin::capture)
+            } else {
+                None
+            };
             let app = app.clone();
-            tauri::async_runtime::spawn(async move { handle(app, stream).await });
+            tauri::async_runtime::spawn(async move {
+                handle(app, stream, |stream| match origin {
+                    Some(origin) => origin.ancestors(),
+                    None => relay_ancestors(stream),
+                }).await
+            });
         }
     });
+}
+
+#[cfg(target_os = "linux")]
+fn relay_data_waiting(stream: &tokio::net::UnixStream) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut byte = 0u8;
+    // Check only already queued data. An idle connection may later be passed
+    // to a different process, and this check must not consume any bytes.
+    unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            (&mut byte as *mut u8).cast(),
+            1,
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        ) == 1
+    }
 }
 
 /// One accepted relay connection, whatever carries it.
@@ -212,7 +243,11 @@ impl Relay for tokio::net::UnixStream {
     }
 }
 
-async fn handle(app: AppHandle, mut pipe: impl Relay) {
+fn relay_ancestors(pipe: &impl Relay) -> Vec<u32> {
+    pipe.client_pid().map(crate::platform::process_ancestors).unwrap_or_default()
+}
+
+async fn handle<R: Relay>(app: AppHandle, mut pipe: R, ancestry: impl FnOnce(&R) -> Vec<u32>) {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
@@ -258,7 +293,7 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
 
     if gate&&event!="PermissionRequest"{pipe.finish();return;}
 
-    note_session_window(&pipe, &payload, &event);
+    note_session_window(&payload, &event, || ancestry(&pipe));
     // Counts for the weekly recap — never the command, path or prompt itself.
     crate::recap::observe(&app, &payload);
 
@@ -347,25 +382,25 @@ fn handoff_payload(request_id:&str,session_id:&str,agent:&str,provider:Option<&s
 
 /// Finds, once per session, the window it runs in — see session_window.rs.
 ///
-/// Only while the session is unknown, so the process snapshot is not taken on
-/// every event. The relay must still be running for its parents to be found:
-/// a permission request always is (it waits for us), a quick event may already
-/// have exited, and then a later event of the session tries again.
-fn note_session_window(pipe: &impl Relay, payload: &Value, event: &str) {
+/// Walk the full tree only for an unknown session. Linux may have witnessed
+/// the sender already when it accepted the data. With neither a witness nor
+/// a live relay, a later event can try again.
+fn note_session_window(payload: &Value, event: &str, ancestry: impl FnOnce() -> Vec<u32>) {
     let Some(session) = payload.get("session_id").and_then(Value::as_str) else { return };
+    let backend = session_window::hook_backend(payload["coucou_agent"].as_str());
     if event == "SessionEnd" {
-        session_window::forget(session);
+        session_window::forget(backend, session);
         return;
     }
-    if session_window::known(session) {
+    if session_window::known(backend, session) {
         return;
     }
-    let Some(relay) = pipe.client_pid() else { return };
-    let ancestors = crate::platform::process_ancestors(relay);
+    let ancestors = ancestry();
     // No ancestors: the relay was already gone, so try again next time. Some,
     // but none with a window (a classic console): settled, VS Code it is.
     if !ancestors.is_empty() {
-        session_window::remember(session, crate::platform::window_owners(&ancestors));
+        let cwd = payload["cwd"].as_str().unwrap_or_default();
+        session_window::remember(backend, session, cwd, crate::platform::window_owners(&ancestors));
     }
 }
 

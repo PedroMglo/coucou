@@ -15,3 +15,31 @@ test('rule waits cannot redirect owner, display a stale response, silently retry
 test('actual rule bridge projects only native management fields and freezes the original definition',async()=>{
  const saved=internals.invoke,calls=[];internals.invoke=async(command,args)=>{calls.push({command,args});return document();};try{const i={petId:'ai_ollama',expectedRevision:'missing',requestId:'create',definition:def(),grant:{all:true},enabled:true};await Bridge.petRuntimeRuleSave(i);i.definition.schedule.timeZone='UTC';assert.equal(calls[0].command,'pet_runtime_rule_save');assert.equal(calls[0].args.input.definition.schedule.timeZone,'Europe/Lisbon');assert.equal(Object.hasOwn(calls[0].args.input,'grant'),false);assert.equal(Object.hasOwn(calls[0].args.input,'enabled'),false);await Bridge.petRuntimeRulePreview({petId:'ai_ollama',ruleId:rule().id,revision:1,authority:true});assert.deepEqual(calls[1].args.input,{petId:'ai_ollama',ruleId:rule().id,revision:1});}finally{internals.invoke=saved;}
 });
+
+test('rule calendar selection is explicit, revisioned and isolated from foreign or conversation sources',async()=>{
+ const {v,api,calls}=fixture();await load(v);fill(v);
+ const source=(id,name,owners,enabled=true)=>({id,name,owners,enabled,revision:3,kind:'ics',path:'/private/'+id+'.ics'});
+ api.petSourceConfiguration=async()=>({revision:'d'.repeat(64),config:{version:3,generation:1,sources:[source('work','Work calendar',[{petId:'ai_ollama',scope:'pet'}]),source('conversation','Conversation only',[{petId:'ai_ollama',conversationId:'cid'}]),source('other','Foreign calendar',[{petId:'agent_codex',scope:'pet'}]),source('off','Disabled',[{petId:'ai_ollama',scope:'pet'}],false)]}});
+ button(v,'Consultar calendários inscritos para a rotina').fire('click');await flush();assert.ok(field(v,'Calendário da rotina: Work calendar'));
+ for(const label of ['Conversation only','Foreign calendar','Disabled'])assert.equal(field(v,'Calendário da rotina: '+label),undefined);
+ const check=field(v,'Calendário da rotina: Work calendar');check.checked=true;check.fire('change');
+ api.petRuntimeRuleSave=async input=>{calls.push(['save',structuredClone(input)]);return {...document([{...rule(),definition:structuredClone(input.definition)}]),schemaVersion:2};};
+ button(v,'Guardar rascunho de rotina').fire('click');await flush();assert.deepEqual(calls.find(([kind])=>kind==='save')[1].definition.dataScope,{calendars:{sources:[{id:'work',revision:3}]}});
+ assert.ok(!calls.some(([kind])=>['preview','execute','readCalendar','authorize'].includes(kind)));
+ v.syncPet('ai_lmstudio',true);assert.equal(field(v,'Calendário da rotina: Work calendar'),undefined);v.dispose();
+});
+test('late source metadata never selects calendars for a different pet',async()=>{
+ const {v,api}=fixture();await load(v);let release;api.petSourceConfiguration=()=>new Promise(resolve=>release=resolve);
+ button(v,'Consultar calendários inscritos para a rotina').fire('click');v.syncPet('ai_lmstudio',true);
+ release({revision:'e'.repeat(64),config:{version:3,generation:1,sources:[{id:'work',name:'Private old calendar',revision:1,kind:'ics',enabled:true,path:'/private/old.ics',owners:[{petId:'ai_ollama',scope:'pet'}]}]}});await flush();assert.doesNotMatch(v.el.textContent,/Private old calendar/);v.dispose();
+});
+
+test('project rule editing preserves pinned metadata until explicitly removed, without borrowing calendar data',async()=>{
+ const {v,api,calls}=fixture(),own=rule();const scope={project:{sourceConversationId:'original-native-cid',project:{id:'a'.repeat(32),revision:3},notes:[{id:'own-note',revision:2}]}};own.definition.dataScope=scope;
+ api.petRuntimeRules=async()=>({...document([own]),schemaVersion:3});v.syncPet('ai_ollama',true,'ollama');await load(v);button(v,'Editar rascunho').fire('click');assert.match(v.el.textContent,/Revisões fixadas no rascunho/);button(v,'Guardar rascunho de rotina').fire('click');await flush();assert.deepEqual(calls.find(([k])=>k==='save')[1].definition.dataScope,scope);
+ api.petRuntimeRules=async()=>({...document([own]),schemaVersion:3});await load(v);button(v,'Editar rascunho').fire('click');button(v,'Retirar projeto desta rotina').fire('click');button(v,'Guardar rascunho de rotina').fire('click');await flush();assert.equal(calls.filter(([k])=>k==='save').at(-1)[1].definition.dataScope,'none');v.dispose();
+});
+test('project rule cannot fix notes without an explicit native source and complete selection',async()=>{
+ const{v,calls}=fixture();v.syncPet('ai_ollama',true,'ollama');await load(v);button(v,'Fixar notas selecionadas nesta rotina').fire('click');assert.match(v.el.textContent,/associa o projeto e seleciona notas completas/);assert.equal(calls.some(([k])=>k==='save'),false);v.dispose();
+});
+test('progress rule editing keeps exact goal definitions/options and optional empty notes in Book4 without silent conversion',async()=>{const{v,api,calls}=fixture(),r=rule();const scope={projectProgress:{sourceConversationId:'original-cid',project:{id:'a'.repeat(32),revision:2},goals:[{goalId:'g-'+'b'.repeat(64),specHash:'c'.repeat(64)}],includeLatestResponse:false,notes:[]}};r.definition.dataScope=scope;api.petRuntimeRules=async()=>({...document([r]),schemaVersion:4});v.syncPet('ai_ollama',true,'ollama');await load(v);button(v,'Editar rascunho').fire('click');assert.match(v.el.textContent,/Acompanhamento fixado/);button(v,'Guardar rascunho de rotina').fire('click');await flush();assert.deepEqual(calls.find(([k])=>k==='save')[1].definition.dataScope,scope);v.dispose();});

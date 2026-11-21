@@ -49,6 +49,10 @@ class FakeElement {
   insertAdjacentHTML() {
     throw new Error("insertAdjacentHTML must never be used");
   }
+  contains(node) {
+    for (let current = node; current; current = current.parentNode) if (current === this) return true;
+    return false;
+  }
   get parentElement() {
     return this.parentNode?.nodeType === 1 ? this.parentNode : null;
   }

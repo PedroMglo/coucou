@@ -31,10 +31,14 @@ pub(crate)fn endpoint_key_for(raw:&str,auth:MetadataAuth)->Option<String>{
   MetadataAuth::Configured(g)if g%2==0=>digest(&(endpoint,"required",g)).ok(),_=>None,
  }
 }
-pub(crate)fn target_auth(target:&crate::pet_inference::Target)->MetadataAuth{match target.choice.credential{
- crate::pet_inference::CredentialReference::None=>MetadataAuth::Anonymous,
- crate::pet_inference::CredentialReference::ConfiguredLmstudioEndpoint=>MetadataAuth::Configured(crate::local_chat::lmstudio_key_generation()),
-}}
+pub(crate)fn target_auth(target:&crate::pet_inference::Target)->Result<MetadataAuth,String>{
+ if target.choice.backend!=crate::pet_inference::Backend::Lmstudio{return Err("Este destino não usa metadados LM Studio.".into());}
+ match target.choice.credential{
+  crate::pet_inference::CredentialReference::None=>Ok(MetadataAuth::Anonymous),
+  crate::pet_inference::CredentialReference::ConfiguredLmstudioEndpoint=>Ok(MetadataAuth::Configured(crate::local_chat::lmstudio_key_generation())),
+  crate::pet_inference::CredentialReference::ConfiguredCustomEndpoint=>Err("A credencial não pertence ao adaptador LM Studio.".into()),
+ }
+}
 impl Binding{
     pub(crate)fn valid_for(&self,model:&str)->bool{
         self.schema_version==1&&id(&self.model_key)&&id(model)

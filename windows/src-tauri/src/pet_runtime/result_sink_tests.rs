@@ -61,7 +61,8 @@ fn incompatible_result_sinks_refuse_before_http_and_leave_all_bytes_and_budget_u
 
 #[test]
 fn final_body_gate_checks_storage_for_every_common_owner_before_creating_an_attempt() {
-    for provider in ["codex", "antigravity", "copilot", "ollama", "lmstudio", "integration_notion"] {
+    assert!(!crate::pet_config::blueprint("integration_notion").unwrap().features.inference);
+    for provider in ["codex", "antigravity", "copilot", "ollama", "lmstudio"] {
         let (f, a, g, _p, o, _main) = if provider == "lmstudio" {
             let server = crate::local_chat::Server { id: "lmstudio", name: "Synthetic accounting only", url: "http://127.0.0.1:1234".into(), key: None };
             setup_lmstudio(&server, &lmstudio_metadata())

@@ -31,7 +31,11 @@ export async function createControlHome(manage:(pet?:string)=>void,collapse:()=>
   State.settings={...State.settings,soundEnabled:!State.settings.soundEnabled};Sound.setEnabled(State.settings.soundEnabled);void Bridge.saveSettings({...State.settings,companionMode:nativeCompanionMode}).catch(Bridge.reportSettingsError);header.sync();
  }});
  header.el.querySelector('.header-settings')!.setAttribute('aria-label','Gerir pets, sessões e modelos');
- const overview=buildPetOverview({setFocus:id=>{State.setFocus(id);syncViews();wake();},openTarget:openChat,blip:()=>Sound.play('blip'),openSettingsWindow:manage,openPetSettings:manage});
+ const overview=buildPetOverview({setFocus:id=>{State.setFocus(id);syncViews();wake();},openTarget:openChat,blip:()=>Sound.play('blip'),openSettingsWindow:manage,openPetSettings:manage,openDiff:async(task,diffId)=>{
+  if(task.sessionId&&task.sessionBackend)await emitToWindow('island','pet-session-select',{pet:task.id,backend:task.sessionBackend,id:task.sessionId,cwd:task.sessionCwd??'',title:task.sessionTitle??'',owned:!!task.sessionOwned,view:'overview',diffId});
+  else await emitToWindow('island',PET_EVENTS.open,{pillId:task.id,view:'overview',manual:true,diffId});
+  collapse();
+ }});
  overview.el.classList.add('on');const views=document.createElement('div');views.className='native-control-views';views.append(overview.el,avatar);el.append(header.el,views);
  function syncViews(){
   header.sync();overview.sync();const task=State.focusTask;

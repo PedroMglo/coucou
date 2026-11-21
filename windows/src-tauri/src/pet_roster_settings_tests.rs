@@ -9,6 +9,26 @@ fn active(id:&str,enabled:bool)->Request {Request::SetActive{id:id.into(),enable
 fn encode(s:&Settings)->Value {serde_json::to_value(s).unwrap()}
 fn apply(s:&Mutex<Settings>,r:Request)->Roster {apply_with(s,r,|_|Ok(()),|_|{}).unwrap()}
 
+#[test]fn desktop_intentions_preserve_every_other_preference_and_reject_ambiguous_payloads(){
+ let before=initial();let current=Mutex::new(before.clone());
+ for input in [json!({"action":"toggleDesktopVisibility","enabled":true}),json!({"action":"setDesktopVisibility","enabled":null}),json!({"action":"setDesktopVisibility","enabled":true,"id":"agent_codex"})]{assert!(serde_json::from_value::<Request>(input).is_err());}
+ let visible=apply(&current,serde_json::from_value(json!({"action":"setDesktopVisibility","enabled":true})).unwrap());let mut expected=before.clone();expected.companion_mode=true;
+ assert!(visible.companion_mode);assert_eq!(encode(&current.lock().unwrap()),encode(&expected));
+ assert_eq!(apply(&current,serde_json::from_value(json!({"action":"setDesktopVisibility","enabled":true})).unwrap()),visible);
+ let hidden=apply(&current,serde_json::from_value(json!({"action":"toggleDesktopVisibility"})).unwrap());assert!(!hidden.companion_mode);assert_eq!(encode(&current.lock().unwrap()),encode(&before));
+}
+#[test]fn concurrent_desktop_toggles_are_serial_and_stale_general_snapshots_cannot_undo_visibility(){
+ let before=initial();let current=Arc::new(Mutex::new(before.clone()));let start=Arc::new(std::sync::Barrier::new(3));let mut threads=vec![];
+ for _ in 0..2{let current=current.clone();let start=start.clone();threads.push(std::thread::spawn(move||{start.wait();apply(&current,Request::ToggleDesktopVisibility {});}));}
+ start.wait();for thread in threads{thread.join().unwrap();}assert_eq!(encode(&current.lock().unwrap()),encode(&before));
+ apply(&current,Request::SetDesktopVisibility{enabled:true});let mut stale=before;stale.sound_volume=0.37;
+ let committed=crate::settings::update_with(&current,|fresh|{preserve_incoming(fresh,&mut stale);*fresh=stale;},|_|Ok(()),|_|{}).unwrap();assert!(committed.companion_mode);assert_eq!(committed.sound_volume,0.37);
+}
+#[test]fn failed_desktop_persistence_never_changes_memory_or_publishes(){
+ let before=initial();let current=Mutex::new(before.clone());let published=Cell::new(false);
+ assert!(apply_with(&current,Request::ToggleDesktopVisibility {},|_|Err(io::Error::other("synthetic disk failure")),|_|published.set(true)).is_err());assert!(!published.get());assert_eq!(encode(&current.lock().unwrap()),encode(&before));
+}
+
 #[test]fn request_accepts_only_explicit_operations_with_typed_fields(){
  for input in [json!({}),Value::Null,json!([]),json!({"action":"toggle","id":"ai_ollama"}),json!({"action":"setActive","id":"ai_ollama"}),json!({"action":"setActive","id":"ai_ollama","enabled":null}),json!({"action":"setMain","id":"agent_codex","activeIntegrations":[]})]{assert!(serde_json::from_value::<Request>(input).is_err());}
  assert!(serde_json::from_str::<Request>(r#"{"action":"setActive","id":"ai_ollama","enabled":false,"enabled":true}"#).is_err());

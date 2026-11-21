@@ -39,6 +39,31 @@ fn code<T>(result:Result<T,Failure>,expected:ErrorCode){assert!(matches!(result,
 #[test]fn plan04_missing_attachment_and_shutdown_fail_closed(){
  let m=Manager::new(true);assert!(m.current().is_err());m.shutdown();assert!(m.register().is_err());assert!(m.client().is_err());
 }
+#[test]
+fn compact_configuration_cannot_supersede_pending_or_open_navigation() {
+    let env = Env::new();
+    let route = Mode::Expanded { route: Route::Home };
+    let (open, pending) = env.c.begin_trusted(route).unwrap();
+    for enabled in [false, true] {
+        let (plan, context) = env.c.begin_compact_configuration(enabled).unwrap();
+        assert!(plan.is_none());
+        assert_eq!(context, pending);
+    }
+    let opened = env.c.finish(&open, true).unwrap().context;
+    for enabled in [false, true] {
+        let (plan, context) = env.c.begin_compact_configuration(enabled).unwrap();
+        assert!(plan.is_none());
+        assert_eq!(context, opened);
+    }
+
+    env.mode(Mode::Compact);
+    let (plan, pending) = env.c.begin_compact_configuration(false).unwrap();
+    assert!(pending.pending);
+    let closed = env.c.finish(&plan.unwrap(), true).unwrap().context;
+    assert_eq!(closed.mode, Mode::Inactive);
+    assert!(!closed.system_eligible);
+}
+
 #[test]fn plan05_visible_compact_is_not_system(){let e=Env::new();e.mode(Mode::Compact);assert!(!e.c.context().unwrap().system_eligible);assert!(e.c.prepare(&e.client,e.c.context().unwrap().revision).is_err());}
 #[test]fn plan06_visible_pets_is_not_system(){let e=Env::new();e.mode(Mode::Expanded{route:Route::Sessions});assert!(!e.c.context().unwrap().system_eligible);assert!(e.c.prepare(&e.client,e.c.context().unwrap().revision).is_err());}
 #[test]fn plan07_current_native_facts_committed_system_admits(){let e=Env::new();e.system();assert!(e.c.context().unwrap().system_eligible);let p=e.prepared();assert!(p.validate().is_ok());let w=p.prepared.fixture_read(&e.service).unwrap().work.unwrap();drop(w);}

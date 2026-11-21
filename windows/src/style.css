@@ -1,4 +1,5 @@
 @import "./views/account-usage.css";
+@import "./views/memory-projects.css";
 /* Coucou for Windows — same palette, sizes and type scale as the macOS island.
    Every colour below is copied from the Swift views. */
 
@@ -984,6 +985,24 @@ input[type="range"]::-webkit-slider-thumb {
   display: flex;
 }
 
+.chat-attachment-history {
+  align-self: flex-end;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--ink-2);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.chat-attachment-history summary { cursor: pointer; }
+.chat-attachment-history p { margin: 5px 0; }
+.chat-attachment-history ul { margin: 0; padding-inline-start: 16px; }
+.chat-attachment-history li > span { display: block; }
+.chat-attachment-history code { user-select: text; }
+
 .chat-row.user {
   justify-content: flex-end;
   padding-left: 32px;
@@ -1625,13 +1644,13 @@ input[type="range"]::-webkit-slider-thumb {
 
 .int-ago {
   font: 400 10px var(--font);
-  color: var(--dim-3);
+  color: var(--dim-2);
   flex: 0 0 auto;
 }
 
 .int-sub {
   font: 400 10px var(--font);
-  color: #4d5159;
+  color: var(--dim-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2681,6 +2700,11 @@ html[data-dir="rtl"] #views :is(.bubble, .reply .md-p, .reply .md-h, .reply .md-
 .pet-summary-status{font-size:11px;color:#b0c5bd;display:flex;align-items:center;gap:5px}.pet-summary-status:before{content:"";width:5px;height:5px;background:#58cfa1;border-radius:50%}.pet-summary-status[data-state=error]:before,.pet-summary-status[data-state=ratelimit]:before{background:#f5a524}
 .pet-summary-model{font-size:11px;line-height:1.5;color:#a9b2c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}
 .pet-summary-activity{font-size:12px;line-height:1.5;color:#c9cfd8;overflow-wrap:anywhere;max-height:36px;overflow:auto;user-select:text}
+.pet-summary-live{min-width:0;padding:10px 0;border-bottom:1px solid #ffffff0b}
+.pet-summary-live>.ticker{position:relative;margin-bottom:6px}
+.pet-summary-live>.pet-summary-diff>.diff-card{padding:0;height:auto;max-height:280px}
+.pet-summary-live .diff-lines{max-height:230px}
+.pet-summary-diagnostics>summary{cursor:pointer;padding:10px 0;font-size:11px;color:#a6bcce}
 .pet-summary-usage{display:flex;gap:10px;flex-shrink:0}.pet-summary-usage>div{display:flex;flex:1;flex-direction:column;gap:3px;border:1px solid #ffffff0c;background:#ffffff04;border-radius:9px;padding:8px 11px}.pet-summary-usage strong{font-size:17px;font-weight:500;font-variant-numeric:tabular-nums}.pet-summary-usage span{font-size:10px;color:#98a3b2}
 .pet-summary-sessions{display:flex;min-height:16px;gap:10px;align-items:center;min-width:0;font-size:10px;color:#93a0b1}.pet-summary-sessions>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pet-summary-session{max-width:55%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pet-overview button{font:500 11px var(--font);color:#c2ccd9;background:#ffffff08;border:1px solid #ffffff18;border-radius:8px;padding:7px 10px;cursor:pointer;line-height:1.4}.pet-overview button:hover{background:#ffffff15;border-color:#ffffff30}.pet-overview button:focus-visible{outline:2px solid #72dcca;outline-offset:2px}.pet-overview button:disabled{opacity:.45}
@@ -2708,6 +2732,11 @@ html[data-dir="rtl"] #views :is(.bubble, .reply .md-p, .reply .md-h, .reply .md-
 .pet-card-header-error:empty{display:none}
 .pet-card-header-error{max-width:220px;font-size:10px;color:#f6aaa4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pet-cards-runtime .view:not(.on){visibility:hidden;pointer-events:none}
+.draft-status{flex:0 0 auto;min-height:0;font-size:10px;line-height:1.4}
+.draft-status>p{margin:3px 0}
+.draft-tools summary{cursor:pointer;color:var(--dim-2)}
+.draft-tools[open]{max-height:130px;overflow:auto}
+.pet-cards-runtime .chat-body{overflow-y:auto}
 
 /* Canonical task status is separate from assistant messages and capabilities. */
 .task-notice{flex-shrink:0;box-sizing:border-box;max-height:150px;overflow:auto;margin:6px 0;padding:10px 12px;border:1px solid #e8bd7030;border-radius:12px;background:#e8bd7009;color:#c5cdd8;font-size:11px;line-height:1.5}

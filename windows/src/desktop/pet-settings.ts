@@ -109,7 +109,7 @@ export class PetSettings {
  private choose(id:string){
   const p=this.document?.config.pets[id];if(!p)return;this.intent++;this.closeDiscard();this.status.textContent=this.el.dataset.dirty==='true'?'Alterações por guardar':'';this.error.hidden=true;this.requested=id;this.selected=id;this.pet.value=id;this.name.value=p.name;this.aliases.value=p.aliases.join(', ');this.mode.value=p.mode;
   this.engineGroup.hidden=id!=='ai_lmstudio'||!!p.inference;this.engine.checked=p.provider==='lmstudio';
-  this.models[0].value=p.fast.model;this.models[1].value=p.reasoning.model;this.efforts[0].value=p.fast.effort;this.efforts[1].value=p.reasoning.effort;this.executionGroup.hidden=p.provider!=='ollama'||p.inference?.backend==='lmstudio';this.execution.value=p.localExecution?.mode??'disabled';
+  this.models[0].value=p.fast.model;this.models[1].value=p.reasoning.model;this.efforts[0].value=p.fast.effort;this.efforts[1].value=p.reasoning.effort;this.executionGroup.hidden=p.provider!=='ollama'||!!p.inference&&p.inference.backend!=='ollama';this.execution.value=p.localExecution?.mode??'disabled';
   for(const [key,input]of this.grants)input.checked=p.permissions?.[key]??false;
   const presentation=petBlueprint(id)?.presentation;
   this.calendars.sync(this.active&&id!=='integration_github'?{petId:id,scope:'pet'}:null);

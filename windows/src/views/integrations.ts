@@ -8,6 +8,7 @@ import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
 import { State, type AgentTask } from "../core/state";
 import { Bridge } from "../core/bridge";
+import { stripePaymentAmount } from "../core/stripe";
 import { isComingSoon, pillDefinition } from "../core/pills";
 import { refreshHookPills } from "../island/integrations";
 import { readActivity, readPulse, readStats } from "../core/github";
@@ -61,7 +62,7 @@ const OPEN_URLS: Record<string, string> = {
 /** IntegrationCardView.statusLabel on macOS. */
 export function idleStatus(
   id: string,
-  info: { configured: boolean; error: string | null } | undefined,
+  info: { configured: boolean; error: string | null; loaded?: boolean } | undefined,
   chatModel: string,
 ): { label: string; color: string } {
   if (isComingSoon(id)) return { label: t("Coming soon"), color: "#6B7079" };
@@ -78,6 +79,9 @@ export function idleStatus(
   if (def?.category === "ai") {
     if (!configured) return missing(t("Key not configured"));
     return ok(id === "ai_anthropic" ? t("Key configured · {model}", { model: chatModel }) : t("Key configured"));
+  }
+  if (configured && info?.loaded && ["integration_vercel", "integration_resend", "integration_notion"].includes(id)) {
+    return ok(t("No recent items"));
   }
   return configured ? ok(t("Connected · loading…")) : missing(t("Key not configured"));
 }
@@ -160,29 +164,36 @@ function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
 
 // ── Vercel ────────────────────────────────────────────────────────────────────
 
-function vercelCard(onDetail: () => void): HTMLElement {
+function vercelCard(onDetail: (id: string) => void): HTMLElement {
   const deployments = arr("integration_vercel", "deployments");
   const rows = h("div", { class: "int-rows" });
   deployments.slice(0, 3).forEach((d, i) => {
     const accent = d.state === "READY" ? "#22C55E" : "#F4505E";
     const name = h("span", { class: "int-name", text: String(d.projectName ?? "") });
     const ago = h("span", { class: "int-ago", text: timeAgo(d.createdAt) });
-    if (i === 0) {
+    const id = typeof d.id === "string" ? d.id : "";
+    if (i === 0 && id) {
       const more = h(
         "button",
-        { class: "int-more", title: t("Details"), onclick: onDetail },
+        { class: "int-more", title: t("Details"), onclick: () => onDetail(id) },
         svg(ICONS.ellipsis, 8),
       );
       rows.append(listRow(accent, true, name, ago, more));
     } else {
-      rows.append(listRow(accent, false, name, ago));
+      rows.append(listRow(accent, i === 0, name, ago));
     }
   });
   return h("div", { class: "int-card" }, header("#7C5CFF", "Vercel", t("Deployments")), rows);
 }
 
-function vercelDetail(onBack: () => void): HTMLElement {
-  const d = arr("integration_vercel", "deployments")[0] ?? {};
+function vercelDetail(d: Record<string, unknown> | undefined, onBack: () => void): HTMLElement {
+  const back = h("button", { class: "int-back", "aria-label": t("Back"), onclick: onBack }, svg(ICONS.chevronLeft, 10, { stroke: 2.4 }));
+  if (!d) {
+    return h("div", { class: "int-card detail" },
+      h("div", { class: "int-detail-head" }, back, h("b", { text: t("Deployment") })),
+      h("div", { class: "int-detail-body", text: t("Deployment outside the latest results") }),
+    );
+  }
   const success = d.state === "READY";
   const accent = success ? "#22C55E" : "#F4505E";
   const status = success ? t("Ready") : d.state === "CANCELED" ? t("Canceled") : t("Error");
@@ -207,7 +218,7 @@ function vercelDetail(onBack: () => void): HTMLElement {
     h(
       "div",
       { class: "int-detail-head" },
-      h("button", { class: "int-back", onclick: onBack }, svg(ICONS.chevronLeft, 10, { stroke: 2.4 })),
+      back,
       dot(accent, 6),
       h("b", { text: String(d.projectName ?? t("Deployment")) }),
       h("span", { class: "int-badge", style: `color:${accent};background:${accent}24`, text: status }),
@@ -274,9 +285,17 @@ function githubCard(): HTMLElement {
 // ── Stripe ────────────────────────────────────────────────────────────────────
 
 function stripeCard(): HTMLElement {
-  const d = get("integration_stripe");
-  const balance = (Number(d.balance ?? 0) / 100).toFixed(2);
-  const currency = String(d.currency ?? "eur").toUpperCase();
+  const balanceRows = h("div", { class: "int-rows tight" });
+  for (const balance of arr("integration_stripe", "balances")) {
+    if (typeof balance.currency !== "string") continue;
+    for (const [label, amount] of [[t("Available balance"), balance.available], [t("Pending balance"), balance.pending]]) {
+      if (typeof amount !== "string") continue;
+      balanceRows.append(h("div", { class: "int-balance" },
+        h("span", { text: amount }), h("i", { text: balance.currency.toUpperCase() }), h("i", { text: String(label) }),
+      ));
+    }
+  }
+  if (!balanceRows.childElementCount) balanceRows.append(h("div", { class: "int-empty", text: "—" }));
   const rows = h("div", { class: "int-rows tight" });
   for (const p of arr("integration_stripe", "payments")) {
     const success = p.status === "succeeded";
@@ -289,8 +308,8 @@ function stripeCard(): HTMLElement {
         h("span", { class: "int-name", text: String(p.description ?? t("Payment")) }),
         h("span", {
           class: "int-amount",
-          style: "color:#22c55e",
-          text: `+${(Number(p.amount ?? 0) / 100).toFixed(2)}`,
+          style: `color:${accent}`,
+          text: stripePaymentAmount(p),
         }),
         h("span", { class: "int-ago", text: timeAgo(p.createdAt) }),
       ),
@@ -300,7 +319,7 @@ function stripeCard(): HTMLElement {
     "div",
     { class: "int-card" },
     header("#0570DE", "Stripe", t("Payments")),
-    h("div", { class: "int-balance" }, h("span", { text: balance }), h("i", { text: currency })),
+    balanceRows,
     rows,
   );
 }
@@ -416,9 +435,13 @@ function n8nDetail(task: AgentTask, onBack: () => void): HTMLElement {
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
+export interface IntegrationCardDetail {
+  deploymentId?: string;
+}
+
 export interface IntegrationCardHooks {
-  detailOpen: boolean;
-  openDetail(): void;
+  detail: IntegrationCardDetail | null;
+  openDetail(deploymentId?: string): void;
   closeDetail(): void;
   openSettings(): void;
 }
@@ -448,12 +471,17 @@ export function hasIntegrationData(id: string): boolean {
 export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHooks): HTMLElement {
   if (task.id === "integration_n8n") {
     const hasActivity = task.steps.length > 0 && (task.state === "finished" || task.state === "error");
-    return hooks.detailOpen && hasActivity
+    return hooks.detail && hasActivity
       ? n8nDetail(task, hooks.closeDetail)
-      : n8nCard(task, hooks.openDetail, hooks.openSettings);
+      : n8nCard(task, () => hooks.openDetail(), hooks.openSettings);
   }
-  if (task.id === "integration_vercel" && hasIntegrationData(task.id)) {
-    return hooks.detailOpen ? vercelDetail(hooks.closeDetail) : vercelCard(hooks.openDetail);
+  if (task.id === "integration_vercel") {
+    const deploymentId = hooks.detail?.deploymentId;
+    if (deploymentId && !State.integrations[task.id]?.error) {
+      const selected = arr(task.id, "deployments").find(row => row.id === deploymentId);
+      return vercelDetail(selected, hooks.closeDetail);
+    }
+    return hasIntegrationData(task.id) ? vercelCard(hooks.openDetail) : idleCard(task, hooks.openSettings);
   }
   if (!hasIntegrationData(task.id)) return idleCard(task, hooks.openSettings);
 
@@ -462,9 +490,9 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
     const d = get(task.id);
     const pulse = readPulse(d);
     if (pulse) {
-      return hooks.detailOpen
+      return hooks.detail
         ? githubDetail(pulse, readStats(d), readActivity(d), hooks.closeDetail)
-        : githubPulseCard(pulse, readStats(d), readActivity(d), hooks.openDetail);
+        : githubPulseCard(pulse, readStats(d), readActivity(d), () => hooks.openDetail());
     }
   }
 

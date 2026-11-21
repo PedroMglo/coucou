@@ -35,12 +35,12 @@ mod tests{
     use super::*;
     #[test]
     fn cloud_local_and_native_routes_share_a_bounded_folder_capability(){
-        for provider in ["codex","copilot","antigravity","gemini-cli","claude-cli","ollama","lmstudio","anthropic","openai","google","openrouter","custom","integration_notion"]{
+        for provider in ["codex","copilot","antigravity","gemini-cli","claude-cli","ollama","lmstudio","anthropic","openai","google","openrouter","custom"]{
             assert!(can_analyze(provider,"folder.zip",true),"{provider}");assert!(can_analyze(provider,"notes.md",false));assert!(can_analyze(provider,"REPORT.PDF",false));
             assert_eq!(can_analyze(provider,"IMAGE.PNG",false),!matches!(provider,"ollama"|"lmstudio"));
             assert_eq!(can_analyze(provider,"report.docx",false),crate::cli_chat::backend(provider).is_some());
         }
-        for provider in ["integration_spotify","integration_github","unknown",""]{assert!(!can_analyze(provider,"folder",true));assert!(!can_analyze(provider,"text.txt",false));}
+        for provider in ["integration_notion","integration_spotify","integration_github","unknown",""]{assert!(!can_analyze(provider,"folder",true));assert!(!can_analyze(provider,"text.txt",false));}
     }
     #[test]
     fn unsupported_binary_never_masquerades_as_utf8_text_for_api_or_local_pets(){

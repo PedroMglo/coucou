@@ -268,6 +268,7 @@ dialogueAction.onclick = async () => {
 };
 let voicePet: string | null = null;
 let voiceActive = false;
+let flowState: PillState | null = null;
 let bubble: {view: VoiceView; dictation: boolean} | null = null;
 function voiceBubble(view: VoiceView | null, dictation = false) {
   bubble = view ? {view,dictation} : null;
@@ -303,18 +304,16 @@ function voiceBubble(view: VoiceView | null, dictation = false) {
   voice.hidden = !view;
   voice.replaceChildren();
   if (!view) { voicePet = null; showNextNotice(); world.presented = snapshot.presented ?? null; input(performance.now()/1000, true); return; }
-  const owner = dictation ? "ai_ollama" : view.pet;
-  const p = owner ? world.pets.get(owner) : world.pets.get("agent_codex") ?? world.pets.get("ai_ollama");
+  // Flow is a global tool, independent of the configured inference pets.
+  const p = [snapshot.presented, voicePet].map(id => id ? world.pets.get(id) : undefined)
+    .find(p => p && !p.retired) ?? [...world.pets.values()].find(p => p.shown && !p.retired);
   if(p && !p.retired) world.touch(p.identity.id,performance.now()/1000);
-  if (!p?.shown) { voice.hidden = true; return; }
-  voicePet = p.identity.id;
+  voicePet = p?.identity.id ?? null;
   if(shownNotice) dismissNotice();
-  world.presented = voicePet;
-  world.touch(voicePet, performance.now()/1000);
+  world.presented = voicePet ?? snapshot.presented ?? null;
   world.sync({...activeSnapshot(snapshot),presented:voicePet,motion:world.motion},window.innerWidth,performance.now()/1000);
   const title = document.createElement("strong");
-  const phases: Record<string,string> = {listening:t("Listening"),thinking:t("Thinking…"),speaking:t("Answers"),copied:t("Dictation")};
-  title.textContent = `${p.identity.name} · ${dictation ? t("Dictation") : phases[view.phase] ?? view.phase}`;
+  title.textContent = `Flow · ${view.note ? t("Notetaker") : t("Dictation")}`;
   const heard = document.createElement("p"); heard.className = "heard"; heard.textContent = view.heard;
   const answer = document.createElement("p"); answer.textContent = view.answer;
   voice.append(title, heard, answer);
@@ -326,10 +325,11 @@ function voiceBubble(view: VoiceView | null, dictation = false) {
     button.onclick = () => void FlowBridge.pillAction(action, view.announcementId);
     voice.append(button);
   }
-  const left = Math.max(8, Math.min(world.width - 348, p.x - 170));
+  const anchor = p?.x ?? world.width / 2;
+  const left = Math.max(8, Math.min(world.width - 348, anchor - 170));
   voice.style.left = `${left}px`;
-  voice.style.top = `${(world.band?.height ?? p.y + 30) + 10}px`;
-  voice.style.setProperty("--tip", `${Math.max(12, Math.min(320,p.x-left-6))}px`);
+  voice.style.top = `${(world.band?.height ?? (p?.y ?? 0) + 30) + 10}px`;
+  voice.style.setProperty("--tip", `${Math.max(12, Math.min(320,anchor-left-6))}px`);
   input(performance.now()/1000, true); wake();
 }
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -505,9 +505,9 @@ function showMenu(p: PetLife) {
   if(taskBoard.supports(p.identity.id))add("Ver tarefas",()=>showTasks(p.identity.id));
   if(p.identity.id!==SPOTIFY_ID&&(p.identity.sessions||taskBoard.supports(p.identity.id)))add(`Ver sessões${p.identity.sessions?' · '+p.identity.sessions:''}`,()=>showTasks(p.identity.id,'sessions'));
   if(delegatedRequest(p.identity.id))add("Preparar pedido no Codex",()=>void emitToWindow("island",PET_EVENTS.delegate,{pet:p.identity.id}));
-  if (p.identity.id === "ai_ollama") {
-    add(t("Dictation"), () => void FlowBridge.pillAction("dictate"));
-  }
+  add(t("Dictation"), () => void FlowBridge.pillAction("dictate"));
+  add(t(flowState?.noteStartedAt ? "Finish" : "Record a call"), () => void FlowBridge.pillAction(flowState?.noteStartedAt ? "stopNote" : "note"));
+  add("Flow · " + t("Open Coucou"), () => void Bridge.openSettingsWindow("dictation"));
   if (p.identity.id === SPOTIFY_ID) add(t("Play / pause"), () => void Bridge.spotifyControl("playPause"));
   add(t("Pet"), () => world.touch(p.identity.id, performance.now() / 1000));
   add(snapshot.paused ? t("Resume companions") : t("Pause companions"), () => {
@@ -811,6 +811,7 @@ async function start() {
   await onEvent<PetNotice>("companions-notice", n=>{noticeQueue.push(n);showNextNotice();});
   await onEvent<VoiceView | null>("companions-voice", view => { voiceActive = !!view; voiceBubble(view); });
   await onEvent<PillState>("companions-flow", state => {
+    flowState = state;
     if (voiceActive) return;
     const active = ["listening", "locked", "thinking", "copied", "failed", "pastedAgain"].includes(state.phase);
     const feedback = state.phase === "copied" ? t("Copied · press Ctrl+V to paste") :

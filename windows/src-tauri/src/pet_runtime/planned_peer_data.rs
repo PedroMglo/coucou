@@ -1,20 +1,76 @@
 //! Data lineage, never authority. Every selected source is a conservative
 //! dependency of a generated message. Raw source records stay on the sender.
 use super::{model,admission::AdmissionSpec,generated_plans::Reference as Plan,messages::Envelope};
-use crate::pet_memory::context_model::{Reference,Destination};
+use crate::pet_memory::{Scope,context_model::{Reference,Destination}};
 use serde::{Serialize,Deserialize};
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
-pub(super)struct Snapshot{#[serde(default,skip_serializing_if="Option::is_none")]pub received_request:Option<Box<super::received_context::Selection>>,pub schema_version:u32,pub goal_id:String,pub pet_id:String,pub conversation_id:String,pub admission_hash:String,pub context_hash:String,pub destination:Destination,pub references:Vec<Reference>}
+pub(super)struct ProjectSource {
+ pub metadata_hash:String,
+ pub conversation_id:String,
+}
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super)struct Snapshot {
+ #[serde(default,skip_serializing_if="Option::is_none")]
+ pub received_request:Option<Box<super::received_context::Selection>>,
+ #[serde(default,skip_serializing_if="Option::is_none")]
+ pub project:Option<ProjectSource>,
+ pub schema_version:u32,
+ pub goal_id:String,
+ pub pet_id:String,
+ pub conversation_id:String,
+ pub admission_hash:String,
+ pub context_hash:String,
+ pub destination:Destination,
+ pub references:Vec<Reference>,
+}
 impl Snapshot{
  pub(super)fn valid(&self)->bool{
-  let mut ids=std::collections::BTreeSet::new();matches!(self.schema_version,1|2|3|4)&&model::goal_id(&self.goal_id)&&crate::pet_config::blueprint(&self.pet_id).is_some_and(|b|!b.retired)&&crate::assistant_memory::valid_id(&self.conversation_id)&&[&self.admission_hash,&self.context_hash].iter().all(|s|super::authority::decode(s).is_some())&&self.destination.valid()&&matches!(&self.destination,Destination::Server{provider,endpoint,model}if matches!(provider.as_str(),"ollama"|"lmstudio")&&super::admission::model_id(model)&&reqwest::Url::parse(endpoint).is_ok_and(|u|crate::net::is_loopback_url(&u)))&&(if self.schema_version==4{self.received_request.as_ref().is_some_and(|r|r.structurally_valid()&&matches!(r.schema_version,1|2|3|4|5|6|7)&&r.source.recipient_pet_id==self.pet_id&&r.source.sender_goal_id!=self.goal_id)}else{self.received_request.is_none()&&(if self.schema_version==2{self.references.is_empty()}else{!self.references.is_empty()})})&&self.references.len()<=crate::pet_memory::context_model::MAX_SELECTED&&self.references.iter().all(|r|r.valid(&self.pet_id,&self.conversation_id)&&ids.insert(&r.id))
+  matches!(self.schema_version,1|2|3|4)&&model::goal_id(&self.goal_id)&&crate::pet_config::blueprint(&self.pet_id).is_some_and(|b|!b.retired)&&crate::assistant_memory::valid_id(&self.conversation_id)
+     &&[&self.admission_hash,&self.context_hash].iter().all(|s|super::authority::decode(s).is_some())
+     &&self.destination.valid()&&matches!(&self.destination,Destination::Server{provider,endpoint,model}if matches!(provider.as_str(),"ollama"|"lmstudio")&&super::admission::model_id(model)&&reqwest::Url::parse(endpoint).is_ok_and(|u|crate::net::is_loopback_url(&u)))
+     &&(if self.schema_version==4{self.received_request.as_ref().is_some_and(|r|r.structurally_valid()&&matches!(r.schema_version,1|2|3|4|5|6|7)&&r.source.recipient_pet_id==self.pet_id&&r.source.sender_goal_id!=self.goal_id)}else{self.received_request.is_none()&&(if self.schema_version==2{self.references.is_empty()}else{!self.references.is_empty()})})
+     &&self.references_valid()
+ }
+ fn references_valid(&self)->bool{
+  if self.references.len()>crate::pet_memory::context_model::MAX_SELECTED{return false;}
+  let mut ids=std::collections::BTreeSet::new();
+  let Some(source)=&self.project else {
+   return self.references.iter().all(|r|r.valid(&self.pet_id,&self.conversation_id)&&ids.insert(&r.id));
+  };
+  if self.schema_version!=1||super::authority::decode(&source.metadata_hash).is_none()
+   ||!crate::assistant_memory::valid_id(&source.conversation_id)||source.conversation_id==self.conversation_id{return false;}
+  let project=self.references.iter().find_map(|r|match &r.owner.scope{
+   Scope::Project{project_id}=>Some((project_id,r.project_revision)),
+   _=>None,
+  });
+  project.is_some_and(|(id,revision)|self.references.iter().all(|r|
+   r.valid_manual(&self.pet_id,&source.conversation_id)&&ids.insert(&r.id)&&match &r.owner.scope{
+    Scope::Project{project_id}=>project_id==id&&r.project_revision==revision,
+    _=>true,
+   }
+  ))
+ }
+ pub(super)fn reopen_project(&self,path:&std::path::Path,now:u64)->model::Result<Option<crate::pet_memory::context::Capture>>{
+  let Some(source)=&self.project else{return Ok(None);};
+  if !self.references_valid(){return Err(model::Error::Conflict);}
+  let capture=crate::pet_memory::context::Capture::at_native_references(path,&self.pet_id,&source.conversation_id,&self.references,now)
+   .map_err(|_|model::Error::Conflict)?;
+  let project=capture.project().ok_or(model::Error::Conflict)?;
+  if model::fingerprint(&project)?!=source.metadata_hash{return Err(model::Error::Conflict);}
+  Ok(Some(capture))
  }
  pub(super)fn from_spec(s:&AdmissionSpec)->model::Result<Option<Self>>{
   if !s.peer_selected_data(){return Ok(None);}
   if !s.binding_format()||s.context.copied_messages!=0{return Err(model::Error::Conflict);}
   let received=if s.peer_received_iteration(){Some(Box::new(s.context.received_request.clone().ok_or(model::Error::Conflict)?))}else{if s.context.received_request.is_some(){return Err(model::Error::Conflict);}None};
   let grant=s.memory_data.as_ref().filter(|g|g.valid(&s.owner.adapter,&s.resolved_model)).ok_or(model::Error::Conflict)?;
-  let snapshot=Self{received_request:received,schema_version:if s.peer_received_iteration(){4}else if s.peer_memory_iteration(){3}else{1},goal_id:s.goal_id.clone(),pet_id:s.owner.pet_id.clone(),conversation_id:s.context.source_conversation_id.as_ref().unwrap_or(&s.context.conversation_id).clone(),admission_hash:model::fingerprint(s)?,context_hash:s.context_hash.clone(),destination:grant.destination.clone(),references:s.context.memory.as_ref().map(|m|m.references.clone()).unwrap_or_default()};if !snapshot.valid(){return Err(model::Error::Conflict);}Ok(Some(snapshot))
+  // The effect belongs to the private execution CID. Reopening the project
+  // requires its distinct source CID and fingerprint, without the catalogue metadata.
+  let project=if let Some(project)=s.context.memory.as_ref().and_then(|m|m.project.as_ref()){
+   Some(ProjectSource{metadata_hash:model::fingerprint(project)?,conversation_id:s.context.source_conversation_id.clone().ok_or(model::Error::Conflict)?})
+  }else{None};
+  let conversation_id=if project.is_some(){&s.context.conversation_id}else{s.context.source_conversation_id.as_ref().unwrap_or(&s.context.conversation_id)};
+  let snapshot=Self{received_request:received,project,schema_version:if s.peer_received_iteration(){4}else if s.peer_memory_iteration(){3}else{1},goal_id:s.goal_id.clone(),pet_id:s.owner.pet_id.clone(),conversation_id:conversation_id.clone(),admission_hash:model::fingerprint(s)?,context_hash:s.context_hash.clone(),destination:grant.destination.clone(),references:s.context.memory.as_ref().map(|m|m.references.clone()).unwrap_or_default()};if !snapshot.valid(){return Err(model::Error::Conflict);}Ok(Some(snapshot))
  }
 }
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -28,7 +84,7 @@ impl Published{
  pub(super)fn for_spec(&self,s:&AdmissionSpec)->bool{self.valid()&&self.generated_plan.decision_id==s.decision_id&&(if matches!(self.schema_version,1|3|4){Snapshot::from_spec(s).ok().flatten().as_ref()==Some(&self.source)}else{s.peer_iteration()&&s.memory_data.is_none()&&self.source.goal_id==s.goal_id&&self.source.pet_id==s.owner.pet_id&&self.source.context_hash==s.context_hash&&model::fingerprint(s).ok().as_ref()==Some(&self.source.admission_hash)})}
  pub(super)fn from_memory(s:&AdmissionSpec,plan:Plan)->model::Result<Self>{let source=Snapshot::from_spec(s)?.ok_or(model::Error::Conflict)?;let value=Self{schema_version:if s.peer_received_iteration(){4}else if s.peer_memory_iteration(){3}else{1},source,generated_plan:plan,round_data:None};if !value.for_spec(s){return Err(model::Error::Conflict);}Ok(value)}
  pub(super)fn from_round(s:&AdmissionSpec,plan:Plan,data:super::peer_round_data::Consent)->model::Result<Self>{
-  let source=if s.peer_selected_iteration(){Snapshot::from_spec(s)?.ok_or(model::Error::Conflict)?}else{Snapshot{received_request:None,schema_version:2,goal_id:s.goal_id.clone(),pet_id:s.owner.pet_id.clone(),conversation_id:data.context_id.clone(),admission_hash:model::fingerprint(s)?,context_hash:s.context_hash.clone(),destination:data.source.destination.clone(),references:vec![]}};let value=Self{schema_version:if s.peer_received_iteration(){4}else if s.peer_memory_iteration(){3}else{2},source,generated_plan:plan,round_data:Some(data)};if !value.for_spec(s){return Err(model::Error::Conflict);}Ok(value)
+  let source=if s.peer_selected_iteration(){Snapshot::from_spec(s)?.ok_or(model::Error::Conflict)?}else{Snapshot{received_request:None,project:None,schema_version:2,goal_id:s.goal_id.clone(),pet_id:s.owner.pet_id.clone(),conversation_id:data.context_id.clone(),admission_hash:model::fingerprint(s)?,context_hash:s.context_hash.clone(),destination:data.source.destination.clone(),references:vec![]}};let value=Self{schema_version:if s.peer_received_iteration(){4}else if s.peer_memory_iteration(){3}else{2},source,generated_plan:plan,round_data:Some(data)};if !value.for_spec(s){return Err(model::Error::Conflict);}Ok(value)
  }
  /// Prompt projection omits raw source records, private memory IDs, endpoint and
  /// native lease/controller/session controls. Native review retains full DATA.

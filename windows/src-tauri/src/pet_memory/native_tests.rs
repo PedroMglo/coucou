@@ -23,8 +23,9 @@ impl Fixture{
 }
 impl Drop for Fixture{fn drop(&mut self){let _=fs::remove_dir_all(&self.root);}}
 
-#[test]fn native_binding_is_common_to_three_accounts_and_a_service_with_durable_adoption_and_no_raw_history(){
- for provider in ["codex","copilot","antigravity","integration_notion"]{
+#[test]fn native_binding_is_common_to_three_accounts_with_durable_adoption_and_no_raw_history(){
+ assert!(crate::cli_chat::backend("integration_notion").is_none(),"service domain has no implicit conversation adapter");
+ for provider in ["codex","copilot","antigravity"]{
   let f=Fixture::new();let(chat,_,cid,_)=f.fresh(provider);let turn=chat.begin_cli(provider,Arc::default()).unwrap();let lease=chat.lease(&turn);
   assert!(chat.native_memory_prompt(&turn,crate::cli_chat::backend(provider).unwrap(),"fixture-free",&f.root,None,"Original public question","ordinary input".into()).is_err());
   chat.publish_native_memory(&turn).unwrap();let raw=fs::read_to_string(f.library()).unwrap();assert!(!raw.contains("PRIVATE_NATIVE_MEMORY_SENTINEL"));let saved=crate::assistant_memory::load(&f.library()).unwrap();assert!(saved.pets[provider].native_memory_context.is_some());

@@ -3,7 +3,7 @@ import {PetFactory,petForTaskProvider,factoryProfileProvider} from '../core/pet-
 export interface ModelProfile {model:string;effort:string}
 export interface PetPermissions {documents:boolean;emailDrafts:boolean;music:boolean;openApps:boolean}
 export interface LocalExecutionPolicy {mode:'ask'|'disabled';taskTimeoutMs?:number;approvalTimeoutMs?:number;commandTimeoutMs?:number;maxCalls?:number;maxOutputBytes?:number;allowedPrograms?:string[]}
-export interface InferenceChoice {schemaVersion:1;backend:'ollama'|'lmstudio';endpoint:string;model:string;credential:'none'|'configuredLmstudioEndpoint'}
+export interface InferenceChoice {schemaVersion:1;backend:'ollama'|'lmstudio'|'custom';endpoint:string;model:string;credential:'none'|'configuredLmstudioEndpoint'|'configuredCustomEndpoint'}
 export type SystemGrant = {subplugin:'sound';operation:'observe'|'volume'|'mute';resource:{kind:'audioOutputs'}|{kind:'audioOutput';key:string}}|{subplugin:'health';operation:'observe';resource:{kind:'hostHealth'}}|{subplugin:'inventory';operation:'observe';resource:{kind:'hostComponents'}};
 export interface SystemAccessPolicy {schemaVersion:1;enabled:boolean;revision:string;grants:SystemGrant[]}
 export interface PetPreference {name:string;aliases:string[];provider:string;mode:'auto'|'fast'|'reasoning';fast:ModelProfile;reasoning:ModelProfile;permissions?:PetPermissions;localExecution?:LocalExecutionPolicy;inference?:InferenceChoice;inferenceRevision?:string;systemAccess?:SystemAccessPolicy}
@@ -36,7 +36,7 @@ export const PetPreferences={
 export function profileSummary(provider:string,selected:string){
  const id=petForTaskProvider(provider)??provider;
  const p=config?.pets[id];if(!p)return profileLabel(selected);
- if(p.inference)return `${p.inference.backend==='ollama'?'Ollama':'LM Studio'} · ${p.inference.model}`;
+ if(p.inference)return `${p.inference.backend==='ollama'?'Ollama':p.inference.backend==='lmstudio'?'LM Studio':'OpenAI-compatible'} · ${p.inference.model}`;
  if(!selected.startsWith('@'))return selected;
  const mode=selected==='@default'?p.mode:selected.slice(1);
  const describe=(profile:ModelProfile)=>[profile.model,profile.effort].filter(Boolean).join(' · ');

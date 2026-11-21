@@ -1,5 +1,6 @@
 import {refreshDocumentState,invalidateDocumentState} from '../core/document-state';
 import {attachmentControls} from './attachment-controls';
+import {buildAttachmentHistory} from './attachment-history';
 import {buildManualMemory} from './manual-memory';
 import {buildCalendarSources} from './calendar-sources';
 import {petForChatProvider,petForTaskProvider,petRetired} from '../core/pet-factory';
@@ -123,7 +124,7 @@ function buildPicker(onChange: () => void,onSelect?:(provider:string,model:strin
 
   function drawChips() {
     clear(chips);
-    for (const p of visibleProviders(State.settings).filter(p => !State.settings.companionMode || p.id === providerForPill(State.focusId ?? undefined))) {
+    for (const p of visibleProviders(State.settings).filter(p => !(State.settings.companionMode || State.petCardsOnly) || p.id === providerForPill(State.focusId ?? undefined))) {
       const on = p.id === State.chatProvider;
       const chip = h(
         "button",
@@ -378,13 +379,14 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   const calendars=buildCalendarSources({changed:onHeightChange});const memory=buildManualMemory({changed:onHeightChange});const preparingMemory=new Set<string>();
   input.addEventListener('input',()=>memory.invalidate());
   const memoryOwner=(provider:string)=>{const pet=petForTaskProvider(provider);return pet&&!petRetired(pet)&&providerForPill(pet)===provider?pet:null;};
-  function syncMemory(){const provider=State.chatProvider,pet=memoryOwner(provider),cid=dialogueId(provider)??null;calendars.sync(pet&&cid&&State.view==='prompt'?{petId:pet,conversationId:cid}:null);memory.sync(pet?{petId:pet,provider,conversationId:cid}:null,JSON.stringify([provider,cid,activeModel({...State.settings,chatProvider:provider}),input.value.trim(),State.filesFor(provider)]));}
+  function syncMemory(){const provider=State.chatProvider,pet=(State.settings.companionMode||State.petCardsOnly)&&!providerForPill(State.focusId??undefined)?null:memoryOwner(provider),cid=dialogueId(provider)??null;calendars.sync(pet&&cid&&State.view==='prompt'?{petId:pet,conversationId:cid}:null);memory.sync(pet?{petId:pet,provider,conversationId:cid}:null,JSON.stringify([provider,cid,activeModel({...State.settings,chatProvider:provider}),input.value.trim(),State.filesFor(provider)]));}
 
   const requests = h("div", { class: "cli-requests", style: "max-height:190px;overflow:auto" });
   const unavailable=h("p",{class:"pet-chat-unavailable"});unavailable.hidden=true;
   const feedback=h("p",{class:"chat-feedback",style:"font-size:11px;color:#fbbf24","role":"status","aria-live":"polite"});feedback.hidden=true;
   const failedQueries=new Map<string,{query:string;id?:string}>();
   const turnSnapshots=new Map<string,ConversationView>(),taskStatus=buildTaskNotice(),requestHistory=buildRequestHistory();
+  const attachmentHistory=buildAttachmentHistory(onHeightChange);
   const failedText=h('pre',{class:'failed-request-text'});
   const failedReview=h('details',{class:'failed-request-review'},h('summary',{text:'Rever pedido original · confirma o histórico antes de repetir'}),failedText);failedReview.hidden=true;
   const prepared=h("button",{class:"picker-link prepared-chat"});prepared.hidden=true;
@@ -473,6 +475,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   PetPreferences.subscribe(()=>{drawModelButton();onHeightChange();});
   const historyRequests=new Map<string,number>();
   async function refreshHistory(provider:string) {
+    if((State.settings.companionMode||State.petCardsOnly)&&!providerForPill(State.focusId??undefined))return;
     if(pending.has(provider) || State.chatResettingProviders.has(provider))return;
     const ticket=(historyRequests.get(provider)??0)+1;historyRequests.set(provider,ticket);
     const before=State.chatHistoryFor(provider),count=before.length;
@@ -539,7 +542,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       log.querySelector(".typing")?.parentElement?.remove();
       log.append(h("div", { class: "chat-row" }, live));
     }
-    const follow=!requestHistory.hasEntries||log.scrollHeight-log.scrollTop-log.clientHeight<56;
+    const follow=!(requestHistory.hasEntries||attachmentHistory.hasEntries)||log.scrollHeight-log.scrollTop-log.clientHeight<56;
     renderMarkdown(live, text);
     if(follow)log.scrollTop = log.scrollHeight;
   }
@@ -580,7 +583,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   });
 
   async function submit() {
-    if(State.settings.companionMode && !providerForPill(State.focusId??undefined))return;
+    if((State.settings.companionMode || State.petCardsOnly) && !providerForPill(State.focusId??undefined))return;
     recordDraftInput();if(!draftViewCurrent())return;const capture=inline.capture();
     const query=input.value.trim(),sendingProvider=State.chatProvider;
     if(!capture||capture.target.provider!==sendingProvider||capture.text!==input.value)return;
@@ -639,6 +642,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       const message = String(err).replace(/^Error:\s*/, "");
       failedQueries.set(sendingProvider,{query,id:dialogueId(sendingProvider)});
       if (message !== "The CLI request was cancelled.") {
+        State.chatFeedback.set(sendingProvider,message);
         history.push({id:nextId++,role:"assistant",content:message});
         if(State.chatProvider === sendingProvider) { State.noteMessage = message; State.view = "note"; }
         notifyReply("The chat could not finish. Open it to see the error.");
@@ -685,14 +689,21 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
   return {
     el,
     sync() {
+      const noChat=(State.settings.companionMode || State.petCardsOnly) && !providerForPill(State.focusId??undefined);
       if(renderedDraftTarget)inline.edit(renderedDraftTarget,input.value);
-      inline.select(draftIdentity());drawInlineDraft();
-      const noChat=State.settings.companionMode && !providerForPill(State.focusId??undefined);
+      inline.select(noChat?null:draftIdentity());drawInlineDraft();
       const snapshot=turnSnapshots.get(State.chatProvider),cid=dialogueId(State.chatProvider),pet=petForChatProvider(State.chatProvider);
       const target=pet&&cid&&providerForPill(pet)===State.chatProvider?{petId:pet,provider:State.chatProvider,origin:'mochi' as const,sessionId:cid,conversationId:cid}:null;
       const historyChanged=requestHistory.sync(noChat?null:target,snapshot?.requestHistory,State.chatHistory.length);
+      const attachmentsMatch=snapshot?.id===cid&&snapshot?.attachmentHistory?.length&&
+        snapshot.messages.every((message,index)=>{
+          const shown=State.chatHistory[index];
+          return shown?.role===message.role&&shown.content===message.content;
+        });
+      const attachmentsChanged=attachmentHistory.sync(noChat||!attachmentsMatch?null:target,
+        snapshot?.attachmentHistory,snapshot?.messages??[]);
       body.classList.toggle('has-request-history',requestHistory.hasEntries);
-      if(historyChanged){renderedCount=-1;live=null;}
+      if(historyChanged||attachmentsChanged){renderedCount=-1;live=null;}
       const noticeWasHidden=taskStatus.el.hidden;
       taskStatus.sync(noChat?null:target,snapshot?{...snapshot,taskNotice:requestHistory.coversTask(snapshot.taskNotice?.taskId)?undefined:snapshot.taskNotice,busy:!!snapshot.busy}:null,busy(State.chatProvider));
       if(noticeWasHidden!==taskStatus.el.hidden)onHeightChange();
@@ -710,14 +721,14 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       folderBtn.textContent=`Pasta: ${path.split(/[\\/]/).filter(Boolean).at(-1)??"pessoal"}`;folderBtn.title=path||"Pasta pessoal · usa as instruções da tua conta";
       folderBtn.disabled=busy(State.chatProvider) || State.chatResettingProviders.has(State.chatProvider);
       if(folderOwner!==State.chatProvider || noChat)folderEditor.hidden=true;
-      if (renderedProvider !== State.chatProvider) {
+      if (!noChat && renderedProvider !== State.chatProvider) {
         
         if (State.settings.companionMode && picker.isOpen) picker.close();
         renderedProvider = State.chatProvider; renderedCount = -1; live = null;
         void refreshHistory(renderedProvider);
       }
       for (const card of requestCards.values()) card.hidden = card.dataset.provider !== State.chatProvider || !!card.dataset.conversationId&&card.dataset.conversationId!==dialogueId(State.chatProvider);
-      attachmentPanel.sync(dialogueId(State.chatProvider)?{provider:State.chatProvider,conversationId:dialogueId(State.chatProvider)!}:null,State.filesFor(State.chatProvider),State.chatResettingProviders.has(State.chatProvider)||State.pendingApproval?.pillId===State.focusId);
+      attachmentPanel.sync(!noChat&&dialogueId(State.chatProvider)?{provider:State.chatProvider,conversationId:dialogueId(State.chatProvider)!}:null,noChat?[]:State.filesFor(State.chatProvider),State.chatResettingProviders.has(State.chatProvider)||State.pendingApproval?.pillId===State.focusId);
 
       const thinking = busy(State.chatProvider);
       const draft=State.preparedChat?.provider===State.chatProvider?State.preparedChat:null;
@@ -729,10 +740,10 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       const count = State.chatHistory.length + (thinking ? 0.5 : 0);
       if (count !== renderedCount && !live) {
         renderedCount = count;
-        const follow=!requestHistory.hasEntries||log.scrollHeight-log.scrollTop-log.clientHeight<56,previousTop=log.scrollTop;
+        const follow=!(requestHistory.hasEntries||attachmentHistory.hasEntries)||log.scrollHeight-log.scrollTop-log.clientHeight<56,previousTop=log.scrollTop;
         clear(log);
         for(let i=0;i<=State.chatHistory.length;i++){
-          log.append(...requestHistory.before(i));if(i<State.chatHistory.length)log.append(bubble(State.chatHistory[i]));
+          log.append(...requestHistory.before(i),...attachmentHistory.before(i));if(i<State.chatHistory.length)log.append(bubble(State.chatHistory[i]));
         }
         log.append(...requestHistory.unplaced());
         if (thinking) {
@@ -750,7 +761,7 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
 
       input.placeholder = t(State.chatHistory.length === 0 ? STRINGS.placeholderFirst : STRINGS.placeholderNext);
       input.disabled = State.chatResettingProviders.has(State.chatProvider)||(State.chatProvider==='ollama'&&OllamaModelSelection.pending);
-      fitInput();if(historyChanged)onHeightChange();
+      fitInput();if(historyChanged||attachmentsChanged)onHeightChange();
     },
     focus() {
       input.focus();
@@ -778,6 +789,7 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
     activate:async o=>{const current=await Bridge.chatConversation(o.provider);if(current.id!==o.conversationId)await Bridge.chatRestoreConversation(o.provider,o.conversationId);},
   });const attachments=attachmentPanel.el;
   const taskStatus=buildTaskNotice(),requestHistory=buildRequestHistory();
+  const attachmentHistory=buildAttachmentHistory(onHeightChange);
   const failedText=h('pre',{class:'failed-request-text'});
   const failedReview=h('details',{class:'failed-request-review'},h('summary',{text:'Rever pedido original · confirma o histórico antes de repetir'}),failedText);failedReview.hidden=true;
   const decisions=buildAgentRequests(()=>session.target,onHeightChange);
@@ -835,11 +847,12 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
     attachmentPanel.sync(target?.origin==='mochi'?{provider:target.provider,conversationId:target.sessionId}:null,target?.origin==='mochi'?snapshot?.attachments??[]:[]);
     failedReview.hidden=!session.failure;failedText.textContent=session.failure?.query??'';
     const messages=snapshot?.messages??[];
+    attachmentHistory.sync(target,snapshot?.attachmentHistory,messages);
     // Preserve scroll position during live updates if the user is reading older
     // messages. Only a new selection or a reader already at the end follows it.
     const follow=log.scrollHeight-log.scrollTop-log.clientHeight<56||log.dataset.owner!==key;
-    const emptyState=taskStatus.el.hidden&&!requestHistory.hasEntries&&!messages.length&&!waiting&&!session.query?(session.error?'error':session.loading?'loading':snapshot?'empty':'opening'):'';
-    const signature=JSON.stringify([key,messages,waiting,session.query,emptyState,requestHistory.signature]);
+    const emptyState=taskStatus.el.hidden&&!requestHistory.hasEntries&&!attachmentHistory.hasEntries&&!messages.length&&!waiting&&!session.query?(session.failure?'failed':session.error?'error':session.loading?'loading':snapshot?'empty':'opening'):'';
+    const signature=JSON.stringify([key,messages,waiting,session.query,emptyState,requestHistory.signature,attachmentHistory.signature]);
     if(signature!==rendered){
       rendered=signature;
       const desired:HTMLElement[]=[],wanted=new Set<string>();
@@ -848,11 +861,11 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
         if(!cached||cached.signature!==signature){const next={signature,el:bubble({...m,id:0})};cached?.el.replaceWith(next.el);cached=next;messageNodes.set(id,cached);}
         desired.push(cached.el);
       };
-      for(let i=0;i<=messages.length;i++){desired.push(...requestHistory.before(i));if(i<messages.length)showMessage(messages[i].id,messages[i]);}
+      for(let i=0;i<=messages.length;i++){desired.push(...requestHistory.before(i),...attachmentHistory.before(i));if(i<messages.length)showMessage(messages[i].id,messages[i]);}
       desired.push(...requestHistory.unplaced());
       if(emptyState){
-        const title=emptyState==='error'?'Não foi possível abrir a conversa':emptyState==='loading'||emptyState==='opening'?'A abrir a conversa…':target?.origin==='external'?'Estás nesta sessão de terminal':'Começa uma conversa';
-        const description=emptyState==='error'?'Usa Atualizar sessões para tentar novamente.':emptyState==='loading'||emptyState==='opening'?'O histórico vai aparecer aqui.':target?.origin==='external'?'As mensagens escritas aqui pertencem apenas à sessão selecionada.':'Escreve o que precisas. Podes voltar a esta conversa na lista de sessões.';
+        const title=emptyState==='failed'?'O pedido não terminou':emptyState==='error'?'Não foi possível abrir a conversa':emptyState==='loading'||emptyState==='opening'?'A abrir a conversa…':target?.origin==='external'?'Estás nesta sessão de terminal':'Começa uma conversa';
+        const description=emptyState==='failed'?'Revê o pedido e confirma o histórico antes de tentar novamente.':emptyState==='error'?'Usa Atualizar sessões para tentar novamente.':emptyState==='loading'||emptyState==='opening'?'O histórico vai aparecer aqui.':target?.origin==='external'?'As mensagens escritas aqui pertencem apenas à sessão selecionada.':'Escreve o que precisas. Podes voltar a esta conversa na lista de sessões.';
         if(!emptyNode||emptyNode.dataset.state!==emptyState){emptyNode=h('div',{class:'session-empty'},h('strong',{text:title}),h('p',{text:description}));emptyNode.dataset.state=emptyState;}
         desired.push(emptyNode);
       }
@@ -863,7 +876,7 @@ function buildSessionPrompt(onHeightChange:()=>void,session:SessionChat,draftSta
       desired.forEach((child,index)=>{if(log.children[index]!==child)log.insertBefore(child,log.children[index]??null);});
       if(follow)log.scrollTop=log.scrollHeight;log.dataset.owner=key;
     }
-    const notices=[session.error,manualError,snapshot?.notice].filter((value,index,all)=>value&&all.indexOf(value)===index);
+    const notices=[session.error,session.failure?.message,manualError,snapshot?.notice].filter((value,index,all)=>value&&all.indexOf(value)===index);
     const text=notices.join('\n\n')||(session.loading&&!snapshot?'A carregar a conversa…':waiting?'A trabalhar nesta sessão.':'');
     feedback.hidden=!text;feedback.textContent=text;
     input.disabled=!snapshot?.capabilities.send;

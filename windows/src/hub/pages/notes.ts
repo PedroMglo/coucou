@@ -22,6 +22,7 @@ export async function notesPage(page: HTMLElement, ctx: HubContext) {
   let selected: string | null = state.recording ?? state.notes[0]?.id ?? null;
   let tab: "summary" | "transcript" = "summary";
   let startError = "";
+  let summaryError: { id: string; message: string } | null = null;
 
   page.append(ctx.hero("notes", t("Notetaker"), t("Your calls transcribed person by person, with a summary and the to-dos. No bot in the meeting."), [], true));
   if (ctx.status.models.parakeet.state !== "ready") {
@@ -97,7 +98,7 @@ export async function notesPage(page: HTMLElement, ctx: HubContext) {
       if (n.status === "recording") item.querySelector(".m")!.prepend(h("span", { class: "hub-rec", style: "margin-inline-end:6px" }));
       listEl.append(item);
     }
-    listEl.append(h("div", { style: "flex:1" }), h("div", { class: "hub-note", style: "padding:10px;border-radius:10px;background:rgba(255,255,255,0.04)", text: t("Everything stays on this computer. Tell the people in the call that you are recording.") }));
+    listEl.append(h("div", { style: "flex:1" }), h("div", { class: "hub-note", style: "padding:10px;border-radius:10px;background:rgba(255,255,255,0.04)", text: t("Recording and transcription are local. Claude summaries send the transcript to the configured Anthropic service. Tell the people in the call that you are recording.") }));
   }
 
   function drawDetail() {
@@ -123,18 +124,26 @@ export async function notesPage(page: HTMLElement, ctx: HubContext) {
       input.select();
     });
     const when = new Date(note.start).toLocaleString(lang(), { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
-    const copied = h("span", { class: "hub-note" });
+    const feedback = h("span", { class: "hub-note", role: "status" });
     const tools = h("div", { class: "hub-row", style: "gap:8px" });
     const confirm = h("div", {});
     if (note.status === "ready") {
       tools.append(button(t("Copy as Markdown"), async () => {
         const md = await FlowBridge.markdown(note.id);
         if (md && (await FlowBridge.copy(md))) {
-          copied.textContent = t("Copied");
-          setTimeout(() => (copied.textContent = ""), 1500);
+          const message = t("Copied");
+          feedback.textContent = message;
+          setTimeout(() => { if (feedback.textContent === message) feedback.textContent = ""; }, 1500);
         }
       }, "", true));
-      tools.append(button(t("Export as Markdown…"), () => void FlowBridge.exportNote(note.id).catch(() => {}), "", true));
+      tools.append(button(t("Export as Markdown…"), async () => {
+        feedback.textContent = "";
+        try {
+          await FlowBridge.exportNote(note.id);
+        } catch (error) {
+          feedback.textContent = String(error);
+        }
+      }, "", true));
     }
     if (note.status !== "recording") {
       tools.append(iconButton("trash", t("Delete"), () => {
@@ -146,12 +155,15 @@ export async function notesPage(page: HTMLElement, ctx: HubContext) {
         ));
       }));
     }
-    tools.append(copied);
+    tools.append(feedback);
     detail.append(
       h("div", { style: "display:flex;flex-direction:column;gap:4px;min-width:0" }, title, h("div", { class: "hub-note", text: note.app ? `${when} · ${note.app}` : when })),
       tools,
       confirm,
     );
+    if (note.microphoneOnly) {
+      detail.append(h("div", { class: "hub-warn", text: t("Microphone only. No computer audio was captured.") }));
+    }
 
     // The people, renamed with a click.
     if (note.speakers.length) {
@@ -205,9 +217,24 @@ export async function notesPage(page: HTMLElement, ctx: HubContext) {
   function summary(note: Note): HTMLElement {
     const el = h("div", { style: "display:flex;flex-direction:column;gap:14px;align-items:flex-start" });
     const busy = state.working.includes(note.id);
-    if (!note.summary && note.keyPoints.length === 0 && note.todos.length === 0) {
+    const empty = !note.summary && note.keyPoints.length === 0 && note.todos.length === 0;
+    const write = button(busy ? t("Writing the summary…") : empty ? t("Write the summary") : t("Write the summary again"), async () => {
+      write.disabled = true;
+      summaryError = null;
+      try {
+        await FlowBridge.summarize(note.id);
+      } catch (error) {
+        summaryError = { id: note.id, message: String(error) };
+      }
+      await reload();
+    }, empty ? "primary" : "", true);
+    write.disabled = busy;
+    if (summaryError?.id === note.id) {
+      el.append(h("div", { class: "hub-warn", role: "alert", text: summaryError.message }));
+    }
+    if (empty) {
       el.append(h("div", { class: "hub-note", text: busy ? t("Writing the summary…") : t("No summary yet.") }));
-      if (!busy) el.append(button(t("Write the summary"), () => void FlowBridge.summarize(note.id), "primary", true));
+      if (!busy) el.append(write);
       return el;
     }
     if (note.summary) el.append(h("div", { class: "hub-card", style: "font-size:14px;line-height:1.55;color:var(--hub-body);align-self:stretch", text: note.summary }));
@@ -226,7 +253,7 @@ export async function notesPage(page: HTMLElement, ctx: HubContext) {
         el.append(h("label", { class: "hub-todo" }, box, h("span", {}, h("span", { text: todo.text, style: todo.done ? "text-decoration:line-through;opacity:.6" : "" }), extra ? h("div", { class: "who", text: extra }) : null)));
       }
     }
-    el.append(button(busy ? t("Writing the summary…") : t("Write the summary again"), () => void FlowBridge.summarize(note.id), "", true));
+    el.append(write);
     return el;
   }
 

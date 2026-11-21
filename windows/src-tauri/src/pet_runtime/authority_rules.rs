@@ -1,7 +1,65 @@
 //! Rule records share Authority/key/catalogue lock/atomic writer with goal grants.
 use super::*;
 use crate::pet_runtime::rules::{RuleGrant,RuleEnvelope,RulePhase,RuleReservation,RuleAuthorityStatus,Rule,Missed};
-fn message(body:&RuleGrant)->Result<Vec<u8>>{let mut m=if body.schema_version==7{b"coucou-native-rule-recurrence-grant-v7\0".to_vec()}else if body.schema_version==6{b"coucou-native-rule-recurrence-grant-v6\0".to_vec()}else if body.schema_version==5{b"coucou-native-rule-recurrence-grant-v5\0".to_vec()}else if body.schema_version==4{b"coucou-native-rule-recurrence-grant-v4\0".to_vec()}else if body.schema_version==3{b"coucou-native-rule-recurrence-grant-v3\0".to_vec()}else if body.schema_version==2{b"coucou-native-rule-recurrence-grant-v2\0".to_vec()}else{b"coucou-native-rule-recurrence-grant-v1\0".to_vec()};m.extend(serde_json::to_vec(body).map_err(|_|Failure::Invalid)?);Ok(m)}
+fn message(body:&RuleGrant)->Result<Vec<u8>>{let mut m=if body.schema_version==12{b"coucou-native-rule-recurrence-grant-v12\0".to_vec()}else if body.schema_version==11{b"coucou-native-rule-recurrence-grant-v11\0".to_vec()}else if body.schema_version==10{b"coucou-native-rule-recurrence-grant-v10\0".to_vec()}else if body.schema_version==9{b"coucou-native-rule-recurrence-grant-v9\0".to_vec()}else if body.schema_version==7{b"coucou-native-rule-recurrence-grant-v7\0".to_vec()}else if body.schema_version==6{b"coucou-native-rule-recurrence-grant-v6\0".to_vec()}else if body.schema_version==5{b"coucou-native-rule-recurrence-grant-v5\0".to_vec()}else if body.schema_version==4{b"coucou-native-rule-recurrence-grant-v4\0".to_vec()}else if body.schema_version==3{b"coucou-native-rule-recurrence-grant-v3\0".to_vec()}else if body.schema_version==2{b"coucou-native-rule-recurrence-grant-v2\0".to_vec()}else{b"coucou-native-rule-recurrence-grant-v1\0".to_vec()};m.extend(serde_json::to_vec(body).map_err(|_|Failure::Invalid)?);Ok(m)}
+impl Authority{
+ /// Commit the existing occurrence partition, then durably record its one
+ /// native read before returning the retained owner to a calendar worker.
+ /// A crash between the two publications has spent no read and may complete
+ /// only that same allocation. A published read is never renewed by expiry.
+ pub(in crate::pet_runtime)fn begin_owned_rule_calendar(&self,decision:&str,policy_hash:&str,index:usize,now:u64,current:impl Fn()->bool)->Result<OwnedCalendarRead>{
+  use crate::pet_runtime::rules::CalendarRead;
+  let allocation=self.reserve_rule_occurrence_kind(decision,policy_hash,index,now,&current,true)?;
+  let _lock=self.lock()?;let name=format!("{decision}.json");if self.historical_file(&name)||self.rule_has_pending_unlocked(decision)?{return Err(Failure::RecoveryRequired);}
+  let(mut g,_)=self.rule_record_data(&name)?.ok_or(Failure::Missing)?;
+  if g.phase!=RulePhase::Active||now<g.updated_at||now>=g.policy.valid_until||!current(){return Err(Failure::Changed);}
+  self.rule_execution_lineage_unlocked(&g,false)?;
+  let slot=g.reservations.iter().position(|r|r.occurrence_id==allocation.occurrence_id).ok_or(Failure::Missing)?;
+  let r=&g.reservations[slot];if r.calendar_read.is_some(){return Err(Failure::RecoveryRequired);}if now>=r.deadline_at{return Err(Failure::Expired);}
+  let seconds=g.policy.capture_seconds().ok_or(Failure::Invalid)?;
+  let id=nonce().map_err(|_|Failure::Unavailable)?;let scope=CalendarRead::scope(&g.policy,r).map_err(|_|Failure::Invalid)?;
+  let owner=crate::pet_runtime::native_owner::OwnedOperation::capture(self,&id,&scope,now).map_err(|_|Failure::Unavailable)?;
+  let read=CalendarRead{schema_version:1,id,scope_hash:scope,owner:owner.record().clone(),prepared_at:now,expires_at:now.saturating_add(u64::from(seconds)*1000).min(r.deadline_at),finished_at:None,outcome:None};
+  g.reservations[slot].calendar_read=Some(read.clone());g.updated_at=now;g.revision=nonce().map_err(|_|Failure::Unavailable)?;
+  self.publish_rule(&g,false,||if current(){Ok(())}else{Err(Failure::Changed)})?;
+  Ok(OwnedCalendarRead{decision:decision.into(),occurrence:allocation.occurrence_id,read,owner})
+ }
+ pub(in crate::pet_runtime)fn rule_calendar_read_current(&self,owned:&OwnedCalendarRead,now:u64)->Result<()>{
+  if owned.owner.current(self).is_err(){return Err(Failure::Changed);}
+  let _lock=self.lock_shared()?;let name=format!("{}.json",owned.decision);if self.historical_file(&name)||self.rule_has_pending_unlocked(&owned.decision)?{return Err(Failure::RecoveryRequired);}
+  let(g,_)=self.rule_record_data(&name)?.ok_or(Failure::Missing)?;
+  if g.phase!=RulePhase::Active||now<g.updated_at||now<owned.read.prepared_at||now>=owned.read.expires_at||now>=g.policy.valid_until{return Err(Failure::Revoked);}
+  self.rule_execution_lineage_unlocked(&g,false)?;
+  let r=g.reservations.iter().find(|r|r.occurrence_id==owned.occurrence).ok_or(Failure::Missing)?;
+  if r.calendar_read.as_ref()!=Some(&owned.read)||owned.read.finished_at.is_some(){return Err(Failure::Changed);}self.fence()
+ }
+ /// Completion preserves an observed stop even after revocation; success still
+ /// needs the original live owner, deadline and current policy. This grants no
+ /// child admission/model call and never releases or replenishes the partition.
+ pub(in crate::pet_runtime)fn finish_rule_calendar_read(&self,owned:&OwnedCalendarRead,outcome:crate::pet_runtime::rules::CalendarReadOutcome,now:u64,current:impl Fn()->bool)->Result<()>{
+  use crate::pet_runtime::rules::CalendarReadOutcome;
+  if owned.owner.current(self).is_err(){return Err(Failure::Changed);}let _lock=self.lock()?;
+  let name=format!("{}.json",owned.decision);if self.historical_file(&name)||self.rule_has_pending_unlocked(&owned.decision)?{return Err(Failure::RecoveryRequired);}
+  let(mut g,_)=self.rule_record_data(&name)?.ok_or(Failure::Missing)?;if now<g.updated_at{return Err(Failure::Changed);}
+  let r=g.reservations.iter_mut().find(|r|r.occurrence_id==owned.occurrence).ok_or(Failure::Missing)?;
+  let old=r.calendar_read.as_mut().filter(|read|read.id==owned.read.id).ok_or(Failure::Changed)?;
+  if old.finished_at.is_some(){return if old.outcome.as_ref()==Some(&outcome){self.stabilize_rule(&g)}else{Err(Failure::Changed)};}
+  if old!=&owned.read{return Err(Failure::Changed);}
+  let captured=matches!(outcome,CalendarReadOutcome::Captured{..});
+  if captured&&(g.phase!=RulePhase::Active||now>=owned.read.expires_at||!current()){return Err(Failure::Changed);}
+  old.finished_at=Some(now);old.outcome=Some(outcome);g.updated_at=now;g.revision=nonce().map_err(|_|Failure::Unavailable)?;
+  self.publish_rule(&g,false,||if !captured||current(){Ok(())}else{Err(Failure::Changed)})
+ }
+}
+
+pub(in crate::pet_runtime)struct OwnedCalendarRead{
+ decision:String,occurrence:String,read:crate::pet_runtime::rules::CalendarRead,owner:crate::pet_runtime::native_owner::OwnedOperation,
+}
+impl OwnedCalendarRead{
+ pub(in crate::pet_runtime)fn read(&self)->&crate::pet_runtime::rules::CalendarRead{&self.read}
+ pub(in crate::pet_runtime)fn current(&self,a:&Authority,now:u64)->bool{a.rule_calendar_read_current(self,now).is_ok()}
+}
+
 impl Authority{
  /// Recognize only the typed discriminator, then verify every byte and HMAC.
  /// Historical DATA uses the same reader; callers separately enforce its fence.
@@ -62,8 +120,12 @@ impl Authority{
  /// Internal parent commitment only. This DATA cannot claim/run a goal. Actual
  /// occurrence admission will bind the same reservation before any child effect.
  pub(in crate::pet_runtime)fn reserve_rule_occurrence(&self,decision:&str,policy_hash:&str,index:usize,now:u64,current:impl Fn()->bool)->Result<RuleReservation>{
+  self.reserve_rule_occurrence_kind(decision,policy_hash,index,now,current,false)
+ }
+ fn reserve_rule_occurrence_kind(&self,decision:&str,policy_hash:&str,index:usize,now:u64,current:impl Fn()->bool,calendar:bool)->Result<RuleReservation>{
   if !model::token(decision)||!current(){return Err(Failure::Changed);}let _lock=self.lock()?;let name=format!("{decision}.json");if self.historical_file(&name){return Err(Failure::RecoveryRequired);}
   let(mut body,_)=self.rule_record_data(&name)?.ok_or(Failure::Missing)?;
+  if body.policy.selected_data()!=calendar{return Err(Failure::Unavailable);} // The ordinary model route never allocates selected-data work.
   let family=self.rule_execution_lineage_unlocked(&body,true)?;let prior=family.prior();let future_after=family.future_after();
   // Complete only the matching original metadata intent. A different request
   // cannot overwrite or silently discard an unresolved parent commitment.
@@ -87,7 +149,7 @@ impl Authority{
    Missed::Skip=>if now.saturating_sub(at)>grace{return Err(Failure::NotDue);},
    Missed::Decision=>if policy.schedule.slots.iter().enumerate().any(|(i,s)|s.at.is_some_and(|a|a<=now&&now-a>grace)&&policy.occurrence_id(i).is_some_and(|id|!body.reservations.iter().chain(&prior).any(|r|r.occurrence_id==id))){return Err(Failure::NotDue);},
   }
-  let allocation=RuleReservation{readiness:vec![],admission:None,occurrence_id:id,slot_index:index.try_into().map_err(|_|Failure::Invalid)?,at,deadline_at:deadline,reserved_at:now,model_calls:1,tool_calls:0,output_bytes:limit.occurrence_output_bytes};body.reservations.push(allocation.clone());body.updated_at=now;body.revision=nonce().map_err(|_|Failure::Unavailable)?;self.publish_rule(&body,false,||if current(){Ok(())}else{Err(Failure::Changed)})?;Ok(allocation)
+  let allocation=RuleReservation{notification:None,calendar_read:None,readiness:vec![],admission:None,occurrence_id:id,slot_index:index.try_into().map_err(|_|Failure::Invalid)?,at,deadline_at:deadline,reserved_at:now,model_calls:1,tool_calls:0,output_bytes:limit.occurrence_output_bytes};body.reservations.push(allocation.clone());body.updated_at=now;body.revision=nonce().map_err(|_|Failure::Unavailable)?;self.publish_rule(&body,false,||if current(){Ok(())}else{Err(Failure::Changed)})?;Ok(allocation)
  }
 }
 
@@ -102,6 +164,12 @@ fn same_rule_admission_intent(base:&RuleGrant,staged:&RuleGrant)->bool{
 }
 impl Authority{
  /// Read authenticated DATA for native materialization/recovery, never a permit.
+ /// Resolve execution output constraints only from the authenticated original
+ /// parent/reference, never from a provider or mutable renderer setting.
+ pub(in crate::pet_runtime)fn rule_calendar_priority_count(&self,s:&AdmissionSpec)->Result<Option<u8>>{
+  let reference=s.rule_occurrence.as_ref().ok_or(Failure::Invalid)?;let g=self.rule_grant(&reference.rule_decision_id)?;
+  if s.schema_version!=30||g.phase!=RulePhase::Active||g.policy.hash().map_err(|_|Failure::Invalid)?!=reference.policy_hash||!g.reservations.iter().any(|r|g.child_matches(r,s)){return Err(Failure::Changed);}Ok(g.policy.calendar_priority_count)
+ }
  pub(in crate::pet_runtime)fn rule_grant(&self,decision:&str)->Result<RuleGrant>{
   if !model::token(decision){return Err(Failure::Invalid);}let _lock=self.lock_shared()?;let name=format!("{decision}.json");if self.historical_file(&name){return Err(Failure::RecoveryRequired);}let(base,_)=self.rule_record_data(&name)?.ok_or(Failure::Invalid)?;
   let pending=self.rule_inventory_unlocked()?.into_iter().filter(|(_,b,c)|!*c&&b.decision_id==decision).collect::<Vec<_>>();
@@ -123,7 +191,7 @@ impl Authority{
   self.rule_admission_current_unlocked(s,now)
  }
  pub(in crate::pet_runtime::authority_store)fn rule_admission_current_unlocked(&self,s:&AdmissionSpec,now:u64)->Result<()>{
-  let Some(reference)=s.rule_occurrence.as_ref()else{return if s.schema_version==29{Err(Failure::Invalid)}else{Ok(())};};
+  let Some(reference)=s.rule_occurrence.as_ref()else{return if matches!(s.schema_version,29|30|31|32){Err(Failure::Invalid)}else{Ok(())};};
   if !reference.for_spec(s){return Err(Failure::Invalid);}let name=format!("{}.json",reference.rule_decision_id);if self.historical_file(&name){return Err(Failure::RecoveryRequired);}let(body,_)=self.rule_record_data(&name)?.ok_or(Failure::Missing)?;
   if body.phase!=RulePhase::Active||now<body.updated_at||now>=body.policy.valid_until||now<reference.at||now>=reference.deadline_at{return Err(Failure::Revoked);}
   let r=body.reservations.iter().find(|r|r.occurrence_id==reference.occurrence_id).ok_or(Failure::Changed)?;

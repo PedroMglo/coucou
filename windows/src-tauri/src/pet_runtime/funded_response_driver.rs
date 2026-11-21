@@ -30,7 +30,11 @@ impl Driver{
   let result=self.owner.respond_once(captured.app.as_ref(),&g,&captured.server,&request,&captured.configuration).await;
   match result{
    Ok(_)=>self.close_funded_response(Phase::AwaitingVerification,"Resposta própria guardada; critérios do subobjetivo por verificar. Worker drenado e orçamento não renovado.").await,
-   Err(_)=>self.close_funded_response(Phase::RecoveryRequired,"A resposta não foi confirmada. Consulta a tentativa e os dados já entregues; nenhum efeito incerto foi repetido.").await,
+   Err(error)=>{
+    #[cfg(debug_assertions)]eprintln!("[pet-runtime-response] goal={} error={error}",g.id);
+    let _=error;
+    self.close_funded_response(Phase::RecoveryRequired,"A resposta não foi confirmada. Consulta a tentativa e os dados já entregues; nenhum efeito incerto foi repetido.").await
+   },
   }
  }
 }

@@ -28,6 +28,9 @@ struct Reply{schema_version:u32,kind:String,status:String,request_id:String,sche
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate)struct Preview{pub schema_version:u32,pub schedule:Schedule,pub time_zone_data_version:String,pub resolver_revision:String,pub slots:Vec<Slot>,pub execution_authorized:bool}
 fn bound(schedule:&Schedule,request_id:&str,value:serde_json::Value)->Result<Preview,&'static str>{
+ bind_preview(schedule,request_id,value,None)
+}
+fn bind_preview(schedule:&Schedule,request_id:&str,value:serde_json::Value,captured_revision:Option<&str>)->Result<Preview,&'static str>{
  let bad="scheduleResponseMismatch";let locals=schedule.locals()?;
  let r:Reply=serde_json::from_value(value).map_err(|_|bad)?;
  if r.schema_version!=1||r.kind!="petRuleSchedule"||r.status!="ready"||r.request_id!=request_id||&r.schedule!=schedule||r.slots.len()!=locals.len()||r.time_zone_data_version.len()!=5||!r.time_zone_data_version.as_bytes()[..4].iter().all(u8::is_ascii_digit)||!r.time_zone_data_version.as_bytes()[4].is_ascii_lowercase(){return Err(bad);}
@@ -40,7 +43,10 @@ fn bound(schedule:&Schedule,request_id:&str,value:serde_json::Value)->Result<Pre
    if i64::try_from(at).ok().and_then(|n|n.checked_add(offset*1000))!=Some(civil)||previous.is_some_and(|n|at<=n){return Err(bad);}previous=Some(at);
   }else if s.at.is_some()||s.offset_seconds.is_some(){return Err(bad);}
  }
- let resolver=super::sha(&[include_bytes!("runtime.zip").as_slice(),include_bytes!("worker.py").as_slice(),r.time_zone_data_version.as_bytes()].concat());
+ // Shape-only/history checks retain the authenticated captured revision. They
+ // must not hash the current 1.5 MiB runtime and then discard that work while
+ // a goal catalog reader is held. Current-resolver checks still derive it.
+ let resolver=captured_revision.map(str::to_owned).unwrap_or_else(||super::sha(&[include_bytes!("runtime.zip").as_slice(),include_bytes!("worker.py").as_slice(),r.time_zone_data_version.as_bytes()].concat()));
  Ok(Preview{schema_version:1,schedule:r.schedule,time_zone_data_version:r.time_zone_data_version,resolver_revision:resolver,slots:r.slots,execution_authorized:false})
 }
 #[cfg(target_os="linux")]
@@ -78,5 +84,14 @@ pub(crate)fn valid_preview(p:&Preview)->bool{
 pub(crate)fn valid_preview_shape(p:&Preview)->bool{
  if p.schema_version!=1||p.execution_authorized||p.resolver_revision.len()!=64||!p.resolver_revision.bytes().all(|b|b.is_ascii_digit()||matches!(b,b'a'..=b'f')){return false;}
  let value=serde_json::json!({"schemaVersion":1,"kind":"petRuleSchedule","status":"ready","requestId":"stored-native-rule-plan","schedule":p.schedule,"timeZoneDataVersion":p.time_zone_data_version,"slots":p.slots});
- bound(&p.schedule,"stored-native-rule-plan",value).is_ok_and(|mut same|{same.resolver_revision=p.resolver_revision.clone();same==*p})
+ bind_preview(&p.schedule,"stored-native-rule-plan",value,Some(&p.resolver_revision)).is_ok_and(|same|same==*p)
+}
+
+#[cfg(test)]mod captured_shape_tests{
+ use super::*;use serde_json::json;
+ #[test]fn historical_shape_retains_captured_revision_without_promoting_it_to_current_resolver(){
+  let mut schedule=tests::schedule("2026-11-17","UTC","09:00");schedule.days=1;let response=json!({"schemaVersion":1,"kind":"petRuleSchedule","status":"ready","requestId":"shape-proof","schedule":schedule,"timeZoneDataVersion":"2026a","slots":[{"localDateTime":"2026-11-17T09:00:00","resolution":"ordinary","at":1794906000000_u64,"offsetSeconds":0}]});
+  let current=bound(&schedule,"shape-proof",response).unwrap();assert!(valid_preview(&current));assert!(valid_preview_shape(&current));let mut historical=current.clone();historical.resolver_revision="f".repeat(64);assert!(valid_preview_shape(&historical));assert!(!valid_preview(&historical));
+  for kind in ["instant","offset","date","version","hash","authority","missing"]{let mut bad=historical.clone();match kind{"instant"=>bad.slots[0].at=bad.slots[0].at.map(|n|n+1000),"offset"=>bad.slots[0].offset_seconds=Some(3600),"date"=>bad.slots[0].local_date_time="2026-11-18T09:00:00".into(),"version"=>bad.time_zone_data_version="unbound".into(),"hash"=>bad.resolver_revision="not-a-revision".into(),"authority"=>bad.execution_authorized=true,_=>bad.slots.clear()}assert!(!valid_preview_shape(&bad),"{kind}");}
+ }
 }

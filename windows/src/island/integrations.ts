@@ -103,6 +103,7 @@ function handle(island: Island, update: IntegrationUpdate) {
     error: update.error,
     loaded: update.error ? (previous?.loaded ?? false) : true,
     configured: previous?.configured ?? true,
+    activity: update.event ?? previous?.activity ?? null,
   };
 
   const event = update.event;
@@ -126,8 +127,14 @@ function handle(island: Island, update: IntegrationUpdate) {
         update.id,
         window.setTimeout(() => {
           clearTimers.delete(update.id);
+          const info = State.integrations[update.id];
+          const cleared = info?.activity === event;
+          if (cleared) info.activity = null;
           const t = State.tasks.find((x) => x.id === update.id);
-          if (!t || (t.state !== "finished" && t.state !== "error")) return;
+          if (!t || (t.state !== "finished" && t.state !== "error")) {
+            if (cleared) State.notify();
+            return;
+          }
           t.state = "idle";
           t.steps = [];
           t.stepIndex = 0;

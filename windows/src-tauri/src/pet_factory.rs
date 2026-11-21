@@ -20,6 +20,12 @@ fn merge(base:&mut Value,overlay:&Value)->Result<(),String>{
 #[cfg(test)]mod runtime_tests {
  use super::*;
  fn source()->Value{serde_json::from_str(include_str!("../pets.factory.json")).unwrap()}
+ #[test]fn feature_policy_belongs_to_domains_and_never_to_the_common_base_or_an_account_extension(){
+  for place in ["base","extension","pet"]{let mut s=source();let row=match place{"base"=>&mut s["base"],"extension"=>&mut s["extensions"]["codex-account"],_=>&mut s["pets"]["integration_n8n"]};row["features"]=serde_json::json!({"inference":true});assert!(resolve(&s).is_err());}
+  for value in [Value::Null,serde_json::json!({"inference":true}),serde_json::json!({}),serde_json::json!({"inference":"true"}),serde_json::json!({"inference":false,"grants":true})]{let mut s=source();s["molds"]["application"]["features"]=value;assert!(resolve(&s).is_err());}
+  for b in blueprints().filter(|b|b.runtime.kind==RuntimeKind::Service){assert!(!b.features.inference);assert!(b.routing.chat.is_none());assert!(!b.routing.execute);}
+  for id in ["agent_codex","agent_copilot","agent_antigravity","ai_ollama"]{let b=blueprint(id).unwrap();assert!(b.features.inference);assert!(b.routing.chat.is_some());}
+ }
  #[test]fn catalog_covers_native_identities_without_conflating_logical_owners(){
   assert_eq!(blueprints().count(),26);
   for p in blueprints(){
@@ -57,7 +63,7 @@ fn merge(base:&mut Value,overlay:&Value)->Result<(),String>{
  #[test]fn native_service_and_optional_assistant_are_declared_without_changing_defaults(){
   let p=blueprint("integration_spotify").unwrap();assert_eq!(p.runtime.adapter,Some(Adapter::Spotify));assert_eq!(p.runtime.assistant_adapter,Some(Adapter::Codex));
   assert_eq!(p.configured_adapter(""),Some(Adapter::Spotify));assert_eq!(p.configured_adapter("codex"),Some(Adapter::Codex));assert_eq!(p.configured_adapter("copilot"),None);
-  assert_eq!(p.routing.chat.as_deref(),Some("integration_spotify"));assert_eq!(for_provider("codex"),Some("agent_codex"));assert!(bundled().pets["integration_spotify"].provider.is_empty());
+  assert!(p.routing.chat.is_none());assert_eq!(for_provider("codex"),Some("agent_codex"));assert!(bundled().pets["integration_spotify"].provider.is_empty());
  }
  #[test]fn optional_assistant_claims_cannot_promote_an_undeclared_account_or_runtime(){
   for(id,adapter)in[("integration_spotify","copilot"),("ai_ollama","codex"),("integration_notion","codex")]{let mut s=source();s["pets"][id]["runtime"]["assistantAdapter"]=serde_json::json!(adapter);assert!(resolve(&s).is_err());}
@@ -65,7 +71,7 @@ fn merge(base:&mut Value,overlay:&Value)->Result<(),String>{
  }
  #[test]fn another_composite_service_can_use_the_same_factory_contract(){
   let mut s=source();let mut p=s["pets"]["integration_spotify"].clone();for key in ["chat","voice","taskProvider"]{p["routing"][key]=serde_json::json!("integration_audio_fixture");}p["preferences"]["name"]=serde_json::json!("Audio fixture");p["preferences"]["aliases"]=serde_json::json!(["audio fixture"]);s["pets"]["integration_audio_fixture"]=p;
-  let catalog=resolve(&s).unwrap();let p=&catalog.entries["integration_audio_fixture"];assert_eq!(p.configured_adapter("codex"),Some(Adapter::Codex));assert_eq!(p.configured_adapter(""),Some(Adapter::Spotify));assert_eq!(p.routing.chat.as_deref(),Some("integration_audio_fixture"));assert!(p.recognizes_owner("integration_audio_fixture","codex"));assert!(p.recognizes_owner("integration_audio_fixture","spotify"));assert!(!p.recognizes_owner("codex","codex"));assert!(!p.recognizes_owner("integration_audio_fixture","copilot"));
+  let catalog=resolve(&s).unwrap();let p=&catalog.entries["integration_audio_fixture"];assert_eq!(p.configured_adapter("codex"),Some(Adapter::Codex));assert_eq!(p.configured_adapter(""),Some(Adapter::Spotify));assert!(p.routing.chat.is_none());assert!(p.recognizes_owner("integration_audio_fixture","codex"));assert!(p.recognizes_owner("integration_audio_fixture","spotify"));assert!(!p.recognizes_owner("codex","codex"));assert!(!p.recognizes_owner("integration_audio_fixture","copilot"));
  }
 
 }
@@ -74,6 +80,9 @@ fn resolve(source:&Value)->Result<Bundled,String>{
     let molds=source.get("molds").and_then(Value::as_object).ok_or_else(invalid)?;
     if molds.len()!=2||!molds.contains_key("llm")||!molds.contains_key("application"){return Err(invalid());}
     let extensions=source.get("extensions").and_then(Value::as_object).ok_or_else(invalid)?;
+    if source["base"].get("features").is_some()||extensions.values().any(|e|e.get("features").is_some()){return Err(invalid());}
+    for mold in molds.values(){let _:runtime::DomainFeatures=serde_json::from_value(mold["features"].clone()).map_err(|_|invalid())?;}
+    if molds["application"]["features"]["inference"]!=Value::Bool(false){return Err(invalid());}
     // Templates cannot provide identity, grants or an execution policy.
     for recipe in std::iter::once(source.get("base").ok_or_else(invalid)?).chain(molds.values()).chain(extensions.values()){
         if !recipe.is_object()||["retired","runtime","routing","service","introducedIn"].iter().any(|k|recipe.get(k).is_some()){return Err(invalid());}
@@ -130,7 +139,7 @@ mod tests{
         let source:Value=serde_json::from_str(include_str!("../pets.factory.json")).unwrap();
         let resolved=resolve(&source).unwrap();
         assert!(resolved.config.pets.values().all(|pet|pet.inference.is_none()));
-        for id in ["ai_ollama","ai_lmstudio"]{assert_eq!(resolved.entries[id].runtime.inference_adapters,vec![Adapter::Ollama,Adapter::Lmstudio]);}
+        for id in ["ai_ollama","ai_lmstudio"]{assert_eq!(resolved.entries[id].runtime.inference_adapters,vec![Adapter::Ollama,Adapter::Lmstudio,Adapter::Custom]);}
         for id in ["agent_codex","integration_spotify","agent_cursor"]{
             let mut forged=source.clone();forged["pets"][id]["runtime"]["inferenceAdapters"]=serde_json::json!(["ollama"]);assert!(resolve(&forged).is_err());
         }
@@ -182,7 +191,7 @@ mod tests{
     }
     #[test]fn instance_overrides_stay_separate_from_family_changes(){
         let mut source:Value=serde_json::from_str(include_str!("../pets.factory.json")).unwrap();
-        source["molds"]["llm"]=serde_json::json!({"preferences":{"mode":"reasoning"}});
+        source["molds"]["llm"]["preferences"]["mode"]=serde_json::json!("reasoning");
         let result=configuration(&source).unwrap();
         assert_eq!(result.pets["agent_codex"].mode,"reasoning");
         assert_eq!(result.pets["agent_copilot"].mode,"reasoning");

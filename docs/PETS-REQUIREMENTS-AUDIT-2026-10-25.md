@@ -1,4 +1,212 @@
+**21/11 — RPM 62 instalado no âmbito autorizado.**
+A instância normal e a página Pets foram observadas no Hyprland.
+O backup foi verificado pelos leitores .44 e .62 e os 21 ficheiros
+acompanhados conservaram o conteúdo no arranque. O registo `0529954`
+no sysworkspace tem assinatura verificada. Os 49 critérios mantêm
+os âmbitos e as lacunas próprios. [Entrega e provas](PETS-INSTALLED-DELIVERY-62.md).
+
+**18/11 — RPM 53 verificado no Hyprland e em X11 privado.**
+O próprio pacote preserva o centro durante a configuração em segundo
+plano e as conversas ao ocultar os pets. Passaram primeira abertura,
+atalho por linha de comandos, reinício, leitura histórica 6/7 e
+prévia de backup sintética. A proposta com hashes e alteração focada
+do sysworkspace está pronta. A instalada continua na 44.
+[Provas, limites e âmbito de entrega](PETS-INSTALLED-DELIVERY-53.md).
+
+**18/11 — RPM 52 validado em X11 privado. Corrigido o fecho do centro em Wayland na fonte posterior.**
+O 52 alternou o centro, guardou a visibilidade dos pets após reinício e
+reabriu o mesmo pedido pendente. No Hyprland, a configuração em segundo
+plano ainda podia fechar o centro no 52. A correção integrada preserva
+a navegação explícita e passou 29 testes dirigidos e um ensaio no
+Hyprland em binário privado. A proposta 52 fica suspensa. A instalada
+continua na 44. [Artefactos, evidência e limites](PETS-INSTALLED-DELIVERY-52.md).
+
+**17/11 — recuperado mostrar/ocultar os pets configurados, em composição privada.**
+O oficial0.5.0 alterna a saída/regresso do seu pet; na privada anterior o atalho
+não tinha efeito. A adaptação usa os pets atuais e a transação de preferências
+existente. Atalho real, controlo Geral, visibilidade nativa, reinício e preservação
+de um pedido Codex sintético/CID passaram, sem aceitar/executar o comando.
+14 Rust dirigidos/64 web/tipos; instalada44 e RPM51 preservados. O binário privado
+12230fac tem versão interna51, mas não é esse RPM. Falta pacote sucessor,
+compositor real e entrega própria; a paridade útil e os49 não estão concluídos.
+[Contrato, comparação, provas e limites](PETS-UPSTREAM-PARITY-2026-11-11.md#desktop-pets-1711).
+
+**17/11 — recuperada a alternância abrir/fechar no centro dos pets, em composição privada.**
+O oficial alternou quatro pressões; o RPM51 abriu sempre. A correção consulta o
+contexto nativo e reutiliza a recolha existente, sem usar o modo da vista legada.
+46 web/tipos, compilação e percurso nativo privado passaram, incluindo chamadas
+antigas de abertura e recusa de pet inválido. O RPM51 não contém esta correção.
+Terminal: foco/tecla/pasta passaram no âmbito controlado; fallback com relay rápido
+na privada continua sem causa demonstrada. Instalada44 e RPM49/50/51 preservados.
+[Contrato, comparação e limites](PETS-UPSTREAM-PARITY-2026-11-11.md#ilha-terminal-1711).
+
+**17/11 — RPM51 com a correção dos atalhos verificado, sem instalação.**
+No próprio executável embalado passaram pedido CLI/dono/CID, duas reaberturas sem
+decisão, Stop/retirada e navegação legada equivalente ao oficial0.5.0. Um turno
+RPC sintético, zero modelos reais;44 web/tipos reutilizados por código exato.
+Instalada44 e RPM49/50 preservados. A proposta50 foi sucedida; Wayland real,
+âmbito próprio para entrega operacional, paridade integral e49 continuam abertos.
+[Artefacto, provas, limites e próximo passo](PETS-INSTALLED-DELIVERY-51.md).
+
+**17/11 — atalhos comparados com o oficial; corrigida a reabertura de pedidos CLI.**
+Avançar/recuar entre pets e voltar a permissões/perguntas passaram no oficial0.5.0
+e na composição privada corrigida. No RPM50 congelado, o atalho era recebido mas
+não reabria o pedido CLI ainda ativo. A correção reutiliza o destino existente;
+reabriu o mesmo pedido/CID duas vezes, sem decidir, e deixou de o reabrir após
+Stop.44 testes web/tipos e percursos nativos privados passaram. Instalada44 e
+RPM50 preservados; o RPM50 não contém esta correção. Segue um pacote novo,
+antes de proposta operacional. Sem quota real ou aceitação Wayland/humana/global.
+[Contrato, comparação, provas e limites](PETS-UPSTREAM-PARITY-2026-11-11.md#atalhos-pedidos-cli-1711).
+
+**17/11 — chat do telefone verificado no próprio RPM50, sem alteração de produto.**
+O probe de sete pedidos sob consultas readonly e o ciclo completo TLS/conversa/
+reset/cancelamento/permissão/modelo/503/reinício passaram.14 POSTs sintéticos,
+zero modelo real; instalada44 e RPM50 preservados. As falhas pré-HTTP22/82
+continuam conservadas, com causa não demonstrada; não foram reproduzidas neste
+âmbito50. Não é aceitação prolongada, física, humana ou global.
+[Comparação com oficial0.5.0, provas e limites](ANDROID_LINK.md#phone-chat-normal50).
+
+**17/11 — candidata50 normal preparada e verificada em QA, sem instalação.**
+O executável do RPM50 passou contexto n8n/Codex por domínio, revisão própria de
+uma rotina→captura/contexto12→admissão32→Driver→uma resposta sintética, consulta
+e reinício sem replay. Histórico atual (8 objetivos/4 contextos12, decisões e
+reserva65536) e6/7 antigos passaram leitura/recusas, após18 comandos nativos de
+restauro/quarentena/revisão/ativação com grants[]. Resposta e decisão restaurada
+foram vistas após reinício na captura X11 virtual real e no WebDriver. Instalada44,
+preferências e artefacto49 preservados; sem quota real, aceitação humana ou49
+integrais. Wayland continua bloqueado; a entrega operacional exige âmbito próprio.
+[Artefacto, falhas conservadas, provas e proposta](PETS-INSTALLED-DELIVERY-50.md).
+
+**17/11 — corrigida contenção na preparação e no selo das ocorrências.**
+O binário privado `0ba38c5e…` autentica a listagem fora do bloqueio longo e valida
+stamps antes de a devolver; alterações são explícitas como consulta incompleta.
+O selo pode aguardar Busy anterior à publicação com o mesmo dono/prazo/resultado,
+sem repetir leitura ou inferência.91 Rust dirigidos e79 web/tipos reutilizados.
+Na composição atual, revisão UI→captura→admissão→Driver→resposta sintética e
+reinício passaram sob consultas concorrentes, preservando os registos anteriores.
+O leitor histórico atual também passou recusas/reinício com zero HTTP. A pintura
+pós-reinício no compositor real continua por confirmar: WebKit/DOM legíveis,
+captura física X11 virtual em branco. Instalada44/RPM49 e49 critérios preservados;
+sem publicação, quota real ou aceitação humana/global.
+[Contrato, provas e limites](PETS-PROJECT-DECISION-2026-11-17.md#consultas-e-publicação-da-captura-sob-contenção).
+
+**17/11 — prazo de confirmação corrigido e decisões preservadas em dois restauros nativos.**
+O binário privado `b321a700…` recusa confirmação anterior à revisão ou após120s
+monotónicos, mesmo com UTC parado.7 Rust dirigidos;79 web/tipos reutilizados por
+hashes. O perfil atual com8 objetivos/4 contextos12, escolha, recusa e resultado
+desconhecido passou22 comandos CLI, duas recuperações, UI histórica, recusas de
+nova autoridade e reinícios sem HTTP/replay. A instalação44 e o RPM49 estão intactos.
+Uma tentativa separada ficou na preparação antes de contexto/admissão (seed5);
+a causa está aberta e será investigada antes de novas capacidades. Não certifica
+fiabilidade prolongada, paridade global, entrega instalada/humana ou49 integrais.
+[Provas, cadeia de tentativas e limites](PETS-PROJECT-DECISION-2026-11-17.md#prazo-e-restauro-da-composição-atual).
+
+**17/11 — pedido e resposta de decisão de projeto validados em composição privada atual.**
+A rotina pode pedir uma decisão limitada. A supervisão revê e guarda a resposta
+numa nota de projeto, sem executar a opção ou gastar nova inferência. Dono,
+origem, consentimento e revogação são validados nativamente; outra resposta não
+sobrescreve a nota. Reutilizar a nota num novo objetivo exigiu seleção e revisão
+próprias. UI legível, reinício e zero replay passaram no binário `bbac7a16…`;
+5 Rust/79 web/tipos. Registry2/Goal69/Admission32 conservados, sem novo ledger.
+Instalada44/RPM49 intactos; restauro nativo atual, uso prolongado, ações próprias,
+entrega instalada/humana e49 integrais continuam abertos.
+[Contrato, provas e limites](PETS-PROJECT-DECISION-2026-11-17.md).
+
+**17/11 — corrigida a consulta de ocorrências de projeto sem notas opcionais.**
+A listagem nativa já reconhecia ContextBinding12, mas a vista de progresso só
+aceitava o projeto das notas2 e recusava a consulta. Recusa reproduzida no binário
+anterior; o leitor usa agora o projeto capturado do acompanhamento, com ou sem
+notas, e recusa identidades/revisões inconsistentes.24 web e tipos passaram.
+No binário privado `0a3e9482…`, duas respostas e uma tentativa desconhecida foram
+consultadas na UI nativa e após reinício, com os mesmos ficheiros e zero inferência.
+Instalada44/RPM49 intactos; sem novos formatos, permissões ou aceitação humana.
+[Contrato, provas e limites](PETS-PROJECT-PROGRESS-2026-11-17.md#ocorrências-do-acompanhamento-sem-notas-opcionais).
+
 # Auditoria rastreável — 43 requisitos originais e System Guardian
+
+**17/11 — acompanhamento de objetivos de projeto validado na composição privada atual.**
+Source17/build5/native9 (`14036407…`): escolhas próprias de dados futuros,
+duas ocorrências civis com fotografias distintas, respostas legíveis,
+sucessão6/revisão7, revogação da origem durante HTTP e reinício sem replay.
+71 Rust dirigidos,58 web/tipos; restauro novo em fixtures. Sem quota real,
+instalação ou aceitação humana. AUTO04 integral/pedido de decisão governado,
+uso prolongado e entrega instalada continuam abertos. Instalada44 e RPM49
+preservados. [Contrato, provas e limites](PETS-PROJECT-FOLLOWUP-2026-11-17.md).
+
+**17/11 — progresso por projeto implementado e validado nativamente em perfil privado.**
+Consulta explícita de objetivos ligados por ID, critérios, revisão capturada/atual,
+resposta e resultados desconhecidos. Reutiliza leitores existentes; o chat só lê
+objetivos do pet mostrado. Arquivo, restauro e reinícios passaram sem inferência
+adicional ou alteração dos bytes do runtime. Fontes1342/binário `9a83c8cb…`, fora
+do RPM49/instalada44. Rotina prolongada, atualização de contexto, recorrência e
+entrega integral permanecem abertas. [Provas e limites](PETS-PROJECT-PROGRESS-2026-11-17.md).
+
+**17/11 — preservação/restauro dos projetos validado na composição atual.**
+O binário privado `6873c5e8…`/fontes1340 preservou catálogo, notas, objetivos,
+respostas, incerteza e metadados Codex2 em dois restauros nativos. Um único turno
+Codex sintético, revisão de dados própria, reinícios sem replay e recusa específica
+de execução histórica. Reutiliza manutenção/autoridade existentes; sem novo código
+de produto, instalação ou inferência real. Progresso/recorrência e entrega integral
+continuam abertos. [Provas e limites](PETS-PROJECT-RECOVERY-2026-11-17.md).
+
+**17/11 — projeto ligado a um objetivo limitado, percurso nativo privado validado.**
+A UI escolhe CID de origem/projeto/notas e prepara contexto Dedicated sem copiar
+histórico. Selection2 conserva o projeto completo, além das revisões/hashes das
+notas; uma alteração dos dados com o mesmo número de revisão também é recusada.
+Reutiliza revisão própria, Authority, orçamento e Driver: uma chamada local,
+zero ferramentas. A resposta executou com a vista fechada; retirar a associação
+no segundo HTTP impediu publicar a resposta tardia. Cada objetivo conservou uma
+chamada debitada. A tentativa revogada mantém resultado desconhecido e reserva
+conservadora de65536B; não renova saldo nem retira dados já recebidos pelo motor.
+O controlo de memória Pet/Selection1 também passou. Reinício conservou os hashes
+e não reenviou. Fontes1340, binário privado `6873c5e8…`;36 Rust dirigidos/132 web
+com reutilização/tipos. A revisão6 é legível; a imagem da resposta6 ficou preta.
+A imagem da resposta4 é legível e usa exatamente os mesmos fontes/binário;4 não
+é aceite integralmente. Planeamento/partilha/continuação/recorrência de projeto e
+restauro nativo dos novos dados continuam abertos. Fora do RPM49/instalada44;
+sem inferência real, publicação, alteração do anfitrião ou aceitação humana.
+[Composição, provas, falhas e limites](../.build/project-goal-memory-20261117/VERIFIED.json).
+
+**17/11 — memória de projeto utilizável no pedido manual, validada nativamente.**
+Selecionam-se revisões exatas de notas de um projeto disponível e associado à
+conversa. A revisão nativa apresenta projeto/notas/destino e exige consentimento
+próprio; renomear, arquivar, retirar associação ou alterar dados invalida novos usos.
+Cancelamento/revisão antiga não enviaram HTTP; uma nova revisão enviou só a nota
+escolhida e excluiu notas do pet/outro projeto. Resposta/reinício/recusa após retirada
+passaram no binário privado `0f2b0d8e…`, fontes1339. A resposta fica legível após
+recolher os detalhes confirmados, preservando a seleção; cancelar mantém-nos abertos.
+43 Rust dirigidos e24 web/tipos, com reutilização por hashes; uma inferência e uma
+consulta de metadados, ambas sintéticas. Referências das sessões CLI/revogação
+ativa têm fixtures, não nova aceitação de contas reais. Objetivos de projeto,
+recorrência e restauro nativo dos novos dados continuam abertos. Fora do RPM49 e
+da instalada44; sem publicação, alterações do anfitrião ou aceitação humana.
+[Provas, composição e limites](../.build/project-memory-context-20261117/VERIFIED.json).
+
+**17/11 — projetos e recordações isoladas, percurso nativo privado concluído.**
+A identidade lógica é criada explicitamente por pet; associar a conversa nativa
+é opt-in e conserva a conversa original. Dois projetos, criação/revisão de notas,
+renomeação, associação/retirada, arquivo e dois reinícios passaram no binário
+`adbe95ad…`, fontes1338. Reutiliza catálogo/CAS; não cria ledger ou scheduler.
+42 Rust dirigidos,21 web e TypeScript passaram. A prova gráfica permite ler o
+projeto/estado/associações, mas a imagem da nota está cortada; não fecha aceitação
+gráfica integral. **As notas de projeto ainda não entram em modelos/objetivos**:
+o percurso antigo recusa-as, com controlo positivo nativo para notas do pet.
+Segue seleção/revisão explícita e revogação por revisão/associação, depois objetivos
+e recorrência. AUTO-04/MEM/49 continuam abertos; instalada44/RPM49 intactos.
+A correção de leitura de proveniência histórica está apenas nas fontes atuais;
+a proposta49 contém agora o limite/preflight correspondente.
+[Provas, composição e limitações](../.build/project-memory-20261117/VERIFIED.json).
+
+## Estado reconciliado16/11
+
+CTX-04/AUTO-03/AUTO-05 agora distinguem código/casos técnicos verificados de entrega
+e aceitação ainda pendentes. Quantidade, ciclo de regras, aviso limitado e janela
+restaurada não são implementação em falta. DATA-02 volta à decisão opcional do
+proprietário; atalhos/Settings não provam PostgreSQL. Os49 IDs, critérios originais
+e dependências permanecem exatos no JSON; nenhum requisito foi fechado nesta revisão.
+[Candidata48](PETS-INSTALLED-DELIVERY-48.md) e
+[medições/provas](../.build/resources48-20261116/VERIFIED.json).
+
 
 ## Atualização01/11 — fontes1003 e instalação32
 
@@ -257,13 +465,13 @@ A branch documental publicada avançou do commit consultado `eeee1b5` para `0abb
 | MEM-01 | parcial integrado + privado | Notas/preferências com dono/origem/validade/revisões em834; seleção/revisão humana de dois âmbitos e contexto nativo em854. | Projetos, episódios, derivados, resumos e partilha explícita por implementar. | Concluir R43 e evoluir classes com dependências/invalidação sem memória global. |
 | MEM-02 | parcial integrado + privado | CRUD/CAS, pesquisa/captura/revogação e dados por destino; SDK854 acrescenta revisão manual e hash de contexto antes de consumir o token. Retoma selecionada nativa146/147 conserva referências e consumo e exige novo consentimento próprio; duas rondas e revogação em IO com motores sintéticos. Backup atual conserva ficheiros de memória e contexto como dados. | Inline/aceitação humana e contas reais, derivados/índices, restauro/adoção pendentes.150 teve Busy de conclusão corrigido emD;145 não tem diagnóstico causal exato. | Fechar restauro/migração da composição coerente e preservar revisão/destino/autoridade sem renovação. |
 | CTX-03 | parcial integrado | Catálogo/consulta ICS e seleção por pet/CID existentes. | Gestão/consentimento e aceitação de todas as superfícies ainda incompletos. | Fonte selecionada e cobertura/frescura explícitas; não anunciar sincronização/escrita. |
-| CTX-04 | pendente + base integrada | Fonte inscrita tem âmbito/revisão; base CAS reutilizável. | Coleções multicalendário e principais de objetivo/regra/ocorrência não concluídos. | Migrar sem alargar pet/CID antigo; capturar coleção e revogação por ocorrência. |
+| CTX-04 | parcial integrada no RPM48 | Coleções ICS/ocorrências, resposta, revisão/sucessão/renovação e restauro nativos. | Entrega48, aceitação e restantes coleções/cenários; sem paridade geral. | Entregar apenas após autorização e aceitar os restantes âmbitos próprios. |
 | CTX-05 | pendente | Avaliação de reutilização identifica limites TLS/bytes/redirects/IMAP; não é adaptador operacional. | RSS/IMAP limitados ainda por implementar/aceitar. | Limites antes de materializar, pastas/destinos explícitos e nenhuma escrita/envio implícitos. |
 | AUTO-01 | pendente | Bases de objetivos/concessões/fontes existem; não constituem repositório completo de regras. | Definição/ativação/revisão de regras e ligação de grants faltam. | Regra autorizada tem dono, fontes, gatilho, validade e limites; texto externo não a cria. |
 | AUTO-02 | pendente | Runtime/recursos são fundação a reutilizar, sem segundo scheduler. | Agendamento com ocorrências/DST/offline não aceite ponta a ponta. | Fuso IANA, debounce/deduplicação, skip/coalesce/decisão sem avalanche. |
-| AUTO-03 | pendente | Consulta de calendário é base, não rotina diária completa. | Multicalendário, regra/ocorrência e notificação dependem CTX-04/AUTO. | Uma ocorrência com dados novos, falha parcial, origem e uma notificação permitida. |
-| AUTO-04 | pendente + base integrada | Critérios/progresso/recuperação individuais existem. | Acompanhamento periódico autorizado e memória de projeto não concluídos. | Detetar bloqueio/progresso e pedir decisão sem replay, spam ou orçamento renovado. |
-| AUTO-05 | pendente + base integrada | Estado/avisos têm bases existentes; não prova política integral de notificações de regras. | Silêncio, escalada e deduplicação por ocorrência/canal por completar. | Validade/limites/sensibilidade e ausência de reenvio infinito ou troca de conta/canal. |
+| AUTO-03 | implementação/caso técnico verificados; entrega pendente | Quantidade1–64, índice global,9h/10h no caso real, aviso, ciclo e restauro; prova atual do RPM48. | Sem instalada/humano/banner; um caso não certifica seleção geral. | Entrega48 autorizada e aceitação operacional, sem reimplementar os passos já provados. |
+| AUTO-04 | parcial integrado; acompanhamento finito validado nativamente pós49 | Pedido recebido: escolha explícita de estados, consentimento próprio, espera sem slot, pausa com vista fechada, um relatório/um débito e inbox original/reinícios sem replay. Conclusão de recibos reutiliza proteção Busy existente. | Só pausa não terminal na janela atual. Memória de projeto, recorrência e entrega instalada deste delta pendentes. | Vínculo real de projeto/memória e acompanhamento sem replay, spam ou saldo renovado. |
+| AUTO-05 | aviso diário limitado integrado/verificado | Tentativa única silenciosa/baixa prioridade, metadados, janela original e sem replay/fallback. | D-Bus privado; banner, quiet hours e escalada geral pendentes. | Aceitar aviso operacional e os restantes cenários aplicáveis. |
 | TEAM-01 | pendente | Preparação de texto editável e autoridade individual existem. | Não existe prova de envelope/entrega durável e delegação comum operacional. | Discovery/mensagens diretas com origem nativa, IDs/causa/ACK/prazo e dados autorizados. |
 | TEAM-02 | pendente | Leases/orçamento individuais são base, não mesh paralela pronta. | Reserva de orçamento pai/filho, ramos/ciclos/conflitos e ausência de coordenador não aceites. | Ramos independentes, backpressure/cancelamento, saldo repartido e nenhum privilégio herdado. |
 | SYS-01 | pendente + bases parciais | Controlos/executores e política nativa de janela existem; não são matriz por pet. | Matriz pet×subplugin×operação×recurso ainda por ligar a executores/pets. | Sistema principal sem grant global; Som Spotify/Ollama com revogação isolada. |
@@ -275,15 +483,15 @@ A branch documental publicada avançou do commit consultado `eeee1b5` para `0abb
 | OBS-01 | parcial integrado | Censo separa clientes/TTY/sessões e estado/cobertura; runtime mantém fases. B3A2: prova negativa de falsozero com grant histórico desligado; histórico2/origemHMAC exata/consumo desconhecido sem autoridade,mesmoStore/Authority/UI.2870Rust21ignorados/1256web/TSC/Vite/build536/native196 sintético,0quota. Trabalho novo mantém resposta1;originais preservados. B3F2A7: novoGoal/Spec13 origem selada só para dados; contexto/admissão/limites próprios,mesmo runtime/driver/Stop/verificação. Histórico concluído é dado,controlo antigo recusado.32dirigidos/2886Rust21ignorados/1262web/build542/native199 UI e HTTP2CLI1/DBus sintéticos,0quota; leitor915 real recusa13 sem destruir. Época13 seguinte é fixture. | Todos os providers/estados externos e instalação não têm cobertura completa. | Fronteiras conjuntas4096/64MiB, migrações/revalidações/adoção local de fontes exatas; lifecycle e aceitação integral/provider antes de TEAM/Guardian e entrega. |
 | OBS-02 | parcial integrado | Captura/métricas e ledgers em percursos declarados, com lacunas. | Cobertura/rotação por conta/thread/provider e reinícios não integralmente aceite. | Não somar snapshots como deltas, não perder antes do ACK nem autenticar por consulta. |
 | DATA-01 | parcial integrado + privado; incremento privado910 | Repositórios privados, CAS, posse e recuperação incremental existentes. F4 recusa memória entregue oculta em formato antigo e qualquer catálogo pet-runtime-* na importação legada; v7 recusado sem escrita. SDK858/F5 acrescenta revisão/confirmação/inspeção CLI de backup completo dos payloads atuais, sob o mesmo dono offline, com proveniência da admissão. Nativo149 prova81ficheiros/adversariais;151 compõe arranque normal, retoma e backup do perfil recém-criado. F6D usa repositório nativo/CAS e migração IndexedDB conhecida para a janela, preserva UTF16/u64/tombstones e retém CID vazio antes de gravar, sem inferência; nativo154 prova migração, conflito, reinício/reset e inclusão no backup. F7A acrescenta produtor inline, slot unbound nativo sem autoridade e cópia explícita conservando origem, controlos comuns, catálogo2 lê1 e leitor antigo recusa2. Nativo158 nos cartões autorizados prova dados de três pets, ponte inline/flutuante, reinício e backup, sem modelos/quota. F8A entrega listagem nativa por dono/revisão, classificação observada, revisão com bytes/destino/prazo/hash e cópia explícita preservando original, sem mensagens/grants. Nativo160 prova controlos inline/flutuante, recusa de replay/conflito/troca de dono, reinício/leitor anterior e backup. F8B2: revisão de ambas as origens/política/revisões/prazo/hash, original completo imutável antes do catálogo3/CAS/recibo; apenas destinos ausentes podem ser juntos. Origens pendentes recuperáveis, reconhecimento transacional/lostACK sem replay, arquivos na UI/backup e leitor2 recusa3. Nativo162 real/scriptado;2700Rust/21ignorados,1255JS/TSC/Vite, produção B1/B2 byte idêntica. F9A: revisão nativa de arquivo/target vazio e retoma, cabeçalhos2/origem/intenção antes dos payloads, subset/prefixo/CAS físico, par/completions/dataRestoredInactive sem .admitted.2713Rust/21ignorados/check/build506;163CLI/IPC real, crash próprio recolhido/retoma, leitores recusam e bytes/originais preservados. Web1255 já validada com fontes idênticas. F9B1C: índice HMAC/protocolo2 sobre o mesmo Authority, negação de decisões/goals históricos, leitura sem permit/owner absence; novo consentimento/claim/budget independente em fixture.2725Rust/21ignorados/12novos/build509 e nativo165 HMAC/CLI/IPC real com0inferência/quota. B2A5: revisão tipada de settings/pets, resolvedor puro comum, diferenças/defaults explícitos e recibo inspectionOnly;2737Rust/21ignorados/12novos/build511/nativo168 real/HMAC sem inferência/quota. B2B1B: referências CID/SID/tarefa antes do codec, guardas comuns de reserva/início/retoma/currentness/publicação, histórico legível e novos contextos em fixtures.2754Rust/21ignorados/17novos/build514;169 é regressão Root1/B1/B2A, sem inferência/quota. B2B2C1: plano nativo/recibo B2A/originais integrais antes de transformar a configuração canónica; Admission2 selada/hash histórico e índice real carregado por Storage antes de Chat.2764Rust/21ignorados/10novos/build518;173 IPC real com HTTP/CLI sintéticos e MPRIS privado: SID novo, objetivo/decisão/Stop/reinício/ACK, IDs antigos recusados.0quota/modelos reais.170 fixture sem workspace e171 erro real de leitura de selo corrigidos;172 chegou ao ACK mas faltou esperar o driver no harness;173 passa, com originais conservados. B2C1A1: backup/inspeção Root2 em formato2 com ambos roots completos, trabalho novo e metadados/originais. Validação comum inicial/HMAC/índices/links sem conceder execução;2770Rust/21ignorados/6novos/build519 e174 nativo com HTTP/CLI sintéticos/MPRIS privado: backup após novo objetivo/Stop/reinício, origem offline, tamper e leitor897/restauro1 recusam2 sem publicar payload. B2C2A4: arquivo2 dos roots completos publicado/revisto/retomado num Header3 inativo, dados antigos byte exatos e admissão2 aninhada como dados. Source1/fence/recibo conservados; restauração de dados e ativação executável projetadas separadamente. Entradas completas reutilizadas também fsync antes da completion.2776Rust/21ignorados/6novos/build519 e177 nativo com copy-worker próprio morto/recolhido e mesmo par retomado, ACK, recibo anterior898 inalterado e recusa de controlo3. B2C3A6: mesma Authority/HMAC/ledger com cadeia limitada autenticada/união de negações, raw grants/consumo desconhecido preservados, revisão nativa Header3/originais completos antes do delta e recuperação de prefixos temporários revistos sem renovar consentimento.2795Rust/21ignorados/19novos/build522/native179 com providers sintéticos e resíduo de staging sintético explicitamente rotulado; A4/178 conservados. B2D1A1: revisão nativa Header3 exige custody C3 completa; recibo2/inspectionOnly liga modelos/endpoints/manifest/ready/histórico e união atual+anterior de CID/SID/tarefa/proveniência limitada. Índice1/recibo1 conservados; Admission2 lê só1.2804Rust/21ignorados/9novos/build522/native180 com hash composto independentemente a partir de bytes reais, providers sintéticos e nenhum efeito adicional. B2D2A4: mesma Activation/Storage com manifest/admission3/job próprio/Scope D1 e mesmos originais C3, History2 antes de Chat e paths2, contexto antigo/atual negado;2811Rust/21ignorados/7novos/build523/native182 com novosSID/objetivo/decisão/Stop/reinício/ACK e arquivo externo ausente, providers sintéticos. Grants/consumo antigos conservados. D3A5: backup3/arquivo2 completo e novo Header3/depth3/C3/D1/D2 com quartoSID e objetivo/decisão próprios, histórico/grants/consumo intactos e reinício/ACK/source offline.2822Rust/21ignorados/11novos/build525/native184 privados. Cópia C3 usa revisões imutáveis+Claim por entrada e hashes integrais antes dos efeitos;183 timeout e A3/A4 erros de expectativa das fixtures conservados. D4A5: preparação nativa para ausência real original, mesmo HMAC/negação, intenção antes de RNG e geração única; sem grants/payload/ativação.2830Rust/21ignorados/8novos/build528/native185,0modelos/quota; A3 prova negativa de regeneração corrigida e conservada. D4B5: mesma chave preparada admitida via manifest/admission4/Header2 e recibo3 separado; adição tipada/prefixos exatos, mesmos originais/ledger/negações, Blobs locais após opened, novosgoals não reclassificados.2837Rust/21ignorados/7novos/build530/native188 com CLI/HTTP sintéticos e0quota/modelos reais,novoSID/objetivo/decisão/Stop/reinício/ACK/backup4; nova épocaAdmission4 emfixtures. D4C2: preflight comum só de leitura antes de metadata e reserva/inferência, sem reparar namespace nem consumir orçamento na recusa. Falha após dispatch conserva reconciliação sem replay.18dirigidos/2841Rust21ignorados/build531/native191 com providers sintéticos; recusa funcional/ledger intacto/reinício/backup. D4D1a: parser estrito comum/keyInvalid/manualRequired e recusa de apply antes de escrever, sem regenerar.11dirigidos/2844Rust21ignorados/build531/native192,0modelos/quota/CLIagents; controlo negativo leitorC2,8chaves inválidas,retoma válida e ready/missing recusados. D4D2A2: CLI nativo retém preparação opaca/cadeia8 com intent antes de rename NOREPLACE, mesmo inode/bytes, fresh review/ready/ACK; sem nova chave/grants, pending normal-reader/P1 bloqueados.11dirigidos/2855Rust21ignorados/build534/native193,0modelos/quota/CLIagents/efeitos. Porta conteúdo emfixture;adoçãooperacionalpendente. D4D2B1: Intent2/generation2 sob OUTRA aprovação/Custody2 Binding1/receipt4 por head preserva1/3/4; Activation/Bound/runtime/backup2 comuns,opened ACK offline/época seguinte fixture.7dirigidos/2864Rust21ignorados/build535/native195 com2HTTP+1CLI sintéticos/0quota. Raiz834 e instalação30 preservadas. B3A2: prova negativa de falsozero com grant histórico desligado; histórico2/origemHMAC exata/consumo desconhecido sem autoridade,mesmoStore/Authority/UI.2870Rust21ignorados/1256web/TSC/Vite/build536/native196 sintético,0quota. Trabalho novo mantém resposta1;originais preservados. B3F2A7: novoGoal/Spec13 origem selada só para dados; contexto/admissão/limites próprios,mesmo runtime/driver/Stop/verificação. Histórico concluído é dado,controlo antigo recusado.32dirigidos/2886Rust21ignorados/1262web/build542/native199 UI e HTTP2CLI1/DBus sintéticos,0quota; leitor915 real recusa13 sem destruir. Época13 seguinte é fixture. B4A1:3dirigidos no RetentionReview real comprovam4096/4097 entradas e64MiB/+1 conjuntos entre originais,8MiB/+1 por ficheiro,bytes/inodes preservados e sem autoridade nova. Só testes mudaram; produção/web iguaisA7 e respetiva prova2886/native199 não repetida. F10A4: prova negativa200 antes da correção; admissão antes da gravação/publicação no escritor comum,0600 exclusivo,temporário estranho conservado,erro final de registo explícito e controlo com readback sem retry.81dirigidos/2892Rust21ignorados/1266web/build542/native201,2HTTP1CLI sintéticos/0quota;UI recusa/memória/bytes/eventos/gravação/restart/backup. Voice/mobile/autostart continuam bloqueados,sem conceder revalidação. F10B1A1: intenção apenas enabled/Settings nativa, snapshots gerais preservam campo, gate impede sobreposição sem segurar mutexglobal no executor. No-op conserva erro anterior sem replay; recibo distingue confirmação de dados e executor.6dirigidos/2898Rust21ignorados/1268web/build544/native202;duasjanelas reais,registo criado/removido sóHOMEprivado,2HTTP1CLI sintéticos/0quota. F10B2A3: campos do telefone, nomes porvoz e indicadores dehooks só entram no Settings/evento após persistência; erros propagados sem falso rollback. Erro telefone para ligação;Stop chat antes da escrita. Reutiliza transação comum, sem novo formato/autoridade.931/547,2905Rust21ignorados/native203; web1268/TSC/Vite reutilizados sem alteração.9comandos nativos sobfalha,0quota/modelos reais. F10B2B1/Linux934: leitores normal/estrito capturam revisão nativa não serializada;writer comum verifica pai/alvo/alias/inode/stamp antes de substituir. Snapshot de janela não renova a origem.12novos/124selecionados1ignorado/2917full21ignorados/check/build550/native204; edição externa recusada antesdeguardar/autostart,reinício privado ebackup.0quota/modelos reais;web1268reutilizado. | NoAuthority normal operacional privado comprovado; geração incerta/seed inválido/pre-manifest/staging anónimo ainda conservados/recusados até reconciliação explícita. Migrações/revalidações voz/mobile/autostart/B3-aceitação-integral/adoção e aceitação integral continuam abertas. F10A não implementa revalidação: faltam intenção por campo/CAS e confirmação após publicação/fsync diretório antes de a conceder. Consumidores não fecham escritor: CAS/fsyncdiretório/resultado incerto tipado/reconciliação/reinício pendentes. Listener ainda antes da gravação e chaves com efeitos próprios; não revalidados/entregues. Isto é verificação otimista para writers cooperantes, não CAS atómico/sandbox deoutros processos do mesmoUID. Incerteza pós-publicação tem classe/recusa de nova escrita,mas barreira global deefeitos/reconciliação durável/reinício/fsyncdiretório eparidade Mac/Windows ainda pendentes. | F10B2C: cercar todos novos efeitos com estado de IO do Shared atual, sem invalidar turnos capturados por simples mudança legítima de outro campo;barreira durável/reconciliação sem replay/fsyncdiretório e intenção do listener/chaves;depois revalidação/adoção/aceitação integral. |
-| DATA-02 | pendente opcional | PostgreSQL não integrado; decisão exige benefício, sem acesso a outras bases. | Não há medição que justifique adoção ou migração. | Medir antes de decidir; se adotado, base/role próprios e migração/restauro/rollback provados. |
+| DATA-02 | opcional, não adotado | Persistência existente preservada; nenhum backend PostgreSQL demonstrado. | Sem necessidade/benefício medidos; atalhos/Settings não provam este ID. | Só avaliar adoção se justificada, mantendo os critérios originais de migração/recuperação. |
 | REL-01 | parcial integrado + privado; incremento privado910 | Checkpoints, pré-imagens e migrações limitadas; protocolo de preservação documentado. F4 recusa memória entregue oculta em formato antigo e qualquer catálogo pet-runtime-* na importação legada; v7 recusado sem escrita. SDK858/F5 acrescenta revisão/confirmação/inspeção CLI de backup completo dos payloads atuais, sob o mesmo dono offline, com proveniência da admissão. Nativo149 prova81ficheiros/adversariais;151 compõe arranque normal, retoma e backup do perfil recém-criado. F6D usa repositório nativo/CAS e migração IndexedDB conhecida para a janela, preserva UTF16/u64/tombstones e retém CID vazio antes de gravar, sem inferência; nativo154 prova migração, conflito, reinício/reset e inclusão no backup. F7A acrescenta produtor inline, slot unbound nativo sem autoridade e cópia explícita conservando origem, controlos comuns, catálogo2 lê1 e leitor antigo recusa2. Nativo158 nos cartões autorizados prova dados de três pets, ponte inline/flutuante, reinício e backup, sem modelos/quota. F8A entrega listagem nativa por dono/revisão, classificação observada, revisão com bytes/destino/prazo/hash e cópia explícita preservando original, sem mensagens/grants. Nativo160 prova controlos inline/flutuante, recusa de replay/conflito/troca de dono, reinício/leitor anterior e backup. F8B2: revisão de ambas as origens/política/revisões/prazo/hash, original completo imutável antes do catálogo3/CAS/recibo; apenas destinos ausentes podem ser juntos. Origens pendentes recuperáveis, reconhecimento transacional/lostACK sem replay, arquivos na UI/backup e leitor2 recusa3. Nativo162 real/scriptado;2700Rust/21ignorados,1255JS/TSC/Vite, produção B1/B2 byte idêntica. F9A: revisão nativa de arquivo/target vazio e retoma, cabeçalhos2/origem/intenção antes dos payloads, subset/prefixo/CAS físico, par/completions/dataRestoredInactive sem .admitted.2713Rust/21ignorados/check/build506;163CLI/IPC real, crash próprio recolhido/retoma, leitores recusam e bytes/originais preservados. Web1255 já validada com fontes idênticas. F9B1C: índice HMAC/protocolo2 sobre o mesmo Authority, negação de decisões/goals históricos, leitura sem permit/owner absence; novo consentimento/claim/budget independente em fixture.2725Rust/21ignorados/12novos/build509 e nativo165 HMAC/CLI/IPC real com0inferência/quota. B2A5: revisão tipada de settings/pets, resolvedor puro comum, diferenças/defaults explícitos e recibo inspectionOnly;2737Rust/21ignorados/12novos/build511/nativo168 real/HMAC sem inferência/quota. B2B1B: referências CID/SID/tarefa antes do codec, guardas comuns de reserva/início/retoma/currentness/publicação, histórico legível e novos contextos em fixtures.2754Rust/21ignorados/17novos/build514;169 é regressão Root1/B1/B2A, sem inferência/quota. B2B2C1: plano nativo/recibo B2A/originais integrais antes de transformar a configuração canónica; Admission2 selada/hash histórico e índice real carregado por Storage antes de Chat.2764Rust/21ignorados/10novos/build518;173 IPC real com HTTP/CLI sintéticos e MPRIS privado: SID novo, objetivo/decisão/Stop/reinício/ACK, IDs antigos recusados.0quota/modelos reais.170 fixture sem workspace e171 erro real de leitura de selo corrigidos;172 chegou ao ACK mas faltou esperar o driver no harness;173 passa, com originais conservados. B2C1A1: backup/inspeção Root2 em formato2 com ambos roots completos, trabalho novo e metadados/originais. Validação comum inicial/HMAC/índices/links sem conceder execução;2770Rust/21ignorados/6novos/build519 e174 nativo com HTTP/CLI sintéticos/MPRIS privado: backup após novo objetivo/Stop/reinício, origem offline, tamper e leitor897/restauro1 recusam2 sem publicar payload. B2C2A4: arquivo2 dos roots completos publicado/revisto/retomado num Header3 inativo, dados antigos byte exatos e admissão2 aninhada como dados. Source1/fence/recibo conservados; restauração de dados e ativação executável projetadas separadamente. Entradas completas reutilizadas também fsync antes da completion.2776Rust/21ignorados/6novos/build519 e177 nativo com copy-worker próprio morto/recolhido e mesmo par retomado, ACK, recibo anterior898 inalterado e recusa de controlo3. B2C3A6: mesma Authority/HMAC/ledger com cadeia limitada autenticada/união de negações, raw grants/consumo desconhecido preservados, revisão nativa Header3/originais completos antes do delta e recuperação de prefixos temporários revistos sem renovar consentimento.2795Rust/21ignorados/19novos/build522/native179 com providers sintéticos e resíduo de staging sintético explicitamente rotulado; A4/178 conservados. B2D1A1: revisão nativa Header3 exige custody C3 completa; recibo2/inspectionOnly liga modelos/endpoints/manifest/ready/histórico e união atual+anterior de CID/SID/tarefa/proveniência limitada. Índice1/recibo1 conservados; Admission2 lê só1.2804Rust/21ignorados/9novos/build522/native180 com hash composto independentemente a partir de bytes reais, providers sintéticos e nenhum efeito adicional. B2D2A4: mesma Activation/Storage com manifest/admission3/job próprio/Scope D1 e mesmos originais C3, History2 antes de Chat e paths2, contexto antigo/atual negado;2811Rust/21ignorados/7novos/build523/native182 com novosSID/objetivo/decisão/Stop/reinício/ACK e arquivo externo ausente, providers sintéticos. Grants/consumo antigos conservados. D3A5: backup3/arquivo2 completo e novo Header3/depth3/C3/D1/D2 com quartoSID e objetivo/decisão próprios, histórico/grants/consumo intactos e reinício/ACK/source offline.2822Rust/21ignorados/11novos/build525/native184 privados. Cópia C3 usa revisões imutáveis+Claim por entrada e hashes integrais antes dos efeitos;183 timeout e A3/A4 erros de expectativa das fixtures conservados. D4A5: preparação nativa para ausência real original, mesmo HMAC/negação, intenção antes de RNG e geração única; sem grants/payload/ativação.2830Rust/21ignorados/8novos/build528/native185,0modelos/quota; A3 prova negativa de regeneração corrigida e conservada. D4B5: mesma chave preparada admitida via manifest/admission4/Header2 e recibo3 separado; adição tipada/prefixos exatos, mesmos originais/ledger/negações, Blobs locais após opened, novosgoals não reclassificados.2837Rust/21ignorados/7novos/build530/native188 com CLI/HTTP sintéticos e0quota/modelos reais,novoSID/objetivo/decisão/Stop/reinício/ACK/backup4; nova épocaAdmission4 emfixtures. D4C2: preflight comum só de leitura antes de metadata e reserva/inferência, sem reparar namespace nem consumir orçamento na recusa. Falha após dispatch conserva reconciliação sem replay.18dirigidos/2841Rust21ignorados/build531/native191 com providers sintéticos; recusa funcional/ledger intacto/reinício/backup. D4D1a: parser estrito comum/keyInvalid/manualRequired e recusa de apply antes de escrever, sem regenerar.11dirigidos/2844Rust21ignorados/build531/native192,0modelos/quota/CLIagents; controlo negativo leitorC2,8chaves inválidas,retoma válida e ready/missing recusados. D4D2A2: CLI nativo retém preparação opaca/cadeia8 com intent antes de rename NOREPLACE, mesmo inode/bytes, fresh review/ready/ACK; sem nova chave/grants, pending normal-reader/P1 bloqueados.11dirigidos/2855Rust21ignorados/build534/native193,0modelos/quota/CLIagents/efeitos. Porta conteúdo emfixture;adoçãooperacionalpendente. D4D2B1: Intent2/generation2 sob OUTRA aprovação/Custody2 Binding1/receipt4 por head preserva1/3/4; Activation/Bound/runtime/backup2 comuns,opened ACK offline/época seguinte fixture.7dirigidos/2864Rust21ignorados/build535/native195 com2HTTP+1CLI sintéticos/0quota. Raiz834 e instalação30 preservadas. B3A2: prova negativa de falsozero com grant histórico desligado; histórico2/origemHMAC exata/consumo desconhecido sem autoridade,mesmoStore/Authority/UI.2870Rust21ignorados/1256web/TSC/Vite/build536/native196 sintético,0quota. Trabalho novo mantém resposta1;originais preservados. B3F2A7: novoGoal/Spec13 origem selada só para dados; contexto/admissão/limites próprios,mesmo runtime/driver/Stop/verificação. Histórico concluído é dado,controlo antigo recusado.32dirigidos/2886Rust21ignorados/1262web/build542/native199 UI e HTTP2CLI1/DBus sintéticos,0quota; leitor915 real recusa13 sem destruir. Época13 seguinte é fixture. B4A1:3dirigidos no RetentionReview real comprovam4096/4097 entradas e64MiB/+1 conjuntos entre originais,8MiB/+1 por ficheiro,bytes/inodes preservados e sem autoridade nova. Só testes mudaram; produção/web iguaisA7 e respetiva prova2886/native199 não repetida. F10A4: prova negativa200 antes da correção; admissão antes da gravação/publicação no escritor comum,0600 exclusivo,temporário estranho conservado,erro final de registo explícito e controlo com readback sem retry.81dirigidos/2892Rust21ignorados/1266web/build542/native201,2HTTP1CLI sintéticos/0quota;UI recusa/memória/bytes/eventos/gravação/restart/backup. Voice/mobile/autostart continuam bloqueados,sem conceder revalidação. F10B1A1: intenção apenas enabled/Settings nativa, snapshots gerais preservam campo, gate impede sobreposição sem segurar mutexglobal no executor. No-op conserva erro anterior sem replay; recibo distingue confirmação de dados e executor.6dirigidos/2898Rust21ignorados/1268web/build544/native202;duasjanelas reais,registo criado/removido sóHOMEprivado,2HTTP1CLI sintéticos/0quota. F10B2A3: campos do telefone, nomes porvoz e indicadores dehooks só entram no Settings/evento após persistência; erros propagados sem falso rollback. Erro telefone para ligação;Stop chat antes da escrita. Reutiliza transação comum, sem novo formato/autoridade.931/547,2905Rust21ignorados/native203; web1268/TSC/Vite reutilizados sem alteração.9comandos nativos sobfalha,0quota/modelos reais. F10B2B1/Linux934: leitores normal/estrito capturam revisão nativa não serializada;writer comum verifica pai/alvo/alias/inode/stamp antes de substituir. Snapshot de janela não renova a origem.12novos/124selecionados1ignorado/2917full21ignorados/check/build550/native204; edição externa recusada antesdeguardar/autostart,reinício privado ebackup.0quota/modelos reais;web1268reutilizado. | NoAuthority normal operacional privado comprovado; geração incerta/seed inválido/pre-manifest/staging anónimo ainda conservados/recusados até reconciliação explícita. Migrações/revalidações voz/mobile/autostart/B3-aceitação-integral/adoção e aceitação integral continuam abertas. F10A não implementa revalidação: faltam intenção por campo/CAS e confirmação após publicação/fsync diretório antes de a conceder. Consumidores não fecham escritor: CAS/fsyncdiretório/resultado incerto tipado/reconciliação/reinício pendentes. Listener ainda antes da gravação e chaves com efeitos próprios; não revalidados/entregues. Isto é verificação otimista para writers cooperantes, não CAS atómico/sandbox deoutros processos do mesmoUID. Incerteza pós-publicação tem classe/recusa de nova escrita,mas barreira global deefeitos/reconciliação durável/reinício/fsyncdiretório eparidade Mac/Windows ainda pendentes. | F10B2C: cercar todos novos efeitos com estado de IO do Shared atual, sem invalidar turnos capturados por simples mudança legítima de outro campo;barreira durável/reconciliação sem replay/fsyncdiretório e intenção do listener/chaves;depois revalidação/adoção/aceitação integral. |
 | REL-02 | pendente de entrega | Instalação operacional .30 preservada; builds privadas posteriores não ativadas. | Autostart/login/hotplug/lifecycle/áudio e aceitação integrada da nova composição pendentes. | Entregar somente no âmbito autorizado, provar comportamento real e preservar legados. |
-| GUA-01 | desenhado; pendente de implementação | Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações. | Separar binding lógico/motor/papel e implementar os módulos/cenários deste ID sobre as dependências após R43. | PET-01/04/05, EXE-01/02, OBS-01, SYS-01. Componentes/versões/serviços/processos/exposição/recursos/logs selecionados e estado desejado, com origem/data/cobertura e distinção gerido/observado/externo/privado/dinâmico; percurso determinístico sem LLM e sem varrimento pessoal indiscriminado |
-| GUA-02 | desenhado; pendente de implementação | Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações. | Separar binding lógico/motor/papel e implementar os módulos/cenários deste ID sobre as dependências após R43. | GUA-01, CTX-05, EXE-02/03, DATA-01. Componente/versão, evidência/origem/data, severidade/confiança/estado/recomendação; distinguir confirmação/candidata/suspeita, conferir advisories da distribuição e pacote; não inventar CVE, inferir vulnerabilidade só por upstream ou executar exploração/scans intrusivos |
-| GUA-03 | desenhado; pendente de implementação | Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações. | Separar binding lógico/motor/papel e implementar os módulos/cenários deste ID sobre as dependências após R43. | GUA-01, OBS-01/02, SYS-03. CPU/memória/IO/GPU suportada/arranque/falhas/conflitos, hipótese/métrica/impacto/custos e validação; fixtures de consumo, dock Thunderbolt e VPN/Tailscale/firewall sem mutações reais, tuning genérico, limpeza destrutiva ou desativação de proteções |
-| GUA-04 | desenhado; pendente de implementação | Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações. | Separar binding lógico/motor/papel e implementar os módulos/cenários deste ID sobre as dependências após R43. | GUA-01, EXE-01/02/03, DATA-01, REL-01. Contratos reais de plano/validação/backup/aplicação/recuperação, estado desejado efetivamente gerido e exclusões Coucou/Mochi/projetos preservados; integração de excluído é proposta separada, sem comandos ou fonte de verdade inventados |
-| GUA-05 | desenhado; pendente de implementação | Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações. | Separar binding lógico/motor/papel e implementar os módulos/cenários deste ID sobre as dependências após R43. | GUA-01/04, RUN, EXE, SYS-01, REL-01/02. Finding→proposta/diff→impacto/pré-condições→autorização→execução limitada→verificação→resultado; receitas específicas sob grants explícitos e aprovação exata para sensíveis; sem shell/root geral, autoaprovação ou replay; rollback só suportado/provado, compensação/irreversibilidade explícitas |
-| GUA-06 | desenhado; pendente de implementação | Sem módulo/identidade Guardian operacional. Fábrica/runtime/brokers existentes são bases a reutilizar, não implementação destes findings ou remediações. | Separar binding lógico/motor/papel e implementar os módulos/cenários deste ID sobre as dependências após R43. | GUA-01/05, AUTO, TEAM, OBS. Gatilhos leves/debounce/deduplicação/limites no scheduler, orçamento e notificações comuns; LLM só quando útil; pedidos diretos/coordenador opcional, delegação autorizada sem ampliar acesso, ausência de motor/coordenador e conteúdo hostil sem alertas/efeitos repetidos |
+| GUA-01 | parcial integrado com prova privada no RPM .63 | Inventário de distribuição e kernel pela interface e por objetivo finito no runtime comum. Concessão separada por pet e recurso. | Faltam pacotes, serviços, processos, exposição, recursos adicionais, logs selecionados e a comparação com estado desejado. | PET-01/04/05, EXE-01/02, OBS-01, SYS-01. Componentes/versões/serviços/processos/exposição/recursos/logs selecionados e estado desejado, com origem/data/cobertura e distinção gerido/observado/externo/privado/dinâmico; percurso determinístico sem LLM e sem varrimento pessoal indiscriminado |
+| GUA-02 | desenhado, com findings e advisories pendentes | O contrato distingue confirmação, correspondência candidata e configuração suspeita. O inventário elementar fornece parte da identidade do componente. | Faltam findings estruturados e a consulta ou fixture governada de advisories da distribuição. O inventário disponível não avalia vulnerabilidades. | GUA-01, CTX-05, EXE-02/03, DATA-01. Componente/versão, evidência/origem/data, severidade/confiança/estado/recomendação; distinguir confirmação/candidata/suspeita, conferir advisories da distribuição e pacote; não inventar CVE, inferir vulnerabilidade só por upstream ou executar exploração/scans intrusivos |
+| GUA-03 | parcial integrado com baseline nativo no RPM .63 | Consulta Saúde e medição de CPU e memória pela interface existente. CPU, memória e uptime dependem da concessão Saúde própria. | Faltam IO, GPU suportada, arranque, falhas, conflitos e validação de otimizações. Permanecem os três cenários exigidos no contrato. | GUA-01, OBS-01/02, SYS-03. CPU/memória/IO/GPU suportada/arranque/falhas/conflitos, hipótese/métrica/impacto/custos e validação; fixtures de consumo, dock Thunderbolt e VPN/Tailscale/firewall sem mutações reais, tuning genérico, limpeza destrutiva ou desativação de proteções |
+| GUA-04 | desenhado, com adaptador sysworkspace pendente | O contrato remete para os gestores reais do sysworkspace. As observações do Guardian têm o estado desejado por determinar. | Falta o adaptador que distingue recursos geridos e excluídos e preserva as transações reais de plano, validação, backup, aplicação e recuperação. | GUA-01, EXE-01/02/03, DATA-01, REL-01. Contratos reais de plano/validação/backup/aplicação/recuperação, estado desejado efetivamente gerido e exclusões Coucou/Mochi/projetos preservados; integração de excluído é proposta separada, sem comandos ou fonte de verdade inventados |
+| GUA-05 | desenhado, com percurso de remediação pendente | As concessões e os controlos governados do runtime comum existem. A leitura de Saúde e Inventário utiliza esse caminho. | Falta a sequência de finding, proposta, aprovação, execução limitada, verificação e recuperação. A prova de observação não concede remediação. | GUA-01/04, RUN, EXE, SYS-01, REL-01/02. Finding→proposta/diff→impacto/pré-condições→autorização→execução limitada→verificação→resultado; receitas específicas sob grants explícitos e aprovação exata para sensíveis; sem shell/root geral, autoaprovação ou replay; rollback só suportado/provado, compensação/irreversibilidade explícitas |
+| GUA-06 | execução finita integrada em parte, com proatividade e cooperação pendentes | O Guardian tem identidade própria na fábrica e executa um objetivo finito pelo runtime comum com revisão e sem motor configurado. | Faltam gatilhos, deduplicação e notificações do Guardian, cooperação efetiva com autoridade do destinatário e os cenários de concorrência e recuperação. | GUA-01/05, AUTO, TEAM, OBS. Gatilhos leves/debounce/deduplicação/limites no scheduler, orçamento e notificações comuns; LLM só quando útil; pedidos diretos/coordenador opcional, delegação autorizada sem ampliar acesso, ausência de motor/coordenador e conteúdo hostil sem alertas/efeitos repetidos |
 
 ## Ficheiros, símbolos, dependências e provas por requisito
 
@@ -1048,9 +1256,11 @@ A branch documental publicada avançou do commit consultado `eeee1b5` para `0abb
 
 **Prova disponível e alcance:**
 
-- [PETS-VALIDATION.md](../docs/PETS-VALIDATION.md) — Apenas bases/histórico; não há aceitação integral específica deste requisito.
+- [Prova delimitada atual](../.build/work-followup-decision-20261117/VERIFIED.json) — fontes1333/SOURCE5, UI/consentimento/fila/Driver/pausa/relatório recebido e dois reinícios, sem inferência/replay. Quatro imagens X11 observadas; não instalada nem aceitação integral.
 
-**Limite / pendência:** Acompanhamento periódico autorizado e memória de projeto não concluídos.
+- [Leitura atual](../.build/work-report-readable-20261117/VERIFIED.json) — estado/data/critérios legíveis e metadados recolhidos,23 web/tipos e mesmo percurso nativo na composição atual. Histórico com prova web; sem novo restauro ou entrega instalada.
+
+**Limite / pendência:** Só pausa não terminal exercitada na janela atual. Memória de projeto, acompanhamento periódico autorizado e entrega operacional deste delta não concluídos.
 
 **Aceitação integral:** aberta. Detetar bloqueio/progresso e pedir decisão sem replay, spam ou orçamento renovado.
 
@@ -1298,6 +1508,8 @@ A branch documental publicada avançou do commit consultado `eeee1b5` para `0abb
 **Prova disponível e alcance:**
 
 - [PETS-VALIDATION.md](../docs/PETS-VALIDATION.md) — Relatos/checkpoints por composição; as provas parciais não cobrem todos os critérios deste ID.
+- Na fonte posterior à .63, o executável de desenvolvimento retomou a escuta no mesmo microfone virtual. Recusou outro identificador com o mesmo nome, recebeu o contexto da resposta anterior e conservou Stop e histórico após reinício. [Prova e âmbito](PETS-VALIDATION.md#voz-reconexao-2111).
+- O próprio RPM .63 interrompeu síntese local em reprodução na escuta contínua e numa sessão explícita. O ensaio mediu áudio virtual antes do Stop e silêncio depois da paragem e do reinício. [Prova e âmbito](PETS-VALIDATION.md#voz-tts-stop-2111).
 
 **Limite / pendência:** Microfone/Bluetooth/TTS PT/EN/misto/latência/diálogo humanos pendentes.
 
@@ -1717,9 +1929,11 @@ A branch documental publicada avançou do commit consultado `eeee1b5` para `0abb
 
 **Prova disponível e alcance:**
 
+- [Recibo nativo do RPM .63](../.build/pet-goal-execution-next-r1/guardian-current-20261121/VERIFIED-63.json) — Inventário de três campos, concessões independentes, objetivo finito sem inferência, recusa de repetição, revogação e reinício.
+
 - [COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json](../.build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json) — Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian.
 
-**Limite / pendência:** Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.
+**Limite / pendência:** Faltam pacotes, serviços, processos, exposição, recursos adicionais, logs selecionados e a comparação com estado desejado.
 
 **Aceitação integral:** aberta. PET-01/04/05, EXE-01/02, OBS-01, SYS-01. Componentes/versões/serviços/processos/exposição/recursos/logs selecionados e estado desejado, com origem/data/cobertura e distinção gerido/observado/externo/privado/dinâmico; percurso determinístico sem LLM e sem varrimento pessoal indiscriminado
 
@@ -1737,7 +1951,7 @@ A branch documental publicada avançou do commit consultado `eeee1b5` para `0abb
 
 - [COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json](../.build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json) — Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian.
 
-**Limite / pendência:** Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.
+**Limite / pendência:** Faltam findings estruturados e a consulta ou fixture governada de advisories da distribuição. O inventário disponível não avalia vulnerabilidades.
 
 **Aceitação integral:** aberta. GUA-01, CTX-05, EXE-02/03, DATA-01. Componente/versão, evidência/origem/data, severidade/confiança/estado/recomendação; distinguir confirmação/candidata/suspeita, conferir advisories da distribuição e pacote; não inventar CVE, inferir vulnerabilidade só por upstream ou executar exploração/scans intrusivos
 
@@ -1753,9 +1967,11 @@ A branch documental publicada avançou do commit consultado `eeee1b5` para `0abb
 
 **Prova disponível e alcance:**
 
+- [Recibo nativo do RPM .63](../.build/pet-goal-execution-next-r1/guardian-current-20261121/VERIFIED-63.json) — Medição em duas amostras, com intervalo de pelo menos 1 s, sem inferência. Separação Saúde/Inventário e revogação por recurso verificadas.
+
 - [COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json](../.build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json) — Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian.
 
-**Limite / pendência:** Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.
+**Limite / pendência:** Faltam IO, GPU suportada, arranque, falhas, conflitos e validação de otimizações. Permanecem os três cenários exigidos no contrato.
 
 **Aceitação integral:** aberta. GUA-01, OBS-01/02, SYS-03. CPU/memória/IO/GPU suportada/arranque/falhas/conflitos, hipótese/métrica/impacto/custos e validação; fixtures de consumo, dock Thunderbolt e VPN/Tailscale/firewall sem mutações reais, tuning genérico, limpeza destrutiva ou desativação de proteções
 
@@ -1773,7 +1989,7 @@ A branch documental publicada avançou do commit consultado `eeee1b5` para `0abb
 
 - [COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json](../.build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json) — Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian.
 
-**Limite / pendência:** Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.
+**Limite / pendência:** Falta o adaptador que distingue recursos geridos e excluídos e preserva as transações reais de plano, validação, backup, aplicação e recuperação.
 
 **Aceitação integral:** aberta. GUA-01, EXE-01/02/03, DATA-01, REL-01. Contratos reais de plano/validação/backup/aplicação/recuperação, estado desejado efetivamente gerido e exclusões Coucou/Mochi/projetos preservados; integração de excluído é proposta separada, sem comandos ou fonte de verdade inventados
 
@@ -1791,7 +2007,7 @@ A branch documental publicada avançou do commit consultado `eeee1b5` para `0abb
 
 - [COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json](../.build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json) — Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian.
 
-**Limite / pendência:** Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.
+**Limite / pendência:** Falta a sequência de finding, proposta, aprovação, execução limitada, verificação e recuperação. A prova de observação não concede remediação.
 
 **Aceitação integral:** aberta. GUA-01/04, RUN, EXE, SYS-01, REL-01/02. Finding→proposta/diff→impacto/pré-condições→autorização→execução limitada→verificação→resultado; receitas específicas sob grants explícitos e aprovação exata para sensíveis; sem shell/root geral, autoaprovação ou replay; rollback só suportado/provado, compensação/irreversibilidade explícitas
 
@@ -1807,9 +2023,11 @@ A branch documental publicada avançou do commit consultado `eeee1b5` para `0abb
 
 **Prova disponível e alcance:**
 
+- [Recibo nativo do RPM .63](../.build/pet-goal-execution-next-r1/guardian-current-20261121/VERIFIED-63.json) — Objetivo finito revisto, resultado original, recusa de repetição, independência da escolha de motor e preservação após reinício.
+
 - [COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json](../.build/COUCOU-GUARDIAN-CONTRACT-REGISTRATION-20261025.json) — Contrato, IDs e ausência de ativação; nenhuma prova de execução Guardian.
 
-**Limite / pendência:** Ainda não há operações, UI funcional, fixtures de diagnóstico ou aceitação Guardian; nenhum acesso/mutação do anfitrião foi concedido.
+**Limite / pendência:** Faltam gatilhos, deduplicação e notificações do Guardian, cooperação efetiva com autoridade do destinatário e os cenários de concorrência e recuperação.
 
 **Aceitação integral:** aberta. GUA-01/05, AUTO, TEAM, OBS. Gatilhos leves/debounce/deduplicação/limites no scheduler, orçamento e notificações comuns; LLM só quando útil; pedidos diretos/coordenador opcional, delegação autorizada sem ampliar acesso, ausência de motor/coordenador e conteúdo hostil sem alertas/efeitos repetidos
 
@@ -1825,3 +2043,367 @@ O sysworkspace foi consultado em leitura: AGENTS, contratos de gestão e políti
 
 Os caminhos privados de prova são referências locais e não estão incluídos no dossier remoto. Nenhuma fonte/campo/documento isolado substitui a aceitação de todos os critérios, plataformas e autorizações aplicáveis.
 
+
+
+## Retoma integral e preservação do oficial —12/11/2026, Source25
+
+O proprietário autorizou retomar o objetivo integral, incluindo os49 requisitos,
+e deu prioridade à recuperação do valor útil do Coucou oficial dentro da
+arquitetura atual. A comparação não exige voltar à aplicação antiga nem repor
+pets sem uso. [Matriz objetiva e provas](PETS-UPSTREAM-PARITY-2026-11-11.md).
+
+Source25/private84 corrige uma falha também observada no oficial: o chat local
+perdia o status HTTP e o telefone apresentava503 como falha de ligação. O novo
+percurso conserva status, prioridade sobre números no corpo e mensagem fixa
+sanitizada. Testes dirigidos e UI/TLS/HTTP sintéticos, cancelamento, revogação e
+reinício passaram na privada84 e no RPM normal próprio, com recibos independentes
+e sete POSTs sintéticos por caso. O payload/ELF/fontes/relay do RPM também foram
+verificados num prefixo privado do projeto. Instalada43
+intacta, sem inferência real/paga nem publicação nesta unidade.
+
+A recusa intermitente pré-HTTP observada no fork continua aberta, com causa
+nativa exata não confirmada. Permanecem também a aceitação gráfica/hardware/
+instalada autorizada e os restantes critérios. As provas históricas6/7 e
+Source22 não são aceitação integral de Source25. Nenhum critério é encerrado
+apenas por esta compilação ou pela contagem dos testes.
+
+
+## Preservação do oficial — contenção de leitura, Source29
+
+A distinção Busy/Changed, espera interativa limitada e feedback sanitizado estão
+implementados. Fixtures verificam destino original/envio único após o leitor,
+Stop/troca de destino sem HTTP, exclusão física, retirada e prazo. Privada85 e
+RPM normal29 têm provas próprias do percurso nativo sintético completo do chat
+do telefone; sem novos formatos, autoridade ou retry de inferência. [Recibos e
+limites](PETS-UPSTREAM-PARITY-2026-11-11.md).
+
+A recusa nativa22/82 continua sem causa exata atribuída. A próxima entrega
+prioriza apresentação atual de código/diffs e recuperação útil do oficial.
+Instalada43 preservada e49 critérios globais ativos; esta unidade não certifica
+hardware, aceitação humana, instalada ou toda a composição6/7 atual.
+
+
+## Preservação do oficial — apresentação atual, Source29
+
+O RPM normal29 tem agora prova própria no compositor: cartão/diff Codex legível
+sem sobreposição e conversa Ollama com cinco linhas de código, mesmo CID/
+mensagens após reinício e um único HTTP sintético sem replay. Não se alterou
+produção ou permissões para obter a prova; foram usadas APIs de apresentação
+existentes num perfil privado. [Matriz/recibos](PETS-UPSTREAM-PARITY-2026-11-11.md).
+
+Instalada43 preservada e QA limpo. Clipboard pessoal não tocado; prova de cópia
+anterior conserva o seu âmbito X11. Restam a aceitação técnica6/7 na composição
+relevante, entrega autorizada, hardware e demais critérios. Não se encerram os49
+critérios globais por esta observação nem se atribui causa ao incidente intermitente.
+
+
+### Composição atual —6/7/preservação,12/11
+
+O RPM normal Source29 completou a aceitação técnica nativa integrada6/7 e o
+restauro correspondente, em perfis gerados. Três respostas sintéticas; reserva,
+aprovação, saldo e prazo conservados na recuperação; Stop/reinício sem replay.
+Oito registos assinados/três objetivos67 preservados; leitura histórica nativa
+com execução recusada e12 payloads iguais. Recibo `RULE67-SOURCE29-VERIFIED.json`.
+Sem aceitação humana/instalada/global49. Prosseguir decisões/resumo semanal e
+restantes componentes úteis; o incidente pré-HTTP continua separado e aberto.
+
+
+### Preservação do original — decisões e resumo atuais
+
+O normal Source29 tem agora observação própria de cartões de decisão/pergunta
+e resumo/partilha completos no Hyprland, com socket/PNG/privacidade/reinício
+verificados em perfis gerados. Não altera produção nem promove as provas antigas
+à composição atual. `COMPOSITOR-DECISIONS-RECAP-SOURCE29-VERIFIED.json`.
+A entrega instalada está preparada e aguarda âmbito explícito; os49 critérios,
+providers, hardware e falha intermitente conservam as suas pendências.
+
+
+### Recuperação útil do original — cartões de serviço Source30
+
+O resumo genérico ocultava os cartões originais. Regressão n8n confirmada entre
+oficial0.5.0 e normal29, corrigida por reutilização de seis widgets existentes.
+Normal30 passou cofre/HTTP nativo sintético, controlos, reinício e remoção de
+credenciais; cinco projeções nativas de fixtures passaram. Aceitação gráfica
+parcial/X11, APIs remotas e instalada ainda não aceites.
+`SERVICE-CARDS-SOURCE30-VERIFIED.json`. Instalada43 intacta;49 critérios ativos.
+
+
+### Recuperação do original — servidor compatível por pet, Source33
+
+Regressão30 confirmada com oficial0.5.0 e corrigida no binding/transporte comuns.
+Normal atual passou UI/HTTP sintético/reinício/retirada de chave sem fallback,
+contas/identidades/permissões mantidas e preservação CLI/recusa da ativação
+antiga. Cartões de serviço também passaram novamente; gráfico parcial.
+`CUSTOM-SOURCE33-VERIFIED.json`, incluindo falhas e compilação32/alinhamento só
+documental33. Sem instalar, consumir quota real ou promover provas antigas.
+Os49 critérios mantêm-se integralmente ativos e com as pendências próprias.
+
+
+### Atualização técnica6/7/preservação —12/11, Source33
+
+`RULE67-SOURCE33-VERIFIED.json`: revisão nativa, três respostas sintéticas,
+interrupção/recuperação e revogação/reinício sem replay. Busy final inicial
+conservado como falha; continuação no perfil original, zero IO adicional.
+Treze recibos CLI, oito registos assinados/três objetivos67/formatos1/6/6/7/7;
+restauro histórico nativo, execução recusada e12 payloads originais iguais.
+Instalada43 intacta. Escopo técnico de QA completo, sem aceitação humana,
+instalada, hardware ou encerramento dos49 critérios. Próximo: componentes úteis
+pendentes e âmbito de entrega atual, sem promover provas de composições antigas.
+
+
+### Atualização serviços — compositor Source33,12/11
+
+`COMPOSITOR-SERVICES33-VERIFIED.json`:12 etapas nativas reais observadas,
+n8n com22 GET locais/Refresh/detalhes/Back/reinício/retirada de chave e cinco
+serviços projetados por eventos sintéticos. Sem mutação/inferência, contas
+remotas, aceitação humana/instalada/global49 ou delta de produção.
+Instalada43 e políticas intactas; QA fechado. A recuperação funcional dos
+widgets originais tem agora apresentação atual própria; limites de qualidade,
+hardware, providers reais, recursos e entrega continuam explícitos.
+
+
+### Vistas de diffs atuais —12/11, Source33
+
+Seis Write/MultiEdit comparados nativamente por relay/socket/UI com o oficial;
+linhas/contagens iguais, centro/seleção própria e Codex MultiEdit no compositor
+passados. Resultado final original e imagem X11 recortada preservados.
+`HOOK-FORMATS-SOURCE33-VERIFIED.json`: zero ferramentas/modelos executados,
+instalada43 intacta, sem aceitação de IDEs reais, persistência após reinício,
+humana, instalada ou global49. Auditoria das operações originais de voz segue.
+
+
+### Voz atual: leitura e recusa —12/11, Source33
+
+`VOICE-OPERATIONS-SOURCE33-VERIFIED.json`: áudio virtual/Whisper real, duas
+rondas sintéticas por turno, broker retornado ou recusado por permissão, Edge
+virtual/Stop/reinício. Seis rondas totais; falha inicial áudio zero conservada,
+continuação no perfil original com dois enunciados mantidos e ACK nativo de
+áudio. Sem efeito de anfitrião, quotas reais, hardware ou instalada. Só estas
+duas operações/caminhos têm esta prova; catálogo cinco não prova cinco efeitos
+ou autoridade granular. Outros critérios VOICE-01/02 e49 mantêm-se abertos.
+
+
+### Correção de isolamento e aceitação de voz vigente — Source33
+
+`VOICE-EFFECTS-SOURCE33-VERIFIED.json`: cinco nomes originais em variantes
+controladas e recusa por permissão, seis perfis frescos,12 atestados de ambiente,
+ASR/TTS reais/áudio virtual,12 rondas sintéticas, persistência/Stop/reinício sem
+replay. HOME herdado dos runners anteriores qualificado explicitamente; não
+reutilizar a antiga prova de operações33 como isolamento completo.
+Janela GTK de QA/mailto capturado/Play num leitor privado, nenhum efeito pessoal.
+Fonte/instalada43 preservadas. Mutações de roster, recursos granulares, contas,
+voz física e aceitação instalada/global49 continuam abertas.
+
+
+### Recuperação de roster por voz —13/11, Source35
+
+`VOICE-ROSTER-SOURCE35-VERIFIED.json`: nova candidata normal; entrada no menu,
+ASR/áudio virtual, proposta sintética/CAS/recibo/resposta/TTS/Stop/reinício, mesmo
+CID e restantes escolhas preservadas; recusa por permissão em separado.
+Sem replay, modelos reais/pagos, hardware, instalação ou aceitação humana/global49.
+Apenas o commit próprio confirmado avança a testemunha e só se o pet continuar
+ativo. Falhas anteriores conservadas e fixture de dono custom corrigida sem
+bypass de autorização. Próximo gate na mesma35:6/7/preservação e proposta de
+entrega instalada. As provas33 conservam a sua composição.
+
+
+### Revisão/preservação6/7 na candidata35 —13/11
+
+`RULE67-SOURCE35-VERIFIED.json`: o cenário nativo atual passou na primeira
+execução, com revisão/sucessão6, carry do saldo original, renovação explícita
+de uma alocação finita, três respostas HTTP sintéticas, Hub fechado, interrupção
+real do backend/recuperação da sondagem com decisão/saldo/prazo originais,
+revogação e reinício sem replay. Não foram criadas novas concessões para
+contornar falhas. A contenção antiga33 conserva a qualificação própria.
+
+Treze comandos CLI atuais de revisão/backup/inspeção/restauro/quarentena/ativação
+preservaram8 registos assinados,3 Goal67, formatos1/6/6/7/7 e12 payloads originais
+exatos. A janela nativa restaurada mostrou a resposta histórica e recusou
+execução: zero HTTP/novo objetivo/renovação de autoridade. Capturas atuais foram
+inspecionadas; painéis e limites legíveis, parte inferior do formulário fora
+do viewport, sem certificação de toda a apresentação. HOME/XDG/D-Bus privados
+atestados nos processos; QA encerrado e instalada43 intacta.
+
+É aceitação técnica de perfis gerados; escolhas de QA não são consentimento
+humano. Não fecha instalada, hardware, contas/efeitos reais nem49 critérios.
+A fonte35/pacote mantêm-se congelados, sem nova compilação ou código nesta
+unidade. Próximo: conclusão natural da fala e proposta concreta instalada35;
+não repetir o percurso6/7/preservação sem novo delta/defeito que o justifique.
+
+
+### Frase falada completa e reabertura sem replay — Source35,13/11
+
+`VOICE-NATURAL-SOURCE35-VERIFIED.json`: a gravação privada contém a frase
+completa “Resposta sintética de voz confirmada.”, reconhecida independentemente
+com os mesmos pesos Whisper locais, sem prompt, vocabulário ou língua forçados.
+O grafo conservado mostra que o Node de reprodução GStreamer terminou e surgiu
+um novo microfone antes de Stop/terminação pela QA. A reabertura só de leitura
+do mesmo perfil manteve o CID anterior ao turno, duas mensagens, settings e
+configuração inteira dos pets; zero nova ação/modelo. Sem terceiro pedido de voz.
+
+Os dois ensaios globais originais permanecem falhados. O primeiro observador
+comparava coucou com o nome real Coucou. O segundo comparava só o número41;
+o Node41/serial203 já terminara e um Link41/serial257 reutilizara o ID. O teste
+já ultrapassara a espera do estado listening antes dessa falha; não foi guardada
+uma captura DOM após a fala. A aceitação técnica deriva dos grafos/áudio
+conservados e da continuação nativa de leitura, não de reescrever RESULT como
+sucesso. O observador futuro usa tipo/id/serial e o dono gst-launch-1.0; só
+preflight, sem repetir a mutação. A captura da resposta visível foi inspecionada.
+
+ASR de entrada/TTS foram reais, áudio exclusivamente virtual, modelo de conversa
+sintético; reconhecimento da gravação em CPU, com o mesmo modelo escolhido,
+sem mudar preferências. Stop explícito depois do fim natural não foi repetido;
+a prova atual separada de interrupção/Stop/reinício conserva o seu âmbito.
+Sem aceitação física, timbre/latência comparados com o oficial, contas reais,
+humana, instalada ou global49. QA encerrado, dados/gravações conservados,
+instalada43 intacta; nenhuma alteração de código/compilação/host/publicação.
+
+[Proposta instalada35](PETS-INSTALLED-DELIVERY-SOURCE35.md): artefacto exato,
+backup específico, quatro fontes/patch da estação e13 payloads verificados
+pelo instalador existente em prefixo só do projeto. Aplicação e exceção de
+registo assinado em sysworkspace aguardam âmbito explícito do proprietário.
+
+<!-- installed35-delivery-20261113 -->
+### Entrega instalada Source35/44 —13/11
+
+Autorização explícita do proprietário recebida para o artefacto35 proposto e
+registos focados assinados Coucou em sysworkspace; fork/push/merge continuam
+suspensos. O primeiro registo `16d53be` passou hooks e assinatura YubiKey antes
+da substituição. Índice de outras sessões preservado. O registo final é tratado
+em separado pelo recibo `installed-source35-delivery/HOST-SIGNED-REGISTRATION.json`.
+
+A43 tinha outro PID após reinício observado, sem causa atribuída ao agente.
+Só o seu Quit nativo revisto foi enviado; terminal externo Codex preservado.
+Backup específico Coucou, com fingerprint observado, verificado pelos leitores43
+e35. Prefixo43 conservado; instalador restrito publicou44, gestor HOME aplicou
+exclusivamente `.local/bin/coucou` e guardou backup transacional. Nenhum serviço
+ou compositor recarregado. Processo1127174/startTicks18236395, dono D-Bus e
+executável87400570… confirmados no perfil normal; sem automação de arranque.
+
+`installed-source35-delivery/INSTALLED44-TECHNICAL.json`:49 ficheiros existentes,
+48 com estado igual, só log alterado, nenhum ausente/novo; modelo grande por
+metadados. Settings/pets JSON integrais iguais, incluindo seleção, modelos,
+destinos, nomes/aliases e permissões; seis caminhos de integração e relay
+preservados. Hub original com histórico/ditado e versão44 e página Pets atual
+observados em capturas privadas da janela real. Só se navegou para Pets;
+nenhum formulário de configuração, grant ou pedido de inferência foi aplicado.
+
+O instalador releu os13 payloads como `already verified`; plano HOME terminou
+com0 alterações. Check estrutural da estação e24 testes Coucou passaram.
+Uma primeira invocação parcial de testes usou o entry point de imports errado;
+o teste DMS não carregou nesse comando. O discovery normal passou, sem mudar
+código ou repetir ensaios nativos. Não houve quota real Copilot/GitHub nem
+inferência de conversa de teste. Provas QA35 de voz/regras/diffs mantêm os seus
+âmbitos; entregar o mesmo binário não é repetir esses percursos no perfil pessoal.
+Áudio físico/Bluetooth, contas reais, fluidez instalada prolongada, aceitação
+humana e restantes49 critérios continuam abertos. Backup e capturas não são
+versionados. Reverter launcher não desfaz migrações de dados.
+<!-- end-installed35-delivery-20261113 -->
+
+## Registos de atualização anteriores — histórico
+
+As notas abaixo conservam estados de composições anteriores; não substituem os campos atuais reconciliados.
+
+**Candidata48 preparada16/11 — ainda não instalada.** O RPM normal atual passou
+n8n sem chat/modelos genéricos, conversa Codex sintética, calendários/reinício/
+automático, revisão/sucessão/renovação,13 comandos nativos de preservação e leitura
+restaurada dos formatos6/7 e10 com execução recusada. Provas e falhas qualificadas
+no recibo; sem quota real no RPM, aceitação humana ou paridade global. Instalada44/
+Source35 e preferências preservadas;49 critérios intactos e abertos. A substituição
+requer autorização própria do artefacto e registo Coucou focado/assinado.
+[Âmbito, artefacto, provas e aplicação proposta](PETS-INSTALLED-DELIVERY-48.md).
+
+**Atualização16/11 — AUTO-03 parcial, caso concreto corrigido.**
+O índice global cronológico do domínio calendário conserva todos os eventos da
+DATA e permite selecionar prioridades posteriores. Na SOURCE1/1332 `66807251…`,
+Tauri/HTTP/resposta/reinício/automático e transição de contrato passaram. Uma chamada
+real/gratuita ao mesmo modelo selecionou9h/10h corretamente;85 palavras, coberturas e
+texto exato reaberto pela UI, sem nova inferência. É aceitação desse caso, não uma
+certificação geral. Há custo adicional de entrada/contexto, discriminado no recibo.
+Histórico restaurado formato10 continua legível e sem execução na composição atual.
+Seguem candidata operacional e paridade pertinente; instalada44/Source35 preservada,
+sem nova instalação/publicação/quota paga.49 critérios intactos e abertos.
+[Contrato, provas e limites](PET-RULES.md).
+
+**Atualização16/11 — AUTO-03 com falha semântica confirmada.**
+A publicação do contexto sob contenção passou fixture e percurso nativo atual,
+com agendamento/painéis fechados e avisos. Uma chamada real/gratuita no modelo
+escolhido recebeu os dados corretos, mas inventou compromissos: a preparação diária
+não está aceite. Investigar/garantir o contexto efetivamente processado pelo
+adaptador antes de nova prova; máximo anunciado não certifica contexto alocado.
+Não altera nenhum dos49 critérios originais nem transforma transporte/build em
+aceitação semântica, humana ou instalada. [Recibos e limites](PET-RULES.md).
+
+**Atualização16/11 — aviso próprio integrado; AUTO-03 continua parcial.**
+Consentimento separado, janela revista, tentativa durável única no Authority,
+recusa/silêncio/timeout/revogação e preservação formato9 têm provas delimitadas
+no executável atual de desenvolvimento. Os âmbitos concluídos de uma fixture
+falhada foram qualificados sem reclassificar o seu resultado global. Outra
+captura automática parou após persistir contexto e antes de ligar o objetivo;
+causa ainda por estabelecer. Sem banner real, aceitação humana/instalada ou
+semântica comprovada num modelo com dados novos. Não fecha nenhum dos49 critérios
+integrais. [Contrato e recibos](PET-RULES.md). As entradas anteriores conservam
+os respetivos âmbitos históricos.
+
+**Revisão parcial16/11 — CTX-04/AUTO-03 continuam abertos.** A composição atual
+de desenvolvimento passou resposta finita com dados próprios, corpo/hash e uma
+tentativa por ocorrência, leitura do diálogo/reinício e horário automático com
+painéis fechados. Passou também revogação durante HTTP sem resultado tardio e
+13 comandos de preservação/recusa do leitor anterior. Tudo sintético, sem quota
+real ou instalação. Faltam notificação deduplicada, semântica de modelo com dados
+novos, ciclo das regras com dados futuros, janela restaurada e entrega operacional.
+Os49 critérios originais permanecem inalterados. [Contrato](PET-RULES.md); recibo
+privado `.build/rule-calendar-inference-20261116/VERIFIED-INFERENCE.json`.
+
+**Revisão parcial16/11 — CTX-04/AUTO-03 continuam abertos.** Captura própria
+por ocorrência integrada com Authority, leitor e contexto comuns, verificada na
+aplicação de desenvolvimento atual: três fontes sintéticas, cobertura parcial e
+indisponível, Busy sem reserva, reinício/preservação e revogação. Zero chamadas de
+modelo. Falta a ligação ao corpo real/autoridade filha, resposta e notificação,
+preservação/backup/leitor anterior e entrega da composição final. Não se alterou
+nenhum dos49 critérios originais. [Contrato](PET-RULES.md); recibo privado
+`.build/rule-calendar-materialization-20261116/VERIFIED-CAPTURE.json`.
+
+<!-- domain-header42-20261113 -->
+**Fonte42/normal47 em preparação; instalada35/44 preservada.** A revisão do
+cabeçalho encontrou “Sessões deste pet” nos serviços, apesar de a fábrica já
+retirar esse controlo. A negativa usou o cabeçalho real e falhou nessa asserção;
+o controlo LLM passou. A42 faz o componente existente respeitar
+`presentation.sessions`, com um ficheiro de produto e o seu teste alterados.
+102 testes frontend e TypeScript passam; os64 testes Rust da40 são reutilizados
+porque todos os fontes Rust/fábrica/defaults são iguais. Sem novo formato,
+permissão, modelo, provider, conta ou migração. Conversas antigas preservadas.
+
+O RPM47/41 compilado fica arquivado, sem proposta/instalação: não contém a
+correção do cabeçalho. O build47/42 está em curso; ainda não é aceitação nativa
+deste pacote. Os recibos40 mantêm o seu âmbito privado anterior. Próximo:
+validar o executável final e a apresentação usando controlos nativos existentes,
+depois preparar revisão própria de entrega. Sem commits do fork/push/merge.
+<!-- end-domain-header42-20261113 -->
+
+<!-- factory-domain40-20261113 -->
+**Validação privada40 concluída:**98 testes frontend e64 testes Rust dirigidos
+passaram; o binário88 foi compilado com1323 inputs exatos. No próprio nativo,
+n8n recusou abrir chat/listar modelos/enviar mensagem, conservou o workflow na
+UI funcional e no TLS, erro/retirada/reinício e todo o registo de conversa antiga
+semeado a partir de QA. Um turno sintético ocorreu apenas no pet LLM Codex;
+resposta/mesmo CID/reinício sem replay passaram. Duas atestações de isolamento;
+processos/containers privados encerrados. Instalada35/44, settings/pets/launcher
+e relay verificados iguais. FACTORY-DOMAIN40-VERIFIED.json fixa os recibos.
+
+Limites: a imagem do serviço está escura; o gate DOM capturou workflow e chat/
+diagnóstico ocultos, sem aceitação gráfica legível. A imagem Codex foi observada
+antes do turno. Não se repetiram nativamente todos os serviços/Spotify, outras
+provas conservam fonte/âmbito. Sem conta/quota real, inferência paga, Android
+físico, aceitação humana/instalada ou integral49. Não há novo pacote normal com40.
+Segue preparar artefacto normal/revisão de entrega própria e continuar a auditoria
+de adequação por domínio. Normal45/46 preservadas;46/39 foi ultrapassada pela
+regra do proprietário e não será instalada como se incluísse40.
+Todos os49 requisitos e critérios originais permanecem abertos conforme a sua evidência; esta unidade não os certifica globalmente.
+<!-- end-factory-domain40-20261113 -->
+
+
+### AUTO04: repetição de notas fixadas, sem encerrar o requisito17/11
+
+Duas ocorrências/sucessão6/revisão7/revogação/fecho/reinício passaram no binário privado atual. A rotina reutiliza notas exatas; falta observação automática de objetivos/resultados e pedido de decisão aplicável ao domínio. Os49 textos originais e dependências de aceitação foram comparados ao baseline e mantêm-se exatos. Sem entrega instalada ou aceitação humana.
+[Fontes, provas e limitações](PETS-PROJECT-RULE-2026-11-17.md).

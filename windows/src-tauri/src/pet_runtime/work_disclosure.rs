@@ -6,7 +6,7 @@ use serde::{Serialize,Deserialize};
 pub struct Arguments{pub to_pet_id:String,pub subject_goal_id:String,pub subject_spec_hash:String,pub source:ReceivedReference,pub expires_at:u64,pub include_attempts:bool,pub states:Vec<State>}
 impl Arguments{
  pub(crate)fn parse(v:&serde_json::Value)->Result<Self,()>{let a:Self=serde_json::from_value(v.clone()).map_err(|_|())?;if !a.valid(){return Err(());}Ok(a)}
- fn valid(&self)->bool{crate::pet_config::blueprint(&self.to_pet_id).is_some()&&model::goal_id(&self.subject_goal_id)&&super::authority::decode(&self.subject_spec_hash).is_some()&&self.source.valid()&&self.expires_at>0&&self.expires_at<=8_640_000_000_000_000&&!self.states.is_empty()&&self.states.len()<=12&&self.states.iter().enumerate().all(|(i,s)|!matches!(s,State::Historical|State::Unavailable)&&!self.states[..i].contains(s))}
+ pub(super)fn valid(&self)->bool{crate::pet_config::blueprint(&self.to_pet_id).is_some()&&model::goal_id(&self.subject_goal_id)&&super::authority::decode(&self.subject_spec_hash).is_some()&&self.source.valid()&&self.expires_at>0&&self.expires_at<=8_640_000_000_000_000&&!self.states.is_empty()&&self.states.len()<=12&&self.states.iter().enumerate().all(|(i,s)|!matches!(s,State::Historical|State::Unavailable)&&!self.states[..i].contains(s))}
  pub(super)fn matches(&self,e:&Envelope)->bool{e.work_report.as_ref().is_some_and(|r|r.valid()&&r.subject_goal_id==self.subject_goal_id&&r.subject_pet_id==e.origin.pet_id&&self.states.contains(&r.state)&&r.observed_at<=e.created_at&&(self.include_attempts||r.attempts.is_none()))}
  #[cfg(target_os="linux")]
  pub(super)fn capture(&self,goals:&std::path::Path,authority:&std::path::Path,pet:&str,now:u64)->model::Result<work_report::Captured>{

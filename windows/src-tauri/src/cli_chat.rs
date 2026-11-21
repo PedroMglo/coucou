@@ -78,10 +78,10 @@ mod help_presentation_tests {
     fn live()->Instant{Instant::now()+Duration::from_secs(60)}
 
     #[test]fn help_reads_exact_logical_owner_without_answering_or_consuming_request(){
-        let(chat,id,target,_cancel,rx,requests)=fixture("integration_notion","integration_notion",Origin::Mochi,live());
+        let(chat,id,target,_cancel,rx,requests)=fixture(crate::pet_config::pet_id("gemini-cli").unwrap(),"gemini-cli",Origin::Mochi,live());
         assert_eq!(with_pending_help_in(&chat,&requests,&id,&target,||"shown").unwrap(),Some("shown"));
         assert!(matches!(rx.try_recv(),Err(mpsc::TryRecvError::Empty)));
-        let mut backend=target.clone();backend.provider="codex".into();
+        let mut backend=target.clone();backend.provider="antigravity".into();
         let mut another_pet=target.clone();another_pet.pet_id="agent_codex".into();
         let mut another_cid=target.clone();another_cid.session_id="another-CID".into();
         let mut another_binding=target.clone();another_binding.conversation_id=Some("another-CID".into());
@@ -251,6 +251,7 @@ pub fn voice_settings(source: &crate::settings::Settings, provider: &str) -> cra
 pub fn backend(provider:&str)->Option<&'static str> {
     match provider {
         value if crate::pet_config::service(value)=>crate::pet_config::blueprint(value)
+            .filter(|b|b.features.inference)
             .and_then(|b|b.runtime.assistant_adapter.or(b.runtime.adapter))
             .filter(|a|matches!(a,crate::pet_config::Adapter::Codex|crate::pet_config::Adapter::Copilot|crate::pet_config::Adapter::Antigravity)).map(|a|a.key()),
         "codex"=>Some("codex"),"copilot"=>Some("copilot"),"antigravity"|"gemini-cli"|"claude-cli"=>Some("antigravity"),_=>None
@@ -273,7 +274,7 @@ pub fn model_matches(provider:&str,model:&str)->bool {
 }
 #[cfg(test)]#[path="cli_continuation_tests.rs"]mod continuation_tests;
 pub async fn resolve_model(settings:&Settings,provider:&str,selected:&str)->Result<String,String> {
-    crate::pet_config::require_active_provider(provider)?;
+    crate::pet_config::require_inference_provider(provider)?;
     if backend(provider).is_none() {return Err("Este pet não tem uma conta CLI de conversação.".into());}
     if selected.starts_with('@') { return Ok(selected.into()); }
     if !selected.trim().is_empty() {

@@ -12,6 +12,8 @@ pub(crate) mod wire;
 pub(crate) mod helper;
 #[cfg(target_os = "linux")]
 pub(crate) mod goal;
+#[cfg(target_os = "linux")]
+pub(crate) mod brief;
 use serde_json::{json, Value};
 use crate::chat::{Chat, ChatContext, Turn};
 use std::path::Path;

@@ -7,14 +7,14 @@ use crate::settings::Settings;
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
-pub enum Backend{Ollama,Lmstudio}
+pub enum Backend{Ollama,Lmstudio,Custom}
 impl Backend{
- pub fn key(self)->&'static str{match self{Self::Ollama=>"ollama",Self::Lmstudio=>"lmstudio"}}
- pub fn adapter(self)->Adapter{match self{Self::Ollama=>Adapter::Ollama,Self::Lmstudio=>Adapter::Lmstudio}}
+ pub fn key(self)->&'static str{match self{Self::Ollama=>"ollama",Self::Lmstudio=>"lmstudio",Self::Custom=>"custom"}}
+ pub fn adapter(self)->Adapter{match self{Self::Ollama=>Adapter::Ollama,Self::Lmstudio=>Adapter::Lmstudio,Self::Custom=>Adapter::Custom}}
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
-pub enum CredentialReference{None,ConfiguredLmstudioEndpoint}
+pub enum CredentialReference{None,ConfiguredLmstudioEndpoint,ConfiguredCustomEndpoint}
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Choice{
@@ -32,9 +32,11 @@ impl Choice{
   if self.schema_version!=1||blueprint.retired||blueprint.runtime.kind!=RuntimeKind::Llm
    ||!blueprint.runtime.inference_adapters.contains(&self.backend.adapter())||!model_key(&self.model)
    ||self.backend==Backend::Ollama&&(self.model.ends_with(":cloud")||self.model.ends_with("-cloud")||self.credential!=CredentialReference::None)
+   ||!matches!((self.backend,self.credential),(_,CredentialReference::None)|(Backend::Lmstudio,CredentialReference::ConfiguredLmstudioEndpoint)|(Backend::Custom,CredentialReference::ConfiguredCustomEndpoint))
    ||self.endpoint.is_empty()||self.endpoint.len()>4096||self.endpoint.trim()!=self.endpoint{return Err(invalid());}
   let url=reqwest::Url::parse(&self.endpoint).map_err(|_|invalid())?;
-  if !matches!(url.scheme(),"http"|"https")||!crate::net::is_loopback_url(&url)||!url.username().is_empty()||url.password().is_some()||url.query().is_some()||url.fragment().is_some()||url.port()==Some(0)
+  if !matches!(url.scheme(),"http"|"https")||self.backend!=Backend::Custom&&!crate::net::is_loopback_url(&url)||!url.username().is_empty()||url.password().is_some()||url.query().is_some()||url.fragment().is_some()||url.port()==Some(0)
+   ||self.backend==Backend::Custom&&self.credential!=CredentialReference::None&&url.scheme()!="https"&&!crate::net::is_loopback_url(&url)
    ||url.as_str().trim_end_matches('/')!=self.endpoint.trim_end_matches('/'){return Err(invalid());}
   Ok(())
  }
@@ -85,6 +87,8 @@ pub(crate)fn resource_for(config:&Configuration,settings:&Settings,provider:&str
 /// Immutable native reservation metadata, not an authority/grant or protocol
 /// capability. Secret values are resolved only by the active transport.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub(crate)enum CaptureObservation{Current,Busy,Changed}
+pub(crate)const CAPTURE_BUSY:&str="A configuração de inferência está temporariamente ocupada. Volta a tentar.";
+pub(crate)const CAPTURE_CHANGED:&str="O destino ou a política de inferência mudou. O pedido original não foi redirecionado.";
 pub(crate)struct Captured{
  pub(crate)provider:String,pub(crate)adapter:&'static str,pub(crate)endpoint:String,
  pub(crate)explicit:Option<Target>,pub(crate)configuration:Arc<Configuration>,
@@ -101,14 +105,14 @@ impl Captured{
  fn resolve(configuration:Arc<Configuration>,settings:&Settings,provider:&str,source:Weak<Mutex<Settings>>)->Result<Self,String>{
   let explicit=Target::for_provider(&configuration,provider)?;
   let(adapter,endpoint,uses_key)=if let Some(target)=&explicit{
-   (target.choice.backend.key(),target.choice.endpoint.clone(),target.choice.credential==CredentialReference::ConfiguredLmstudioEndpoint)
+   (target.choice.backend.key(),target.choice.endpoint.clone(),target.choice.credential!=CredentialReference::None)
   }else{match provider{
    "ollama"=>("ollama",settings.ollama_url.clone(),false),
    "lmstudio"=>("lmstudio",settings.lmstudio_url.clone(),true),
-   "custom"=>("custom",settings.custom_url.clone(),false),_=>return Err(invalid()),
+   "custom"=>("custom",settings.custom_url.clone(),true),_=>return Err(invalid()),
   }};
   physical_key(&endpoint)?;
-  let credential_revision=(adapter=="lmstudio"&&uses_key).then(crate::local_chat::lmstudio_key_generation);
+  let credential_revision=if uses_key{match adapter{"lmstudio"=>Some(crate::local_chat::lmstudio_key_generation()),"custom"=>Some(crate::local_chat::custom_key_generation()),_=>None}}else{None};
   if credential_revision.is_some_and(|r|r%2!=0){return Err("A credencial está a ser alterada. Volta a iniciar o pedido.".into());}
   Ok(Self{provider:provider.into(),adapter,endpoint,explicit,configuration,credential_revision,source,retired:AtomicBool::new(false),#[cfg(test)]profile:None})
  }
@@ -135,6 +139,24 @@ impl Captured{
    &&crate::pet_config::pet_id(&self.provider).is_none_or(|id|serde_json::to_vec(&self.configuration.pets.get(id)).ok()==serde_json::to_vec(&now.configuration.pets.get(id)).ok());
   if !same{return retire();}if self.retired.load(Ordering::Acquire){CaptureObservation::Changed}else{CaptureObservation::Current}
  }
- pub(crate)fn check(&self)->Result<(),String>{if self.current(){Ok(())}else{Err("O destino ou a política de inferência mudou. O pedido original não foi redirecionado.".into())}}
+ pub(crate)fn check(&self)->Result<(),String>{match self.observation(){CaptureObservation::Current=>Ok(()),CaptureObservation::Busy=>Err(CAPTURE_BUSY.into()),CaptureObservation::Changed=>Err(CAPTURE_CHANGED.into())}}
+ /// Only wait for read-only validation of this immutable target. No provider
+ /// dispatch, credential selection, authority action or retry occurs here.
+ /// Never hold a settings/chat/store mutex across this cancellable wait.
+ pub(crate)async fn wait_current(&self,current:impl Fn()->bool,until:std::time::Instant)->Result<(),String>{
+  loop{
+   if !current(){return Err(crate::net::CANCELLED.into());}
+   if std::time::Instant::now()>=until{return Err(CAPTURE_BUSY.into());}
+   match self.observation(){
+    CaptureObservation::Current=>return if !current(){Err(crate::net::CANCELLED.into())}else if std::time::Instant::now()>=until{Err(CAPTURE_BUSY.into())}else{Ok(())},
+    CaptureObservation::Changed=>return Err(CAPTURE_CHANGED.into()),
+    CaptureObservation::Busy=>{
+     let left=until.saturating_duration_since(std::time::Instant::now());
+     if left.is_zero(){return Err(CAPTURE_BUSY.into());}
+     tokio::time::sleep(left.min(std::time::Duration::from_millis(10))).await;
+    }
+   }
+  }
+ }
 }
 #[cfg(test)]#[path="pet_inference_tests.rs"]mod tests;

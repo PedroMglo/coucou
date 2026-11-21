@@ -3,6 +3,13 @@ use super::Repository;
 use serde::{Deserialize,Serialize};
 use tauri::{AppHandle,Manager};
 pub(super)fn allowed(label:&str)->bool{[crate::HUB_LABEL,crate::companions::LABEL,crate::pet_control::LABEL,crate::pet_panel::LABEL].contains(&label)}
+/// Project progress in the pet chat uses only these explicit data readers.
+/// Mutation, admission, recovery and execution retain the original allowlist.
+pub(super)fn read_scope_allowed(label:&str,requested:Option<&str>,shown:Option<&str>)->bool{allowed(label)||label==crate::pet_chat::LABEL&&requested.is_some_and(|p|!p.is_empty())&&requested==shown}
+pub(super)fn read_window_check(w:&tauri::WebviewWindow,pet:Option<&str>)->Result<()>{
+ let shown=if w.label()==crate::pet_chat::LABEL{Some(crate::pet_chat::pet_chat_context(w.app_handle().clone()).pet)}else{None};
+ if read_scope_allowed(w.label(),pet,shown.as_deref()){Ok(())}else{Err(Error::InvalidInput)}
+}
 fn window_check(w:&tauri::WebviewWindow)->Result<()>{if allowed(w.label()){Ok(())}else{Err(Error::InvalidInput)}}
 fn pet(id:&str)->Result<()>{if crate::pet_config::defaults().pets.contains_key(id){Ok(())}else{Err(Error::InvalidInput)}}
 pub(super)fn owner(app:&AppHandle,id:&str)->Result<Owner>{
@@ -50,7 +57,7 @@ pub async fn pet_runtime_create_deterministic(app:AppHandle,window:tauri::Webvie
 }
 #[tauri::command]
 pub async fn pet_runtime_list(window:tauri::WebviewWindow,pet_id:Option<String>)->Result<Listing>{
-    window_check(&window)?;if let Some(id)=&pet_id{pet(id)?;}
+    read_window_check(&window,pet_id.as_deref())?;if let Some(id)=&pet_id{pet(id)?;}
     #[cfg(not(target_os="linux"))]{let _=pet_id;Err(Error::UnsupportedPlatform)}
     #[cfg(target_os="linux")]
     tauri::async_runtime::spawn_blocking(move||match super::store::Store::existing_native(&root())?{
@@ -59,7 +66,7 @@ pub async fn pet_runtime_list(window:tauri::WebviewWindow,pet_id:Option<String>)
 }
 #[tauri::command]
 pub async fn pet_runtime_read(window:tauri::WebviewWindow,pet_id:String,goal_id:String)->Result<Record>{
-    window_check(&window)?;pet(&pet_id)?;
+    read_window_check(&window,Some(&pet_id))?;pet(&pet_id)?;
     #[cfg(not(target_os="linux"))]{let _=(pet_id,goal_id);Err(Error::UnsupportedPlatform)}
     #[cfg(target_os="linux")]
     tauri::async_runtime::spawn_blocking(move||existing()?.read(&goal_id,&pet_id)).await.map_err(|_|Error::StorageUnavailable)?
@@ -111,7 +118,7 @@ pub async fn pet_runtime_import_legacy(app:AppHandle,window:tauri::WebviewWindow
 }
 
 #[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct PrepareContextInput{pub pet_id:String,pub goal_id:String,pub revision:String,pub request_id:String,pub mode:PreparationMode,#[cfg(target_os="linux")]#[serde(default)]pub selected_calendars:Option<crate::pet_calendar::goal::Request>,#[serde(default)]pub selected_memory:Option<Vec<crate::pet_memory::context_model::Selected>>,#[serde(default)]pub include_received_request:bool}
+pub struct PrepareContextInput{#[serde(default)]pub selected_project:Option<crate::pet_memory::context_model::SelectedProject>,pub pet_id:String,pub goal_id:String,pub revision:String,pub request_id:String,pub mode:PreparationMode,#[cfg(target_os="linux")]#[serde(default)]pub selected_calendars:Option<crate::pet_calendar::goal::Request>,#[serde(default)]pub selected_memory:Option<Vec<crate::pet_memory::context_model::Selected>>,#[serde(default)]pub include_received_request:bool}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct ContextView{pub binding:ContextBinding,pub messages:Vec<serde_json::Value>,pub message_count:usize,pub truncated:bool}
 fn context_root()->std::path::PathBuf{crate::settings::config_dir().join("pet-runtime-contexts-v1")}
@@ -123,17 +130,17 @@ pub async fn pet_runtime_prepare_context(app:AppHandle,window:tauri::WebviewWind
     tauri::async_runtime::spawn_blocking(move||{
         let store=std::sync::Arc::new(existing()?);let goal=store.read_control(&input.goal_id,&input.pet_id)?;
         if let Some(binding)=&goal.execution_context{
-            if binding.request_id!=input.request_id||binding.mode!=input.mode||binding.received_request.is_some()!=input.include_received_request||!crate::pet_memory::context_model::same_selection(binding.memory.as_ref(),input.selected_memory.as_deref())||!super::context::same_calendars(binding,input.selected_calendars.as_ref()){return Err(Error::Conflict);}
+            if binding.request_id!=input.request_id||binding.mode!=input.mode||binding.received_request.is_some()!=input.include_received_request||!crate::pet_memory::context_model::same_selection(binding.memory.as_ref(),input.selected_memory.as_deref())||!super::model::same_memory_project(binding,input.selected_project.as_ref())||!super::context::same_calendars(binding,input.selected_calendars.as_ref()){return Err(Error::Conflict);}
             let _calendars=if binding.has_calendars(){Some(super::context::open_with_authority(&context_root(),&goal,&app.state::<crate::chat::Chat>(),&super::admission_review::authority_root())?)}else{None};
             if binding.memory.is_some(){super::context::validate_memory(binding)?;}
             return store.mutate(&goal.id,&input.pet_id,&input.revision,input.request_id,Action::BindContext{binding:binding.clone()},crate::assistant_memory::now());
         }
         if goal.execution_context.is_none(){let current=runtime_owner(&app,&input.pet_id)?;if current.provider!=goal.spec.owner.provider||current.adapter!=goal.spec.owner.adapter{return Err(Error::Conflict);}}
         let main=app.state::<crate::chat::Chat>();
-        if input.selected_calendars.is_some()&&input.include_received_request{return Err(Error::InvalidInput);}
+        if input.selected_calendars.is_some()&&input.include_received_request||input.selected_project.is_some()&&(input.selected_calendars.is_some()||input.include_received_request){return Err(Error::InvalidInput);}
         let observed=store.clone();let id=goal.id.clone();let pet=goal.spec.owner.pet_id.clone();let revision=goal.revision.clone();
         let current=std::sync::Arc::new(move||observed.read_control(&id,&pet).is_ok_and(|g|g.state==State::Draft&&g.revision==revision&&g.execution_context.is_none()));
-        let(binding,_chat)=if input.selected_calendars.is_some(){super::context::prepare_with_calendar_data(&context_root(),&goal,&main,input.mode,&input.request_id,input.selected_memory.as_deref(),&super::admission_review::authority_root(),input.selected_calendars.as_ref(),current)?}
+        let(binding,_chat)=if let Some(project)=input.selected_project.as_ref(){super::context::prepare_with_project_data(&context_root(),&goal,&main,input.mode,&input.request_id,input.selected_memory.as_deref(),project,&super::admission_review::authority_root())?}else if input.selected_calendars.is_some(){super::context::prepare_with_calendar_data(&context_root(),&goal,&main,input.mode,&input.request_id,input.selected_memory.as_deref(),&super::admission_review::authority_root(),input.selected_calendars.as_ref(),current)?}
           else{super::context::prepare_with_data(&context_root(),&goal,&main,input.mode,&input.request_id,input.selected_memory.as_deref(),&super::admission_review::authority_root(),input.include_received_request)?};
         store.mutate(&goal.id,&input.pet_id,&input.revision,input.request_id,Action::BindContext{binding},crate::assistant_memory::now())
     }).await.map_err(|_|Error::StorageUnavailable)?

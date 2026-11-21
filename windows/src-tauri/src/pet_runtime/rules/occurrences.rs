@@ -18,7 +18,12 @@ pub(crate)struct Admitted{pub goal_id:String,pub rule_id:String,pub occurrence_i
  let wanted=policy.occurrence_id(index).ok_or(Error::InvalidInput)?;
  let bounds=authority.rule_execution_bounds(decision).map_err(Failure::control_error)?;
  if at<=bounds.future_after||bounds.prior.iter().any(|r|r.occurrence_id==wanted){return Err(Error::Conflict);}
- let goal=prepare_draft(store,contexts,main,&initial,index,&clock,valid)?;
+ let goal=if policy.selected_data(){
+  let read=initial.reservations.iter().find(|r|r.occurrence_id==wanted).and_then(|r|r.calendar_read.as_ref()).ok_or(Error::Conflict)?;
+  let Some(CalendarReadOutcome::Captured{goal_id,context_hash})=&read.outcome else{return Err(Error::Conflict);};
+  let goal=store.read(goal_id,&policy.rule.owner.pet_id)?;
+  if goal.execution_context.as_ref().is_none_or(|b|model::fingerprint(b).ok().as_ref()!=Some(context_hash)){return Err(Error::Conflict);}goal
+ }else{prepare_draft(store,contexts,main,&initial,index,&clock,valid)?};
  let occurrence=policy.occurrence_id(index).ok_or(Error::InvalidInput)?;
  if !goal.admissions.is_empty(){
   let row=goal.admissions.last().ok_or(Error::Conflict)?;
@@ -64,6 +69,28 @@ pub async fn pet_runtime_rule_occurrence_admit(app:tauri::AppHandle,window:tauri
 }
 
 #[cfg(target_os="linux")]pub(in crate::pet_runtime)fn prepare_draft(store:&Store,contexts:&Path,main:&Chat,parent:&RuleGrant,index:usize,clock:&impl Fn()->u64,valid:impl Fn()->bool)->model::Result<Record>{
+ if parent.policy.selected_data(){return Err(Error::Conflict);}
+ let mut goal=prepare_plan(store,parent,index,clock,&valid)?;
+ let occurrence=parent.policy.occurrence_id(index).ok_or(Error::InvalidInput)?;
+ if goal.admissions.is_empty()&&goal.execution_context.is_none(){checked(&valid)?;let(binding,_)=context::prepare(contexts,&goal,main,model::PreparationMode::Dedicated,&format!("rc-{occurrence}"))?;checked(&valid)?;goal=commit(store.mutate(&goal.id,&goal.spec.owner.pet_id,&goal.revision,format!("rb-{occurrence}"),Action::BindContext{binding},clock())?)?;}
+ Ok(goal)
+}
+
+#[cfg(target_os="linux")]pub(super)fn prepare_plan(store:&Store,parent:&RuleGrant,index:usize,clock:&impl Fn()->u64,valid:impl Fn()->bool)->model::Result<Record>{
+ // Catalog observers may hold a short shared read across several native
+ // records. Retry only pre-publication Busy with the SAME deterministic
+ // goal/task/plan requests, before the one selected-data read is committed.
+ let slot=parent.policy.schedule.slots.get(index).and_then(|s|s.at).ok_or(Error::InvalidInput)?;
+ let deadline=slot.saturating_add(u64::from(parent.policy.rule.definition.limits.occurrence_timeout_seconds)*1000);
+ let until=std::time::Instant::now()+std::time::Duration::from_millis(deadline.saturating_sub(clock()).min(500));
+ loop{if clock()>=deadline||!valid(){return Err(Error::Conflict);}
+  match prepare_plan_once(store,parent,index,clock,&valid){
+   Err(Error::Busy)if std::time::Instant::now()<until=>std::thread::sleep(std::time::Duration::from_millis(5)),
+   result=>return result,
+  }
+ }
+}
+#[cfg(target_os="linux")]fn prepare_plan_once(store:&Store,parent:&RuleGrant,index:usize,clock:&impl Fn()->u64,valid:impl Fn()->bool)->model::Result<Record>{
  let spec=parent.policy.goal_spec(index).ok_or(Error::InvalidInput)?;let occurrence=parent.policy.occurrence_id(index).ok_or(Error::InvalidInput)?;
  // Fixed deterministic goal/request identity is persisted before any authority
  // grant or model effect. Stop/edit of this goal is never auto-resumed.
@@ -72,6 +99,5 @@ pub async fn pet_runtime_rule_occurrence_admit(app:tauri::AppHandle,window:tauri
  if goal.state!=model::State::Draft{return Err(Error::Conflict);}
  if goal.tasks.is_empty(){checked(&valid)?;goal=commit(store.mutate(&goal.id,&goal.spec.owner.pet_id,&goal.revision,format!("rt-{occurrence}"),Action::ProposeTask{description:parent.policy.rule.definition.name.clone()},clock())?)?;}
  if goal.plans.is_empty(){checked(&valid)?;goal=commit(store.mutate(&goal.id,&goal.spec.owner.pet_id,&goal.revision,format!("rp-{occurrence}"),Action::ProposePlan{task_id:goal.tasks.first().ok_or(Error::Conflict)?.id.clone(),steps:vec![StepInput{description:"Produzir a resposta finita desta ocorrência".into(),postcondition:"Resposta conservada; critérios ainda exigem verificação".into(),operation:None}]},clock())?)?;}
- if goal.execution_context.is_none(){checked(&valid)?;let(binding,_)=context::prepare(contexts,&goal,main,model::PreparationMode::Dedicated,&format!("rc-{occurrence}"))?;checked(&valid)?;goal=commit(store.mutate(&goal.id,&goal.spec.owner.pet_id,&goal.revision,format!("rb-{occurrence}"),Action::BindContext{binding},clock())?)?;}
  Ok(goal)
 }

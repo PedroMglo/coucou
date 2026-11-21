@@ -14,6 +14,8 @@ import { cyclePill, islandKeyAction, navigate, pillByNumber, type IslandKeyActio
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
 import {resetDialogue} from "../core/chat-dialogue";
+import {requestDestinations} from "../core/request-destinations";
+import {presentRequest} from "./request-routing";
 
 const CLAUDE_DESKTOP_ID = "agent_claude-desktop";
 
@@ -54,7 +56,7 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
     case "toggleIsland":
       if (State.petCardsOnly) {
         resume();
-        void Bridge.petPanelOpen(360,50,undefined,'home');
+        void Bridge.petPanelOpen(360,50,undefined,'home',true);
         break;
       }
       if (State.mode === "expanded") {
@@ -82,6 +84,7 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
     case "goToAlert": {
       const asking = State.tasks.find((t) => t.state === "question");
       const pending = State.pendingApproval;
+      const destination = State.petCardsOnly ? requestDestinations.first() : null;
       if (pending) {
         // The one card every agent's request uses: its own pill to the front,
         // its card (permission or question) up. Nothing is answered from here.
@@ -89,6 +92,9 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
         State.setFocus(pending.pillId);
         host.alert(pending.questions ? "question" : "approval");
         host.takeKeyboard();
+      } else if (destination) {
+        resume();
+        void presentRequest(destination);
       } else if (asking) {
         resume();
         State.setFocus(asking.id);
@@ -142,7 +148,7 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
         Sound.play("error");
         break;
       }
-      if (!State.mochiOnDesktop) resume();
+      if (!State.petCardsOnly && !State.mochiOnDesktop) resume();
       host.flyOutOrHome();
       break;
 

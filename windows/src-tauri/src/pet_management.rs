@@ -204,8 +204,19 @@ pub async fn pet_management(window:tauri::WebviewWindow,chat:tauri::State<'_,cra
 pub async fn pet_focus_session(window:tauri::WebviewWindow,provider:String,id:String)->Result<Value,String>{
  if ![crate::island::WINDOW_LABEL,crate::pet_chat::LABEL,crate::pet_panel::LABEL,crate::HUB_LABEL,crate::companions::LABEL,crate::pet_control::LABEL].contains(&window.label()){return Err("Abre o pet para consultar esta sessão.".into());}
  if id.is_empty(){return Err("A sessão não tem identificador.".into());}
- let args=arguments(&Request{action:"focus".into(),provider,identifier:id,keep_alive:String::new()})?;
- tauri::async_runtime::spawn_blocking(move||execute(args)).await.map_err(|_|"A consulta da sessão parou inesperadamente.".to_string())?
+ let provider = if provider.is_empty() { "codex".to_owned() } else { provider };
+ let args = arguments(&Request {
+  action: "focus".into(), provider: provider.clone(), identifier: id.clone(), keep_alive: String::new(),
+ });
+ tauri::async_runtime::spawn_blocking(move || {
+  #[cfg(target_os = "linux")]
+  if crate::session_window::lookup(Some(&provider), &id)
+      .is_some_and(|session| crate::platform::focus_session_window(&session.owners, &session.folder))
+  {
+   return Ok(serde_json::json!({"action": "focus", "provider": provider, "focused": true}));
+  }
+  execute(args?)
+ }).await.map_err(|_|"A consulta da sessão parou inesperadamente.".to_string())?
 }
 #[cfg(test)]mod tests{
  use super::*;

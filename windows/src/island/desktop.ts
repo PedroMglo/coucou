@@ -7,6 +7,7 @@ import { Bridge, emitToWindow, onEvent, type DesktopMode } from "../core/bridge"
 import type { BotEmoteName } from "../core/layout";
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
+import {PetRosterPreferences} from '../core/pet-roster-settings';
 import { desktopDances } from "../core/spotify";
 import {
   DESKTOP_EVENTS, DesktopMochiController, alertActive, type DesktopSnapshot,
@@ -22,6 +23,7 @@ export interface DesktopHost {
   /** Shows the island (compact) if it is hidden. */
   reveal(): void;
   openFromDesktop(id?: string, view?: string, manual?: boolean): void;
+  showDiff?(id: number): void;
   /** Right-click on the desktop Mochi: the wardrobe, or back. */
   wardrobeFromDesktop(): void;
   /** Three pokes on the desktop Mochi. */
@@ -37,6 +39,7 @@ export class DesktopLink {
 
   private seasons = new SeasonCache();
   private companions: CompanionsLink;
+  private visibility:PetRosterPreferences;
   private pushed = "";
   private pendingCarry: { x: number; y: number } | null = null;
   private carryFrame = false;
@@ -45,7 +48,10 @@ export class DesktopLink {
   constructor(host: DesktopHost) {
     this.host = host;
     this.companions = new CompanionsLink((id, view, manual) => this.host.openFromDesktop(id, view, manual),
-      () => State.wardrobePreview ?? this.seasons.get(parseOutfit(State.settings.mochiOutfit)));
+      () => State.wardrobePreview ?? this.seasons.get(parseOutfit(State.settings.mochiOutfit)),id=>this.host.showDiff?.(id));
+    this.visibility=new PetRosterPreferences({save:request=>Bridge.petRosterSettingsPatch(request),adopt:roster=>{
+      if(typeof roster.companionMode==='boolean'){State.settings={...State.settings,companionMode:roster.companionMode};State.notify();}
+    }});
     // This entry owns pet cards and shared infrastructure, never the retired
     // singleton's controller, desktop listeners, snapshot publisher or fallback.
     if (State.petCardsOnly) return;
@@ -74,11 +80,15 @@ export class DesktopLink {
   get centerSupported(): boolean { return this.companions.supported; }
 
   get supported(): boolean {
-    return this.mode !== "off";
+    return State.petCardsOnly?this.companions.supported:this.mode !== "off";
   }
 
   async init() {
-    if (State.petCardsOnly) { await this.companions.init(); return; }
+    if (State.petCardsOnly) {
+      await this.companions.init();
+      await onEvent('settings-changed',settings=>this.visibility.observe(settings));
+      return;
+    }
     const info = await Bridge.desktopInfo();
     if (!info || info.mode === "off") return;
     this.mode = info.mode;
@@ -125,8 +135,11 @@ export class DesktopLink {
    * drag out of the island — the drop decides that one.
    */
   flyOutOrHome() {
+    if(State.petCardsOnly){
+      if(!this.companions.supported)return;
+      return this.visibility.change({action:'toggleDesktopVisibility'}).then(()=>{}).catch(Bridge.reportSettingsError);
+    }
     if (this.companions.active) { State.paused = !State.paused; State.notify(); return; }
-    if (State.petCardsOnly) return;
     if (!this.supported || this.carrying) return;
     void this.controller.flyOutOrHome();
   }

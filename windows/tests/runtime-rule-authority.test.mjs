@@ -13,3 +13,93 @@ test('automatic scheduling is an explicit original review choice and confirmatio
 test('native expiry and clock uncertainty keep due admission disabled even when renderer time or policy looks usable',async()=>{
  for(const phase of ['expired','authorityTimeUncertain']){const{v,api,calls}=fixture();api.petRuntimeRuleAuthorityStatus=async i=>{calls.push(['status',i]);return{...status(phase),policy:ticket().proposal,dispatchAvailable:false,observedAt:1234};};button(v,'Consultar autorização da regra').fire('click');await flush();assert.equal(button(v,'Admitir ocorrência vencida autorizada').disabled,true);button(v,'Admitir ocorrência vencida autorizada').fire('click');await flush();assert.ok(calls.every(([k])=>k==='status'));assert.match(v.el.textContent,phase==='expired'?/expirou/:/hora nativa é anterior/);}
 });
+
+function calendarFixture(){
+ const own=rule();own.definition.dataScope={calendars:{sources:[{id:'work',revision:2}]}};const t=ticket();t.responseContract='calendar-observed-brief-v4';t.approvalScope=t.proposal.scope='boundedRuleRecurrenceWithFutureCalendarData';t.proposal.schemaVersion=3;t.proposal.rule=own;
+ t.proposal.calendarData={schemaVersion:1,readerRevision:'f'.repeat(64),consent:'boundedRuleFutureCalendarData',sources:[{id:'work',revision:2,name:'Work private calendar',path:'/synthetic/work.ics',enrollmentBinding:'e'.repeat(64)}],dataClass:'nativeCalendarEventsV1',window:'occurrenceCivilDay',maxDataBytes:65536,maxInputBytes:262144,maxCaptureSeconds:10,maxReadsPerOccurrence:1};
+ const calls=[],api={petRuntimeRuleAuthorityPrepare:async input=>{calls.push(['prepare',input]);return structuredClone(t);},petRuntimeRuleAuthorityConfirm:async input=>{calls.push(['confirm',input]);return{status:'recorded',authority:{...status('authorizedNotDispatched'),policy:structuredClone(t.proposal)}};}};
+ const v=buildRuleAuthority(own,{transport:api});return{v,t,api,calls};
+}
+test('future calendar data requires separate own consent and a completed capture before manual admission',async()=>{
+ const {v,calls}=calendarFixture();button(v,'Rever autorização recorrente').fire('click');await flush();assert.match(v.el.textContent,/Work private calendar/);assert.match(v.el.textContent,/65536 B/);
+ const check=label=>v.el.find('input').find(n=>n.getAttribute('aria-label')===label),recurrence=check('Autorizar recorrência limitada desta regra'),data=check('Autorizar dados futuros dos calendários desta regra');
+ recurrence.checked=true;recurrence.fire('change');assert.equal(button(v,'Guardar autorização recorrente revista').disabled,true);
+ data.checked=true;data.fire('change');assert.equal(button(v,'Guardar autorização recorrente revista').disabled,false);button(v,'Guardar autorização recorrente revista').fire('click');await flush();
+ const sent=calls.find(([kind])=>kind==='confirm')[1];assert.equal(sent.calendarConsent,'boundedRuleFutureCalendarData');assert.equal(sent.responseContract,'calendar-observed-brief-v4');assert.match(v.el.textContent,/contrato|calendários/);assert.equal(sent.consent,'boundedRuleRecurrenceWithFutureCalendarData');assert.equal(button(v,'Admitir ocorrência vencida autorizada').disabled,true);assert.match(v.el.textContent,/Prepara os calendários/);v.dispose();
+});
+test('future calendar review refuses changed source revision rather than borrowing manual scope',async()=>{
+ const {v,t,calls}=calendarFixture();t.proposal.calendarData.sources[0].revision=3;button(v,'Rever autorização recorrente').fire('click');await flush();assert.equal(button(v,'Guardar autorização recorrente revista'),undefined);assert.ok(!calls.some(([kind])=>kind==='confirm'));assert.match(v.el.textContent,/revisão nativa mudou/);v.dispose();
+});
+
+test('future calendar control prepares only its due context and reports partial coverage without admitting a model',async()=>{
+ const{v,t,api,calls}=calendarFixture();api.petRuntimeRuleAuthorityStatus=async()=>({...status('authorizedNotDispatched'),policy:structuredClone(t.proposal)});
+ api.petRuntimeRuleCalendarPrepare=async input=>{calls.push(['capture',structuredClone(input)]);return{goalId:'g-'+'a'.repeat(64),ruleId:rule().id,occurrenceId:'b'.repeat(64),contextHash:'c'.repeat(64),sources:2,unavailableSources:1,partialSources:1,existingCapture:false,queued:false};};
+ const capture=button(v,'Preparar calendários da ocorrência vencida');assert.equal(capture.disabled,true);button(v,'Consultar autorização da regra').fire('click');await flush();assert.equal(capture.disabled,false);assert.equal(button(v,'Admitir ocorrência vencida autorizada').disabled,true);
+ capture.fire('click');await flush();assert.deepEqual(calls.find(([kind])=>kind==='capture')[1],{petId:'ai_ollama',ruleId:rule().id,revision:2});assert.match(v.el.textContent,/2 fontes, 1 indisponíveis e 1 com cobertura parcial/);assert.match(v.el.textContent,/Sem admissão nem chamada de modelo/);assert.ok(calls.every(([kind])=>kind==='capture'));
+ api.petRuntimeRuleAuthorityStatus=async()=>({...status('restoredSnapshotOnly'),snapshotOnly:true,policy:structuredClone(t.proposal)});button(v,'Consultar autorização da regra').fire('click');await flush();assert.equal(capture.disabled,true);v.dispose();
+});
+test('future calendar control discards a late capture receipt after revocation',async()=>{
+ const{v,t,api}=calendarFixture();api.petRuntimeRuleAuthorityStatus=async()=>({...status('authorizedNotDispatched'),policy:structuredClone(t.proposal)});let done;
+ api.petRuntimeRuleCalendarPrepare=async()=>new Promise(resolve=>done=resolve);api.petRuntimeRuleAuthorityRevoke=async()=>status('revoked');
+ button(v,'Consultar autorização da regra').fire('click');await flush();button(v,'Preparar calendários da ocorrência vencida').fire('click');await flush();button(v,'Revogar autorização da regra').fire('click');await flush();done({queued:true});await flush();assert.match(v.el.textContent,/Autorização revogada/);assert.doesNotMatch(v.el.textContent,/Calendários preparados/);assert.equal(button(v,'Preparar calendários da ocorrência vencida').disabled,true);v.dispose();
+});
+
+test('calendar admission requires native completed capture and sends no forged per-goal data consent',async()=>{
+ const{v,t,api,calls}=calendarFixture();let allocations=[];
+ api.petRuntimeRuleAuthorityStatus=async()=>({...status('authorizedNotDispatched'),policy:structuredClone(t.proposal),allocations:structuredClone(allocations)});
+ api.petRuntimeRuleOccurrenceAdmit=async input=>{calls.push(['admit',structuredClone(input)]);return{goalId:'g-'+'a'.repeat(64),ruleId:rule().id,occurrenceId:'c'.repeat(64),queued:true,existingAdmission:false};};
+ button(v,'Consultar autorização da regra').fire('click');await flush();assert.equal(button(v,'Admitir ocorrência vencida autorizada').disabled,true);
+ allocations=[{at:Date.now()-1000,deadlineAt:Date.now()+60000,calendarRead:{finishedAt:Date.now()-1,outcome:{captured:{goal_id:'g-'+'a'.repeat(64),context_hash:'b'.repeat(64)}}}}];
+ button(v,'Consultar autorização da regra').fire('click');await flush();assert.equal(button(v,'Admitir ocorrência vencida autorizada').disabled,false);button(v,'Admitir ocorrência vencida autorizada').fire('click');await flush();assert.deepEqual(calls.find(([kind])=>kind==='admit')[1],{petId:'ai_ollama',ruleId:rule().id,revision:2});assert.match(v.el.textContent,/fila comum com a reserva original/);v.dispose();
+});
+
+const notificationPolicy=()=>({schemaVersion:1,consent:'boundedRuleResultNotification',channel:'desktopSystem',content:'resultReadyMetadataOnly',priority:'low',silent:true,maxPerOccurrence:1,maxDelayMillis:300000});
+test('daily response notice needs requested scope and independent native-reviewed consent',async()=>{
+ const{v,t,calls}=calendarFixture();t.proposal.notification=notificationPolicy();t.proposal.schemaVersion=4;
+ const check=label=>v.el.querySelectorAll('input').find(x=>x.getAttribute('aria-label')===label);
+ const opt=check('Notificar quando a resposta diária estiver pronta');assert.equal(Boolean(opt.checked),false);opt.checked=true;opt.fire('change');button(v,'Rever autorização recorrente').fire('click');await flush();assert.equal(calls.find(([k])=>k==='prepare')[1].notifyResult,true);assert.match(v.el.textContent,/sem eventos privados/);assert.match(v.el.textContent,/Janela permitida \(UTC\)/);
+ for(const label of ['Autorizar recorrência limitada desta regra','Autorizar dados futuros dos calendários desta regra']){const c=check(label);c.checked=true;c.fire('change');}assert.equal(button(v,'Guardar autorização recorrente revista').disabled,true);
+ const c=check('Autorizar um aviso limitado por ocorrência');c.checked=true;c.fire('change');assert.equal(button(v,'Guardar autorização recorrente revista').disabled,false);button(v,'Guardar autorização recorrente revista').fire('click');await flush();assert.equal(calls.find(([k])=>k==='confirm')[1].notificationConsent,'boundedRuleResultNotification');v.dispose();
+});
+test('daily response notice cannot be silently enabled or change its private content/window',async()=>{
+ for(const field of ['unrequested','content','maxDelayMillis']){const{v,t,calls}=calendarFixture();t.proposal.notification=notificationPolicy();t.proposal.schemaVersion=4;if(field!=='unrequested'){const opt=v.el.querySelectorAll('input').find(x=>x.getAttribute('aria-label')==='Notificar quando a resposta diária estiver pronta');opt.checked=true;opt.fire('change');t.proposal.notification[field]=field==='content'?'calendarText':600000;}button(v,'Rever autorização recorrente').fire('click');await flush();assert.equal(button(v,'Guardar autorização recorrente revista'),undefined);assert.ok(!calls.some(([k])=>k==='confirm'));v.dispose();}
+});
+test('bridge forwards notice opt-in and consent explicitly rather than granting them by default',async()=>{
+ const old=internals.invoke,calls=[];internals.invoke=async(command,args)=>{calls.push({command,args});return null;};try{await Bridge.petRuntimeRuleAuthorityPrepare({petId:'ai_ollama',ruleId:rule().id,revision:2,notifyResult:true});await Bridge.petRuntimeRuleAuthorityConfirm({petId:'ai_ollama',ruleId:rule().id,revision:2,token:'original-native-review',approve:true,consent:'boundedRuleRecurrenceWithFutureCalendarData',notificationConsent:'boundedRuleResultNotification'});
+ assert.equal(calls[0].args.input.notifyResult,true);assert.equal(calls[1].args.input.notificationConsent,'boundedRuleResultNotification');}finally{internals.invoke=old;}
+});
+
+test('Ollama rule review explains the explicit native runtime context without changing the selected model',async()=>{
+ const{v,t}=calendarFixture();t.proposal.destination.endpoint='http://127.0.0.1:11434/api/chat';button(v,'Rever autorização recorrente').fire('click');await flush();assert.match(v.el.textContent,/destino nativo \/api\/chat/);assert.match(v.el.textContent,/até65536 tokens/);assert.match(v.el.textContent,/capacidade anunciada é validada/);assert.match(v.el.textContent,/explicit-model/);v.dispose();
+});
+
+// A renderer must not claim the factual contract against an older native backend.
+test('future calendar review requires the exact native factual response contract',async()=>{for(const contract of [undefined,'unknown-contract']){const{v,t,calls}=calendarFixture();t.responseContract=contract;button(v,'Rever autorização recorrente').fire('click');await flush();assert.equal(button(v,'Guardar autorização recorrente revista'),undefined);assert.ok(!calls.some(([kind])=>kind==='confirm'));assert.match(v.el.textContent,/contrato de resposta nativo/);v.dispose();}});
+
+test('calendar quantity is an explicit native-reviewed choice and editing it discards the old ticket',async()=>{
+ const{v,t,calls}=calendarFixture();t.proposal.calendarPriorityCount=7;t.proposal.schemaVersion=5;const n=v.el.find('input').find(n=>n.getAttribute('aria-label')==='Quantidade de compromissos da rotina');n.value='7';n.fire('input');button(v,'Rever autorização recorrente').fire('click');await flush();assert.equal(calls[0][1].calendarPriorityCount,7);assert.match(v.el.textContent,/7 compromissos observados/);n.value='2';n.fire('input');assert.equal(button(v,'Guardar autorização recorrente revista'),undefined);assert.ok(!calls.some(([kind])=>kind==='confirm'));v.dispose();
+});
+test('invalid or changed reviewed quantity cannot prepare or confirm a calendar rule',async()=>{
+ for(const value of ['0','65','2.5','not-a-number']){const{v,calls}=calendarFixture();const n=v.el.find('input').find(n=>n.getAttribute('aria-label')==='Quantidade de compromissos da rotina');n.value=value;n.fire('input');button(v,'Rever autorização recorrente').fire('click');await flush();assert.equal(calls.length,0);v.dispose();}
+ const{v,t,calls}=calendarFixture();const n=v.el.find('input').find(n=>n.getAttribute('aria-label')==='Quantidade de compromissos da rotina');n.value='2';n.fire('input');t.proposal.calendarPriorityCount=3;t.proposal.schemaVersion=5;button(v,'Rever autorização recorrente').fire('click');await flush();assert.equal(button(v,'Guardar autorização recorrente revista'),undefined);assert.ok(!calls.some(([kind])=>kind==='confirm'));v.dispose();
+});
+
+function projectFixture(){
+ const own=rule(),project={id:'d'.repeat(32),petId:'ai_ollama',creationRequestId:'original-project',revision:3,name:'Own project',conversationIds:['original-source'],enabled:true,createdAt:1,updatedAt:2};
+ own.definition.dataScope={project:{sourceConversationId:'original-source',project:{id:project.id,revision:3},notes:[{id:'own-note',revision:2}]}};
+ const record={id:'own-note',revision:2,owner:{petId:'ai_ollama',scope:{kind:'project',projectId:project.id}},kind:'note',title:'Complete selected note',content:'PRIVATE_PROJECT_NOTE <script>untrusted()</script>',sensitivity:'sensitive',expiresAt:null};
+ const t=ticket();t.proposal.schemaVersion=6;t.proposal.rule=own;t.approvalScope=t.proposal.scope='boundedRuleRecurrenceWithPinnedProjectData';t.proposal.projectData={schemaVersion:1,consent:'boundedRulePinnedProjectData',sourceConversationId:'original-source',selection:{schemaVersion:2,project,references:[{id:record.id,revision:2,owner:record.owner,contentHash:'e'.repeat(64),expiresAt:null,projectRevision:3}]},maxInputBytes:262144,maxCaptureSeconds:10,maxReadsPerOccurrence:1};t.projectRecords=[record];
+ const calls=[],api={petRuntimeRuleAuthorityPrepare:async i=>{calls.push(['prepare',i]);return structuredClone(t);},petRuntimeRuleAuthorityConfirm:async i=>{calls.push(['confirm',i]);return{status:'recorded',authority:{...status(),policy:structuredClone(t.proposal)}};}};
+ const v=buildRuleAuthority(own,{transport:api});return{v,t,api,calls};
+}
+test('pinned project recurrence shows complete notes and requires its independent unchecked consent',async()=>{
+ const {v,calls}=projectFixture();button(v,'Rever autorização recorrente').fire('click');await flush();assert.match(v.el.textContent,/PRIVATE_PROJECT_NOTE/);assert.match(v.el.textContent,/sem copiar histórico/);assert.equal(v.el.find('script').length,0);assert.equal(v.el.find('input').some(n=>n.getAttribute('aria-label')==='Quantidade de compromissos da rotina'),false);
+ const recurrence=v.el.find('input').find(n=>n.getAttribute('aria-label')==='Autorizar recorrência limitada desta regra'),data=v.el.find('input').find(n=>n.getAttribute('aria-label')==='Autorizar notas fixadas de projeto desta regra');assert.ok(!data.checked);recurrence.checked=true;recurrence.fire('change');assert.equal(button(v,'Guardar autorização recorrente revista').disabled,true);button(v,'Guardar autorização recorrente revista').fire('click');await flush();assert.equal(calls.length,1);
+ data.checked=true;data.fire('change');assert.equal(button(v,'Guardar autorização recorrente revista').disabled,false);button(v,'Guardar autorização recorrente revista').fire('click');await flush();assert.equal(calls[1][1].projectConsent,'boundedRulePinnedProjectData');assert.equal(calls[1][1].consent,'boundedRuleRecurrenceWithPinnedProjectData');assert.equal(Object.hasOwn(calls[1][1],'calendarConsent'),false);v.dispose();
+});
+test('pinned project review refuses missing full data and changed source or revisions',async()=>{
+ for(const change of ['missing','recordRevision','projectRevision','source','calendar']){const{v,t,calls}=projectFixture();if(change==='missing')delete t.projectRecords;else if(change==='recordRevision')t.projectRecords[0].revision++;else if(change==='projectRevision')t.proposal.projectData.selection.project.revision++;else if(change==='source')t.proposal.projectData.sourceConversationId='other';else t.proposal.calendarData={};button(v,'Rever autorização recorrente').fire('click');await flush();assert.equal(button(v,'Guardar autorização recorrente revista'),undefined,change);assert.ok(!calls.some(([k])=>k==='confirm'));v.dispose();}
+});
+test('project own consent is explicitly projected in all three native decision operations',async()=>{
+ const before=internals.invoke,calls=[];internals.invoke=async(command,args)=>{calls.push({command,args});return null;};try{for(const name of ['petRuntimeRuleAuthorityConfirm','petRuntimeRuleRevisionConfirm','petRuntimeRuleSuccessionConfirm'])await Bridge[name]({petId:'ai_ollama',ruleId:rule().id,revision:2,mode:'carryRemaining',token:'own-native-token',approve:true,projectConsent:'boundedRulePinnedProjectData',model:'forged'});assert.equal(calls.length,3);for(const {args}of calls){assert.equal(args.input.projectConsent,'boundedRulePinnedProjectData');assert.equal(Object.hasOwn(args.input,'model'),false);assert.equal(Object.hasOwn(args.input,'calendarConsent'),false);}}finally{internals.invoke=before;}
+});

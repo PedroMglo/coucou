@@ -8,6 +8,7 @@ export class RequestDestinations {
  private ended=new Set<string>();
  private epoch=0;
  get size(){return this.pending.size;}
+ first(){return this.pending.values().next().value??null;}
  beginRead(){return this.epoch;}
  applyRead(epoch:number,requests:Pick<AgentRequest,'id'|'target'>[]){
   if(epoch!==this.epoch)return false;

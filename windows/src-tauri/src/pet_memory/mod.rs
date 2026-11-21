@@ -1,18 +1,20 @@
 //! Native user management of scoped memories. Not exposed as a model tool and
 //! explicit model use is a separate, one-use native human data decision.
 mod model;
+pub(crate)mod projects;
 pub(crate)mod context_model;
 #[cfg(target_os="linux")]pub(crate)mod context;
 #[cfg(target_os="linux")]pub(crate)mod manual;
 #[cfg(target_os="linux")]pub(crate)mod native;
 pub(crate)use model::{Owner,Scope,Query,Mutation,Page,Receipt,Entry};
+#[cfg(target_os="linux")]pub(crate)mod project_decision_note;
 use tauri::Emitter;
 fn allowed(label:&str)->bool{[crate::HUB_LABEL,crate::island::WINDOW_LABEL,crate::pet_control::LABEL,crate::pet_chat::LABEL].contains(&label)}
 fn message(code:&str)->String{match code{
  "registryChanged"|"registryConflict"|"memoryRevisionConflict"=>"A memória mudou. Volta a consultar antes de editar.",
  "memoryNotFound"=>"Esta recordação não existe neste pet e âmbito.",
  "conversationRetentionUnavailable"=>"Não foi possível confirmar a gravação da conversa. A recordação não foi publicada; volta a consultar antes de repetir.",
- "invalidOwner"|"ownerChanged"=>"O pet ou a conversa já não correspondem ao âmbito desta memória.",
+ "invalidOwner"|"ownerChanged"=>"O pet, conversa ou projeto já não correspondem ao âmbito desta memória.",
  "invalidMemoryInput"|"invalidMemoryQuery"=>"O conteúdo, validade ou limites do pedido de memória são inválidos.",
  "registryBusy"=>"Outro pedido está a guardar a memória. Aguarda e volta a consultar.",
  "registryCommitUncertain"=>"A gravação pode ter ocorrido. Volta a consultar a memória antes de repetir.",
@@ -36,7 +38,7 @@ pub(crate)fn retains_conversation(library:&std::path::Path,provider:&str,cid:&st
  #[cfg(target_os="linux")]{
   let Some(pet)=crate::pet_config::integration_pet(provider)else{return false;};
   match crate::private_registry::load_at::<model::Registry>(&library.with_file_name("memories.json")){
-   Ok(snapshot)=>!snapshot.unchanged()||snapshot.registry.items.iter().any(|e|e.owner.pet_id==pet&&matches!(&e.owner.scope,Scope::Conversation{conversation_id}if conversation_id==cid)),
+   Ok(snapshot)=>!snapshot.unchanged()||snapshot.registry.items.iter().any(|e|e.owner.pet_id==pet&&matches!(&e.owner.scope,Scope::Conversation{conversation_id}if conversation_id==cid))||snapshot.registry.projects.iter().any(|p|p.pet_id==pet&&p.conversation_ids.iter().any(|c|c==cid)),
    Err(_)=>true,
   }
  }

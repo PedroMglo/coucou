@@ -7,8 +7,8 @@ import type {PetConfiguration,PetPreference,PetPermissions} from '../mochi/pet-p
 
 export type PetMold='llm'|'application';
 export type PetRuntimeKind='llm'|'service'|'observer';
-export type PetAdapter='codex'|'copilot'|'antigravity'|'ollama'|'lmstudio'|'spotify';
-export interface PetRuntime {readonly kind:PetRuntimeKind;readonly adapter:PetAdapter|null;readonly assistantAdapter?:PetAdapter|null;readonly inferenceAdapters?:readonly ('ollama'|'lmstudio')[];}
+export type PetAdapter='codex'|'copilot'|'antigravity'|'ollama'|'lmstudio'|'custom'|'spotify';
+export interface PetRuntime {readonly kind:PetRuntimeKind;readonly adapter:PetAdapter|null;readonly assistantAdapter?:PetAdapter|null;readonly inferenceAdapters?:readonly ('ollama'|'lmstudio'|'custom')[];}
 export interface PetPresentation {
  readonly galleryAvatarSize:number;readonly overviewAvatarSize:number;
  readonly galleryCardRadius:number;readonly galleryCardGap:number;
@@ -23,6 +23,7 @@ export interface PetRouting {
 }
 export interface PetBlueprint {
  readonly id:string;readonly introducedIn:number;readonly mold:PetMold;readonly service:boolean;readonly retired:boolean;
+ readonly features:{readonly inference:boolean};
  readonly runtime:PetRuntime;
  readonly preferences:PetPreference;readonly presentation:PetPresentation;readonly routing:PetRouting;
 }
@@ -61,6 +62,9 @@ export function createPetFactory(input:unknown){
  const revision=(source.configuration as Row).catalogRevision??0;if(typeof revision!=='number'||!Number.isInteger(revision)||revision<0||revision>4294967295)invalid();
  const molds=source.molds as Row,extensions=source.extensions as Row,pets=source.pets as Row;
  if(Object.keys(molds).length!==2||!Object.hasOwn(molds,'llm')||!Object.hasOwn(molds,'application'))invalid();
+ for(const mold of Object.values(molds))if(!object(mold)||!object(mold.features)||Object.keys(mold.features).length!==1||typeof mold.features.inference!=='boolean')invalid();
+ if((molds.application as Row).features&&((molds.application as Row).features as Row).inference!==false)invalid();
+ if(Object.hasOwn(source.base as Row,'features')||Object.values(extensions).some(e=>object(e)&&Object.hasOwn(e,'features')))invalid();
  // Stable identity and access policy are always explicit for each pet.
  const protectedKeys=['name','aliases','provider','permissions','localExecution','inference','inferenceRevision','systemAccess'];
  for(const recipe of [source.base,...Object.values(molds),...Object.values(extensions)]){
@@ -71,7 +75,7 @@ export function createPetFactory(input:unknown){
  const routeOwners=new Map<string,string>();
  for(const[id,raw]of Object.entries(pets)){
   if(!/^[a-zA-Z0-9_-]{1,128}$/.test(id)||['__proto__','prototype','constructor'].includes(id))invalid();
-  if(!object(raw)||(raw.retired!==undefined&&typeof raw.retired!=='boolean')||(raw.mold!=='llm'&&raw.mold!=='application')||typeof raw.service!=='boolean'||!object(raw.preferences)||!object(raw.routing))invalid();
+  if(!object(raw)||Object.hasOwn(raw,'features')||(raw.retired!==undefined&&typeof raw.retired!=='boolean')||(raw.mold!=='llm'&&raw.mold!=='application')||typeof raw.service!=='boolean'||!object(raw.preferences)||!object(raw.routing))invalid();
   if(!['name','aliases','provider','permissions'].every(k=>Object.hasOwn(raw.preferences as Row,k)))invalid();
   if(Object.hasOwn(raw.preferences,'systemAccess'))invalid();
   const introducedIn=raw.introducedIn===undefined?0:raw.introducedIn;
@@ -96,7 +100,7 @@ export function createPetFactory(input:unknown){
    ||!(runtime.adapter===null||typeof runtime.adapter==='string'&&['codex','copilot','antigravity','ollama','lmstudio','spotify'].includes(runtime.adapter))
    ||(runtime.kind==='service')!==(raw.mold==='application')||raw.service&&runtime.kind!=='service')invalid();
   const choices=runtime.inferenceAdapters;
-  if(choices!==undefined&&(!Array.isArray(choices)||choices.length>2||choices.some(a=>a!=='ollama'&&a!=='lmstudio')||new Set(choices).size!==choices.length
+  if(choices!==undefined&&(!Array.isArray(choices)||choices.length>3||choices.some(a=>a!=='ollama'&&a!=='lmstudio'&&a!=='custom')||new Set(choices).size!==choices.length
    ||choices.length>0&&(runtime.kind!=='llm'||runtime.adapter!==null&&!['ollama','lmstudio'].includes(String(runtime.adapter)))))invalid();
   const assistant=runtime.assistantAdapter??null;
   if(assistant!==null&&(!raw.service||runtime.adapter!=='spotify'||assistant!=='codex'))invalid();
@@ -119,9 +123,12 @@ export function createPetFactory(input:unknown){
    routeOwners.set(route,id);
   }
   const retired=raw.retired===true;
-  // Route identities remain usable for historical conversations. New work is gated separately.
-  const routing=retired?{...r,execute:false}:r;
-  entries.set(id,freeze({id,introducedIn,mold:raw.mold,service:raw.service,retired,runtime,preferences:p,presentation:effective.presentation,routing}) as unknown as PetBlueprint);
+  const features=mold.features as {inference:boolean};
+  // Domain limits win over account extensions. Keep the task alias and stored
+  // preferences for historical data; they do not activate a service chatbot.
+  const routing=features.inference?(retired?{...r,execute:false}:r):{...r,chat:null,voice:runtime.adapter==='spotify'?r.voice:null,execute:false};
+  const shown=features.inference?effective.presentation:{...effective.presentation,profiles:false,sessions:false,metrics:false,contextAction:'open'};
+  entries.set(id,freeze({id,introducedIn,mold:raw.mold,service:raw.service,retired,features,runtime,preferences:p,presentation:shown,routing}) as unknown as PetBlueprint);
  }
  if(entries.size===0)invalid();
  const services=freeze([...entries.values()].filter(p=>p.service).map(p=>p.id));

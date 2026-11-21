@@ -3,9 +3,10 @@ use super::*;
 use crate::chat::CliSession;
 fn session(full_access:bool)->CliSession{CliSession{id:"original-native-session".into(),cwd:"/private/original".into(),full_access}}
 #[test]fn exact_native_sessions_and_explicit_new_conversations_keep_all_declared_cli_owners(){
- for(owner,provider)in[("codex","codex"),("copilot","copilot"),("antigravity","antigravity"),("gemini-cli","antigravity"),("claude-cli","antigravity"),("integration_notion","codex"),("integration_spotify","codex")]{
+ for(owner,provider)in[("codex","codex"),("copilot","copilot"),("antigravity","antigravity"),("gemini-cli","antigravity"),("claude-cli","antigravity")]{
   for full in[false,true]{let saved=session(full);assert_eq!(managed_session(provider,owner,Some(&saved),"/private/original",full).unwrap(),Some("original-native-session"));assert_eq!(managed_session(provider,owner,None,"/private/original",full).unwrap(),None);}
  }
+ for owner in ["integration_notion","integration_spotify"] {assert!(managed_session("codex",owner,Some(&session(false)),"/private/original",false).is_err());}
 }
 #[test]fn changed_workspaces_or_creation_preferences_never_become_a_fresh_session(){
  for provider in["codex","antigravity","copilot"]{for full in[false,true]{let saved=session(full);assert!(managed_session(provider,provider,Some(&saved),"/private/other",full).unwrap_err().contains("Nova conversa"));

@@ -8,6 +8,13 @@ pub(super)fn with_calendars(goal_id:&str,existing:Option<Value>,calendars:Option
  let message=json!({"role":"user","content":serde_json::to_string(&data).map_err(|_|model::Error::InvalidRecord)?});
  if serde_json::to_vec(&message).map_err(|_|model::Error::InvalidRecord)?.len()>crate::pet_memory::context_model::MAX_CONTEXT_BYTES{return Err(model::Error::LimitReached);}Ok(Some(message))
 }
+/// The dated observation is user data, never instructions or execution authority.
+pub(super)fn with_project_progress(goal_id:&str,existing:Option<Value>,progress:Option<&super::project_goal_observation::Snapshot>)->model::Result<Option<Value>>{
+ let Some(progress)=progress else{return Ok(existing);};
+ let data=json!({"schemaVersion":1,"kind":"explicitSelectedProjectGoalProgress","goalId":goal_id,"untrustedData":true,"otherSelectedData":existing,"projectGoalProgress":progress,"authorizesActions":false,"observationsAreAsOf":true});
+ let message=json!({"role":"user","content":serde_json::to_string(&data).map_err(|_|model::Error::InvalidRecord)?});
+ if serde_json::to_vec(&message).map_err(|_|model::Error::InvalidRecord)?.len()>crate::pet_memory::context_model::GOAL_INPUT_LIMIT{return Err(model::Error::LimitReached);}Ok(Some(message))
+}
 pub(super)fn compose(goal_id:&str,notes:Option<Value>,received:Option<Value>)->model::Result<Option<Value>>{
  let has_received=received.is_some();let message=match(notes,received){
   (None,None)=>return Ok(None),

@@ -79,7 +79,7 @@ fn same_state(a:&Output,b:&Output){assert_eq!(a.id,b.id);assert_eq!(a.serial,b.s
 #[test]fn typed_native_action_rejects_unknown_fields_and_out_of_range_before_effect(){
  for data in [json!({"kind":"shell","command":"anything"}),json!({"kind":"volume","percent":-1}),json!({"kind":"volume","percent":12,"petId":"other"}),json!({"kind":"mute","muted":"true"})]{assert!(serde_json::from_value::<NativeAction>(data).is_err());}
  assert!(!serde_json::from_value::<NativeAction>(json!({"kind":"volume","percent":101})).unwrap().valid());
- assert!(serde_json::from_value::<NativeAction>(json!({"kind":"volume","percent":0})).unwrap().valid());assert!(!crate::pet_audio::task::native_dispatch_available());
+ assert!(serde_json::from_value::<NativeAction>(json!({"kind":"volume","percent":0})).unwrap().valid());
 }
 #[test]#[ignore="Private native PipeWire/Quickshell fixture; no user audio devices"]
 fn native_private_effect_requires_intent_rechecks_stop_and_observes_a_separate_connection(){

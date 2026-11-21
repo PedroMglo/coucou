@@ -4,6 +4,13 @@ use crate::pet_runtime::lease_controller::{memory_test_http_fixture as fixture_w
 use crate::pet_memory::context_model::{GoalConsent,GoalGrant,GOAL_INPUT_LIMIT};
 
 fn metadata(provider:&str)->Value{if provider=="lmstudio"{json!({"models":[{"type":"llm","key":"fixture-free","publisher":"private-fixture","format":"gguf","size_bytes":1,"loaded_instances":[]}]})}else{local_metadata()}}
+fn completion_route(engine: &str) -> &'static str {
+    match engine {
+        "ollama" => "/api/chat",
+        "lmstudio" => "/v1/chat/completions",
+        _ => panic!("Unexpected fixture engine {engine}"),
+    }
+}
 fn evidence(f:&Fixture,g:&Record,server:&crate::local_chat::Server,now:u64)->Evidence{
  if f.root.join("pets.json").exists(){
   let config=crate::pet_config::read_existing_at(&f.root.join("pets.json")).unwrap();let settings=explicit_settings(&g.spec.owner.pet_id);
@@ -73,7 +80,7 @@ fn ledger(f:&Fixture,g:&Record)->Value{serde_json::from_slice::<Value>(&fs::read
  for provider in ["ollama","lmstudio"]{
   let(mut server,http)=fixture_with_hook(vec![("application/json",metadata(provider).to_string()),("text/event-stream",stream("Resposta baseada no contexto permitido",true))],|_|{});server.id=provider;
   let(f,_store,_authority,g,owner,_main)=setup(&server);let grant=g.admissions[0].spec.memory_data.as_ref().unwrap();assert_eq!(grant.consent,GoalConsent::BoundedGoalContext);assert!(grant.valid(provider,"fixture-free"));assert_eq!(grant.max_input_bytes,GOAL_INPUT_LIMIT);
-  assert_eq!(run(owner.respond_once(None,&g,&server,"one-memory-call",&config(provider))).unwrap(),"Resposta baseada no contexto permitido");let requests=http.join().unwrap();assert_eq!(requests.len(),2);assert_eq!(requests[1].0,"/v1/chat/completions");let body=&requests[1].1;let messages=body["messages"].as_array().unwrap();let memory=&messages[messages.len()-2];assert_eq!(memory["role"],"user");assert!(memory["content"].as_str().unwrap().contains("PRIVATE_GOAL_MEMORY_SENTINEL"));assert!(!messages.last().unwrap()["content"].as_str().unwrap().contains("PRIVATE_GOAL_MEMORY_SENTINEL"));assert!(body.get("tools").is_none());
+  assert_eq!(run(owner.respond_once(None,&g,&server,"one-memory-call",&config(provider))).unwrap(),"Resposta baseada no contexto permitido");let requests=http.join().unwrap();assert_eq!(requests.len(),2);assert_eq!(requests[1].0,completion_route(provider));let body=&requests[1].1;let messages=body["messages"].as_array().unwrap();let memory=&messages[messages.len()-2];assert_eq!(memory["role"],"user");assert!(memory["content"].as_str().unwrap().contains("PRIVATE_GOAL_MEMORY_SENTINEL"));assert!(!messages.last().unwrap()["content"].as_str().unwrap().contains("PRIVATE_GOAL_MEMORY_SENTINEL"));assert!(body.get("tools").is_none());
   let usage=ledger(&f,&g);let attempts=usage["attempts"].as_array().unwrap();assert_eq!(attempts.len(),1);let lease=&g.admissions[0].lease.as_ref().unwrap().id;assert_eq!(attempts[0]["inputHash"],crate::pet_runtime::model::fingerprint(&(lease,"fixture-free",body)).unwrap());assert_eq!(attempts[0]["phase"],"settled");
   for p in f.rglob_json(){assert!(!fs::read_to_string(p).unwrap().contains("PRIVATE_GOAL_MEMORY_SENTINEL"));}
   let prior=ledger(&f,&g);server.url="http://127.0.0.1:1".into();assert_eq!(run(owner.respond_once(None,&g,&server,"one-memory-call",&config(provider))).unwrap(),"Resposta baseada no contexto permitido");assert_eq!(ledger(&f,&g),prior);assert_eq!(owner.workers(),0);
@@ -91,7 +98,7 @@ fn ledger(f:&Fixture,g:&Record)->Value{serde_json::from_slice::<Value>(&fs::read
 }
 
 #[test]fn revocation_after_dispatch_preserves_the_bound_attempt_and_refuses_late_success(){
- let path=Arc::new(std::sync::Mutex::new(None::<PathBuf>));let target=path.clone();let(server,http)=fixture_with_hook(vec![("application/json",local_metadata().to_string()),("text/event-stream",stream("Late answer must not commit",true))],move|route|{if route=="/v1/chat/completions"{fs::write(target.lock().unwrap().as_ref().unwrap(),b"{\"version\":1,\"generation\":2,\"items\":[]}").unwrap();}});
+ let path=Arc::new(std::sync::Mutex::new(None::<PathBuf>));let target=path.clone();let(server,http)=fixture_with_hook(vec![("application/json",local_metadata().to_string()),("text/event-stream",stream("Late answer must not commit",true))],move|route|{if route==completion_route("ollama"){fs::write(target.lock().unwrap().as_ref().unwrap(),b"{\"version\":1,\"generation\":2,\"items\":[]}").unwrap();}});
  let(f,_store,_authority,g,owner,_main)=setup(&server);*path.lock().unwrap()=Some(f.catalog());assert!(run(owner.respond_once(None,&g,&server,"revoked-during-model",&config("ollama"))).is_err());let requests=http.join().unwrap();assert_eq!(requests.len(),2);let usage=ledger(&f,&g);assert_eq!(usage["attempts"].as_array().unwrap().len(),1);assert_eq!(usage["attempts"][0]["inputHash"],crate::pet_runtime::model::fingerprint(&(&g.admissions[0].lease.as_ref().unwrap().id,"fixture-free",&requests[1].1)).unwrap());assert!(!fs::read_to_string(f.contexts().join(&g.id).join(JOURNAL)).unwrap().contains("Late answer must not commit"));assert_eq!(owner.workers(),0);
  let prior=ledger(&f,&g);assert!(run(owner.respond_once(None,&g,&server,"revoked-during-model",&config("ollama"))).is_err());assert_eq!(ledger(&f,&g),prior);
 }
@@ -109,7 +116,7 @@ impl Fixture{
 
 #[test]fn full_body_limit_includes_the_existing_history_before_hash_or_model_budget(){
  let(server,http)=fixture_with_hook(vec![("application/json",local_metadata().to_string())],|_|{});let(f,_store,_authority,g,owner,_main)=setup_with_history(&server,true);
- let error=run(owner.respond_once(None,&g,&server,"oversized-actual-body",&config("ollama"))).unwrap_err();assert!(error.contains("limite"),"{error}");let requests=http.join().unwrap();assert_eq!(requests.len(),1);assert_eq!(requests[0].0,"/api/show");assert!(ledger(&f,&g).is_null());assert_eq!(owner.workers(),0);
+ let error=run(owner.respond_once(None,&g,&server,"oversized-actual-body",&config("ollama"))).unwrap_err();assert!(error.contains("janela de contexto"),"{error}");let requests=http.join().unwrap();assert_eq!(requests.len(),1);assert_eq!(requests[0].0,"/api/show");assert!(ledger(&f,&g).is_null());assert_eq!(owner.workers(),0);
 }
 
 // R6: real registry/resolver/admission/control path with synthetic metadata,
@@ -129,7 +136,7 @@ fn explicit_config(provider:&str,server:&crate::local_chat::Server)->crate::pet_
   let mut unrelated=crate::settings::Settings::default();unrelated.ollama_url="http://127.0.0.1:1".into();unrelated.lmstudio_url="http://127.0.0.1:2".into();
   let projected=owner.server_projection(&unrelated).unwrap();assert_eq!(projected.id,engine);assert_eq!(projected.url,server.url);assert!(projected.key.is_none());
   assert_eq!(run(owner.respond_once(None,&g,&projected,"explicit-call",&config)).unwrap(),"Explicit engine goal result");
-  let requests=http.join().unwrap();assert_eq!(requests.len(),2);assert_eq!(requests[1].0,"/v1/chat/completions");let body=&requests[1].1;assert_eq!(body["model"],"fixture-free");
+  let requests=http.join().unwrap();assert_eq!(requests.len(),2);assert_eq!(requests[1].0,completion_route(engine));let body=&requests[1].1;assert_eq!(body["model"],"fixture-free");
   let memory=body["messages"].as_array().unwrap().iter().filter(|m|m["content"].as_str().is_some_and(|s|s.contains("PRIVATE_GOAL_MEMORY_SENTINEL"))).collect::<Vec<_>>();assert_eq!(memory.len(),1);assert!(memory[0]["content"].as_str().unwrap().contains(&g.spec.owner.pet_id));assert!(body.get("tools").is_none());assert!(main.history(provider).is_empty());
   let before=ledger(&f,&g);assert_eq!(before["attempts"].as_array().unwrap().len(),1);assert_eq!(before["attempts"][0]["inputHash"],crate::pet_runtime::model::fingerprint(&(&owner.lease().id,"fixture-free",body)).unwrap());assert_eq!(before["attempts"][0]["phase"],"settled");
   let reopened=Store::ensure(&f.root.join("goals")).unwrap();let restored=reopened.read(&g.id,&g.spec.owner.pet_id).unwrap();assert_eq!(serde_json::to_vec(&restored.admissions).unwrap(),serde_json::to_vec(&g.admissions).unwrap());assert!(store.read(&g.id,if provider=="ollama"{"ai_lmstudio"}else{"ai_ollama"}).is_err());
@@ -150,7 +157,7 @@ fn explicit_config(provider:&str,server:&crate::local_chat::Server)->crate::pet_
  for stage in ["metadata","response"]{
   let path=Arc::new(std::sync::Mutex::new(None::<PathBuf>));let target=path.clone();let during=stage.to_owned();
   let responses=if stage=="metadata"{vec![("application/json",local_metadata().to_string())]}else{vec![("application/json",local_metadata().to_string()),("text/event-stream",stream("Retired binding late response",true))]};
-  let(server,http)=fixture_with_hook(responses,move|route|{if route==if during=="metadata"{"/api/show"}else{"/v1/chat/completions"}{let path=target.lock().unwrap();let path=path.as_ref().unwrap();let mut c=crate::pet_config::read_existing_at(path).unwrap();c.pets.get_mut("ai_lmstudio").unwrap().inference_revision=Some("f".repeat(32));fs::write(path,serde_json::to_vec(&c).unwrap()).unwrap();}});
+  let(server,http)=fixture_with_hook(responses,move|route|{if route==if during=="metadata"{"/api/show"}else{completion_route("ollama")}{let path=target.lock().unwrap();let path=path.as_ref().unwrap();let mut c=crate::pet_config::read_existing_at(path).unwrap();c.pets.get_mut("ai_lmstudio").unwrap().inference_revision=Some("f".repeat(32));fs::write(path,serde_json::to_vec(&c).unwrap()).unwrap();}});
   let config=explicit_config("lmstudio",&server);let(f,_store,_a,g,owner,main)=setup_configuration(&server,false,Some(("lmstudio",config.clone())));*path.lock().unwrap()=Some(f.root.join("pets.json"));
   assert!(run(owner.respond_once(None,&g,&server,"retired-in-flight",&config)).is_err());let requests=http.join().unwrap();assert_eq!(requests.len(),if stage=="metadata"{1}else{2});
   let before=ledger(&f,&g);if stage=="metadata"{assert!(before.is_null());}else{assert_eq!(before["attempts"].as_array().unwrap().len(),1);assert_eq!(before["attempts"][0]["inputHash"],crate::pet_runtime::model::fingerprint(&(&owner.lease().id,"fixture-free",&requests[1].1)).unwrap());}
@@ -186,7 +193,7 @@ impl crate::pet_runtime::lease_controller::dispatcher::Environment for ExplicitE
   let(f,_store,authority,g,owner,main)=setup_mode(&server,false,Some((provider,config.clone())),true);let bus=Bus::new();let player=Player::new(&bus,"Private explicit-engine driver");let env=Arc::new(ExplicitEnvironment{profile:f.root.join("pets.json"),address:bus.address.clone(),allow,decisions:std::sync::atomic::AtomicUsize::new(0)});
   let owner=Arc::new(owner);let store=Arc::new(Store::existing_verified(&f.root.join("goals"),&f.root.join("authority")).unwrap().unwrap());let driver=Driver::new(owner.clone(),store.clone(),env.clone()).unwrap();let status=run(driver.run()).unwrap();assert_eq!(status.phase,if allow{Phase::Completed}else{Phase::Declined});assert_eq!(status.pet_id,pet);assert_eq!(env.decisions.load(std::sync::atomic::Ordering::Acquire),1);
   let final_goal=store.read(&g.id,pet).unwrap();assert_eq!(final_goal.spec.owner,g.spec.owner);assert_eq!(final_goal.state,if allow{State::Completed}else{State::RecoveryRequired});if allow{authority.verify_completed_goal(&final_goal).unwrap();}
-  assert_eq!(player.calls.lock().unwrap().len(),usize::from(allow));assert_eq!(owner.workers(),0);let requests=http.join().unwrap();assert_eq!(requests.len(),2);assert_eq!(requests[1].0,"/v1/chat/completions");assert!(requests[1].1.to_string().contains("PRIVATE_GOAL_MEMORY_SENTINEL"));
+  assert_eq!(player.calls.lock().unwrap().len(),usize::from(allow));assert_eq!(owner.workers(),0);let requests=http.join().unwrap();assert_eq!(requests.len(),2);assert_eq!(requests[1].0,completion_route(engine));assert!(requests[1].1.to_string().contains("PRIVATE_GOAL_MEMORY_SENTINEL"));
   let attempts=ledger(&f,&g)["attempts"].as_array().unwrap().clone();assert_eq!(attempts.iter().filter(|a|a["kind"]=="model").count(),1);assert_eq!(attempts.iter().filter(|a|a["kind"]=="tool").count(),usize::from(allow));assert!(!status.active);assert!(main.runtime_resources().busy().unwrap().is_empty());
  }
 }

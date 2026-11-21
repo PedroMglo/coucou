@@ -55,3 +55,20 @@ fn configured()->Configuration{
  v=serde_json::to_value(&current).unwrap();v["pets"]["ai_ollama"]["inference"].as_object_mut().unwrap().remove("credential");assert!(serde_json::from_value::<Configuration>(v).is_err());
  v=serde_json::to_value(&current).unwrap();v["pets"]["ai_ollama"]["inference"]["fallback"]=serde_json::json!("ollama");assert!(serde_json::from_value::<Configuration>(v).is_err());
 }
+
+#[test]fn custom_compatible_choice_preserves_owner_permissions_and_exact_remote_destination(){
+ let mut config=pet_config::defaults();let before=config.pets["agent_codex"].clone();let permissions=config.pets["ai_ollama"].permissions.clone();config.version=2;
+ let selected=Choice{schema_version:1,backend:Backend::Custom,endpoint:"https://models.example.invalid/private/v1".into(),model:"fixture-custom-model".into(),credential:CredentialReference::ConfiguredCustomEndpoint};
+ let pet=config.pets.get_mut("ai_ollama").unwrap();pet.inference=Some(selected.clone());pet.inference_revision=Some("a".repeat(32));
+ pet_config::validate(&config).unwrap();let target=Target::for_provider(&config,"ollama").unwrap().unwrap();assert_eq!(target.provider,"ollama");assert_eq!(target.choice,selected);assert!(pet_config::blueprint("ai_ollama").unwrap().recognizes_owner("ollama","custom"));assert_eq!(config.pets["ai_ollama"].permissions,permissions);assert_eq!(serde_json::to_value(&config.pets["agent_codex"]).unwrap(),serde_json::to_value(before).unwrap());
+ assert_eq!(config.select("ollama","@default","test").unwrap().model,"fixture-custom-model");assert!(config.select("ollama","another-model","test").is_err());assert!(crate::local_chat::lmstudio::target_auth(&target).is_err());
+ let bytes=serde_json::to_vec(&config).unwrap();assert_eq!(serde_json::to_vec(&pet_config::resolve_existing_bytes(&bytes).unwrap()).unwrap(),bytes);
+}
+#[test]fn custom_credentials_are_explicit_and_cannot_use_lmstudio_or_cleartext_remote_auth(){
+ let blueprint=pet_config::blueprint("ai_ollama").unwrap();let anonymous=choice(Backend::Custom,"http://models.example.invalid/v1","fixture-custom");anonymous.validate(blueprint).unwrap();
+ let mut selected=anonymous.clone();selected.credential=CredentialReference::ConfiguredCustomEndpoint;assert!(selected.validate(blueprint).is_err());selected.endpoint="https://models.example.invalid/v1".into();selected.validate(blueprint).unwrap();
+ selected.credential=CredentialReference::ConfiguredLmstudioEndpoint;assert!(selected.validate(blueprint).is_err());
+ for backend in [Backend::Lmstudio,Backend::Ollama]{let selected=Choice{backend,endpoint:"http://127.0.0.1:1234".into(),credential:CredentialReference::ConfiguredCustomEndpoint,..anonymous.clone()};assert!(selected.validate(blueprint).is_err());}
+ for endpoint in ["https://user@example.invalid/v1","https://example.invalid/v1?token=x","https://example.invalid/v1#x","https://example.invalid/../private","file:///tmp/model"]{assert!(Choice{endpoint:endpoint.into(),..anonymous.clone()}.validate(blueprint).is_err());}
+ assert!(anonymous.validate(pet_config::blueprint("agent_codex").unwrap()).is_err());assert!(anonymous.validate(pet_config::blueprint("agent_system_guardian").unwrap()).is_err());
+}

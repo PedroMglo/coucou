@@ -33,7 +33,7 @@ fn exercise(provider:&'static str,revoke:bool){
  let(mut original_server,http)=crate::pet_runtime::lease_controller::memory_test_http_fixture(vec![("application/json",meta.to_string()),("text/event-stream",stream(&plan.to_string(),true)),("application/json",meta.to_string())],|_|{});original_server.id=provider;
  let mut env=Process::with_endpoint(provider,"funded-planning-partial",Some(&original_server));assert_eq!(env.g.schema_version,61);
  env.crash();let closed=env.close();let before=body(&env.s,&closed);assert_eq!(before["schemaVersion"],47);
- let signed=env.s.a.recovery_body(&closed).unwrap();let server=crate::local_chat::Server{id:provider,name:"Original destination; passive observation only",url:match &signed.peer_memory_planning.as_ref().unwrap().destination{crate::pet_memory::context_model::Destination::Server{endpoint,..}=>endpoint.trim_end_matches("/v1/chat/completions").to_owned(),_=>panic!("local destination")},key:None};
+ let signed=env.s.a.recovery_body(&closed).unwrap();let server=server_from_reviewed_endpoint(provider,&signed.peer_memory_planning.as_ref().unwrap().destination);
  let memory=passive(&env.s,&closed,&server).unwrap();let review=resume_review(&env,&closed,"resume-exact-funded61-owner");
  let mut approved=review.approve(crate::assistant_memory::now(),Arc::new(||true)).unwrap();
  approved.prepare_worker(&env.s.main,&env.s.f.path.join("contexts"),&memory,Arc::new(|_,_,_|Validity::Current),crate::assistant_memory::now()).unwrap();

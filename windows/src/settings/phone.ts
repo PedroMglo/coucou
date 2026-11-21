@@ -8,6 +8,7 @@ import type { Settings } from "../core/state";
 import { h } from "../views/dom";
 import { PendingWrite } from "../core/pending-write";
 import { t } from "../i18n/i18n";
+import { petRetired } from "../core/pet-factory";
 
 type Toggle = (on: boolean, onChange: (v: boolean) => void) => HTMLElement;
 
@@ -288,7 +289,7 @@ function servicesBlock(): HTMLElement {
     note.textContent = state.error || (state.pending ? t("Saving…") : "");
     retry.hidden = !state.retryable;
   });
-  const boxes = PHONE_SERVICES.map(([id, name]) => {
+  const boxes = PHONE_SERVICES.filter(([id]) => !petRetired(id)).map(([id, name]) => {
     const box = h("input", { type: "checkbox", disabled: true }) as HTMLInputElement;
     box.addEventListener("change", () => {
       if (!ready) return;
