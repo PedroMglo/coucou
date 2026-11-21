@@ -2,9 +2,12 @@
 //
 // Windows: the named pipe `\\.\pipe\coucou-<sid>`, one instance per connection.
 // Linux: the Unix socket `$XDG_RUNTIME_DIR/coucou.sock`. Every hook event is
-// forwarded to the island as a `hook` event. `PermissionRequest` is the only one
-// that keeps its connection open: it waits for the island's decision and writes
-// it back on the same connection, which is how approving from the island works.
+// forwarded to the island as a `hook` event. `PermissionRequest` keeps its
+// connection open: it waits for the island's decision and writes it back on the
+// same connection, which is how approving from the island works. Antigravity's
+// `PreToolUse` (tagged `agy_pre_tool`) is the other one: it is answered `ask` at
+// once, or `pending` and then the click when its command is put on the card
+// (agy_pre_tool below, agy_approvals.rs).
 //
 // Claude Code is never blocked by us. Three things guarantee it:
 //   * coucou-hook gives the connection 300 ms and exits cleanly if we are closed;
@@ -22,16 +25,17 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(windows)]
-use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+use tokio::net::windows::named_pipe::NamedPipeServer;
 use tokio::sync::mpsc;
 
+use crate::agy_approvals;
 use crate::island::WINDOW_LABEL;
 use crate::log;
 use crate::session_window;
@@ -81,6 +85,17 @@ struct RelayState{requests:HashMap<String,PendingRequest>,routing:external_appro
 #[derive(Default)]
 pub struct Pending(Mutex<RelayState>);
 
+static RELAY_ERROR: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
+
+/// Last error encountered while opening the hook relay pipe/socket, if any.
+pub fn relay_error() -> Option<String> {
+    RELAY_ERROR.lock().unwrap().clone()
+}
+
+fn set_relay_error(app: &AppHandle, err: Option<String>) {
+    *RELAY_ERROR.lock().unwrap() = err.clone();
+    let _ = app.emit("pipe-error", err);
+}
 
 /// `\\.\pipe\coucou-<sid>` — must match coucou-hook's `pipe_path()` exactly.
 #[cfg(windows)]
@@ -92,31 +107,47 @@ pub fn pipe_name() -> String {
 
 #[cfg(windows)]
 pub fn start(app: AppHandle) {
+    use std::os::windows::io::AsRawHandle;
+
     tauri::async_runtime::spawn(async move {
         let name = pipe_name();
         // first_pipe_instance also means we refuse to join a pipe somebody else
         // already owns under our name, rather than serving on top of it.
-        let mut server = match ServerOptions::new().first_pipe_instance(true).create(&name) {
+        let mut server = match crate::platform::create_private_pipe(&name, true) {
             Ok(s) => s,
             Err(err) => {
-                log::line(format!("cannot open the relay pipe: {err}"));
+                let msg = format!("cannot open the relay pipe: {err}");
+                log::line(&msg);
+                set_relay_error(&app, Some(msg));
                 return;
             }
         };
+        set_relay_error(&app, None);
         loop {
             if server.connect().await.is_err() {
+                // A failed instance never connects again (#853): listen on a fresh one.
+                if let Ok(fresh) = crate::platform::create_private_pipe(&name, false) {
+                    server = fresh;
+                }
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 continue;
             }
             // Hand the connected instance to a task and listen on a fresh one.
-            let next = match ServerOptions::new().create(&name) {
+            let next = match crate::platform::create_private_pipe(&name, false) {
                 Ok(s) => s,
                 Err(err) => {
-                    log::line(format!("cannot reopen the relay pipe: {err}"));
+                    let msg = format!("cannot reopen the relay pipe: {err}");
+                    log::line(&msg);
+                    set_relay_error(&app, Some(msg));
                     return;
                 }
             };
             let connected = std::mem::replace(&mut server, next);
+            // Refuse clients that do not run under our own user SID (Linux/macOS parity).
+            if !crate::platform::pipe_client_is_same_user(connected.as_raw_handle()) {
+                log::line("refused a relay connection from another user");
+                continue;
+            }
             let app = app.clone();
             tauri::async_runtime::spawn(async move { handle(app, connected, relay_ancestors).await });
         }
@@ -130,7 +161,9 @@ pub fn start(app: AppHandle) {
 
     tauri::async_runtime::spawn(async move {
         let Some(path) = crate::platform::relay_socket_path() else {
-            log::line("no private runtime directory ($XDG_RUNTIME_DIR) — Claude Code hooks are inactive");
+            let msg = "no private runtime directory ($XDG_RUNTIME_DIR) — Claude Code hooks are inactive".to_string();
+            log::line(&msg);
+            set_relay_error(&app, Some(msg));
             return;
         };
         // A socket file left behind by a crash answers nothing and can go. One
@@ -138,7 +171,9 @@ pub fn start(app: AppHandle) {
         // first_pipe_instance on Windows, we refuse to serve on top of it.
         if path.exists() {
             if std::os::unix::net::UnixStream::connect(&path).is_ok() {
-                log::line("another Coucou already serves the relay socket");
+                let msg = "another Coucou already serves the relay socket".to_string();
+                log::line(&msg);
+                set_relay_error(&app, Some(msg));
                 return;
             }
             let _ = std::fs::remove_file(&path);
@@ -146,10 +181,13 @@ pub fn start(app: AppHandle) {
         let listener = match UnixListener::bind(&path) {
             Ok(l) => l,
             Err(err) => {
-                log::line(format!("cannot open the relay socket: {err}"));
+                let msg = format!("cannot open the relay socket: {err}");
+                log::line(&msg);
+                set_relay_error(&app, Some(msg));
                 return;
             }
         };
+        set_relay_error(&app, None);
         // The runtime directory is already 0700; this is belt and braces.
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         let uid = unsafe { libc::getuid() };
@@ -297,6 +335,12 @@ async fn handle<R: Relay>(app: AppHandle, mut pipe: R, ancestry: impl FnOnce(&R)
     // Counts for the weekly recap — never the command, path or prompt itself.
     crate::recap::observe(&app, &payload);
 
+    // Antigravity's PreToolUse: its relay waits for one line (agy_approvals.rs).
+    if event == "PreToolUse" && payload.get("coucou_kind").and_then(Value::as_str) == Some(agy_approvals::KIND) {
+        agy_pre_tool(app, pipe, payload).await;
+        return;
+    }
+
     if event != "PermissionRequest" {
         // The status line relay calls in with every Claude Code update: not log-worthy.
         if event != "StatusLine" {
@@ -307,6 +351,8 @@ async fn handle<R: Relay>(app: AppHandle, mut pipe: R, ancestry: impl FnOnce(&R)
         return;
     }
 
+    // This marker is added only by the standalone adapter after a native request is registered.
+    payload.as_object_mut().unwrap().remove("coucou_kind");
     let native=if gate{
         let chat=app.state::<crate::chat::Chat>();
         let captured=chat.hook_binding(&backend,&session).and_then(|binding|native_source::Gate::capture(binding,&payload).ok());
@@ -378,6 +424,90 @@ async fn handle<R: Relay>(app: AppHandle, mut pipe: R, ancestry: impl FnOnce(&R)
 
 fn handoff_payload(request_id:&str,session_id:&str,agent:&str,provider:Option<&str>,reason:&str)->Value{
     json!({"requestId":request_id,"sessionId":session_id,"agent":agent,"provider":provider,"reason":reason})
+}
+
+/// Antigravity's standalone relay may request an in-app card on Windows.
+/// It shares the same external-route lease and presentation acknowledgement
+/// as the other relays. No response is treated as permission by Coucou.
+async fn agy_pre_tool(app: AppHandle, mut pipe: impl Relay, payload: Value) {
+    let enabled = cfg!(windows) && app.state::<crate::Shared>().settings.lock().unwrap().agy_approvals_enabled;
+    let gate = agy_approvals::gate(&payload, enabled, &crate::platform::home_dir());
+    let _ = app.emit_to(WINDOW_LABEL, "hook", &payload);
+    let Some((gate, id)) = gate.zip(crate::cli_chat::next_native_request_id()) else {
+        reply_line(&mut pipe, "ask").await;
+        pipe.finish();
+        return;
+    };
+    let session = payload["session_id"].as_str().unwrap_or("").to_owned();
+    let started = Instant::now();
+    let (tx, mut rx) = mpsc::channel::<Reply>(4);
+    let route = {
+        let pending = app.state::<Pending>();
+        let mut state = pending.0.lock().unwrap();
+        let request = PendingRequest::new(tx, session.clone(), request_pet(&payload), started);
+        external_approvals::register(&mut state, id.clone(), request, true)
+    };
+    let external_approvals::Registration::Queued(route) = route else {
+        reply_line(&mut pipe, "ask").await;
+        pipe.finish();
+        return;
+    };
+    let mut card = payload;
+    card["hook_event_name"] = json!("PermissionRequest");
+    card["request_id"] = json!(id);
+    card["tool_input"]["command"] = json!(gate.command);
+    crate::recap::note_request(&app, &id, &card);
+    let _ = app.emit_to(WINDOW_LABEL, "hook", card);
+
+    let start = tokio::time::Instant::from_std(started);
+    let outcome = external_approvals::until_current(route.as_ref(), async {
+        let ack_deadline = start + ACK_TIMEOUT;
+        let first = tokio::select! {
+            biased;
+            _ = relay_closed(&mut pipe) => return DecisionOutcome::Handoff("relay-closed"),
+            first = tokio::time::timeout_at(ack_deadline, rx.recv()) => first.ok().flatten(),
+        };
+        if tokio::time::Instant::now() >= ack_deadline {
+            return DecisionOutcome::Handoff("unacknowledged");
+        }
+        match first {
+            Some(Reply::Decision(value)) => DecisionOutcome::Decision(value),
+            Some(Reply::Ack) => {
+                reply_line(&mut pipe, "pending").await;
+                let wait = async {
+                    let deadline = start + gate.wait.min(DECISION_TIMEOUT);
+                    let value = tokio::time::timeout_at(deadline, rx.recv()).await;
+                    match value {
+                        Ok(Some(Reply::Decision(value))) if tokio::time::Instant::now() < deadline => DecisionOutcome::Decision(value),
+                        _ => DecisionOutcome::Handoff("released"),
+                    }
+                };
+                until_relay_closed(&mut pipe, wait).await
+            }
+            _ => DecisionOutcome::Handoff("not-shown"),
+        }
+    }).await;
+    app.state::<Pending>().0.lock().unwrap().requests.remove(&id);
+    let word = match &outcome {
+        DecisionOutcome::Decision(value) if route.as_ref().is_some_and(|r| r.load(Ordering::Acquire)) => {
+            match value.as_str() { "allow" => "allow", "deny" => "deny", _ => "ask" }
+        }
+        _ => "ask",
+    };
+    if word == "ask" {
+        crate::recap::forget_request(&app, &id);
+        let _ = app.emit_to(WINDOW_LABEL, "approval-handoff",
+            handoff_payload(&id, &session, "antigravity", None, "external-standalone"));
+    }
+    if !matches!(outcome, DecisionOutcome::Handoff("relay-closed")) {
+        reply_line(&mut pipe, word).await;
+    }
+    pipe.finish();
+}
+
+async fn reply_line(pipe: &mut impl Relay, word: &str) {
+    let _ = pipe.write_all(format!("{word}\n").as_bytes()).await;
+    let _ = pipe.flush().await;
 }
 
 /// Finds, once per session, the window it runs in — see session_window.rs.
@@ -988,5 +1118,29 @@ mod card_receipt_tests {
         let(_chat,_lease,gate)=owned();let(mut server,client)=tokio::io::duplex(64);drop(client);
         assert!(matches!(until_native_closed(&mut server,Some(gate.review()),async{DecisionOutcome::Decision("allow".into())}).await,DecisionOutcome::Handoff("relay-closed")));
         let(mut server,_client)=tokio::io::duplex(64);assert!(matches!(until_native_closed(&mut server,Some(gate.review()),async{DecisionOutcome::Decision("deny".into())}).await,DecisionOutcome::Decision(s)if s=="deny"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block_on<T>(f: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(f)
+    }
+
+    /// The card's fast exit: the relay hanging up (Claude Code ended it because
+    /// the prompt was answered in the terminal) is seen at once, and a relay
+    /// that is still waiting is not mistaken for one that left.
+    #[test]
+    fn a_relay_that_hangs_up_is_seen_at_once() {
+        block_on(async {
+            let (mut ours, theirs) = tokio::io::duplex(64);
+            let waiting = tokio::time::timeout(Duration::from_millis(50), relay_closed(&mut ours)).await;
+            assert!(waiting.is_err(), "a live relay must not count as gone");
+            drop(theirs);
+            let gone = tokio::time::timeout(Duration::from_millis(50), relay_closed(&mut ours)).await;
+            assert!(gone.is_ok(), "a closed relay must be seen within the poll");
+        });
     }
 }

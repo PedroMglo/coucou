@@ -72,6 +72,18 @@ class AppModel(private val context: Context) : LinkListener {
     /** Set only by LaunchActivity (not exported), read by MainActivity: see [com.coucou.android.core.PendingLaunch]. */
     val launch = com.coucou.android.core.PendingLaunch()
 
+    /** Text shared to Coucou from another app, waiting to be put in the chat box (see [com.coucou.android.core.ShareDraft]). */
+    val shareDraft = com.coucou.android.core.ShareDraft()
+
+    /** Changes with every share, so a chat screen that is already open notices there is a new draft. */
+    var shareVersion by mutableStateOf(0); private set
+
+    /** Keeps [text] (cleaned) as the draft for the chat box. Called by the share target only. */
+    fun offerShare(text: String?) {
+        shareDraft.offer(text)
+        shareVersion++
+    }
+
     /** Agent tasks finished today, for the Today widget. Kept on this phone only (see [TodayStore]). */
     private val todayCounter = com.coucou.android.core.TodayCounter(TodayStore(context))
 
@@ -133,16 +145,74 @@ class AppModel(private val context: Context) : LinkListener {
         }
     }
 
+    /** The language the surfaces (Widgets, the ongoing notification) were last drawn in. */
+    private var surfacesLanguage: String? = null
+
+    /** The app's language is [tag] now: what the Widgets and the notification say is written again in it (once per change). */
+    fun languageChanged(tag: String) {
+        if (surfacesLanguage == tag) return
+        val first = surfacesLanguage == null
+        surfacesLanguage = tag
+        if (first) return // the first look at it, at start: nothing was drawn in another language
+        notifier.forgetOngoing()
+        WidgetHub.refreshAll(context)
+        pushGlance()
+    }
+
     /** What the user chose in Settings (sound, notices, quiet hours). */
     var settings by mutableStateOf(UserSettings.load(kv)); private set
 
     fun updateSettings(next: UserSettings) {
         val relayChanged = next.useRelay != settings.useRelay
+        val dndChoiceChanged = next.hideIslandInDnd != settings.hideIslandInDnd
         settings = next
         UserSettings.save(kv, next)
         applySound()
+        notifier.applyApprovalSettings(settings.vibration, settings.keepScreenOff)
+        com.coucou.android.core.MotionState.choice = settings.motion
         // Switching the relay on or off rebuilds the connection with the right routes.
         if (relayChanged) currentPairing?.let { restartLink(it) }
+        if (dndChoiceChanged) {
+            watchDnd()
+            refreshIsland()
+        }
+    }
+
+    // ── Do Not Disturb ──────────────────────────────────────────────────────────
+    // "Hide the island in Do Not Disturb": the island follows the phone's mode. The system tells us when the mode
+    // changes, and only while the user wants this: nothing is registered, and nothing runs, otherwise.
+
+    private val notificationManager = context.getSystemService(android.app.NotificationManager::class.java)
+
+    /** The phone is in Do Not Disturb: any mode but "all interruptions". An unknown mode counts as off. */
+    private fun dndOn(): Boolean = when (notificationManager?.currentInterruptionFilter) {
+        android.app.NotificationManager.INTERRUPTION_FILTER_PRIORITY,
+        android.app.NotificationManager.INTERRUPTION_FILTER_ALARMS,
+        android.app.NotificationManager.INTERRUPTION_FILTER_NONE -> true
+        else -> false
+    }
+
+    private val dndChanged = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: Context?, intent: android.content.Intent?) { main.post { refreshIsland() } }
+    }
+    private var watchingDnd = false
+
+    /** Listens for Do Not Disturb turning on or off while the choice is on, and stops when it is off. */
+    private fun watchDnd() {
+        val want = settings.hideIslandInDnd
+        if (want == watchingDnd) return
+        runCatching {
+            if (want) {
+                androidx.core.content.ContextCompat.registerReceiver(
+                    context, dndChanged,
+                    android.content.IntentFilter(android.app.NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED),
+                    androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+                )
+            } else {
+                context.unregisterReceiver(dndChanged)
+            }
+            watchingDnd = want
+        }
     }
 
     private fun applySound() {
@@ -150,7 +220,12 @@ class AppModel(private val context: Context) : LinkListener {
         sounds.volume = settings.volume
     }
 
-    init { applySound() }
+    init {
+        applySound()
+        notifier.applyApprovalSettings(settings.vibration, settings.keepScreenOff)
+        com.coucou.android.core.MotionState.choice = settings.motion
+        watchDnd()
+    }
 
     /** What the computer says Mochi wears ("auto" or an outfit); the last one it told, kept for when it is away. */
     var computerOutfit by mutableStateOf(com.coucou.android.mochi.outfit.Wardrobe.parse(kv.getString("computer_outfit", "")))
@@ -203,6 +278,9 @@ class AppModel(private val context: Context) : LinkListener {
     var diffsOffered by mutableStateOf(false); private set
     /** The Claude and Codex plan usage the computer sent (its switch is on); null: nothing to show. */
     var usage by mutableStateOf<com.coucou.android.link.UsageSnapshot?>(null); private set
+
+    /** Last week's recap the computer sent (its switch is on); null: nothing to show. Held in memory only, never stored. */
+    var recap by mutableStateOf<com.coucou.android.link.Recap?>(null); private set
     /** The read-only service cards the user allowed on the computer; empty: none. */
     var services by mutableStateOf<List<com.coucou.android.link.ServiceCard>>(emptyList()); private set
 
@@ -299,7 +377,19 @@ class AppModel(private val context: Context) : LinkListener {
         onAllow = { notifier.openAllow(it) },
         onDeny = { decide(it, allow = false) },
         onOpen = { notifier.openApp() },
+        onSwiped = { shadeAfterSwipe(it) },
     )
+
+    /** The island went up: leave what it showed in the notification shade (quietly), so nothing is lost with the swipe. */
+    private fun shadeAfterSwipe(spec: com.coucou.android.core.IslandSpec) {
+        when (IslandPlan.shadeFor(spec.kind)) {
+            IslandPlan.Shade.STATUS_NOTE -> notifier.showStatus(spec.pillId, spec.agent, spec.state, spec.text)
+            IslandPlan.Shade.REQUEST_NOTE ->
+                approvals.firstOrNull { it.fingerprint == spec.fingerprint }
+                    ?.let { notifier.showApproval(it, agentName(it.pillId), OverlayPolicy.ApprovalAlert.QUIET) }
+            IslandPlan.Shade.ONGOING -> Unit // the ongoing notification already says who is working
+        }
+    }
 
     fun overlayPermitted() = overlay.permitted()
 
@@ -318,7 +408,8 @@ class AppModel(private val context: Context) : LinkListener {
 
     private fun islandAllowed(): Boolean {
         val connected = mode != Mode.PAIRED || linkState == LinkState.CONNECTED
-        val why = OverlayPolicy.blocker(choice.wished, overlay.permitted(), inForeground)
+        val silenced = OverlayPolicy.silenced(settings.hideIslandInDnd, settings.hideIslandInDnd && dndOn())
+        val why = OverlayPolicy.blocker(choice.wished, overlay.permitted(), inForeground, silenced)
             ?: if (!connected) "not connected to a computer" else null
         if (why != null) Log.d("CoucouOverlay", "no island: $why")
         return why == null
@@ -367,7 +458,7 @@ class AppModel(private val context: Context) : LinkListener {
 
     /** The name the user knows the agent by: the session's own name, else the pill catalog. */
     fun agentName(pillId: String): String =
-        sessions.firstOrNull { it.pillId == pillId }?.agent?.takeIf { it.isNotBlank() } ?: Pills.byId(pillId)?.name ?: "An agent"
+        sessions.firstOrNull { it.pillId == pillId }?.agent?.takeIf { it.isNotBlank() } ?: Pills.byId(pillId)?.name ?: com.coucou.android.core.Texts.t("agent_an_title", "An agent")
 
     val isPaired get() = store.loadPairing() != null
 
@@ -392,6 +483,8 @@ class AppModel(private val context: Context) : LinkListener {
         return true
     }
 
+    @Volatile private var verifyGeneration = 0
+
     fun confirmPairing() {
         val link = pairRequest ?: return
         pairRequest = null
@@ -403,9 +496,28 @@ class AppModel(private val context: Context) : LinkListener {
     fun pair(text: String): Boolean {
         val p = PairingPayload.parse(text)
         if (p == null) { message = context.getString(R.string.msg_bad_link); return false }
-        stopLink()
-        store.savePairing(p)
-        connect(p)
+        if (!isPaired) {
+            stopLink()
+            store.savePairing(p)
+            connect(p)
+            return true
+        }
+        val gen = ++verifyGeneration
+        val useRelay = settings.useRelay
+        val modelName = Build.MODEL ?: "Android"
+        probeExecutor.execute {
+            val result = com.coucou.android.link.PairingVerifier.verify(p, useRelay = useRelay, deviceName = modelName)
+            main.post {
+                if (gen != verifyGeneration) return@post
+                if (result is com.coucou.android.link.PairingVerifier.Result.Verified) {
+                    stopLink()
+                    store.savePairing(p)
+                    connect(p)
+                } else {
+                    message = context.getString(R.string.msg_pair_verify_failed)
+                }
+            }
+        }
         return true
     }
 
@@ -462,6 +574,9 @@ class AppModel(private val context: Context) : LinkListener {
     // ── Keeping the link alive while the phone sleeps (docs/ANDROID_LINK.md, "Keeping the link alive") ──
 
     /** What happened to the link: when it was lost and why, and how often the screen had been off when it was. */
+    /** Whether the phone is on Wi-Fi now, for the sentence that names why the link was lost. */
+    val wifiUp: Boolean get() = netWatch.wifiUp
+
     var health by mutableStateOf(LinkHealth(dropsWhileScreenOff = kv.getInt("link_drops_off", 0))); private set
     /** The screen was off at some point since the link last came up. */
     @Volatile private var screenWasOff = false
@@ -577,8 +692,10 @@ class AppModel(private val context: Context) : LinkListener {
     fun stopDemo() = stopLink()
 
     private fun stopLink() {
+        verifyGeneration++
         closeDiff()
         usage = null
+        recap = null
         services = emptyList()
         fallback?.stop()
         fallback = null
@@ -671,6 +788,7 @@ class AppModel(private val context: Context) : LinkListener {
             detailsOffered = Protocol.CAP_DETAILS in caps
             diffsOffered = Protocol.CAP_DIFFS in caps
             if (Protocol.CAP_USAGE !in caps) usage = null
+            if (Protocol.CAP_RECAP !in caps) recap = null
             pushGlance() // the Usage Ring says to turn it on
             if (Protocol.CAP_SERVICES !in caps) services = emptyList()
         }
@@ -681,6 +799,10 @@ class AppModel(private val context: Context) : LinkListener {
             this.usage = usage.takeIf { it.claude != null || it.codex != null }
             pushGlance() // the Usage Ring follows it
         }
+    }
+
+    override fun onRecap(recap: com.coucou.android.link.Recap?) {
+        main.post { this.recap = recap }
     }
 
     override fun onServices(cards: List<com.coucou.android.link.ServiceCard>) {
@@ -727,7 +849,7 @@ class AppModel(private val context: Context) : LinkListener {
                 val name = agentName(s.pillId)
                 val sound = com.coucou.android.mochi.MochiConst.STATE_SOUND[s.state]
                 if (sound != null && StatusPolicy.stateSoundWanted(prev, s.state, settings)) sounds.play(sound)
-                val a = StatusPolicy.announce(prev, s.state, settings, minute, inForeground)
+                val a = StatusPolicy.announce(prev, s.state, settings, minute, inForeground, s.pillId)
                 if (a.sound && sound != null) sounds.play(sound)
                 if (a.notify) notifier.showStatus(s.pillId, name, s.state, s.statusText)
                 IslandPlan.flash(prev, s, settings, minute, islandAllowed(), this::agentName)?.let { overlay.flash(it) }

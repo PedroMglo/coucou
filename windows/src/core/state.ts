@@ -123,6 +123,12 @@ export interface Settings {
   autoCloseInterval: number;
   /** Hovering the island opens it all the way (off: hovering only peeks). */
   openOnHover: boolean;
+  /** Open the island for a moment when any pill finishes or hits an error. */
+  alertsFromAllPills: boolean;
+  /** Date and time in the middle of the compact island. */
+  showClock: boolean;
+  /** What the closed island shows at the top of the screen (see core/closed.ts). */
+  closedIsland: string;
   absenceInterval: number;
   /** Declared pills next to the main one (at most 6), in the order they were added. */
   activeIntegrations: string[];
@@ -142,6 +148,8 @@ export interface Settings {
   model: string;
   /** Show the Claude plan pill (5 h and weekly limits) in the island's header. */
   showPlanInNotch: boolean;
+  /** Show the Claude plan percentage in the compact island next to the agent dots. */
+  showPlanInCompactIsland: boolean;
   /** Coucou's status line relay is installed in Claude Code's settings. */
   planRelayInstalled: boolean;
   /** Show the Codex plan pill in the island's header. */
@@ -161,6 +169,8 @@ export interface Settings {
   voiceAsrPython: string;
   voiceAsrModel: string;
   voiceAsrEngine: 'auto'|'whisper'|'parakeet';
+  /** Settings → Chat → Your AI subscriptions: each provider's switch (cli_relay.rs). */
+  chatSubscriptions: Record<string, boolean>;
   /** Model server addresses once connected; empty means not connected. */
   ollamaUrl: string;
   lmstudioUrl: string;
@@ -207,6 +217,9 @@ export const DEFAULT_SETTINGS: Settings = {
   soundVolume: 0.12,
   autoCloseInterval: 15,
   openOnHover: false,
+  alertsFromAllPills: false,
+  showClock: false,
+  closedIsland: "mochi",
   absenceInterval: 180,
   activeIntegrations: [
     "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
@@ -223,6 +236,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hooksInstalled: false,
   model: "claude-opus-5",
   showPlanInNotch: false,
+  showPlanInCompactIsland: false,
   planRelayInstalled: false,
   showCodexPlanInNotch: false,
   chatProvider: "anthropic",
@@ -238,6 +252,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceAsrModel: "",
   voiceAsrEngine: 'auto',
   chatModels: {},
+  chatSubscriptions: {},
   ollamaUrl: "",
   lmstudioUrl: "",
   customUrl: "",
@@ -276,6 +291,8 @@ class AppState {
   uploadProgress = 0;
   uploadDuration = 2.4;
   fileDragOver = false;
+  /** The session pill a dragged file is over on the drop card (Mac dropSessionTarget). */
+  dropSessionTarget: string | null = null;
 
   private chatContexts = new Map<string,PromptContext>();
   private chatFiles = new Map<string,PetFile[]>();
@@ -427,6 +444,7 @@ class AppState {
     if(session){session.state='working';session.pillBadge=null;}
     this.updateTask(req.pillId, "working");
     this.setPillBadge(req.pillId, null);
+
     const previous = this.focusBeforeApproval;
     this.focusBeforeApproval = null;
     const editor=this.editorBeforeApproval;this.editorBeforeApproval=null;

@@ -111,6 +111,8 @@ class FakeElement {
     for (const n of nodes) this.insertBefore(typeof n === 'string' ? new FakeText(n) : n, first);
   }
   replaceChildren(...nodes) {
+    // As in a real DOM, the old children no longer have a parent.
+    for (const old of this.childNodes) old.parentNode = null;
     this.childNodes = [];
     this.append(...nodes);
   }

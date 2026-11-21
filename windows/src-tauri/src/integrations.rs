@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
-use crate::github::{self, GitHubActivity, GitHubPulse};
+use crate::github::{self, CiState, ContributionDay, GitHubActivity, GitHubPr, GitHubPulse, GitHubRepoCi, ReviewState};
 use crate::island::WINDOW_LABEL;
 use crate::log;
 use crate::secrets;
@@ -44,7 +44,7 @@ pub struct IntegrationEvent {
     pub detail: Option<String>,
 }
 
-fn emit(app: &AppHandle, update: IntegrationUpdate) {
+pub(crate) fn emit(app: &AppHandle, update: IntegrationUpdate) {
     let _ = app.emit_to(WINDOW_LABEL, "integration", update);
 }
 
@@ -73,12 +73,14 @@ pub fn start(app: AppHandle) {
         spawn(app.clone(), GITHUB_ID, 7, 300, poll_github);
         spawn_github_loops(app.clone());
     }
-    spawn(app.clone(), "integration_calcom", 8, 300, poll_calcom);
+    spawn(app.clone(), "integration_gitlab", 7, 300, poll_gitlab);
+    spawn(app.clone(), "integration_gitea", 7, 300, poll_gitea);
+    spawn(app.clone(), "integration_calcom", 8, 300, crate::calcom::poll);
     spawn(app, "integration_notion", 9, 300, poll_notion);
 }
 
 /// Shared admission for scheduled polls and manual refreshes.
-fn polling_allowed(app: &AppHandle, id: &str) -> bool {
+pub(crate) fn enabled(app: &AppHandle, id: &str) -> bool {
     if PAUSED.load(Ordering::Relaxed) || crate::pet_config::retired(id) {
         return false;
     }
@@ -104,7 +106,7 @@ where
             // integration the user switched off, or a paused app, must make no
             // network calls at all — CLAUDE.md allows talking only to services
             // the user configured, and a disabled one is not configured.
-            if !polling_allowed(&app, id) {
+            if !enabled(&app, id) {
                 continue;
             }
             poll(app.clone()).await;
@@ -114,7 +116,7 @@ where
 
 /// One-shot refresh from the Refresh buttons in the island.
 pub async fn poll_once(app: AppHandle, id: &str) {
-    if !polling_allowed(&app, id) {
+    if !enabled(&app, id) {
         return;
     }
     match id {
@@ -124,13 +126,344 @@ pub async fn poll_once(app: AppHandle, id: &str) {
             github_refresh_if_stale("activity");
             poll_github(app).await
         }
+        "integration_gitlab" => poll_gitlab(app).await,
+        "integration_gitea" => poll_gitea(app).await,
         "integration_vercel" => poll_vercel(app).await,
         "integration_n8n" => poll_n8n(app).await,
         "integration_resend" => poll_resend(app).await,
         "integration_notion" => poll_notion(app).await,
-        "integration_calcom" => poll_calcom(app).await,
+        "integration_calcom" => crate::calcom::poll(app).await,
         _ => {}
     }
+}
+
+// ── GitLab ───────────────────────────────────────────────────────────────────
+fn gitea_api_base() -> Option<String> {
+    let url = secrets::get("gitea-url")?;
+    let parsed = reqwest::Url::parse(url.trim()).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return None;
+    }
+    Some(format!("{}/api/v1", parsed.as_str().trim_end_matches('/')))
+}
+
+async fn poll_gitea(app: AppHandle) {
+    if PAUSED.load(Ordering::Relaxed) || !enabled(&app, "integration_gitea") { return; }
+    let (Some(token), Some(base)) = (secrets::get("gitea-token"), gitea_api_base()) else { return };
+    let Ok(http) = reqwest::Client::builder().timeout(TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none()).build() else { return };
+    let user = http.get(format!("{base}/user")).header("Authorization", format!("token {token}")).send().await;
+    let Ok(response) = user else { return };
+    if !response.status().is_success() {
+        emit(&app, IntegrationUpdate { id: "integration_gitea", data: json!({}),
+            error: Some(status_error(response.status().as_u16(), &crate::i18n::t("Token lacks the needed scope"))), event: None });
+        return;
+    }
+    let user: Value = response.json().await.unwrap_or(json!({}));
+    let repos_response = http.get(format!("{base}/user/repos?limit=100&sort=updated"))
+        .header("Authorization", format!("token {token}")).send().await;
+    let repos: Vec<Value> = match repos_response {
+        Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let stars: i64 = repos.iter().filter_map(|r| r.get("stars_count").and_then(Value::as_i64)).sum();
+    let open_prs: i64 = repos.iter().filter_map(|r| r.get("open_pr_counter").and_then(Value::as_i64)).sum();
+    let profile_url = user.get("html_url").and_then(Value::as_str).unwrap_or("");
+    // Gitea's heatmap API is the equivalent of GitHub's contribution calendar.
+    // The full year supplies the compact card and detail grid. This is optional
+    // on older/self-hosted instances, so a missing one never hides the stats.
+    let login = user.get("login").and_then(Value::as_str).unwrap_or("");
+    let heatmap: Vec<Value> = if login.is_empty() {
+        Vec::new()
+    } else {
+        match http.get(format!("{base}/users/{login}/heatmap"))
+            .header("Authorization", format!("token {token}")).send().await {
+            Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    };
+    let activity = gitea_activity(&heatmap, now_ms());
+    let my_raw = gitea_get(&http, &token, format!("{base}/repos/issues/search?state=open&type=pulls&created=true&limit=20")).await;
+    let review_raw = gitea_get(&http, &token, format!("{base}/repos/issues/search?state=open&type=pulls&review_requested=true&limit=20")).await;
+    let my_prs = gitea_prs(&my_raw);
+    let to_review = gitea_prs(&review_raw);
+    let main_ci = gitea_main_ci(&http, &token, &base, &repos).await;
+    let pulse = GitHubPulse { login: login.to_string(), my_prs, to_review, main_ci, fetched_at: now_ms() };
+    emit(&app, IntegrationUpdate { id: "integration_gitea", data: json!({
+        "totalRepos": repos.len(), "totalStars": stars, "openPRs": open_prs,
+        "profileUrl": profile_url, "pulse": pulse, "activity": activity,
+    }), error: None, event: None });
+}
+
+async fn gitea_get(http: &reqwest::Client, token: &str, url: String) -> Vec<Value> {
+    match http.get(url).header("Authorization", format!("token {token}")).send().await {
+        Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn gitea_prs(raw: &[Value]) -> Vec<GitHubPr> {
+    raw.iter().filter_map(|pr| {
+        let repo = pr.get("repository")?.get("full_name")?.as_str()?.to_string();
+        let number = pr.get("number")?.as_i64()?;
+        Some(GitHubPr { id: format!("{repo}#{number}"), title: pr.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
+            url: pr.get("html_url").and_then(Value::as_str).unwrap_or("").to_string(), repo, number,
+            is_draft: pr.get("is_draft").and_then(Value::as_bool).unwrap_or(false), ci: CiState::Unknown,
+            review: ReviewState::Unknown, head_sha: None })
+    }).collect()
+}
+
+fn gitea_ci(state: Option<&str>) -> CiState {
+    match state.map(str::to_ascii_lowercase).as_deref() {
+        Some("success") => CiState::Success,
+        Some("pending") => CiState::Pending,
+        Some("failure") | Some("error") => CiState::Failure,
+        _ => CiState::Unknown,
+    }
+}
+
+pub(crate) fn gitea_workflow_ci(status: Option<&str>, conclusion: Option<&str>) -> CiState {
+    let s = status.map(str::to_ascii_lowercase);
+    let c = conclusion.map(str::to_ascii_lowercase);
+
+    match (s.as_deref(), c.as_deref()) {
+        (Some("completed") | Some("done"), Some("success")) => CiState::Success,
+        (
+            Some("completed") | Some("done"),
+            Some("failure") | Some("timed_out") | Some("cancelled") | Some("action_required"),
+        ) => CiState::Failure,
+        (Some("completed") | Some("done"), Some("skipped") | Some("neutral")) => CiState::Success,
+        (
+            Some(
+                "running"
+                | "in_progress"
+                | "queued"
+                | "waiting"
+                | "pending"
+                | "blocked"
+                | "requested",
+            ),
+            _,
+        ) => CiState::Pending,
+        _ => match (s.as_deref(), c.as_deref()) {
+            (Some("success"), _) | (_, Some("success")) => CiState::Success,
+            (Some("failure"), _) | (_, Some("failure")) => CiState::Failure,
+            (Some("pending"), _) | (_, Some("pending")) => CiState::Pending,
+            _ => CiState::Unknown,
+        },
+    }
+}
+
+async fn gitea_actions_ci(
+    http: &reqwest::Client,
+    token: &str,
+    base: &str,
+    repo: &str,
+    branch: &str,
+) -> Option<(CiState, Option<String>)> {
+    let url = format!("{base}/repos/{repo}/actions/runs?branch={branch}&page=1&limit=5");
+    let resp = http
+        .get(url)
+        .header("Authorization", format!("token {token}"))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: Value = resp.json().await.ok()?;
+    let runs = if let Some(arr) = body.get("workflow_runs").and_then(Value::as_array) {
+        arr.as_slice()
+    } else if let Some(arr) = body.as_array() {
+        arr.as_slice()
+    } else {
+        &[]
+    };
+
+    let target = runs.iter().find(|r| {
+        r.get("head_branch")
+            .and_then(Value::as_str)
+            .map_or(true, |b| b.eq_ignore_ascii_case(branch))
+    })?;
+
+    let status = target.get("status").and_then(Value::as_str);
+    let conclusion = target.get("conclusion").and_then(Value::as_str);
+    let head_sha = target
+        .get("head_sha")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let ci = gitea_workflow_ci(status, conclusion);
+    if ci != CiState::Unknown {
+        Some((ci, head_sha))
+    } else {
+        None
+    }
+}
+
+async fn gitea_main_ci(http: &reqwest::Client, token: &str, base: &str, repos: &[Value]) -> Vec<GitHubRepoCi> {
+    let mut out = Vec::new();
+    for repo in repos.iter().take(20) {
+        let Some(name) = repo.get("full_name").and_then(Value::as_str) else { continue };
+        let branch = repo.get("default_branch").and_then(Value::as_str).unwrap_or("main");
+        let statuses = gitea_get(http, token, format!("{base}/repos/{name}/commits/{branch}/statuses?limit=1&sort=recentupdate")).await;
+        let mut ci = gitea_ci(statuses.first().and_then(|s| s.get("state")).and_then(Value::as_str));
+        let mut head_sha = None;
+        if ci == CiState::Unknown {
+            if let Some((action_ci, action_sha)) = gitea_actions_ci(http, token, base, name, branch).await {
+                ci = action_ci;
+                head_sha = action_sha;
+            }
+        }
+        out.push(GitHubRepoCi { repo: name.to_string(), url: repo.get("html_url").and_then(Value::as_str).unwrap_or("").to_string(),
+            branch: branch.to_string(), ci, head_sha });
+    }
+    out
+}
+
+fn gitea_activity(heatmap: &[Value], fetched_at: u64) -> GitHubActivity {
+    let today = (fetched_at / 86_400_000) as i64;
+    let mut start = today - 364;
+    start -= i64::from(civil_day(start).3);
+    let mut weeks: Vec<Vec<ContributionDay>> = Vec::new();
+    for day in start..=today {
+        let (y, m, d, weekday) = civil_day(day);
+        if weekday == 0 || weeks.is_empty() { weeks.push(Vec::new()); }
+        let count = heatmap.iter().find_map(|entry| {
+            let ts = entry.get("timestamp")?.as_i64()?;
+            let entry_day = if ts > 10_000_000_000 { ts / 86_400_000 } else { ts / 86_400 };
+            (entry_day == day).then(|| entry.get("contributions").and_then(Value::as_i64).unwrap_or(0).max(0))
+        }).unwrap_or(0);
+        weeks.last_mut().unwrap().push(ContributionDay {
+            date: format!("{y:04}-{m:02}-{d:02}"), count, weekday,
+            level: if count == 0 { 0 } else if count == 1 { 1 } else if count < 4 { 2 } else if count < 8 { 3 } else { 4 },
+        });
+    }
+    let total = weeks.iter().flatten().map(|d| d.count).sum(); GitHubActivity { total, weeks, fetched_at }
+}
+
+/// A Gitea address or token changed: old totals belong to the previous account
+/// and must not remain on the card while the new credentials are checked.
+pub fn gitea_credentials_changed(app: &AppHandle) {
+    emit(app, IntegrationUpdate { id: "integration_gitea", data: json!({}), error: None, event: None });
+    if !PAUSED.load(Ordering::Relaxed) && enabled(app, "integration_gitea") {
+        tauri::async_runtime::spawn(poll_gitea(app.clone()));
+    }
+}
+
+fn gitlab_ci(raw: Option<&str>) -> CiState {
+    match raw {
+        Some("success") => CiState::Success,
+        Some("failed") | Some("canceled") | Some("skipped") => CiState::Failure,
+        Some("running") | Some("pending") | Some("created") | Some("preparing") | Some("waiting_for_resource") => CiState::Pending,
+        _ => CiState::Unknown,
+    }
+}
+
+/// Gregorian date and Sunday-based weekday for a day counted from 1970-01-01.
+fn civil_day(day: i64) -> (i32, u32, u32, u8) {
+    let z = day + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + i64::from(m <= 2);
+    (year as i32, m as u32, d as u32, (day + 4).rem_euclid(7) as u8)
+}
+
+fn gitlab_activity(events: &[Value], fetched_at: u64) -> GitHubActivity {
+    let mut counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for event in events {
+        if let Some(date) = event.get("created_at").and_then(Value::as_str).and_then(|s| s.get(..10)) {
+            *counts.entry(date.to_string()).or_default() += 1;
+        }
+    }
+    let today = (fetched_at / 86_400_000) as i64;
+    let mut start = today - 364;
+    start -= i64::from(civil_day(start).3); // start the first column on Sunday
+    let mut weeks: Vec<Vec<ContributionDay>> = Vec::new();
+    for day in start..=today {
+        let (year, month, date, weekday) = civil_day(day);
+        if weekday == 0 || weeks.is_empty() { weeks.push(Vec::new()); }
+        let key = format!("{year:04}-{month:02}-{date:02}");
+        let count = counts.get(&key).copied().unwrap_or(0);
+        let level = if count == 0 { 0 } else if count == 1 { 1 } else if count <= 3 { 2 } else if count <= 7 { 3 } else { 4 };
+        weeks.last_mut().unwrap().push(ContributionDay { date: key, count, level, weekday });
+    }
+    let total = weeks.iter().flatten().map(|day| day.count).sum();
+    GitHubActivity { total, weeks, fetched_at }
+}
+
+async fn poll_gitlab(app: AppHandle) {
+    if PAUSED.load(Ordering::Relaxed) || !enabled(&app, "integration_gitlab") { return; }
+    let Some(token) = secrets::get("gitlab-token") else { return };
+    let instance = secrets::get("gitlab-url").unwrap_or_else(|| "https://gitlab.com".into());
+    let Ok(instance) = reqwest::Url::parse(instance.trim()) else { return };
+    if !matches!(instance.scheme(), "http" | "https") || instance.host_str().is_none() { return; }
+    let base = instance.as_str().trim_end_matches('/').to_string();
+    // PRIVATE-TOKEN must never follow an instance redirect to another server.
+    let Ok(http) = reqwest::Client::builder().timeout(TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none()).build() else { return };
+    let headers = |request: reqwest::RequestBuilder| request.header("PRIVATE-TOKEN", &token);
+    let user = headers(http.get(format!("{base}/api/v4/user"))).send().await;
+    let Ok(user) = user else { return };
+    if !user.status().is_success() {
+        emit(&app, IntegrationUpdate { id: "integration_gitlab", data: json!({}), error: Some(status_error(user.status().as_u16(), &crate::i18n::t("Token lacks the needed scope"))), event: None }); return;
+    }
+    let user: Value = user.json().await.unwrap_or(json!({}));
+    let login = user.get("username").and_then(Value::as_str).unwrap_or("GitLab").to_string();
+    let profile_url = user.get("web_url").and_then(Value::as_str).map(str::to_string);
+
+    // GitHub's overview counts repositories owned by the user, so GitLab does
+    // the same. Walk the pages for accurate repository and star totals; the
+    // first ten (ordered by recent activity) also drive default-branch CI.
+    let mut projects = Vec::new();
+    for page in 1..=10 {
+        let response = headers(http.get(format!("{base}/api/v4/projects")).query(&[
+            ("owned", "true"),
+            ("simple", "true"),
+            ("order_by", "last_activity_at"),
+            ("per_page", "100"),
+            ("page", &page.to_string()),
+        ])).send().await;
+        let batch: Vec<Value> = match response {
+            Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let done = batch.len() < 100;
+        projects.extend(batch);
+        if done { break; }
+    }
+    let list = |url: String| async { match headers(http.get(url)).send().await { Ok(v) if v.status().is_success() => v.json::<Vec<Value>>().await.unwrap_or_default(), _ => Vec::new() } };
+    let mine = list(format!("{base}/api/v4/merge_requests?scope=created_by_me&state=opened&per_page=20")).await;
+    let review = list(format!("{base}/api/v4/merge_requests?scope=reviews_for_me&state=opened&per_page=20")).await;
+    let mut events = Vec::new();
+    let today = (now_ms() / 86_400_000) as i64;
+    let (year, month, day, _) = civil_day(today - 364);
+    let after = format!("{year:04}-{month:02}-{day:02}");
+    for page in 1..=10 {
+        let batch = list(format!("{base}/api/v4/events?scope=all&after={after}&per_page=100&page={page}")).await;
+        let done = batch.len() < 100;
+        events.extend(batch);
+        if done { break; }
+    }
+    let to_pr = |v: &Value| -> Option<GitHubPr> { let repo = v.get("references")?.get("full")?.as_str()?.split('!').next()?.to_string(); let n = v.get("iid")?.as_i64()?; Some(GitHubPr { id: format!("{repo}#{n}"), title: v.get("title")?.as_str()?.to_string(), url: v.get("web_url")?.as_str()?.to_string(), repo, number: n, is_draft: v.get("draft").and_then(Value::as_bool).unwrap_or(false), ci: gitlab_ci(v.get("head_pipeline").and_then(|p| p.get("status")).and_then(Value::as_str)), review: ReviewState::Unknown, head_sha: v.get("sha").and_then(Value::as_str).map(str::to_string) }) };
+    let mut main_ci = Vec::new();
+    for project in projects.iter().take(10) {
+        let (Some(id), Some(repo), Some(url)) = (project.get("id").and_then(Value::as_i64), project.get("path_with_namespace").and_then(Value::as_str), project.get("web_url").and_then(Value::as_str)) else { continue };
+        let branch = project.get("default_branch").and_then(Value::as_str).unwrap_or("main");
+        let pipelines: Vec<Value> = match http.get(format!("{base}/api/v4/projects/{id}/pipelines")).query(&[("ref", branch), ("per_page", "1")]).header("PRIVATE-TOKEN", &token).send().await { Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(), _ => Vec::new() };
+        let ci = gitlab_ci(pipelines.first().and_then(|p| p.get("status")).and_then(Value::as_str));
+        main_ci.push(GitHubRepoCi { repo: repo.into(), url: url.into(), branch: branch.into(), ci, head_sha: None });
+    }
+    let fetched_at = now_ms();
+    let pulse = GitHubPulse { login, my_prs: mine.iter().filter_map(to_pr).collect(), to_review: review.iter().filter_map(to_pr).collect(), main_ci, fetched_at };
+    let activity = gitlab_activity(&events, fetched_at);
+    let stars: i64 = projects.iter().filter_map(|p| p.get("star_count").and_then(Value::as_i64)).sum();
+    emit(&app, IntegrationUpdate { id: "integration_gitlab", data: json!({ "projects": projects.len(), "totalRepos": projects.len(), "totalStars": stars, "profileUrl": profile_url, "pulse": pulse, "activity": activity }), error: None, event: None });
 }
 
 /// Remembers the newest id per integration so an event fires once, not on every poll.
@@ -269,7 +602,7 @@ async fn poll_stripe(app: AppHandle) {
     const KEY: &str = "stripe-api-key";
     let Some(key) = secrets::get(KEY) else { return };
     let is_current = || {
-        polling_allowed(&app, ID) && secrets::get(KEY).as_deref() == Some(key.as_str())
+        enabled(&app, ID) && secrets::get(KEY).as_deref() == Some(key.as_str())
     };
     let auth = format!("Basic {}", crate::claude::base64_for(format!("{key}:").as_bytes()));
     let http = client();
@@ -381,30 +714,51 @@ async fn poll_github(app: AppHandle) {
         .and_then(Value::as_i64)
         .unwrap_or(0);
 
-    let repos = http
-        .get("https://api.github.com/user/repos?per_page=100&affiliation=owner&sort=pushed")
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "Coucou")
-        .send()
-        .await;
-    let stars: i64 = match repos {
-        Ok(r) if r.status().is_success() => r
-            .json::<Value>()
-            .await
-            .ok()
-            .and_then(|v| v.as_array().cloned())
-            .map(|list| {
-                list.iter()
-                    .filter_map(|r| r.get("stargazers_count").and_then(Value::as_i64))
-                    .sum()
-            })
-            .unwrap_or(0),
-        _ => 0,
-    };
+    let total_repos = public + private;
+    let max_pages = calculate_repo_pages(total_repos);
+    let mut stars: i64 = 0;
 
-    GITHUB.cache.lock().unwrap().stats = Some((public + private, stars));
+    for page in 1..=max_pages {
+        let url = format!(
+            "https://api.github.com/user/repos?per_page=100&affiliation=owner&sort=pushed&page={page}"
+        );
+        let resp = http
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "Coucou")
+            .send()
+            .await;
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                let Ok(list) = r.json::<Vec<Value>>().await else { break };
+                let count = list.len();
+                stars += sum_repo_stars(&list);
+                if count < 100 {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+
+    GITHUB.cache.lock().unwrap().stats = Some((total_repos, stars));
     emit_github(&app);
+}
+
+pub(crate) fn calculate_repo_pages(total_repos: i64) -> usize {
+    if total_repos <= 0 {
+        1
+    } else {
+        usize::try_from((total_repos + 99) / 100).unwrap_or(1).clamp(1, 50)
+    }
+}
+
+pub(crate) fn sum_repo_stars(repos: &[Value]) -> i64 {
+    repos
+        .iter()
+        .filter_map(|r| r.get("stargazers_count").and_then(Value::as_i64))
+        .sum()
 }
 
 // ── GitHub pulse and activity (GithubPoller.swift) ────────────────────────────
@@ -527,7 +881,7 @@ async fn github_graphql(token: &str, query: &str, what: &str) -> Option<Value> {
 
 /// Returns whether some CI is still running, which sets the next interval.
 async fn run_github_pulse(app: &AppHandle) -> bool {
-    if !polling_allowed(app, GITHUB_ID) {
+    if !enabled(app, GITHUB_ID) {
         return false;
     }
     let Some(token) = secrets::get("github-token") else { return false };
@@ -556,7 +910,7 @@ async fn run_github_pulse(app: &AppHandle) -> bool {
 }
 
 async fn run_github_activity(app: &AppHandle) {
-    if !polling_allowed(app, GITHUB_ID) {
+    if !enabled(app, GITHUB_ID) {
         return;
     }
     let Some(token) = secrets::get("github-token") else { return };
@@ -621,7 +975,7 @@ pub fn github_token_changed(app: &AppHandle) {
     emit_github(app);
     GITHUB.pulse_wake.notify_one();
     GITHUB.activity_wake.notify_one();
-    if has_token && polling_allowed(app, GITHUB_ID) {
+    if has_token && enabled(app, GITHUB_ID) {
         tauri::async_runtime::spawn(poll_github(app.clone()));
     }
 }
@@ -823,52 +1177,6 @@ fn notion_title(value: &Value) -> Option<String> {
 
 // ── Cal.com ───────────────────────────────────────────────────────────────────
 
-async fn poll_calcom(app: AppHandle) {
-    let Some(key) = secrets::get("calcom-api-key") else { return };
-    let request = client()
-        .get("https://api.cal.com/v2/bookings?status=upcoming&sortStart=asc")
-        .header("Authorization", format!("Bearer {key}"))
-        .header("cal-api-version", "2024-08-13");
-    let Some(bookings) = read_service(
-        &app, "integration_calcom", request, &crate::i18n::t("Key lacks access"),
-        calcom_bookings,
-    ).await else { return };
-
-    emit(&app, IntegrationUpdate {
-        id: "integration_calcom",
-        data: json!({ "bookings": bookings }),
-        error: None,
-        event: None,
-    });
-}
-
-fn calcom_bookings(response: Value) -> Option<Vec<Value>> {
-    if response.get("status").is_some_and(|status| status.as_str() != Some("success")) {
-        return None;
-    }
-    response.get("data")?.as_array()?.iter().map(|booking| {
-        let start = booking.get("start").or_else(|| booking.get("startTime"))?.as_str()?;
-        chrono::DateTime::parse_from_rfc3339(start).ok()?;
-        let attendee = booking.get("attendees").and_then(Value::as_array).and_then(|a| a.first());
-        let notes = booking
-            .get("responses")
-            .and_then(|r| r.get("notes"))
-            .and_then(|n| n.get("value"))
-            .and_then(Value::as_str)
-            .or_else(|| booking.get("description").and_then(Value::as_str))
-            .filter(|s| !s.is_empty());
-        Some(json!({
-            "id": booking.get("id").map(|v| v.to_string()).unwrap_or_default(),
-            "title": booking.get("title").and_then(Value::as_str).unwrap_or("Meeting"),
-            "start": start,
-            "status": booking.get("status").and_then(Value::as_str).unwrap_or("accepted"),
-            "attendeeName": attendee.and_then(|a| a.get("name")).and_then(Value::as_str),
-            "attendeeEmail": attendee.and_then(|a| a.get("email")).and_then(Value::as_str),
-            "attendeeNotes": notes,
-        }))
-    }).collect()
-}
-
 // ── n8n ───────────────────────────────────────────────────────────────────────
 
 fn n8n_execution_identity(base: &str, key: &str, id: &str) -> String {
@@ -897,34 +1205,79 @@ fn n8n_needs_detail(identity: &str) -> bool {
     false
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct N8nExecution {
+    identity: String,
+    workflow: String,
+    status: String,
+    detail: Option<String>,
+}
+
+static N8N_LAST: std::sync::LazyLock<Mutex<Option<N8nExecution>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+
+/// An n8n URL or API key changed: forget the previously seen execution so the
+/// next poll runs immediately with the new credentials.
+pub fn n8n_credentials_changed(app: &AppHandle) {
+    SEEN.0.lock().unwrap().remove("n8n");
+    *N8N_LAST.lock().unwrap() = None;
+    emit(app, IntegrationUpdate { id: "integration_n8n", data: json!({}), error: None, event: None });
+    if enabled(app, "integration_n8n") {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            poll_n8n(app).await;
+        });
+    }
+}
+
+fn extract_n8n_workflow_name(json: &Value) -> Option<String> {
+    json.get("workflowData")
+        .and_then(|w| w.get("name"))
+        .and_then(Value::as_str)
+        .or_else(|| json.get("workflowName").and_then(Value::as_str))
+        .or_else(|| json.get("name").and_then(Value::as_str))
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 async fn poll_n8n(app: AppHandle) {
+    if !enabled(&app, "integration_n8n") {
+        return;
+    }
     let (Some(key), Some(raw_base)) = (secrets::get("n8n-api-key"), secrets::get("n8n-url")) else {
         return;
     };
     let base = raw_base.trim_end_matches('/').to_string();
     let http = client();
     let may_continue = || {
-        polling_allowed(&app, "integration_n8n") && n8n_connection_is_current(&base, &key)
+        enabled(&app, "integration_n8n") && n8n_connection_is_current(&base, &key)
     };
 
     // Same two shapes as the Swift poller: the public API first, then /rest.
     let list_urls = [
-        format!("{base}/api/v1/executions?limit=1&includeData=false"),
-        format!("{base}/rest/executions?limit=1&includeData=false"),
+        format!("{base}/api/v1/executions?limit=10&includeData=false"),
+        format!("{base}/rest/executions?limit=10&includeData=false"),
     ];
 
     let mut items: Option<Vec<Value>> = None;
+    let mut last_status: Option<u16> = None;
+    let mut transport_failed = false;
     for url in &list_urls {
         if !may_continue() {
             return;
         }
-        let Ok(response) = http.get(url).header("X-N8N-API-KEY", &key).header("Accept", "application/json").send().await
-        else {
-            continue;
+        let response = http.get(url).header("X-N8N-API-KEY", &key).header("Accept", "application/json").send().await;
+        let response = match response {
+            Ok(r) => r,
+            Err(_) => {
+                transport_failed = true;
+                continue;
+            }
         };
         if !response.status().is_success() {
             // Only the status: a self-hosted base URL can carry credentials.
             log::line(format!("n8n list HTTP {}", response.status()));
+            last_status = Some(response.status().as_u16());
             continue;
         }
         let Ok(json) = response.json::<Value>().await else { continue };
@@ -938,64 +1291,89 @@ async fn poll_n8n(app: AppHandle) {
         }
     }
 
-    let Some(first) = items.and_then(|list| list.into_iter().next()) else { return };
-    let id = match first.get("id") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        _ => return,
+    if !may_continue() { return; }
+    let Some(list) = items else {
+        let error = match (last_status, transport_failed) {
+            (Some(code), _) => status_error(code, &crate::i18n::t("Key lacks access")),
+            (None, true) => crate::i18n::t("Could not reach the service."),
+            (None, false) => crate::i18n::tf("API error {code}", &[("code", "?")]),
+        };
+        emit(&app, IntegrationUpdate { id: "integration_n8n", data: json!({}), error: Some(error), event: None });
+        return;
     };
 
+    let Some(first) = find_terminal_execution(&list) else {
+        // Seed SEEN so the first future execution is not treated as the initial load.
+        let empty = n8n_execution_identity(&base, &key, "");
+        let _ = is_new("n8n", &empty);
+        *N8N_LAST.lock().unwrap() = None;
+        emit(&app, IntegrationUpdate { id: "integration_n8n", data: json!({}), error: None, event: None });
+        return;
+    };
+    let Some(id) = parse_execution_id(first) else { return };
+
     let status = first.get("status").and_then(Value::as_str).unwrap_or("");
-    if !["success", "error", "crashed", "canceled", "failed"].contains(&status) {
+    if !may_continue() {
         return;
     }
     let identity = n8n_execution_identity(&base, &key, &id);
-    if !may_continue() || !n8n_needs_detail(&identity) {
-        return;
-    }
+    let needs_detail = n8n_needs_detail(&identity);
     let success = status == "success";
 
-    let detail_urls = [
-        format!("{base}/api/v1/executions/{id}?includeData=true"),
-        format!("{base}/api/v1/executions/{id}"),
-        format!("{base}/rest/executions/{id}?includeData=true"),
-        format!("{base}/rest/executions/{id}"),
-    ];
-    let mut name = crate::i18n::t("Workflow");
-    let mut detail = None;
-    for url in &detail_urls {
-        if !may_continue() {
-            return;
+    let cached = {
+        let guard = N8N_LAST.lock().unwrap();
+        guard.as_ref().filter(|prev| prev.identity == identity && prev.status == status).cloned()
+    };
+
+    let (name, detail) = if let Some(prev) = cached {
+        (prev.workflow, prev.detail)
+    } else if needs_detail {
+        let detail_urls = [
+            format!("{base}/api/v1/executions/{id}?includeData=true"),
+            format!("{base}/api/v1/executions/{id}"),
+            format!("{base}/rest/executions/{id}?includeData=true"),
+            format!("{base}/rest/executions/{id}"),
+        ];
+        let mut name = extract_n8n_workflow_name(first).unwrap_or_else(|| crate::i18n::t("Workflow"));
+        let mut detail = None;
+        for url in &detail_urls {
+            if !may_continue() { return; }
+            let Ok(response) = http.get(url).header("X-N8N-API-KEY", &key).header("Accept", "application/json").send().await
+            else {
+                continue;
+            };
+            if !response.status().is_success() {
+                continue;
+            }
+            let Ok(json) = response.json::<Value>().await else { continue };
+            name = extract_n8n_workflow_name(&json).unwrap_or_else(|| name.clone());
+            detail = n8n_detail(&json, success);
+            break;
         }
-        let Ok(response) = http.get(url).header("X-N8N-API-KEY", &key).header("Accept", "application/json").send().await
-        else {
-            continue;
-        };
-        if !response.status().is_success() {
-            continue;
-        }
-        let Ok(json) = response.json::<Value>().await else { continue };
-        name = json
-            .get("workflowData")
-            .and_then(|w| w.get("name"))
-            .and_then(Value::as_str)
-            .or_else(|| json.get("name").and_then(Value::as_str))
-            .map(str::to_string)
-            .unwrap_or_else(|| crate::i18n::t("Workflow"));
-        detail = n8n_detail(&json, success);
-        break;
+        (name, detail)
+    } else {
+        (extract_n8n_workflow_name(first).unwrap_or_default(), None)
+    };
+
+    if !may_continue() { return; }
+    let fresh = needs_detail && is_new("n8n", &identity);
+    if needs_detail {
+        *N8N_LAST.lock().unwrap() = Some(N8nExecution {
+            identity,
+            workflow: name.clone(),
+            status: status.to_string(),
+            detail: detail.clone(),
+        });
     }
 
-    // Recheck after the last await before publishing or marking the execution seen.
-    if !may_continue() || !is_new("n8n", &identity) {
-        return;
+    if fresh {
+        log::line(format!("n8n execution {id} {status} · {name}"));
     }
-    log::line(format!("n8n execution {id} {status} · {name}"));
     emit(&app, IntegrationUpdate {
         id: "integration_n8n",
-        data: json!({ "workflow": name, "status": status }),
+        data: json!({ "id": id, "workflow": name, "status": status, "detail": detail }),
         error: None,
-        event: Some(IntegrationEvent { success, label: name, detail }),
+        event: fresh.then(|| IntegrationEvent { success, label: name, detail }),
     });
 }
 
@@ -1068,9 +1446,86 @@ fn fmt_value(v: &Value) -> String {
     }
 }
 
+pub(crate) fn find_terminal_execution(list: &[Value]) -> Option<&Value> {
+    const TERMINAL: [&str; 5] = ["success", "error", "crashed", "canceled", "failed"];
+    list.iter().find(|item| {
+        item.get("status")
+            .and_then(Value::as_str)
+            .map(|s| TERMINAL.contains(&s))
+            .unwrap_or(false)
+    })
+}
+
+pub(crate) fn parse_execution_id(item: &Value) -> Option<String> {
+    match item.get("id") {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gitea_calendar_keeps_full_weeks_and_yearly_totals() {
+        let today = 20_000_i64;
+        let activity = gitea_activity(&[
+            json!({ "timestamp": (today - 300) * 86_400, "contributions": 5 }),
+            json!({ "timestamp": today * 86_400_000, "contributions": 2 }),
+        ], today as u64 * 86_400_000);
+        assert_eq!(activity.total, 7);
+        assert!(activity.weeks.iter().flatten().count() >= 365);
+        for week in &activity.weeks {
+            assert_eq!(week[0].weekday, 0);
+            for (index, day) in week.iter().enumerate() {
+                assert_eq!(day.weekday as usize, index);
+            }
+        }
+        let last = activity.weeks.last().unwrap().last().unwrap();
+        assert_eq!(last.count, 2);
+    }
+
+
+
+
+    #[test]
+    fn gitlab_activity_builds_a_full_calendar_and_counts_events() {
+        let events = vec![
+            json!({ "created_at": "1970-01-01T12:00:00Z" }),
+            json!({ "created_at": "1970-01-01T18:00:00Z" }),
+        ];
+        let activity = gitlab_activity(&events, 0);
+        let days: Vec<_> = activity.weeks.iter().flatten().collect();
+        assert!(days.len() >= 365);
+        let first_day = days.iter().find(|day| day.date == "1970-01-01").unwrap();
+        assert_eq!((first_day.count, first_day.level, first_day.weekday), (2, 2, 4));
+        assert_eq!(activity.total, 2);
+    }
+
+    #[test]
+    fn gitea_workflow_ci_maps_runs_and_conclusions() {
+        assert_eq!(gitea_workflow_ci(Some("completed"), Some("success")), CiState::Success);
+        assert_eq!(gitea_workflow_ci(Some("completed"), Some("failure")), CiState::Failure);
+        assert_eq!(gitea_workflow_ci(Some("completed"), Some("timed_out")), CiState::Failure);
+        assert_eq!(gitea_workflow_ci(Some("completed"), Some("cancelled")), CiState::Failure);
+        assert_eq!(gitea_workflow_ci(Some("completed"), Some("skipped")), CiState::Success);
+        assert_eq!(gitea_workflow_ci(Some("running"), None), CiState::Pending);
+        assert_eq!(gitea_workflow_ci(Some("in_progress"), None), CiState::Pending);
+        assert_eq!(gitea_workflow_ci(Some("queued"), None), CiState::Pending);
+        assert_eq!(gitea_workflow_ci(Some("waiting"), None), CiState::Pending);
+        assert_eq!(gitea_workflow_ci(None, Some("success")), CiState::Success);
+        assert_eq!(gitea_workflow_ci(None, None), CiState::Unknown);
+    }
+
+    #[test]
+    fn gitlab_ci_maps_pipeline_states() {
+        assert_eq!(gitlab_ci(Some("success")), CiState::Success);
+        assert_eq!(gitlab_ci(Some("running")), CiState::Pending);
+        assert_eq!(gitlab_ci(Some("failed")), CiState::Failure);
+        assert_eq!(gitlab_ci(None), CiState::Unknown);
+    }
 
     #[test]
     fn github_card_data_sends_only_what_is_known() {
@@ -1083,5 +1538,93 @@ mod tests {
         assert_eq!(data["totalRepos"], json!(12));
         assert_eq!(data["activity"], json!({ "total": 5, "weeks": [], "fetchedAt": 9 }));
         assert!(data.get("pulse").is_none());
+    }
+
+    #[test]
+    fn stripe_balance_does_not_mix_different_currencies() {
+        let payload = json!({
+            "available": [
+                { "amount": 10000, "currency": "eur" },
+                { "amount": 5000, "currency": "usd" }
+            ],
+            "pending": [
+                { "amount": 2000, "currency": "eur" },
+                { "amount": 3000, "currency": "usd" }
+            ]
+        });
+        assert_eq!(stripe_balances(payload), Some(vec![
+            json!({ "currency": "eur", "available": "100.00", "pending": "20.00" }),
+            json!({ "currency": "usd", "available": "50.00", "pending": "30.00" }),
+        ]));
+    }
+
+    #[test]
+    fn calculate_repo_pages_bounds_correctly() {
+        assert_eq!(calculate_repo_pages(0), 1);
+        assert_eq!(calculate_repo_pages(1), 1);
+        assert_eq!(calculate_repo_pages(100), 1);
+        assert_eq!(calculate_repo_pages(101), 2);
+        assert_eq!(calculate_repo_pages(200), 2);
+        assert_eq!(calculate_repo_pages(500), 5);
+        assert_eq!(calculate_repo_pages(5000), 50);
+        assert_eq!(calculate_repo_pages(9999), 50);
+    }
+
+    #[test]
+    fn sum_repo_stars_sums_stargazers_count() {
+        let repos = vec![
+            json!({ "name": "repo1", "stargazers_count": 42 }),
+            json!({ "name": "repo2", "stargazers_count": 10 }),
+            json!({ "name": "repo3" }),
+            json!({ "name": "repo4", "stargazers_count": 0 }),
+        ];
+        assert_eq!(sum_repo_stars(&repos), 52);
+    }
+
+    #[test]
+    fn find_terminal_execution_skips_running_and_finds_terminal() {
+        let list = vec![
+            json!({ "id": "1", "status": "running" }),
+            json!({ "id": "2", "status": "waiting" }),
+            json!({ "id": "3", "status": "error" }),
+            json!({ "id": "4", "status": "success" }),
+        ];
+        let term = find_terminal_execution(&list).unwrap();
+        assert_eq!(term["id"], "3");
+    }
+
+    #[test]
+    fn parse_execution_id_handles_string_and_number() {
+        assert_eq!(parse_execution_id(&json!({ "id": "abc-123" })), Some("abc-123".to_string()));
+        assert_eq!(parse_execution_id(&json!({ "id": 42 })), Some("42".to_string()));
+        assert_eq!(parse_execution_id(&json!({ "foo": "bar" })), None);
+    }
+
+    #[test]
+    fn extract_n8n_workflow_name_reads_workflow_data_or_fallbacks() {
+        assert_eq!(
+            extract_n8n_workflow_name(&json!({ "workflowData": { "name": "Deploy" } })),
+            Some("Deploy".to_string())
+        );
+        assert_eq!(
+            extract_n8n_workflow_name(&json!({ "workflowName": "Sync" })),
+            Some("Sync".to_string())
+        );
+        assert_eq!(
+            extract_n8n_workflow_name(&json!({ "name": "Backup" })),
+            Some("Backup".to_string())
+        );
+        assert_eq!(extract_n8n_workflow_name(&json!({ "name": "" })), None);
+    }
+
+    #[test]
+    fn is_new_after_empty_seed_marks_first_execution_as_new() {
+        let key = "test_n8n_empty_seed";
+        SEEN.0.lock().unwrap().remove(key);
+        assert_eq!(is_new(key, ""), false);
+        assert_eq!(is_new(key, "101"), true);
+        assert_eq!(is_new(key, "101"), false);
+        assert_eq!(is_new(key, "102"), true);
+        SEEN.0.lock().unwrap().remove(key);
     }
 }

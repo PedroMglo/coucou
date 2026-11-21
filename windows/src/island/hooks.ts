@@ -8,10 +8,11 @@
 import { Bridge, onEvent,emitToWindow } from "../core/bridge";
 import { buildFileDiff, fileName, makeDiffStep, toOneLine } from "../core/diff";
 import { Sound } from "../core/sound";
-import { State, type AskedQuestion, type AgentTask } from "../core/state";
+import { State, type ApprovalInfo, type AskedQuestion, type AgentTask } from "../core/state";
 import {sessionKey,sessionLabel} from '../core/pet-sessions';
-import { pillDefinition } from "../core/pills";
-import { APPROVAL_AGENTS, agentColor, agentName, validateAgent } from "./agents";
+import { HOST_OS, pillDefinition } from "../core/pills";
+import { agentColor, agentName, takesCard, validateAgent } from "./agents";
+import { Launch } from "../core/launch";
 import type { Island } from "./island";
 import { parseClaudePlan, restorePlanUsage } from "../core/plan";
 import { setClaudePlanUsage, storedClaudePlanUsage } from "../views/usage";
@@ -67,8 +68,83 @@ function cancelStopTimer(id: string): boolean {
   return true;
 }
 
+/** The pill that was focused before another pill's alert borrowed the front. */
+let focusBeforeAlert: string | null = null;
+let alertPill: string | null = null;
+
+function showsAlert(pill: string, focused: boolean): boolean {
+  if (State.pendingApproval) return false;
+  if (focused) return true;
+  if (!State.settings.alertsFromAllPills) return false;
+  if (State.mode === "expanded" && !["overview", "finished", "error", "empty"].includes(State.view)) {
+    return false;
+  }
+  if (focusBeforeAlert == null) focusBeforeAlert = State.focusId;
+  alertPill = pill;
+  State.setFocus(pill);
+  return true;
+}
+
+export function restoreAlertFocus(): void {
+  if (!focusBeforeAlert) return;
+  const prev = focusBeforeAlert;
+  const borrowed = alertPill;
+  focusBeforeAlert = null;
+  alertPill = null;
+  if (
+    !State.pendingApproval &&
+    State.focusId === borrowed &&
+    borrowed !== prev &&
+    State.tasks.some((t) => t.id === prev)
+  ) {
+    State.setFocus(prev);
+  }
+}
+
 /** Events after which a pending permission request of the same session is moot. */
 const TURN_OVER = new Set(["Stop", "StopFailure", "UserPromptSubmit", "SessionEnd", "Interrupt"]);
+
+/**
+ * True when `name` (from `agentId`'s session) shows the pending card was
+ * settled somewhere else: the turn is over (interrupted, a new prompt, the
+ * session ended), or the very tool call it asked about has run, so it was
+ * allowed in the terminal or the Claude app. A tool result of another call (a
+ * subagent working alongside) does not count. The relay hanging up is the
+ * fastest sign of all; it arrives as `approval-handoff`.
+ */
+export function settledElsewhere(
+  pending: ApprovalInfo,
+  name: string,
+  agentId: string,
+  sessionId: string,
+  tool: string | undefined,
+  input: Record<string, unknown> | undefined,
+): boolean {
+  if (pending.pillId !== agentId || pending.sessionId !== sessionId) return false;
+  if (TURN_OVER.has(name)) return true;
+  if (name !== "PostToolUse" && name !== "PostToolUseFailure") return false;
+  const t = tool ?? "Tool";
+  return t === pending.tool && approvalTarget(t, input ?? {}) === pending.command;
+}
+
+/**
+ * A prompt as the session's step line. Claude Code also submits text the
+ * user never typed (a background task's `<task-notification>`, system
+ * reminders, slash-command echoes): those show as their summary or command,
+ * or not at all, never as raw tags.
+ */
+export function promptStep(raw: string): string | null {
+  const tag = (name: string) => raw.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))?.[1]?.trim();
+  if (raw.includes("<task-notification>")) return tag("summary") ?? null;
+  const command = tag("command-name");
+  if (command) return command;
+  const text = raw
+    .replace(/<(system-reminder|local-command-\w+)>[\s\S]*?<\/\1>/g, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text ? text.slice(0, 60) : null;
+}
 
 interface HookPayload {
   hook_event_name?: string;
@@ -86,6 +162,8 @@ interface HookPayload {
   coucou_diff_truncated?: boolean;
   /** Optional agent tag: lowercase, digits and hyphens, ≤ 24 chars. */
   coucou_agent?: string;
+  coucou_kind?: string;
+  agent_type?: string;
   /** App-owned mapping for an exact live native session, never set by the relay. */
   coucou_pet_provider?: string;
   coucou_assistant_gate?: boolean;
@@ -253,6 +331,13 @@ export function registerHookHandlers(island: Island) {
   State.planUsage ??= restorePlanUsage(storedClaudePlanUsage());
   void onEvent<HookPayload>("hook", (payload) => handleHook(island, payload));
   void onEvent<ApprovalHandoff>('approval-handoff',event=>handoffPendingApproval(island,event));
+  // Older relays can withdraw a single request by its process-wide ID.
+  void onEvent<string>("approval-expired", (id) => {
+    if (State.pendingApproval?.requestId !== id) return;
+    if (pendingTimeout !== null) window.clearTimeout(pendingTimeout);
+    pendingTimeout = null;
+    dropPendingCard(island);
+  });
 }
 
 function handleHook(island: Island, payload: HookPayload) {
@@ -357,9 +442,9 @@ function handleHook(island: Island, payload: HookPayload) {
   const pending = State.pendingApproval;
   if (
     pending &&
-    TURN_OVER.has(name) &&
-    pending.pillId === agentId &&
-    pending.sessionId === (payload.session_id ?? "")
+    (!pending.backend || pending.backend === backend) &&
+    (pending.owned ? TURN_OVER.has(name) && pending.pillId === agentId && pending.sessionId === sessionId
+      : settledElsewhere(pending, name, agentId, sessionId, payload.tool_name, payload.tool_input))
   ) {
     if (pendingTimeout != null) window.clearTimeout(pendingTimeout);
     pendingTimeout = null;
@@ -370,6 +455,7 @@ function handleHook(island: Island, payload: HookPayload) {
   // Read after the card above is dropped: its pill may have handed the front
   // back to the pill you were on.
   const focused = State.focusId === agentId;
+  if ((name === "SessionStart" || name === "UserPromptSubmit") && !payload.coucou_agent && cwd) Launch.remember(cwd);
 
   switch (name) {
     case "SessionStart":
@@ -389,8 +475,9 @@ function handleHook(island: Island, payload: HookPayload) {
       clearFinal();
       updateTask(agentId, "thinking");
       // The field is `prompt`; reading `message` meant this step was always blank.
-      const asked = payload.prompt ?? payload.message;
-      if (asked) appendStep(agentId, asked.slice(0, 60));
+      const asked = promptStep(payload.prompt ?? payload.message ?? "");
+      if (asked) appendStep(agentId, asked);
+      if (focused && State.mode === "expanded" && State.view === "finished") island.setView("overview");
       surface("overview", false);
       break;
     }
@@ -399,25 +486,17 @@ function handleHook(island: Island, payload: HookPayload) {
       ensurePill();
       supersedeStop();
       clearFinal();
-      updateTask(agentId, "working");
       const tool = payload.tool_name ?? "Tool";
+      const question = validAgent === "antigravity" && (tool === "ask_question" || tool.endsWith(":ask_question"));
+      updateTask(agentId, question ? "question" : "working");
       appendStep(agentId, stepLabel(tool, payload.tool_input ?? {}));
-      surface("overview", false);
+      if (question) Sound.play("question");
+      surface("overview", question && !State.pendingApproval);
       break;
     }
 
     case "PostToolUse":
       supersedeStop();
-      // The question was answered in the terminal: the card would be lying.
-      if (
-        payload.tool_name === "AskUserQuestion" &&
-        State.pendingApproval?.questions &&
-        State.pendingApproval.sessionId === (payload.session_id ?? "")
-      ) {
-        if (pendingTimeout != null) window.clearTimeout(pendingTimeout);
-        pendingTimeout = null;
-        dropPendingCard(island);
-      }
       updateTask(agentId, "working");
       recordDiff(agentId, payload, session, step=>appendStep(agentId,step));
       break;
@@ -461,7 +540,7 @@ function handleHook(island: Island, payload: HookPayload) {
       }
       Sound.play("finish");
       // A card waiting for an answer is never covered by another alert.
-      if ((focused || State.settings.companionMode) && !State.pendingApproval) surface("finished", true);
+      if (!State.pendingApproval && (State.settings.companionMode || showsAlert(agentId, focused))) surface("finished", true);
       else setBadge(agentId, "finished");
       cancelStopTimer(timerKey);
       stopTimers.set(
@@ -492,7 +571,7 @@ function handleHook(island: Island, payload: HookPayload) {
       supersedeStop();
       updateTask(agentId, "error");
       Sound.play("error");
-      if ((focused || State.settings.companionMode) && !State.pendingApproval) surface("error", true);
+      if (!State.pendingApproval && (State.settings.companionMode || showsAlert(agentId, focused))) surface("error", true);
       else setBadge(agentId, "error");
       break;
 
@@ -510,6 +589,7 @@ function handleHook(island: Island, payload: HookPayload) {
       break;
 
     case "SubagentStop":
+      if (validAgent === null && payload.agent_type === "") break;
       appendStep(agentId, t("• subagent done"));
       break;
 
@@ -522,7 +602,8 @@ function handleHook(island: Island, payload: HookPayload) {
       // CLI, Muse Code — same as the Mac) get a card. Anyone else's request is
       // declined at once, so the agent asks in its own terminal.
       const gravityGate=validAgent==="antigravity" && payload.coucou_assistant_gate===true && !!ownedPet;
-      if (isExternalAgent && !APPROVAL_AGENTS.has(validAgent!) && !gravityGate) {
+      const standaloneKind = HOST_OS === "windows" ? payload.coucou_kind : undefined;
+      if (!takesCard(validAgent, standaloneKind) && !gravityGate) {
         if (payload.request_id) void Bridge.approvalDecline(payload.request_id);
         if(session){session.state='approval';session.decisionInTerminal=true;}
         break;

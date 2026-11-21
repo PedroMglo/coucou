@@ -6,6 +6,9 @@ struct FlowEntry: Codable, Identifiable, Hashable, Sendable {
     var id = UUID()
     var date: Date
     var text: String
+    /// What was heard, when Claude rewrote it (clean-up, prompt mode, translation, speech level);
+    /// nil when the words went in as they were. Older entries have none.
+    var heard: String?
     /// The app it was pasted in ("Slack"), when known.
     var app: String?
     var words: Int
@@ -89,6 +92,15 @@ final class FlowStore: ObservableObject {
     @Published var cleanupEnabled: Bool = UserDefaults.standard.bool(forKey: FlowStore.cleanupKey) {
         didSet { UserDefaults.standard.set(cleanupEnabled, forKey: Self.cleanupKey) }
     }
+    /// Prompt mode: what you say becomes a structured prompt (goal, context, steps, constraints,
+    /// done when) before it is pasted. Needs the Claude key, like the clean-up.
+    @Published var promptMode: Bool = UserDefaults.standard.bool(forKey: FlowStore.promptModeKey) {
+        didSet { UserDefaults.standard.set(promptMode, forKey: Self.promptModeKey) }
+    }
+    /// The language the words are pasted in, whatever language you speak ("" = as spoken).
+    @Published var translateTo: String = UserDefaults.standard.string(forKey: FlowStore.translateKey) ?? "" {
+        didSet { UserDefaults.standard.set(translateTo, forKey: Self.translateKey) }
+    }
     /// The style of the apps that have none of their own.
     @Published var defaultStyle: FlowStyle = FlowStyle(rawValue: UserDefaults.standard.string(forKey: FlowStore.defaultStyleKey) ?? "") ?? .natural {
         didSet { UserDefaults.standard.set(defaultStyle.rawValue, forKey: Self.defaultStyleKey) }
@@ -105,6 +117,8 @@ final class FlowStore: ObservableObject {
     static let engineKey = "flowEngine"
     static let keepDaysKey = "flowKeepDays"
     static let cleanupKey = "flowCleanup"
+    static let promptModeKey = "flowPromptMode"
+    static let translateKey = "flowTranslateTo"
     static let defaultStyleKey = "flowDefaultStyle"
 
     private struct WordsFile: Codable {
@@ -160,7 +174,7 @@ final class FlowStore: ObservableObject {
     /// When the history is not kept, the last dictation still waits here (memory only) for "paste again".
     private var lastUnkeptText: String?
 
-    func record(text: String, app: String?, seconds: Double) {
+    func record(text: String, heard: String? = nil, app: String?, seconds: Double) {
         let count = FlowText.wordCount(text)
         guard count > 0 else { return }
         let now = Date()
@@ -177,7 +191,7 @@ final class FlowStore: ObservableObject {
             lastUnkeptText = text
             return
         }
-        history.insert(FlowEntry(date: now, text: text, app: app, words: count, seconds: seconds), at: 0)
+        history.insert(FlowEntry(date: now, text: text, heard: heard, app: app, words: count, seconds: seconds), at: 0)
         prune()
         saveHistory()
     }

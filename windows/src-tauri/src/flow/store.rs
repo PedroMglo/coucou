@@ -66,10 +66,12 @@ pub struct AppStyle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Edge {
     #[default]
     Bottom,
+    BottomLeft,
+    BottomRight,
     Left,
     Right,
 }
@@ -89,7 +91,12 @@ pub struct Prefs {
     /// Hold a key to dictate anywhere. Off until the user turns it on.
     pub enabled: bool,
     pub key: FlowKey,
+    /// The keys of a shortcut of the user's own, when `key` is `Custom`: their
+    /// KeyboardEvent.code names ("AltLeft", "ShiftLeft", "KeyF").
+    pub key_combo: Vec<String>,
     pub edge: Edge,
+    /// Hide the pill while nothing is dictated: it shows only for a dictation, a call being recorded or a message.
+    pub hide_pill: bool,
     /// The microphone by name; empty is the system's default.
     pub mic: String,
     /// Days the history is kept: 0 = not kept, -1 = forever.
@@ -103,10 +110,14 @@ pub struct Prefs {
     pub open_at_launch: bool,
     /// « OK Coucou »: listen for it and answer with Claude (needs the Claude key).
     pub voice: bool,
+    /// The other apps' sound is muted while Coucou listens to you (Windows).
+    pub mute_others: bool,
     /// How Coucou answers out loud: "system", "elevenlabs" or "off".
     pub voice_output: String,
     /// The ElevenLabs voice: "female" or "male".
     pub voice_gender: String,
+    /// One short press of the key starts hands-free dictation, instead of two.
+    pub one_tap_hands_free: bool,
 }
 
 impl Default for Prefs {
@@ -114,7 +125,9 @@ impl Default for Prefs {
         Self {
             enabled: false,
             key: FlowKey::default(),
+            key_combo: Vec::new(),
             edge: Edge::Bottom,
+            hide_pill: false,
             mic: String::new(),
             keep_days: 30,
             cleanup: false,
@@ -122,13 +135,15 @@ impl Default for Prefs {
             summary_engine: SummaryEngine::Claude,
             open_at_launch: true,
             voice: false,
+            mute_others: false,
             voice_output: "system".into(),
             voice_gender: "female".into(),
+            one_tap_hands_free: false,
         }
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Words {
     pub words: Vec<String>,
     pub replacements: Vec<Replacement>,
@@ -318,26 +333,35 @@ impl Store {
         Some(entry)
     }
 
-    pub fn delete(&mut self, id: &str) {
-        let before=self.history.len();
-        self.history.retain(|e| e.id != id);
-        if before!=self.history.len(){self.advance_output();}
-        self.save_history();
+    fn set_history(&mut self, history: Vec<Entry>) -> Result<(), String> {
+        self.save(&history, "history.json").map_err(|e| format!("Could not update dictation history: {e}"))?;
+        self.history = history;
+        self.advance_output();
+        Ok(())
+    }
+
+    pub fn delete(&mut self, id: &str) -> Result<(), String> {
+        let history: Vec<_> = self.history.iter().filter(|e| e.id != id).cloned().collect();
+        if history.len() == self.history.len() {
+            return Ok(());
+        }
+        self.set_history(history)
     }
 
     /// Empties the history; the numbers stay.
-    pub fn clear_history(&mut self) {
-        self.advance_output();
-        self.history.clear();
+    pub fn clear_history(&mut self) -> Result<(), String> {
+        self.set_history(Vec::new())?;
         self.last_unkept = None;
-        self.save_history();
+        Ok(())
     }
 
     /// Empties the history and the numbers.
-    pub fn clear_everything(&mut self) {
-        self.clear_history();
-        self.stats = Stats::default();
-        self.save_stats();
+    pub fn clear_everything(&mut self) -> Result<(), String> {
+        self.clear_history()?;
+        let stats = Stats::default();
+        self.save(&stats, "stats.json").map_err(|e| format!("History erased; could not erase statistics: {e}"))?;
+        self.stats = stats;
+        Ok(())
     }
 
     pub fn prune(&mut self, now: u64) {
@@ -377,10 +401,203 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn temp_store() -> (Store, PathBuf) {
         let dir = std::env::temp_dir().join(format!("coucou-flow-{}-{}", std::process::id(), new_id()));
         (Store::load_from(dir.clone()), dir)
+    }
+
+    // Block atomic replacement at the destination even when the temporary name is random.
+    fn block_save(dir: &Path, name: &str) -> PathBuf {
+        let file = dir.join(name);
+        let backup = dir.join(format!("{name}.saved"));
+        std::fs::rename(&file, &backup).unwrap();
+        std::fs::create_dir(file).unwrap();
+        backup
+    }
+
+    fn unblock_save(dir: &Path, name: &str, backup: PathBuf) {
+        let file = dir.join(name);
+        std::fs::remove_dir(&file).unwrap();
+        std::fs::rename(backup, file).unwrap();
+    }
+
+    #[test]
+    fn dictionary_edits_are_durable_and_failed_writes_keep_the_live_and_saved_words() {
+        let (mut store, path) = temp_store();
+        let words = Words { words: vec!["Coucou".into()], replacements: vec![
+            Replacement { id: "one".into(), from: "cloud code".into(), to: "Claude Code".into() },
+        ] };
+        store.set_words(words.clone()).unwrap();
+        assert_eq!(Store::load_from(path.clone()).words, words);
+        let before = std::fs::read(path.join("words.json")).unwrap();
+        let backup = block_save(&path, "words.json");
+        assert!(store.set_words(Words::default()).is_err());
+        assert_eq!(store.words, words);
+        assert_eq!(std::fs::read(&backup).unwrap(), before);
+        assert_eq!(store.prepare("coucou cloud code").text, "Coucou Claude Code");
+        unblock_save(&path, "words.json", backup);
+        store.set_words(Words::default()).unwrap();
+        assert_eq!(Store::load_from(path.clone()).words, Words::default());
+        std::fs::remove_file(path.join("words.json")).unwrap();
+        std::fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn snippet_edits_are_durable_and_failed_writes_keep_the_live_and_saved_snippets() {
+        let (mut store, path) = temp_store();
+        let snippets = vec![Snippet { id: "one".into(), trigger: "signature".into(), text: "Hello world".into() }];
+        store.set_snippets(snippets.clone()).unwrap();
+        assert_eq!(Store::load_from(path.clone()).snippets, snippets);
+        let before = std::fs::read(path.join("snippets.json")).unwrap();
+        let backup = block_save(&path, "snippets.json");
+        assert!(store.set_snippets(vec![]).is_err());
+        assert_eq!(store.snippets, snippets);
+        assert_eq!(std::fs::read(&backup).unwrap(), before);
+        assert_eq!(store.prepare("signature").snippets.values().next().unwrap(), "Hello world");
+        unblock_save(&path, "snippets.json", backup);
+        store.set_snippets(vec![]).unwrap();
+        assert!(Store::load_from(path.clone()).snippets.is_empty());
+        std::fs::remove_file(path.join("snippets.json")).unwrap();
+        std::fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn style_edits_are_durable_and_failed_writes_keep_the_live_and_saved_styles() {
+        let (mut store, path) = temp_store();
+        let styles = vec![AppStyle { id: "mail".into(), name: "Mail".into(), style: Style::Polished }];
+        store.set_styles(styles.clone()).unwrap();
+        assert_eq!(Store::load_from(path.clone()).app_styles, styles);
+        let before = std::fs::read(path.join("styles.json")).unwrap();
+        let backup = block_save(&path, "styles.json");
+        assert!(store.set_styles(vec![]).is_err());
+        assert_eq!(store.app_styles, styles);
+        assert_eq!(std::fs::read(&backup).unwrap(), before);
+        assert_eq!(store.style_for(Some("mail")), Style::Polished);
+        unblock_save(&path, "styles.json", backup);
+        store.set_styles(vec![]).unwrap();
+        assert!(Store::load_from(path.clone()).app_styles.is_empty());
+        std::fs::remove_file(path.join("styles.json")).unwrap();
+        std::fs::remove_dir(path).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn locked_editor_files_reject_replacement_without_changing_live_values() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (mut store, path) = temp_store();
+        store.set_words(Words::default()).unwrap();
+        store.set_snippets(vec![]).unwrap();
+        store.set_styles(vec![]).unwrap();
+        let locks: Vec<_> = ["words", "snippets", "styles"].iter().map(|name|
+            std::fs::OpenOptions::new().read(true).share_mode(0).open(path.join(format!("{name}.json"))).unwrap()
+        ).collect();
+        assert!(store.set_words(Words { words: vec!["unsaved".into()], replacements: vec![] }).is_err());
+        assert!(store.set_snippets(vec![Snippet { id: "one".into(), trigger: "unsaved".into(), text: "unsaved".into() }]).is_err());
+        assert!(store.set_styles(default_app_styles()).is_err());
+        assert!(store.words.words.is_empty());
+        assert!(store.snippets.is_empty());
+        assert!(store.app_styles.is_empty());
+        drop(locks);
+        let again = Store::load_from(path.clone());
+        assert!(again.words.words.is_empty());
+        assert!(again.snippets.is_empty());
+        assert!(again.app_styles.is_empty());
+        for name in ["words", "snippets", "styles"] {
+            std::fs::remove_file(path.join(format!("{name}.json"))).unwrap();
+        }
+        std::fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn failed_history_deletion_keeps_live_and_saved_entries_until_retry() {
+        let (mut store, path) = temp_store();
+        let entry = store.record("saved dictation", None, 1.0, today(), now_ms()).unwrap();
+        let before = std::fs::read(path.join("history.json")).unwrap();
+        let backup = block_save(&path, "history.json");
+        assert!(store.delete(&entry.id).is_err());
+        assert_eq!(store.history.len(), 1);
+        assert_eq!(store.history[0].id, entry.id);
+        assert_eq!(std::fs::read(&backup).unwrap(), before);
+        unblock_save(&path, "history.json", backup);
+        store.delete(&entry.id).unwrap();
+        assert!(store.history.is_empty());
+        assert!(Store::load_from(path.clone()).history.is_empty());
+        assert_eq!(store.totals(None).0, 2);
+        for name in ["history.json", "stats.json"] { std::fs::remove_file(path.join(name)).unwrap(); }
+        std::fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn failed_history_clear_keeps_the_last_dictation_and_statistics() {
+        let (mut store, path) = temp_store();
+        store.record("saved dictation", None, 1.0, today(), now_ms()).unwrap();
+        store.last_unkept = Some("memory dictation".into());
+        let backup = block_save(&path, "history.json");
+        assert!(store.clear_everything().is_err());
+        assert_eq!(store.history.len(), 1);
+        assert_eq!(store.last_unkept.as_deref(), Some("memory dictation"));
+        assert_eq!(store.totals(None).0, 2);
+        let again = Store::load_from(path.clone());
+        assert!(again.history.is_empty());
+        assert_eq!(again.totals(None).0, 2);
+        unblock_save(&path, "history.json", backup);
+        assert_eq!(Store::load_from(path.clone()).history.len(), 1);
+        store.clear_history().unwrap();
+        assert!(store.history.is_empty());
+        assert!(store.last_unkept.is_none());
+        assert_eq!(store.totals(None).0, 2);
+        for name in ["history.json", "stats.json"] { std::fs::remove_file(path.join(name)).unwrap(); }
+        std::fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn a_failed_statistics_erase_keeps_live_and_saved_counts_and_can_be_retried() {
+        let (mut store, path) = temp_store();
+        store.record("saved dictation", None, 1.0, today(), now_ms()).unwrap();
+        let backup = block_save(&path, "stats.json");
+        assert!(store.clear_everything().unwrap_err().contains("History erased; could not erase statistics"));
+        // History is already durably erased; the statistics remain until their write succeeds.
+        assert!(store.history.is_empty());
+        assert_eq!(store.totals(None).0, 2);
+        let again = Store::load_from(path.clone());
+        assert!(again.history.is_empty());
+        unblock_save(&path, "stats.json", backup);
+        assert_eq!(Store::load_from(path.clone()).totals(None).0, 2);
+        store.clear_everything().unwrap();
+        assert_eq!(store.totals(None).0, 0);
+        assert_eq!(Store::load_from(path.clone()).totals(None).0, 0);
+        for name in ["history.json", "stats.json"] { std::fs::remove_file(path.join(name)).unwrap(); }
+        std::fs::remove_dir(path).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn locked_history_and_statistics_files_report_failed_replacements() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (mut store, path) = temp_store();
+        let entry = store.record("saved dictation", None, 1.0, today(), now_ms()).unwrap();
+        let history_lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(path.join("history.json")).unwrap();
+        assert!(store.delete(&entry.id).is_err());
+        assert!(store.clear_everything().is_err());
+        assert_eq!(store.history.len(), 1);
+        assert_eq!(store.totals(None).0, 2);
+        drop(history_lock);
+        assert_eq!(Store::load_from(path.clone()).history.len(), 1);
+
+        let stats_lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(path.join("stats.json")).unwrap();
+        assert!(store.clear_everything().unwrap_err().contains("History erased; could not erase statistics"));
+        assert!(store.history.is_empty());
+        assert_eq!(store.totals(None).0, 2);
+        drop(stats_lock);
+        assert_eq!(Store::load_from(path.clone()).totals(None).0, 2);
+        store.clear_everything().unwrap();
+        let again = Store::load_from(path.clone());
+        assert!(again.history.is_empty());
+        assert_eq!(again.totals(None).0, 0);
+        for name in ["history.json", "stats.json"] { std::fs::remove_file(path.join(name)).unwrap(); }
+        std::fs::remove_dir(path).unwrap();
     }
 
     #[test]
@@ -418,6 +635,20 @@ mod tests {
         s.prefs.default_style = Style::Polished;
         assert_eq!(s.style_for(None), Style::Polished);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn edge_serialization_round_trips_all_positions() {
+        for (edge, s) in [
+            (Edge::Bottom, "\"bottom\""),
+            (Edge::BottomLeft, "\"bottom-left\""),
+            (Edge::BottomRight, "\"bottom-right\""),
+            (Edge::Left, "\"left\""),
+            (Edge::Right, "\"right\""),
+        ] {
+            assert_eq!(serde_json::to_string(&edge).unwrap(), s);
+            assert_eq!(serde_json::from_str::<Edge>(s).unwrap(), edge);
+        }
     }
 
     #[test]
@@ -634,7 +865,7 @@ mod setter_io_tests {
 #[cfg(test)]mod last_output_tests{
  use super::*;
  #[test]fn a_new_kept_entry_does_not_revive_an_older_unkept_text_after_deletion(){
-  let folder=std::env::temp_dir().join(format!("coucou-last-output-{}",new_id()));let mut store=Store::load_from(folder.clone());store.prefs.keep_days=0;store.record("old unkept",None,1.0,today(),now_ms());store.prefs.keep_days=-1;let entry=store.record("new kept",None,1.0,today(),now_ms()).unwrap();assert_eq!(store.last_text_ref(),Some("new kept"));store.delete(&entry.id);assert!(!store.has_last_text());let _=std::fs::remove_dir_all(folder);
+  let folder=std::env::temp_dir().join(format!("coucou-last-output-{}",new_id()));let mut store=Store::load_from(folder.clone());store.prefs.keep_days=0;store.record("old unkept",None,1.0,today(),now_ms());store.prefs.keep_days=-1;let entry=store.record("new kept",None,1.0,today(),now_ms()).unwrap();assert_eq!(store.last_text_ref(),Some("new kept"));store.delete(&entry.id).unwrap();assert!(!store.has_last_text());let _=std::fs::remove_dir_all(folder);
  }
  #[test]fn a_reloaded_store_has_a_distinct_ephemeral_source_epoch(){let folder=std::env::temp_dir().join(format!("coucou-output-epoch-{}",new_id()));let a=Store::load_from(folder.clone());let b=Store::load_from(folder.clone());assert_ne!(a.last_output_epoch(),b.last_output_epoch());let _=std::fs::remove_dir_all(folder);}
 }

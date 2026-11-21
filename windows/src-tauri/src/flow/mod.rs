@@ -10,6 +10,7 @@
 
 pub mod cleanup;
 mod capture;
+pub mod hush;
 pub mod logic;
 pub mod paste;
 #[cfg(target_os="linux")]pub(crate)mod clipboard_read;
@@ -148,13 +149,16 @@ fn is_terminal(id: &str) -> bool {
 // ── Setup, on and off ─────────────────────────────────────────────────────────
 
 pub fn setup(app: &AppHandle) {
+    // Sound left muted by a Coucou that quit while listening comes back.
+    hush::setup();
     let flow = Arc::new(Flow { store: Mutex::new(Store::load()), running: Mutex::new(None), prefs_update: Mutex::new(()),dictation_cancel:Mutex::new(None) });
     app.manage(flow.clone());
     pill::setup(app);
     let prefs = flow.store.lock().unwrap().prefs.clone();
     pill::update(app, |s| {
         s.edge = pill::edge_name(prefs.edge).into();
-        s.key = key_id(prefs.key);
+        s.hide_idle = prefs.hide_pill;
+        s.key = key_id(prefs.key, &prefs.key_combo);
     });
     if prefs.enabled {
         enable(app, &flow);
@@ -162,11 +166,14 @@ pub fn setup(app: &AppHandle) {
     crate::voice::sync(app);
 }
 
-/// The key as the pages write it ("right_ctrl"…), or "wayland" where the
-/// desktop holds the shortcut.
-fn key_id(key: logic::FlowKey) -> String {
+/// The key as the pages write it ("right_ctrl"…, "custom:AltLeft+ShiftLeft+KeyF"
+/// for a shortcut of one's own), or "wayland" where the desktop holds it.
+fn key_id(key: logic::FlowKey, combo: &[String]) -> String {
     if os::keys_supported() == Err("wayland") {
         return "wayland".into();
+    }
+    if key == logic::FlowKey::Custom {
+        return format!("custom:{}", key.codes(combo).join("+"));
     }
     serde_json::to_value(key).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default()
 }
@@ -180,7 +187,7 @@ fn enable(app: &AppHandle, flow: &Arc<Flow>) {
     let prefs = flow.store.lock().unwrap().prefs.clone();
     let (tx, rx) = mpsc::channel::<(KeyEvent, Instant)>();
     let listener: Option<Box<dyn std::any::Any + Send>> = match os::keys_supported() {
-        Ok(()) => match os::listen(prefs.key, tx.clone()) {
+        Ok(()) => match os::listen(&prefs.key.codes(&prefs.key_combo), tx.clone()) {
             Ok(l) => Some(Box::new(l)),
             Err(err) => {
                 crate::log::line(format!("flow: the key can't be watched: {err}"));
@@ -204,7 +211,7 @@ fn enable(app: &AppHandle, flow: &Arc<Flow>) {
     drop(running);
     // Enabling the shortcut is not a request to keep a 650 MB model resident.
     pill::update(app, |s| s.enabled = true);
-    crate::log::line(format!("flow dictation on ({})", prefs.key.label()));
+    crate::log::line(format!("flow dictation on ({})", prefs.key.label(&prefs.key_combo)));
 }
 
 fn disable(app: &AppHandle, flow: &Arc<Flow>) {
@@ -225,6 +232,8 @@ fn disable(app: &AppHandle, flow: &Arc<Flow>) {
 
 struct Listening {
     capture: audio::Capture,
+    /// The other apps are silent while Coucou listens (hush.rs); dropped with it.
+    _hush: Option<hush::Guard>,
     take: Arc<Mutex<audio::Take>>,
     started: Instant,
     app: Option<(String, String)>,
@@ -257,7 +266,11 @@ fn run(app: AppHandle, flow: Arc<Flow>, rx: mpsc::Receiver<(KeyEvent, Instant)>)
                 break;
             }
             Some((KeyEvent::Down, at)) => logic.key_down(secs(at)),
-            Some((KeyEvent::Up, at)) => logic.key_up(secs(at)),
+            Some((KeyEvent::Up, at)) => {
+                // Read at each release, so a change in the settings needs no restart of the keyboard hook.
+                logic.one_tap = flow.store.lock().unwrap().prefs.one_tap_hands_free;
+                logic.key_up(secs(at))
+            }
             Some((KeyEvent::Other, _)) => logic.other_key(),
             Some((KeyEvent::Escape, _)) => logic.escape(),
             Some((KeyEvent::HandsFree, _)) => {
@@ -341,6 +354,10 @@ fn run(app: AppHandle, flow: Arc<Flow>, rx: mpsc::Receiver<(KeyEvent, Instant)>)
         if let Some(l) = &listening {
             let levels = l.take.lock().unwrap().meter.levels;
             let _ = app.emit_to(pill::LABEL, "pill-bands", levels);
+            // The Coucou window's bands breathe with the voice while it is on screen.
+            if crate::hub_is_shown() {
+                let _ = app.emit_to(crate::HUB_LABEL, "flow-bands", levels);
+            }
         }
     }
     pill::update(&app, |s| s.phase = "idle".into());
@@ -381,7 +398,8 @@ fn begin(app: &AppHandle, flow: &Arc<Flow>) -> Option<Listening> {
         Ok(mut capture) => {
             if input.check().is_err(){capture.stop();return None;}
             pill::update(app, |s| s.phase = "listening".into());
-            Some(Listening { capture, take, started: Instant::now(), app: app_front,input })
+            let _hush = hush::hush(input.options.mute_others);
+            Some(Listening { capture, _hush, take, started: Instant::now(), app: app_front,input })
         }
         Err(err) => {
             crate::log::line(format!("flow: microphone: {err}"));
@@ -404,6 +422,7 @@ fn begin(app: &AppHandle, flow: &Arc<Flow>) -> Option<Listening> {
 /// thread so the key works again at once.
 fn finish(app: &AppHandle, flow: &Arc<Flow>, mut l: Listening) {
     l.capture.stop();
+    drop(l._hush.take());
     let seconds = l.started.elapsed().as_secs_f64();
     let (samples, peak) = {
         let mut t = l.take.lock().unwrap();
@@ -441,7 +460,7 @@ fn process(app: &AppHandle, _flow: &Arc<Flow>, input:&capture::Input, samples: &
     }
     input.check()?;
     let prepared=input.prepare(&raw);
-    let(style,cleanup,words,key)=(input.options.style,input.options.cleanup,&input.options.words,input.options.key);
+    let(style,cleanup,words,key)=(input.options.style,input.options.cleanup,&input.options.words,&input.options.key_codes);
     let mut written = prepared.text.clone();
     if cleanup && style != store::Style::Verbatim && cleanup::has_key() {
         let app_name = front.map(|(_, n)| n.clone());
@@ -550,9 +569,10 @@ pub async fn flow_set_prefs(app: AppHandle, flow: State<'_, Arc<Flow>>, prefs: P
     tauri::async_runtime::spawn_blocking(move || flow.update_prefs(&prefs, |before| {
         pill::update(&app, |s| {
             s.edge = pill::edge_name(prefs.edge).into();
-            s.key = key_id(prefs.key);
+            s.hide_idle = prefs.hide_pill;
+            s.key = key_id(prefs.key, &prefs.key_combo);
         });
-        let restart = before.key != prefs.key;
+        let restart = before.key != prefs.key || before.key_combo != prefs.key_combo;
         if before.enabled && (!prefs.enabled || restart) {
             disable(&app, &flow);
         }
@@ -577,17 +597,17 @@ pub fn flow_history(flow: State<Arc<Flow>>) -> Vec<Entry> {
 }
 
 #[tauri::command]
-pub fn flow_delete(flow: State<Arc<Flow>>, id: String) {
-    flow.store.lock().unwrap().delete(&id);
+pub fn flow_delete(flow: State<Arc<Flow>>, id: String) -> Result<(), String> {
+    flow.store.lock().unwrap().delete(&id)
 }
 
 #[tauri::command]
-pub fn flow_clear(flow: State<Arc<Flow>>, everything: bool) {
+pub fn flow_clear(flow: State<Arc<Flow>>, everything: bool) -> Result<(), String> {
     let mut store = flow.store.lock().unwrap();
     if everything {
-        store.clear_everything();
+        store.clear_everything()
     } else {
-        store.clear_history();
+        store.clear_history()
     }
 }
 
@@ -753,6 +773,10 @@ pub fn pill_hot(app: AppHandle, rects: Vec<(f64, f64, f64, f64)>) {
 pub fn pill_hover(app: AppHandle, inside: bool) {
     if let Some(p) = pill::get(&app) {
         p.hovered.store(inside, Ordering::Relaxed);
+    }
+    #[cfg(target_os = "linux")]
+    if inside {
+        pill::watch_pointer_leave(&app);
     }
 }
 

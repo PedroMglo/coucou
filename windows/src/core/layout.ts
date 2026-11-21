@@ -23,7 +23,10 @@ export type IslandViewName =
   | "settings"
   | "greeting"
   | "recap"
-  | "wardrobe";
+  | "wardrobe"
+  | "update"
+  | "whatsNew"
+  | "launch";
 
 export type BotStateName =
   | "idle"
@@ -93,6 +96,14 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   // to the shared image.
   recap: { height: 184, botX: 62, botY: null, botDiameter: 58, agentMode: "column" },
   wardrobe: { height: 160, botX: 68, botY: null, botDiameter: 58, agentMode: "none" },
+  // New version: Mochi on the left, the version and Update now (Mac: .update).
+  update: { height: 160, botX: 62, botY: null, botDiameter: 58, agentMode: "none" },
+  // After an update: what the new version brings, then "Your Coucou so far".
+  // Taller than a card, for two rows of items with their line (and, on the
+  // second step, the Botan line under the thanks).
+  whatsNew: { height: 248, botX: 62, botY: null, botDiameter: 58, agentMode: "none" },
+  // A new Claude Code session: Mochi on the left, the project and the prompt (Mac: .launch).
+  launch: { height: 160, botX: 58, botY: null, botDiameter: 52, agentMode: "none" },
 };
 
 // The upload views above are only the fallback geometry. Once a file is actually

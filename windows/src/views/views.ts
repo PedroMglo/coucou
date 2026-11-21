@@ -27,9 +27,16 @@ import { lastTextStep } from "../core/diff";
 import { Bridge } from "../core/bridge";
 import { buildRecap } from "./recap";
 import { buildWardrobe } from "./wardrobe";
+import { buildUpdate } from "./update";
+import { buildWhatsNew } from "./whatsnew";
+import { buildLaunch } from "./launch";
 import { buildSpotifyPill, type SpotifyPillHost } from "./spotify";
 import {buildSpotyCard} from "./spoty-audio";
 import { SPOTIFY_ID } from "../core/spotify";
+import { buildWhatsAppCard } from "./whatsapp";
+import { WHATSAPP_ID } from "../core/whatsapp";
+import { MAIL_ID } from "../core/mail";
+import { buildMailCard } from "./mail";
 import type { Outfit, OutfitSelection } from "../mochi/wardrobe";
 import { language, t, tl, type Msg } from "../i18n/i18n";
 import type { ViewCommand } from "../island/shortcuts";
@@ -63,6 +70,12 @@ export interface ViewActions {
   chooseOutfit(selection: OutfitSelection): void;
   /** Wardrobe hover: shows an outfit on Mochi without keeping it; null ends it. */
   previewOutfit(outfit: Outfit | null): void;
+  /** The island takes the keyboard (a text field in a card) or gives it back. */
+  keyboard(on: boolean): void;
+  /** Something is being typed in a card: the island stays open until it is sent or cleared. */
+  holdOpen(on: boolean): void;
+  /** A Claude Code session was started from the launch card: Mochi is pleased, the island folds. */
+  launched(): void;
 }
 
 export interface ViewHost {
@@ -130,6 +143,12 @@ export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse
   const tabHome = h("button", { class: "tab", title: tl("Overview"), onclick: () => go("overview") }, svg(ICONS.house, 13));
   const tabChat = h("button", { class: "tab", title: tl("Ask"), onclick: () => go("prompt") }, svg(ICONS.bubble, 13));
   const tabDrop = h("button", { class: "tab", title: tl("Drop"), onclick: () => go("upload") }, svg(ICONS.plus, 13));
+  // A new Claude Code session, in a project, from here (Mac: the terminal tab).
+  const tabLaunch = h(
+    "button",
+    { class: "tab", title: tl("New Claude Code session"), onclick: () => go("launch") },
+    svg(ICONS.terminal, 17, { stroke: 1.7 }),
+  );
 
   const expandChat=h('button',{title:'Expandir conversa numa janela flutuante','aria-label':'Expandir conversa',onclick:()=>{
     const task=State.focusTask;if(!task)return;
@@ -180,7 +199,7 @@ export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse
   const el = h(
     "div",
     { id: "header" },
-    h("div", { class: "tabs" }, tabHome, tabChat, tabDrop),
+    h("div", { class: "tabs" }, tabHome, tabChat, tabDrop, tabLaunch),
     h("div", { class: "header-actions" }, sessionsButton,expandChat,companionName, planPills, gearBtn, soundBtn, closeBtn),
   );
   const headerActions = el.lastElementChild as HTMLElement;
@@ -192,22 +211,25 @@ export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse
     sync() {
       if(visible())void PetObservability.refresh();
       const v = State.view;
-      closeBtn.hidden = !State.settings.companionMode;
+      closeBtn.hidden = false;
       expandChat.hidden=!State.settings.companionMode || !State.focusTask || State.focusId===SPOTIFY_ID;
       tabHome.classList.toggle("on", v === "overview" || v === "empty");
       const ownChat = State.focusId!==SPOTIFY_ID&&(!(State.settings.companionMode || State.petCardsOnly) || providerForPill(State.focusId ?? undefined) != null);
       tabChat.hidden = tabDrop.hidden = !ownChat;
       tabChat.classList.toggle("on", v === "prompt");
       tabDrop.classList.toggle("on", v === "upload");
+      tabLaunch.hidden = State.focusId !== "integration_claude" || State.settings.companionMode;
+      tabLaunch.classList.toggle("on", v === "launch");
       gearBtn.classList.toggle("on", v === "settings");
       clear(gearBtn);
-      gearBtn.append(svg(v === "settings" ? ICONS.gearFill : ICONS.gear, 14));
+      gearBtn.append(v === "settings" ? svg(ICONS.gearFill, 18) : svg(ICONS.gearLine, 18, { stroke: 1.6 }));
       clear(soundBtn);
       soundBtn.append(svg(State.settings.soundEnabled ? ICONS.speakerOn : ICONS.speakerOff, 14));
       companionName.hidden = !State.settings.companionMode;
       companionName.textContent = State.focusTask?.name ?? "Mochi";
       companionName.style.color = State.focusTask?.color ?? "inherit";
       syncSessionControl();
+      closeBtn.style.display = State.pendingApproval ? "none" : "";
       syncPlanPills();
       el.style.opacity = v === "confused" ? "0" : "1";
     },
@@ -232,7 +254,7 @@ export function buildHeader(actions: Pick<ViewActions,'setView'|'blip'|'collapse
 
 // ── Overview ──────────────────────────────────────────────────────────────────
 
-export function buildOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'blip'|'openSettingsWindow'|'openPetSettings'>): ViewHost {
+export function buildOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'blip'|'openSettingsWindow'|'openPetSettings'|'keyboard'|'holdOpen'>): ViewHost {
   // Boot settings arrive after the island is constructed. Choose the surface
   // during sync so the first window also receives the companion dashboard.
   const pet=buildPetOverview(actions),legacy=buildLegacyOverview(actions);
@@ -242,7 +264,7 @@ export function buildOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|
   return {el,sync(){pet.el.hidden=!State.settings.companionMode;legacy.el.hidden=State.settings.companionMode;current().sync();},tick:now=>current().tick?.(now),command:command=>current().command?.(command)};
 }
 
-function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'blip'|'openSettingsWindow'>): ViewHost {
+function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'blip'|'openSettingsWindow'|'keyboard'|'holdOpen'>): ViewHost {
   /** The diff open in the left card (a FileDiff id), as activeDiffId on macOS. */
   let activeDiffId: number | null = null;
   const closeDiff = () => {
@@ -261,7 +283,7 @@ function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'
   const jump = h(
     "button",
     { class: "icon-btn jump", title: tl("Open"), onclick: () => actions.openTarget() },
-    svg(ICONS.arrowUpRight, 8),
+    svg(ICONS.arrowUpRight, 12),
   );
   const left = card(null, leftBody, jump);
   const pills = h("div", { class: "pills" });
@@ -273,6 +295,14 @@ function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'
   // runs on, and a slider being dragged must not be rebuilt under the pointer.
   const spotifyCard = buildSpotyCard();
   let spotifyPill: SpotifyPillHost | null = null;
+  // WhatsApp's card too: its reply field keeps the draft and the keyboard while messages arrive.
+  // Mail's card too (classic Outlook): the search field keeps its text and the keyboard.
+  const mailCard = buildMailCard({ keyboard: (on) => actions.keyboard(on) });
+  const whatsappCard = buildWhatsAppCard({
+    openSettings: () => actions.openSettingsWindow(),
+    keyboard: (on) => actions.keyboard(on),
+    holdOpen: (on) => actions.holdOpen(on),
+  });
 
   const el = h("div", { class: "view overview" },
     h("div", { class: "left" }, left),
@@ -282,7 +312,7 @@ function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'
   let pillIds = "";
   let detail: IntegrationCardDetail | null = null;
   let lastFocus: string | null = null;
-  let mode: "ticker" | "card" | "plan" | "diff" | "spotify" | null = null;
+  let mode: "ticker" | "card" | "plan" | "diff" | "spotify" | "whatsapp" | "mail" | null = null;
   let cardKey = "";
   /** The list row highlighted at the last sync, to scroll only when it moves. */
   let shownSelection: number | null = null;
@@ -440,6 +470,23 @@ function buildLegacyOverview(actions: Pick<ViewActions,'setFocus'|'openTarget'|'
           cardKey = "";
         }
         spotifyCard.sync();
+      } else if (task && task.id === MAIL_ID) {
+        if (mode !== "mail") {
+          clear(leftBody);
+          leftBody.append(mailCard.el);
+          mode = "mail";
+          cardKey = "";
+        }
+        mailCard.sync();
+      } else if (task && task.id === WHATSAPP_ID) {
+        // Its own card in every state: not linked, no message, conversations, one open.
+        if (mode !== "whatsapp") {
+          clear(leftBody);
+          leftBody.append(whatsappCard.el);
+          mode = "whatsapp";
+          cardKey = "";
+        }
+        whatsappCard.sync();
       } else if (task) {
         const info = State.integrations[task.id];
         const key = [
@@ -595,6 +642,10 @@ function buildApproval(actions: ViewActions): ViewHost {
     if (performance.now() - shownAt < CLICK_GUARD_MS||!interactive(context)) return;
     actions.decide(d,context,{trusted:event?.isTrusted??false,detail:event?.detail??0});
   };
+  const inTerminal = (context: ApprovalContext) => {
+    if (performance.now() - shownAt < CLICK_GUARD_MS) return;
+    actions.answerInTerminal(context);
+  };
   return {
     el,
     sync() {
@@ -616,7 +667,13 @@ function buildApproval(actions: ViewActions): ViewHost {
       code.textContent = State.pendingApproval?.command || State.pendingApproval?.tool || "…";
       // Preserve nodes within one request; replace them for a new identity so
       // a delayed old activation can never dispatch against another request.
-      if(changed){rowKey=key;clear(row);row.append(btn(tl('Deny'),'secondary',guarded(context,'deny'),'N'),btn(tl('Allow'),'primary',guarded(context,'allow'),'Y'));}
+      if(changed){rowKey=key;clear(row);row.append(btn(tl('Deny'),'secondary',guarded(context,'deny'),'N'),btn(tl('Allow'),'primary',guarded(context,'allow'),'Y'));
+        if (req.pillId === "agent_antigravity") {
+          row.append(btn(tl("Reply in terminal"), "secondary", () => {
+            if (interactive(context)) inTerminal(context);
+          }));
+        }
+      }
       for(const button of row.querySelectorAll('button'))button.disabled=!req.presentationReady||!!req.answering||performance.now()-shownAt<CLICK_GUARD_MS;
       feedback.textContent=req.feedback??(!req.presentationReady?'A apresentar o pedido…':'');feedback.hidden=!feedback.textContent;
     },
@@ -909,6 +966,9 @@ export function buildViews(
   map.set("choose", buildChoose(actions));
   map.set("recap", buildRecap(actions));
   map.set("wardrobe", buildWardrobe(actions));
+  map.set("update", buildUpdate());
+  map.set("whatsNew", buildWhatsNew());
+  map.set("launch", buildLaunch(actions));
   // Not in the Windows v1: sending a file by email, window attach + web result.
   map.set("mail", buildMail(actions));
   map.set("searching", buildPlaceholder(tl("Claude is searching…"), ""));

@@ -41,8 +41,8 @@ pub(crate)fn project(report:&Value,choice:&Choices,sources:Option<&[u8]>,flow:Op
  }
  crate::pet_config::validate(&pets).map_err(|_|Error::UnsupportedProfile)?;
  settings.main_pill=choice.main_pet.clone();settings.active_integrations=choice.active_pets.iter().filter(|id|*id!=&choice.main_pet).cloned().collect();
- settings.autostart=false;settings.hooks_installed=false;settings.plan_relay_installed=false;settings.cli_full_access=false;settings.spotify_quiet_ads=false;settings.sound_enabled=false;
- settings.phone_link=false;settings.phone_chat=false;settings.phone_chat_models.clear();settings.phone_details=false;settings.phone_answers=false;settings.phone_diffs=false;settings.phone_usage=false;settings.phone_services.clear();settings.phone_relay=false;
+ settings.autostart=false;settings.hooks_installed=false;settings.plan_relay_installed=false;settings.cli_full_access=false;settings.agy_approvals_enabled=false;settings.spotify_quiet_ads=false;settings.sound_enabled=false;
+ settings.phone_link=false;settings.phone_chat=false;settings.phone_chat_models.clear();settings.phone_details=false;settings.phone_answers=false;settings.phone_diffs=false;settings.phone_usage=false;settings.phone_recap=false;settings.phone_services.clear();settings.phone_relay=false;
  settings.pet_system_center=false;settings.shortcuts=crate::shortcuts::ACTIONS.iter().map(|a|(a.id.into(),crate::shortcuts::Binding{keys:String::new(),enabled:false})).collect();
  // Preserve chosen inference identities/models/endpoints as reviewed DATA.
  // Entry admission checks canonical active pet choices before inference; these
@@ -50,8 +50,14 @@ pub(crate)fn project(report:&Value,choice:&Choices,sources:Option<&[u8]>,flow:Op
  let main=crate::pet_config::blueprint(&choice.main_pet).ok_or(Error::UnsupportedProfile)?;if let Some(route)=&main.routing.chat{settings.chat_provider=route.clone();}
  let sources=sources.map(crate::pet_sources::suspend_for_restoration).transpose().map_err(|_|Error::UnsupportedProfile)?;
  let flow=flow.map(crate::flow::suspend_for_restoration).transpose().map_err(|_|Error::UnsupportedProfile)?;
- let new_settings=value(&settings)?;let mut changed=vec![];for(k,v)in new_settings.as_object().ok_or(Error::UnsupportedProfile)?{if setting.get(k)!=Some(v){changed.push(json!({"field":k,"before":setting.get(k),"after":v}));}}
+ let mut new_settings=value(&settings)?;
+ // Keep the canonical output of previously reviewed and retryable restores.
+ let added = crate::settings::RECONCILED_FIELDS;
+ if added.iter().all(|key| !setting.contains_key(*key)) {
+     new_settings.as_object_mut().ok_or(Error::UnsupportedProfile)?.retain(|key, _| !added.contains(&key.as_str()));
+ }
+ let mut changed=vec![];for(k,v)in new_settings.as_object().ok_or(Error::UnsupportedProfile)?{if setting.get(k)!=Some(v){changed.push(json!({"field":k,"before":setting.get(k),"after":v}));}}
  let mut differences=json!({"settings":changed,"petGrants":choice.grants,"localCommandsEnabled":false,"persistentSourcesSuspended":sources.is_some(),"flowAndVoiceSuspended":flow.is_some(),"pendingFeatureRevalidation":["voice","mobile","autostart"],"inferenceFallbackAllowed":false});
  if pets.pets.values().any(|p|p.system_access.is_some()){differences["systemGrantsSuspended"]=json!(true);differences["systemGrantsRequireFreshNativeReview"]=json!(true);}
- Ok(Projection{settings:bytes(settings)?,pets:bytes(pets)?,sources,flow,settings_io:None,differences})
+ Ok(Projection{settings:bytes(new_settings)?,pets:bytes(pets)?,sources,flow,settings_io:None,differences})
 }

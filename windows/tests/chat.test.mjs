@@ -180,10 +180,12 @@ test("switching provider saves it and asks the new provider only", async () => {
   await flush();
   assert.equal(State.settings.chatProvider, "google");
   assert.deepEqual(sent("chat_models"), [{ provider: "google" }]);
-  // The saved model was not offered: the flash one is kept instead, and saved.
-  assert.equal(State.settings.chatModels.google, "gemini-2.5-flash");
-  assert.equal(sent("save_settings").at(-1).settings.chatModels.google, "gemini-2.5-flash");
+  assert.equal(State.settings.chatModels.google, undefined);
+  assert.equal(sent("save_settings").at(-1).settings.chatModels.google, undefined);
   assert.deepEqual(models(), ["gemini-2.5-flash"]);
+  view.el.find(".picker-model")[0].fire("click");
+  await flush();
+  assert.equal(State.settings.chatModels.google, "gemini-2.5-flash");
 });
 
 test("a local answer streams into one reply, then the finished text replaces it", async () => {
@@ -587,4 +589,21 @@ test('inline memory review preserves the unsent draft and uses a separate explic
  State.settings={...DEFAULT_SETTINGS,chatProvider:'ollama',companionMode:false,chatModels:{ollama:'fixture-free'}};State.clearDialogueContext('ollama');const cid='inline-memory-cid',record={id:'inline-note',revision:2,owner:{petId:'ai_ollama',scope:{kind:'pet'}},kind:'note',title:'Inline memory',content:'<img onerror=grant()> private fixture',sensitivity:'sensitive',provenance:'explicitUser',retention:'untilDeleted',createdAt:1,updatedAt:1,observedAt:1,expiresAt:null};
  answers.chat_conversation={id:cid,messages:[],busy:false};answers.pet_memory_list=({request})=>({owner:request.owner,revision:'catalogue',items:request.owner.scope.kind==='pet'?[{entry:record,available:true}]:[],hasMore:false,nextOffset:null});answers.pet_memory_context_prepare=args=>({token:'inline-native-token',proposal:{schemaVersion:1,petId:'ai_ollama',conversationId:cid,destination:{kind:'server',provider:'ollama',endpoint:'http://127.0.0.1:11434/v1/chat/completions',model:'fixture-free'},question:args.query,records:[record],preparedAt:Date.now(),expiresAt:Date.now()+60000,requiredConsent:'thisRequest',nativeAccountCoverage:'nativeCredentialSnapshotNotExposed',requestContextHash:'a'.repeat(64),dispatchCoverage:{schemaVersion:1,kind:'exactNativeEndpoint',endpoints:['http://127.0.0.1:11434/v1/chat/completions'],providerInternalsObserved:false,modelSemantics:'requestedModelServerInternalsUnobserved',toolsContainmentObserved:false}}});answers.chat_send={text:'Accepted fixture response'};
  view=buildPrompt(()=>{});view.sync();await flush();view.sync();view.el.find('button').find(b=>b.textContent==='Consultar recordações').fire('click');await flush();const choose=view.el.find('input').find(i=>i.getAttribute('aria-label')==='Selecionar recordação Inline memory revisão 2');choose.checked=true;choose.fire('change');const input=$('.chat-input');input.value='Question with selected data';input.fire('input');view.sync();$('.send-btn').fire('click');await flush();view.sync();assert.equal(sent('chat_send').length,0);assert.equal(input.value,'Question with selected data');assert.ok(!State.chatHistory.some(m=>m.content===input.value));assert.equal(view.el.find('img').length,0);const approve=view.el.find('button').find(b=>b.textContent==='Autorizar dados e enviar');assert.equal(approve.disabled,true);approve.fire('click');await flush();assert.equal(sent('chat_send').length,0);const consent=view.el.find('input').find(i=>i.getAttribute('aria-label')==='Autorizar dados no âmbito deste pedido');consent.checked=true;consent.fire('change');approve.fire('click');await flush();assert.equal(sent('chat_send').length,1);assert.deepEqual(sent('chat_send')[0].memoryDecision,{token:'inline-native-token',consent:'thisRequest'});assert.equal(sent('chat_send')[0].conversationId,cid);assert.equal(sent('chat_send')[0].selectedModel,'fixture-free');assert.equal(sent('pet_memory_context_prepare')[0].query,'Question with selected data');assert.ok(!JSON.stringify(sent('chat_send')).includes(record.content));
+});
+
+
+test("a stored subscription shows its review state without looking up an API key or catalog", async () => {
+  State.settings = {
+    ...State.settings,
+    chatProvider: "google",
+    chatModels: { google: "saved-model" },
+    chatSubscriptions: { google: true },
+  };
+  $(".model-btn").fire("click");
+  await flush();
+  assert.match($(".picker-status").textContent, /Revê a ligação/);
+  assert.deepEqual(sent("secret_present"), []);
+  assert.deepEqual(sent("chat_models"), []);
+  assert.deepEqual(sent("save_settings"), []);
+  assert.equal(State.settings.chatModels.google, "saved-model");
 });

@@ -10,7 +10,7 @@ import { N_ } from "../i18n/i18n";
 
 export type ProviderId =
   | "anthropic" | "openai" | "google" | "openrouter" | "codex" | "copilot" | "antigravity" | "gemini-cli" | "claude-cli"
-  | "ollama" | "lmstudio" | "custom" | ServiceProvider;
+  | "ollama" | "lmstudio" | "custom" | "cursor" | ServiceProvider;
 
 export interface ProviderDef {
   id: ProviderId;
@@ -41,10 +41,18 @@ export const PROVIDERS: readonly ProviderDef[] = [
   { id: "custom", name: N_("Custom server"), accent: "#C0C4CC", key: null, urlField: "customUrl", defaultModel: "", prefer: null },
 ];
 
+// Saved upstream profiles still show the original name while the user reviews
+// the route. Cursor's upstream CLI is not a configured Coucou pet adapter.
+const LEGACY_CURSOR: ProviderDef = {
+  id: "cursor", name: "Cursor", accent: "#A1A1AA", key: null,
+  urlField: null, defaultModel: "", prefer: null,
+};
+
 /** Credential store entry of the custom server's optional key. */
 export const CUSTOM_SERVER_KEY = "openai-compatible-key";
 
 export function providerDef(id: string): ProviderDef {
+  if (id === LEGACY_CURSOR.id) return LEGACY_CURSOR;
   if(isServiceProvider(id)){const def=pillDefinition(id);return {id,name:`${petName(id,def?.name??id)} · via Codex`,accent:def?.color??"#2dd4bf",key:null,urlField:null,defaultModel:"@default",prefer:null};}
   return PROVIDERS.find((p) => p.id === id) ?? PROVIDERS[0];
 }
@@ -73,7 +81,8 @@ export function withModel(settings: Settings, provider: ProviderId, model: strin
  * active one, so the picker never hides where the chat goes.
  */
 export function visibleProviders(settings: Settings): ProviderDef[] {
-  const providers=isServiceProvider(settings.chatProvider)?[...PROVIDERS,providerDef(settings.chatProvider)]:PROVIDERS;
+  const preserveLabel = isServiceProvider(settings.chatProvider) || settings.chatProvider === LEGACY_CURSOR.id;
+  const providers = preserveLabel ? [...PROVIDERS, providerDef(settings.chatProvider)] : PROVIDERS;
   return providers.filter(
     (p) => (!isGravityFamily(p.id) || settings.chatProvider === p.id) &&
       (!p.urlField || settings[p.urlField] !== "" || settings.chatProvider === p.id),

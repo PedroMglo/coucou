@@ -117,7 +117,7 @@ pub fn companions_open(app: AppHandle, pill_id: String, x: f64, y: f64, view: Op
     *habitat.anchor.lock().unwrap() = Some((x, y + surface.top));
     // Wake the receiving webview before routing the click, including recovery
     // from a version that hid it instead of mapping a transparent strip.
-    crate::set_collapsed(app.clone(), app.state::<crate::Shared>(), false);
+    crate::set_collapsed(app.clone(), app.state::<crate::Shared>(), false, None, None);
     let _ = app.emit_to(crate::island::WINDOW_LABEL, "companions-open", OpenPet { pill_id, view: view.filter(|v| v.len() <= 32), manual: manual.unwrap_or(false) });
 }
 

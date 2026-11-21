@@ -1,9 +1,9 @@
-#if !APPSTORE
 import AVFoundation
 import Carbon
 import Speech
 
-/// Speech to text for the notch chat (GitHub build), on-device when the Mac supports it.
+/// Speech to text for the notch chat, on-device when the Mac supports it (both builds: the
+/// App Store one has the microphone entitlement and the usage strings for it).
 ///
 /// Apple's recognizer only understands one language per request, so "Automatic" (the default)
 /// listens with up to three recognizers at once — the user's languages (macOS languages,
@@ -16,9 +16,9 @@ import Speech
 @Observable
 final class MacDictation: @unchecked Sendable {
     static let automatic = "auto"
-    private static let languageKey = "dictationLanguage"
+    static let languageKey = "dictationLanguage"
     /// The language that won the last automatic dictation: shown first next time.
-    private static let lastHeardKey = "dictationLastLocale"
+    static let lastHeardKey = "dictationLastLocale"
     private static let maxCandidates = 3
 
     var isRecording = false
@@ -232,7 +232,8 @@ final class MacDictation: @unchecked Sendable {
 
     /// The languages Automatic listens for: last winner, macOS languages, keyboard layouts,
     /// Coucou's own language, then English — one per language, up to three.
-    static func automaticLocales() -> [Locale] {
+    /// Main actor: macOS 27 traps when the keyboard layouts are read off the main thread.
+    @MainActor static func automaticLocales() -> [Locale] {
         var ids: [String] = []
         if let last = UserDefaults.standard.string(forKey: lastHeardKey) { ids.append(last) }
         // The Mac's languages (not Coucou's override in Settings → General → Language).
@@ -281,7 +282,7 @@ final class MacDictation: @unchecked Sendable {
     }
 
     /// The main language of each enabled keyboard layout ("fr" for AZERTY, "en" for ABC…).
-    private static func keyboardLanguages() -> [String] {
+    @MainActor private static func keyboardLanguages() -> [String] {
         let filter = ["TISPropertyInputSourceCategory": "TISCategoryKeyboardInputSource"] as CFDictionary
         guard let list = TISCreateInputSourceList(filter, false)?.takeRetainedValue() as? [TISInputSource] else { return [] }
         return list.compactMap { source in
@@ -307,4 +308,3 @@ extension Notification.Name {
     static let dictationDidStart = Notification.Name("notchBuddy.dictationDidStart")
     static let dictationDidEnd   = Notification.Name("notchBuddy.dictationDidEnd")
 }
-#endif

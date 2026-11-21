@@ -51,10 +51,13 @@ impl ChatBackend for AppChat {
         Box::pin(async move {
             crate::settings::effect_allowed().map_err(|_|ChatFail::Internal)?;
             let Some((provider, model)) = parse_model_id(&id) else { return Err(ChatFail::Internal) };
-            if let Some(key) = key_name(provider) {
-                if secrets::get(key).is_none() {
-                    return Err(ChatFail::NoKey);
-                }
+            let ready = match key_name(provider) {
+                Some(claude::KEY) => claude::ready(),
+                Some(key) => secrets::present(key),
+                None => true,
+            };
+            if !ready {
+                return Err(ChatFail::NoKey);
             }
             let result = chat::send_for_phone(&settings, &chat, provider, model, text, |so_far| {
                 let _ = deltas.send(so_far);

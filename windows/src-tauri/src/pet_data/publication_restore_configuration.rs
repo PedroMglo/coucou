@@ -38,12 +38,12 @@ fn differences(raw:&Value,resolved:&Value,at:String,out:&mut Vec<String>){
  if raw==resolved{return;}match(raw,resolved){(Value::Object(a),Value::Object(b))=>for(k,v)in b{let path=if at.is_empty(){k.clone()}else{format!("{at}.{k}")};if let Some(original)=a.get(k){differences(original,v,path,out);}else{out.push(path);}},_=>out.push(at)}
 }
 fn group(field:&str)->&'static str{match field{
- "model"|"chatProvider"|"chatModels"|"ollamaUrl"|"lmstudioUrl"|"customUrl"=>"inferenceSelections",
- "cliWorkspace"|"cliWorkspaces"|"cliFullAccess"=>"nativeExecution",
- "activeIntegrations"|"mainPill"|"spotifyQuietAds"|"autostart"|"hooksInstalled"|"planRelayInstalled"|"showPlanInNotch"|"showCodexPlanInNotch"|"petSystemCenter"|"shortcuts"=>"systemAndIntegrations",
+ "model"|"chatProvider"|"chatModels"|"chatSubscriptions"|"ollamaUrl"|"lmstudioUrl"|"customUrl"=>"inferenceSelections",
+ "cliWorkspace"|"cliWorkspaces"|"cliFullAccess"|"agyApprovalsEnabled"=>"nativeExecution",
+ "activeIntegrations"|"mainPill"|"spotifyQuietAds"|"autostart"|"hooksInstalled"|"planRelayInstalled"|"showPlanInNotch"|"showPlanInCompactIsland"|"showCodexPlanInNotch"|"petSystemCenter"|"shortcuts"=>"systemAndIntegrations",
  s if s.starts_with("phone")=>"mobile",
  s if s.starts_with("voice")||s=="edgeVoicePython"||s=="localVoiceDirs"=>"voice",
- "autoCloseInterval"|"openOnHover"|"absenceInterval"|"screen"|"companionMode"|"companionMotion"|"companionBarMode"|"petControlBar"|"companionTopClearance"|"mochiOutfit"|"pillColors"|"language"|"desktopMochi"=>"presentation",
+ "autoCloseInterval"|"openOnHover"|"alertsFromAllPills"|"showClock"|"closedIsland"|"absenceInterval"|"screen"|"companionMode"|"companionMotion"|"companionBarMode"|"petControlBar"|"companionTopClearance"|"mochiOutfit"|"pillColors"|"language"|"desktopMochi"=>"presentation",
  "soundEnabled"|"soundVolume"=>"systemAndIntegrations",
  _=>"requiresClassification",
 }}
@@ -51,7 +51,13 @@ fn inspect(settings:Option<&[u8]>,pets:Option<&[u8]>)->Result<Value>{
  let raw_settings=match settings{Some(b)=>object(b)?,None=>json!({})};
  // Unlike settings::load_from, a malformed known field cannot be salvaged or
  // written aside. All default-derived values are explicitly shown as changes.
- let resolved:crate::settings::Settings=serde_json::from_value(raw_settings.clone()).map_err(|_|Error::UnsupportedProfile)?;let resolved=value(resolved)?;known(&raw_settings,&resolved)?;
+ let resolved:crate::settings::Settings=serde_json::from_value(raw_settings.clone()).map_err(|_|Error::UnsupportedProfile)?;let mut resolved=value(resolved)?;known(&raw_settings,&resolved)?;
+ // A report binds the raw source and the exact reviewed output. Keep the
+ // previous report for sources that predate the new settings.
+ let added = crate::settings::RECONCILED_FIELDS;
+ if added.iter().all(|key| raw_settings.get(key).is_none()) {
+     resolved.as_object_mut().ok_or(Error::UnsupportedProfile)?.retain(|key, _| !added.contains(&key.as_str()));
+ }
  let mut setting_changes=vec![];differences(&raw_settings,&resolved,String::new(),&mut setting_changes);
  let mut groups=serde_json::Map::new();for(k,v)in resolved.as_object().ok_or(Error::UnsupportedProfile)?{groups.entry(group(k)).or_insert_with(||json!({})).as_object_mut().unwrap().insert(k.clone(),v.clone());}
  let raw_pets=match pets{Some(b)=>object(b)?,None=>json!({})};

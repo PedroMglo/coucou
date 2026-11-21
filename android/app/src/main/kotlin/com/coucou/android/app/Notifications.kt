@@ -13,12 +13,16 @@ import android.net.Uri
 import android.util.Log
 import com.coucou.android.MainActivity
 import com.coucou.android.R
+import com.coucou.android.core.ApprovalChannels
 import com.coucou.android.core.ApprovalSheetPlan
 import com.coucou.android.core.Glance
 import com.coucou.android.core.GlanceTone
+import com.coucou.android.core.NotificationIds
 import com.coucou.android.core.OverlayPolicy
+import com.coucou.android.core.OngoingGate
 import com.coucou.android.core.SafeText
 import com.coucou.android.core.ToolLabels
+import com.coucou.android.core.VibrationChoice
 import com.coucou.android.link.ApprovalRequest
 import com.coucou.android.mochi.BotState
 
@@ -33,33 +37,59 @@ class Notifications(private val context: Context) {
     init {
         nm.deleteNotificationChannel("approvals")
         nm.deleteNotificationChannel("approvals_v2")
+        createChannels()
+    }
+
+    /** The channels' names and descriptions are in the app's language (Android shows them in its own settings); made again when it changes. */
+    private fun createChannels() {
         nm.createNotificationChannel(
-            NotificationChannel(CH_LINK, "Connection", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Shows that Coucou is connected to your computer"
+            NotificationChannel(CH_LINK, context.getString(R.string.channel_link), NotificationManager.IMPORTANCE_LOW).apply {
+                description = context.getString(R.string.channel_link_description)
                 setShowBadge(false)
             },
         )
         nm.createNotificationChannel(
-            NotificationChannel(CH_UPDATES, "Updates", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "An agent finished, failed or has a question"
+            NotificationChannel(CH_UPDATES, context.getString(R.string.channel_updates), NotificationManager.IMPORTANCE_LOW).apply {
+                description = context.getString(R.string.channel_updates_description)
                 setShowBadge(false)
             },
         )
         // The same request while the pill is on screen: in the shade only, no heads-up and no sound,
         // so the pill and the notification never overlap at the top of the screen.
         nm.createNotificationChannel(
-            NotificationChannel(CH_APPROVAL_QUIET, "Approvals (quiet)", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "A waiting request, kept in the shade while the pill shows it"
+            NotificationChannel(CH_APPROVAL_QUIET, context.getString(R.string.channel_approvals_quiet), NotificationManager.IMPORTANCE_LOW).apply {
+                description = context.getString(R.string.channel_approvals_quiet_description)
                 setShowBadge(false)
             },
         )
+        // The approvals channel is made by applyApprovalSettings (its id depends on the vibration choice).
+    }
+
+    private var vibration = VibrationChoice.STANDARD
+    private var keepScreenOff = false
+    private var channelFor: VibrationChoice? = null
+
+    /**
+     * The two Settings choices about a request: how it buzzes and whether it lights the screen. A channel's vibration cannot change
+     * after it exists, so a new choice means a new channel id and the old channel is deleted. The channel stays IMPORTANCE_HIGH with
+     * Mochi's sound whatever is chosen: a request is never muted or hidden.
+     */
+    fun applyApprovalSettings(v: VibrationChoice, screenOff: Boolean) {
+        keepScreenOff = screenOff
+        if (channelFor == v) return // the channel exists already: nothing to rebuild when another setting moves
+        channelFor = v
+        vibration = v
+        ApprovalChannels.othersThan(v).forEach { nm.deleteNotificationChannel(it) }
         nm.createNotificationChannel(
-            NotificationChannel(CH_APPROVAL, "Approvals", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "An agent is waiting for your permission"
-                // A short buzz, so a request is felt even when the notification volume is 0 (a channel cannot change
-                // later, which is why this one has a new id).
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 500, 150, 500)
+            NotificationChannel(ApprovalChannels.id(v), context.getString(R.string.channel_approvals), NotificationManager.IMPORTANCE_HIGH).apply {
+                description = context.getString(R.string.channel_approvals_description)
+                val pattern = v.pattern
+                if (pattern != null) {
+                    enableVibration(true)
+                    vibrationPattern = pattern
+                } else {
+                    enableVibration(false)
+                }
                 // Mochi's own approval sound, bundled in res/raw.
                 setSound(
                     Uri.parse("${ContentResolver.SCHEME_ANDROID_RESOURCE}://${context.packageName}/${R.raw.approval}"),
@@ -82,7 +112,12 @@ class Notifications(private val context: Context) {
      * when expanded, one line per agent ("Claude Code: Working"). Only states, never a command or a path. On a locked
      * screen it shows the plain "Connected" line, like the other notifications of the app.
      */
-    fun ongoing(model: AppModel?): Notification = ongoing(model?.glance())
+    fun ongoing(model: AppModel?): Notification {
+        val g = model?.glance()
+        ongoingGate.forget()
+        ongoingGate.shouldPost(g) // what the service posts is now the last notification
+        return ongoing(g)
+    }
 
     private fun ongoing(g: Glance?): Notification {
         val title = g?.headline ?: context.getString(R.string.status_connecting)
@@ -109,16 +144,26 @@ class Notifications(private val context: Context) {
         return b.build()
     }
 
+    /** The language changed: the next push posts the ongoing notification again, whatever it said before, and the channels get their new names. */
+    fun forgetOngoing() {
+        ongoingGate.forget()
+        createChannels()
+        channelFor = null
+        applyApprovalSettings(vibration, keepScreenOff)
+    }
+
+    /** Only posted again when what it shows changes ([OngoingGate]); the service's own first post counts as the last one. */
+    private val ongoingGate = OngoingGate()
+
     fun updateOngoing(model: AppModel, g: Glance = model.glance()) {
-        if (model.mode == Mode.PAIRED) runCatching { nm.notify(ONGOING_ID, ongoing(g)) }
+        if (model.mode == Mode.PAIRED && ongoingGate.shouldPost(g)) runCatching { nm.notify(ONGOING_ID, ongoing(g)) }
     }
 
     fun showApproval(r: ApprovalRequest, agentName: String, alert: OverlayPolicy.ApprovalAlert = OverlayPolicy.ApprovalAlert.HEADS_UP) {
-        val channel = if (alert == OverlayPolicy.ApprovalAlert.QUIET) CH_APPROVAL_QUIET else CH_APPROVAL
+        val channel = if (alert == OverlayPolicy.ApprovalAlert.QUIET) CH_APPROVAL_QUIET else ApprovalChannels.id(vibration)
         Log.d("CoucouOverlay", "approval notification: $alert")
-        val id = idFor(r.fingerprint)
         val deny = PendingIntent.getBroadcast(
-            context, id, Intent(context, ActionReceiver::class.java).setAction(ACTION_DENY).putExtra(EXTRA_FP, r.fingerprint),
+            context, NotificationIds.requestCode("deny:${r.fingerprint}"), Intent(context, ActionReceiver::class.java).setAction(ACTION_DENY).putExtra(EXTRA_FP, r.fingerprint),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val publicVersion = Notification.Builder(context, channel)
@@ -134,15 +179,15 @@ class Notifications(private val context: Context) {
             .setPublicVersion(publicVersion)
             .setAutoCancel(true)
             .setTimeoutAfter(com.coucou.android.link.Protocol.APPROVAL_TTL_MS)
-            .setContentIntent(open(r.fingerprint, false, id))
+            .setContentIntent(open(r.fingerprint, false, NotificationIds.requestCode("open:${r.fingerprint}")))
             .addAction(Notification.Action.Builder(null, context.getString(R.string.action_deny), deny).build())
             .apply {
                 // A command the phone cannot show in full is answered on the computer: no Allow here.
-                if (ApprovalSheetPlan.canAllowHere(r)) addAction(Notification.Action.Builder(null, context.getString(R.string.action_allow), open(r.fingerprint, true, id + 1)).build())
+                if (ApprovalSheetPlan.canAllowHere(r)) addAction(Notification.Action.Builder(null, context.getString(R.string.action_allow), open(r.fingerprint, true, NotificationIds.requestCode("allow:${r.fingerprint}"))).build())
             }
             .build()
-        runCatching { nm.notify(id, n) } // POST_NOTIFICATIONS may be denied: the in-app card still works
-        if (alert == OverlayPolicy.ApprovalAlert.HEADS_UP) wakeScreen()
+        runCatching { nm.notify(NotificationIds.approvalTag(r.fingerprint), NotificationIds.APPROVAL_ID, n) } // POST_NOTIFICATIONS may be denied: the in-app card still works
+        if (alert == OverlayPolicy.ApprovalAlert.HEADS_UP && !keepScreenOff) wakeScreen()
     }
 
     /**
@@ -157,7 +202,7 @@ class Notifications(private val context: Context) {
             .acquire(WAKE_MS)
     }
 
-    fun cancelApproval(fp: String) = nm.cancel(idFor(fp))
+    fun cancelApproval(fp: String) = nm.cancel(NotificationIds.approvalTag(fp), NotificationIds.APPROVAL_ID)
 
     /** An agent finished, failed, hit a limit or asks something. Quiet: Mochi's own sound and the pill are the alerts. */
     fun showStatus(pillId: String, agentName: String, state: BotState, statusText: String) {
@@ -183,22 +228,20 @@ class Notifications(private val context: Context) {
             .setAutoCancel(true)
             .setContentIntent(open(null, false, 0))
             .build()
-        runCatching { nm.notify(STATUS_TAG, statusId(pillId), n) }
+        runCatching { nm.notify(NotificationIds.statusTag(pillId), NotificationIds.STATUS_ID, n) }
     }
 
-    fun cancelStatus(pillId: String) = runCatching { nm.cancel(STATUS_TAG, statusId(pillId)) }
+    fun cancelStatus(pillId: String) = runCatching { nm.cancel(NotificationIds.statusTag(pillId), NotificationIds.STATUS_ID) }
 
     /** Coucou is on screen: the notices are redundant. */
     fun cancelAllStatus() {
-        runCatching { nm.activeNotifications.filter { it.tag == STATUS_TAG }.forEach { nm.cancel(it.tag, it.id) } }
+        runCatching { nm.activeNotifications.filter { NotificationIds.isStatusTag(it.tag) }.forEach { nm.cancel(it.tag, it.id) } }
     }
-
-    private fun statusId(pillId: String) = pillId.hashCode() and 0x3fffffff
 
     /** Opens the app on the biometric prompt for this request (the same as tapping Allow in the notification). */
     fun openAllow(fp: String) {
         Log.d("CoucouLaunch", "open the app on Allow (tap on the pill)")
-        runCatching { open(fp, true, idFor(fp) + 1).send() }
+        runCatching { open(fp, true, NotificationIds.requestCode("allow:$fp")).send() }
     }
 
     fun openApp() {
@@ -209,16 +252,12 @@ class Notifications(private val context: Context) {
     companion object {
         const val CH_LINK = "link"
         private const val WAKE_MS = 6_000L
-        const val CH_APPROVAL = "approvals_v3"
         const val CH_APPROVAL_QUIET = "approvals_quiet"
         const val CH_UPDATES = "updates"
-        private const val STATUS_TAG = "status"
-        const val ONGOING_ID = 1
+        const val ONGOING_ID = NotificationIds.ONGOING_ID
         const val ACTION_DENY = "com.coucou.android.DENY"
         const val EXTRA_FP = "fingerprint"
         const val EXTRA_ALLOW = "allow"
-        /** Even ids for the request, +1 for its Allow action; never collides with ONGOING_ID. */
-        fun idFor(fp: String) = (fp.hashCode() and 0x3fffffff) * 2 + 2
     }
 }
 

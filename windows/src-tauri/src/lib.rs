@@ -37,6 +37,8 @@ mod pet_host_inventory;
 mod local_tasks;
 mod agent_hooks;
 mod agents;
+mod agy_approvals;
+mod agy_rules;
 mod chat;
 mod claude;
 mod codex_chat;
@@ -44,6 +46,8 @@ mod cli_chat;
 mod copilot_chat;
 #[path="copilot_chat/adapter.rs"]
 mod copilot_adapter;
+mod claude_code;
+mod cli_relay;
 mod codex_plan;
 mod config_file;
 mod companions;
@@ -79,13 +83,17 @@ mod flow;
 mod github;
 mod gravity_chat;
 mod gravity_hook;
+mod herdr;
 mod hooks;
 mod i18n;
 mod identity;
 mod integrations;
+mod calcom;
 mod island;
+mod launch;
 mod local_chat;
 mod log;
+mod mail;
 mod net;
 mod notes;
 mod openai_compat;
@@ -107,12 +115,15 @@ mod sounds;
 mod speech;
 mod spotify;
 mod tray;
+mod update;
 mod voice;
 #[cfg(windows)]
 mod webview_drop;
+mod webview_memory;
+mod whatsapp;
 
 use std::process::Command;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -181,10 +192,14 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> R
         settings.phone_answers = current.phone_answers;
         settings.phone_diffs = current.phone_diffs;
         settings.phone_usage = current.phone_usage;
+        settings.phone_recap = current.phone_recap;
         settings.phone_services = current.phone_services.clone();
         settings.phone_relay = current.phone_relay;
         settings.phone_relay_url = current.phone_relay_url.clone();
         settings.phone_chat_models = current.phone_chat_models.clone();
+        // Only the dedicated command can acknowledge a change to an older route.
+        settings.chat_subscriptions = current.chat_subscriptions.clone();
+        settings.agy_approvals_enabled = current.agy_approvals_enabled;
         // Ollama choices have their own validated, acknowledged command. A
         // settings page opened before that choice cannot silently undo it.
         if let Some(model)=current.chat_models.get("ollama"){
@@ -206,7 +221,8 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) -> R
     pet_native_binding::publish_current(&app);
     if screen_changed {
         let collapsed = shared.gate.collapsed.load(Ordering::Relaxed);
-        island::apply_geometry(&app, &settings.screen, collapsed);
+        let size = *shared.gate.collapsed_size.lock().unwrap();
+        island::apply_geometry(&app, &settings.screen, collapsed.then_some(size));
     }
     if shortcuts_changed {
         shortcuts::apply(&app, &settings.shortcuts);
@@ -310,16 +326,23 @@ fn language_changed(app: &AppHandle) {
 /// Close/open explicit cards. Linux keeps only the mapped controller alive,
 /// with an empty input region while closed and no passive wake surface.
 #[tauri::command]
-fn set_collapsed(app: AppHandle, shared: State<Shared>, collapsed: bool) {
-    if collapsed{if let Some(win)=island::window(&app){platform::set_activating(&win,false);}}
+fn set_collapsed(app: AppHandle, shared: State<Shared>, collapsed: bool, width: Option<f64>, height: Option<f64>) {
+    if collapsed { if let Some(win) = island::window(&app) { platform::set_activating(&win, false); } }
     let pref = shared.settings.lock().unwrap().screen.clone();
     shared.gate.collapsed.store(collapsed, Ordering::Relaxed);
-    // This webview owns background event handlers. Hiding the GTK window
-    // suspends WebKit and would prevent a pet from opening its card again.
-    island::apply_geometry(&app, &pref, collapsed);
-    let keep_controller=cfg!(target_os="linux")||shared.settings.lock().unwrap().companion_mode;
+    // An older page sends no size: the wake strip, as before.
+    let size = island::clamp_collapsed((width.unwrap_or(island::STRIP_W), height.unwrap_or(island::STRIP_H)));
+    *shared.gate.collapsed_size.lock().unwrap() = size;
+    // The poll stops first: a tick of it after this could make the closed
+    // island click-through again (see spawn_cursor_poll).
+    if collapsed {
+        shared.gate.set_active(false);
+    }
+    island::apply_geometry(&app, &pref, collapsed.then_some(size));
+    // The closed island must always take the mouse, and a resize invalidates the flag.
+    // Linux keeps a live background controller. Its input region is empty while collapsed.
+    let keep_controller = cfg!(target_os="linux") || shared.settings.lock().unwrap().companion_mode;
     if keep_controller { if let Some(win) = island::window(&app) { let _ = win.show(); } }
-    // Card input follows its actual shape, and a resize invalidates the flag.
     island::refresh_click_through(&app, &shared.gate);
     shared.gate.set_active(!collapsed&&!cfg!(target_os="linux"));
     platform::set_pointer_watch(!collapsed);
@@ -349,7 +372,8 @@ fn reposition(app: AppHandle, shared: State<Shared>) {
     if shared.gate.collapsed.load(Ordering::Relaxed) && (cfg!(target_os="linux")||shared.settings.lock().unwrap().companion_mode) { return; }
     let pref = shared.settings.lock().unwrap().screen.clone();
     let collapsed = shared.gate.collapsed.load(Ordering::Relaxed);
-    island::apply_geometry(&app, &pref, collapsed);
+    let size = *shared.gate.collapsed_size.lock().unwrap();
+    island::apply_geometry(&app, &pref, collapsed.then_some(size));
 }
 
 /// The panel is laid out in CSS px against the window's own scale. If the webview
@@ -384,6 +408,47 @@ fn open_url(url: String) {
         return;
     }
     platform::open_url(&url);
+}
+
+/// Opens a GitLab link only when it belongs to the configured instance. This
+/// also covers self-hosted installations without exposing their token.
+#[tauri::command]
+fn open_gitlab_url(url: String) {
+    let base = secrets::get("gitlab-url").unwrap_or_else(|| "https://gitlab.com".into());
+    let (Ok(target), Ok(instance)) = (reqwest::Url::parse(&url), reqwest::Url::parse(base.trim())) else { return };
+    if is_forge_instance_url(&target, &instance) {
+        open_url(url);
+    }
+}
+
+fn is_forge_instance_url(target: &reqwest::Url, instance: &reqwest::Url) -> bool {
+    if !matches!(target.scheme(), "http" | "https")
+        || target.scheme() != instance.scheme()
+        || target.host_str() != instance.host_str()
+        || target.port_or_known_default() != instance.port_or_known_default()
+    {
+        return false;
+    }
+    let base = instance.path().trim_end_matches('/');
+    base.is_empty() || target.path() == base || target.path().starts_with(&format!("{base}/"))
+}
+
+/// The configured Gitea address is a credential-store value, so the island
+/// asks Rust to open it instead of ever receiving it.
+#[tauri::command]
+fn open_gitea() {
+    if let Some(url) = secrets::get("gitea-url") {
+        open_url(url);
+    }
+}
+
+#[tauri::command]
+fn open_gitea_url(url: String) {
+    let (Ok(target), Some(base)) = (reqwest::Url::parse(&url), secrets::get("gitea-url")) else { return };
+    let Ok(instance) = reqwest::Url::parse(&base) else { return };
+    if is_forge_instance_url(&target, &instance) {
+        open_url(url);
+    }
 }
 
 /// "Open terminal" opens the working folder in VS Code when `code` is on PATH,
@@ -450,8 +515,8 @@ fn open_session(session_id: Option<String>, path: Option<String>) -> bool {
     }
 }
 
-/// The Claude Desktop pill's target: the Claude app (Windows only — it has no
-/// Linux build).
+/// The Claude Desktop pill's target: the Claude app (Windows, and Linux with
+/// Anthropic's .deb).
 #[tauri::command]
 fn open_claude_desktop() -> bool {
     platform::open_claude_desktop()
@@ -580,6 +645,7 @@ fn status_line_apply(
         // As on the Mac: taking the relay out turns the pill off with it.
         if !install {
             next.show_plan_in_notch = false;
+            next.show_plan_in_compact_island = false;
         }
     }, settings::save, |fresh| { let _ = app.emit("settings-changed", fresh); })
         .map_err(|err| format!("{} O relay já foi alterado; não repitas a aplicação para resolver esta falha. Cópia anterior: {backup}",
@@ -660,6 +726,7 @@ async fn chat_send(
     let provider=if provider.is_empty(){"anthropic".to_string()}else{provider};
     if provider=="integration_spotify" {return Err("O Spoty controla música e som e não inicia conversas com modelos.".into());}
     if !crate::pet_config::service(&provider) && !["anthropic","openai","google","openrouter","codex","copilot","antigravity","gemini-cli","claude-cli","ollama","lmstudio","custom"].contains(&provider.as_str()) { return Err("Unknown chat provider".into()); }
+    crate::cli_relay::require_configured_route(&shared.settings.lock().unwrap(), &provider)?;
     // Admission precedes the effective model snapshot. A model ACK that wins
     // the race is visible here; an admitted turn prevents a later selection.
     let _conversation=chat.reserve_conversation(&provider,conversation_id.as_deref())?;
@@ -683,6 +750,13 @@ async fn chat_models(shared: State<'_, Shared>, provider: String) -> Result<Vec<
     settings::effect_allowed()?;
     let settings = shared.settings.lock().unwrap().clone();
     chat::models(&settings, &provider).await
+}
+
+/// The Claude API settings use their own key even when chat uses a CLI plan.
+#[tauri::command]
+async fn claude_api_models() -> Result<Vec<ModelInfo>, String> {
+    settings::effect_allowed()?;
+    claude::available_models().await
 }
 
 /// Settings → Local models → Connect: does the server answer, and with which models?
@@ -749,6 +823,35 @@ fn secret_present(key: String) -> bool {
     secrets::present(&key)
 }
 
+/// Whether Claude can answer: an API key, or else the user's own Claude Code.
+#[tauri::command]
+fn claude_ready() -> bool {
+    claude::ready()
+}
+
+/// Settings → Chat → Your AI subscriptions: each provider's switch and
+/// whether its terminal tool is installed (looked up again on every call).
+#[tauri::command]
+fn subscription_status(shared: State<Shared>) -> Vec<cli_relay::Status> {
+    let settings = shared.settings.lock().unwrap().clone();
+    cli_relay::status(&settings)
+}
+
+/// Discard the selected legacy binding only after a deliberate user action
+/// and a committed settings write.
+#[tauri::command]
+fn subscription_set(app: AppHandle, shared: State<Shared>, provider: String, on: bool) -> Result<Vec<cli_relay::Status>, String> {
+    if on {
+        return Err("Seleciona a conta no pet correspondente.".into());
+    }
+    let next = settings::update_checked_with(&shared.settings,
+        |next| cli_relay::clear_binding(next, &provider),
+        settings::save,
+        |next| { let _ = app.emit("settings-changed", next); },
+    ).map_err(|error| settings::save_error("Não foi possível confirmar a ligação", &error))?;
+    Ok(cli_relay::status(&next))
+}
+
 #[tauri::command]
 fn secret_set(app: AppHandle, key: String, value: String) -> Result<(), String> {
     // Bound to its server's address: only local_set_key may store it.
@@ -765,6 +868,13 @@ fn secret_set(app: AppHandle, key: String, value: String) -> Result<(), String> 
             integrations::github_token_changed(&app);
         }
     }
+    if key == "gitea-token" || key == "gitea-url" {
+        integrations::gitea_credentials_changed(&app);
+    }
+    if key == "n8n-api-key" || key == "n8n-url" {
+        integrations::n8n_credentials_changed(&app);
+    }
+    let _ = app.emit("secrets-changed", &key);
     Ok(())
 }
 
@@ -778,6 +888,13 @@ fn secret_clear(app: AppHandle, key: String) -> Result<(), String> {
     if had {
         integrations::github_token_changed(&app);
     }
+    if key == "gitea-token" || key == "gitea-url" {
+        integrations::gitea_credentials_changed(&app);
+    }
+    if key == "n8n-api-key" || key == "n8n-url" {
+        integrations::n8n_credentials_changed(&app);
+    }
+    let _ = app.emit("secrets-changed", &key);
     Ok(())
 }
 
@@ -872,18 +989,49 @@ fn create_settings_window(app: &AppHandle) {
     {
         Ok(win) => {
             settings::review::register_window(&win);
-            // Closing it must only hide it, or it could never be reopened.
-            let hidden = win.clone();
-            win.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            let this = win.clone();
+            win.on_window_event(move |event| match event {
+                // Closing it must only hide it, or it could never be reopened.
+                tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
-                    let _ = hidden.emit("hub-visible", false);
-                    let _ = hidden.hide();
+                    let _ = this.hide();
+                    set_hub_shown(&this, false);
+                    webview_memory::set_low(&this, true);
                 }
+                // Minimised (a 0×0 resize on Windows) or back from it.
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(true) => {
+                    let on = this.is_visible().unwrap_or(false) && !this.is_minimized().unwrap_or(false);
+                    set_hub_shown(&this, on);
+                }
+                _ => {}
             });
+            webview_memory::set_low(&win, true); // created hidden
         }
         Err(err) => log::line(format!("Coucou window failed: {err}")),
     }
+}
+
+/// Whether the Coucou window is on screen (shown and not minimised). Its page
+/// animates its canvases only then (hub/hero.ts): WebKitGTK can keep
+/// `document.visibilityState` at "visible" for a hidden window, and its
+/// animation loop then kept a core busy with the window closed (#792).
+static HUB_SHOWN: AtomicBool = AtomicBool::new(false);
+
+fn set_hub_shown(win: &tauri::WebviewWindow, shown: bool) {
+    if HUB_SHOWN.swap(shown, Ordering::Relaxed) != shown {
+        let _ = win.emit_to(HUB_LABEL, "hub-visible", shown);
+    }
+}
+
+/// Whether the Coucou window is on screen, for what only it shows.
+pub(crate) fn hub_is_shown() -> bool {
+    HUB_SHOWN.load(Ordering::Relaxed)
+}
+
+/// The page asks once at load, in case it missed the event.
+#[tauri::command]
+fn hub_shown() -> bool {
+    HUB_SHOWN.load(Ordering::Relaxed)
 }
 
 pub fn show_settings_window(app: &AppHandle) {
@@ -902,17 +1050,32 @@ fn hub_requested_page(window:tauri::WebviewWindow)->Result<Option<String>,String
 }
 pub fn show_hub(app: &AppHandle, page: Option<&str>) {
     let Some(win) = app.get_webview_window(HUB_LABEL) else {
-        log::line("Coucou window missing");
+        // Creating it at startup can fail on some machines (WebView2
+        // 0x80070578, #775): try again now, on the main thread, where
+        // window creation can't deadlock a command.
+        log::line("Coucou window missing, creating it again");
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            create_settings_window(&handle);
+            if let Some(win) = handle.get_webview_window(HUB_LABEL) {
+                webview_memory::set_low(&win, false);
+                let _ = win.show();
+                let _ = win.set_focus();
+                set_hub_shown(&win, true);
+            }
+        });
         return;
     };
     if let Some(page) = page.filter(|s|s.len()<=256&&!s.chars().any(char::is_control)) {
         if let Ok(mut pending)=HUB_REQUESTED_PAGE.lock(){*pending=Some(page.to_string());}
         let _ = win.emit("hub-page", page.to_string());
     }
+    webview_memory::set_low(&win, false);
     let _ = win.unminimize();
     let _ = win.show();
     let _ = win.emit("hub-visible", true);
     let _ = win.set_focus();
+    set_hub_shown(&win, true);
 }
 
 /// The argument the login item starts Coucou with.
@@ -967,6 +1130,20 @@ pub fn run() {
         .manage(shortcuts::Registry::default())
         .invoke_handler(tauri::generate_handler![
             boot,
+            mail::mail_refresh,
+            mail::mail_more,
+            mail::mail_search,
+            mail::mail_detail,
+            mail::mail_open,
+            mail::mail_act,
+            mail::mail_triage,
+            mail::mail_triage_set,
+            mail::mail_journal_clear,
+            mail::mail_undo,
+            mail::mail_plan_show,
+            mail::mail_plan_test,
+            mail::mail_plan_start,
+            mail::mail_plan_cancel,
             save_settings,
             settings_io_status,
             settings::review::settings_review_prepare,
@@ -991,10 +1168,16 @@ pub fn run() {
             focus_window,
             reposition,
             fit_zoom,
+            hub_shown,
             list_monitors,
             open_url,
+            open_gitlab_url,
+            open_gitea,
+            open_gitea_url,
             open_in_vscode,
             open_session,
+            launch::launch_session,
+            launch::pick_folder,
             open_claude_desktop,
             open_file_in_vscode,
             quit_app,
@@ -1015,12 +1198,15 @@ pub fn run() {
             pipe::external_approvals::relay_external_approval_status,
             pipe::external_approvals::relay_external_approval_set,
             approval_decline,
+            agy_approvals::agy_approvals_status,
+            agy_approvals::agy_approvals_set_enabled,
             log_line,
             chat_send,
             chat_models,
             cli_chat::assistant_set_workspace,
             cli_chat::cli_agent_answer,
             cli_chat::cli_agent_pending,
+            claude_api_models,
             local_connect,
             local_set_key,
             chat_reset,
@@ -1197,6 +1383,9 @@ pub fn run() {
             pet_documents::pet_document_clear,
             pet_documents::pet_document_cancel_drop,
             secret_present,
+            claude_ready,
+            subscription_status,
+            subscription_set,
             secret_set,
             secret_clear,
             refresh_integration,
@@ -1230,10 +1419,13 @@ pub fn run() {
             phone_link::phone_link_send_diff,
             phone_link::phone_usage_status,
             phone_link::phone_usage_set_enabled,
+            phone_link::phone_recap_status,
+            phone_link::phone_recap_set_enabled,
             phone_link::phone_relay_status,
             phone_link::phone_relay_set,
             phone_link::phone_relay_set_access,
             phone_link::phone_link_publish_usage,
+            phone_link::phone_link_publish_recap,
             phone_link::phone_services_status,
             phone_link::phone_services_set,
             phone_link::phone_link_publish_services,
@@ -1310,6 +1502,18 @@ pub fn run() {
             spotify::spotify_play_item,
             spotify::spotify_open,
             spotify::spotify_installed,
+            whatsapp::whatsapp_island,
+            whatsapp::whatsapp_open,
+            whatsapp::whatsapp_close,
+            whatsapp::whatsapp_open_app,
+            whatsapp::whatsapp_send,
+            whatsapp::whatsapp_ignore,
+            whatsapp::whatsapp_unignore,
+            whatsapp::whatsapp_settings,
+            whatsapp::whatsapp_set_options,
+            whatsapp::whatsapp_save_gateway,
+            whatsapp::whatsapp_test,
+            whatsapp::whatsapp_install,
             flow::flow_status,
             flow::flow_set_prefs,
             flow::flow_history,
@@ -1349,6 +1553,16 @@ pub fn run() {
             voice::session::voice_session_toggle,
             voice::session::voice_session_start,
             voice::session::voice_learn_alias,
+            update::update_status,
+            update::update_set_consent,
+            update::update_check,
+            update::update_shown,
+            update::update_show,
+            update::update_later,
+            tray::tray_update_hint,
+            update::update_dismiss,
+            update::update_install,
+            update::update_open_page,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -1396,7 +1610,7 @@ pub fn run() {
                 platform::make_non_activating(&win);
                 #[cfg(windows)]
                 webview_drop::install(&handle);
-                island::apply_geometry(&handle, &loaded.screen, false);
+                island::apply_geometry(&handle, &loaded.screen, None);
                 let _ = win.show();
             }
             gate.collapsed.store(cfg!(target_os="linux"), Ordering::Relaxed);
@@ -1416,8 +1630,12 @@ pub fn run() {
             pipe::start(handle.clone());
             phone_link::start_if_enabled(&handle);
             integrations::start(handle.clone());
+            mail::start(handle.clone());
             spotify::sync(&handle, &loaded.active_integrations);
+            // WhatsApp (experimental): nothing runs unless it is turned on and its pill is active.
+            whatsapp::start(&handle, &loaded.active_integrations);
             shortcuts::apply(&handle, &loaded.shortcuts);
+            update::start(handle.clone());
             // Registration is an explicit reviewed effect on Linux. Startup
             // only observes; drift or a missing outcome never triggers replay.
             #[cfg(target_os="linux")]if loaded.autostart{
@@ -1449,13 +1667,32 @@ pub fn run() {
                 phone_link::stop_on_exit(app);
                 notes::shutdown(app);
                 pet_observability::runtime::shutdown_on_exit(app);
+                // GOWA started by Coucou stops with it; the conversations were only in memory.
+                whatsapp::shutdown();
             }
         });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::diff_file;
+    use super::{diff_file, is_forge_instance_url};
+
+    #[test]
+    fn forge_links_stay_on_the_configured_instance() {
+        let instance = reqwest::Url::parse("https://git.example.com/team/").unwrap();
+        assert!(is_forge_instance_url(
+            &reqwest::Url::parse("https://git.example.com/team/me/project").unwrap(),
+            &instance,
+        ));
+        assert!(!is_forge_instance_url(
+            &reqwest::Url::parse("https://git.example.com/other/project").unwrap(),
+            &instance,
+        ));
+        assert!(!is_forge_instance_url(
+            &reqwest::Url::parse("https://evil.example/team/me/project").unwrap(),
+            &instance,
+        ));
+    }
 
     #[test]
     fn voice_cli_routes_only_explicit_requests() {

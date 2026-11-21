@@ -1506,6 +1506,7 @@ pub async fn send(
 ) -> Result<ChatReply, String> {
     chat.check_new_effect()?;
     let provider = if settings.chat_provider.is_empty(){ANTHROPIC}else{settings.chat_provider.as_str()};
+    crate::cli_relay::require_configured_route(settings, provider)?;
     let reservation=chat.bind_reservation(provider)?.broadcast(app,&query);
     let channel=reservation.channel();let chat=&channel;
     chat.check_admission(provider)?;
@@ -1544,6 +1545,7 @@ pub async fn send_for_phone(
     on_delta: impl FnMut(String),
 ) -> Result<ChatReply, String> {
     chat.check_new_effect()?;
+    crate::cli_relay::require_configured_route(settings, provider)?;
     if provider == ANTHROPIC {
         return claude::send(chat, model, query, None).await;
     }
@@ -1561,6 +1563,7 @@ pub async fn send_for_phone(
 /// address): nothing is sent anywhere before that.
 pub async fn models(settings: &Settings, provider: &str) -> Result<Vec<ModelInfo>, String> {
     crate::settings::effect_allowed()?;
+    crate::cli_relay::require_configured_route(settings, provider)?;
     crate::pet_config::require_inference_provider(provider)?;
     let config=match crate::pet_config::read_existing(){Ok(c)=>Some(c),Err(error)if crate::pet_inference::managed_provider(provider)&&provider!="custom"=>return Err(error),Err(_)=>None};
     let observation=config.as_ref().and_then(|c|crate::pet_capabilities::begin_catalog_configured(settings,provider,c));
@@ -1585,8 +1588,7 @@ async fn models_resolved(settings:&Settings,provider:&str,config:Option<&crate::
     }
     let no_key = || crate::i18n::t("No API key — add it in Settings.");
     if provider == ANTHROPIC {
-        let key = secrets::get(claude::KEY).ok_or_else(no_key)?;
-        return claude::models(&key).await;
+        return claude::available_models().await;
     }
     if let Some(p) = openai_compat::provider(provider) {
         let key = secrets::get(p.key).ok_or_else(no_key)?;

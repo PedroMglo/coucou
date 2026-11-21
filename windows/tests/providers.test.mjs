@@ -107,3 +107,10 @@ test("Spoty keeps sound commands without a model chat profile",async()=>{
  assert.equal(providerForPill('integration_spotify'),null);assert.equal(profileProvider('integration_spotify'),false);
  const cap=petCapabilities('integration_spotify');assert.equal(cap.chat,null);assert.equal(cap.voice,'integration_spotify');assert.match(cap.role,/som do PC/);
 });
+
+test("a saved Cursor route is visible with its own name and never inserted into a fresh picker", () => {
+  assert.equal(providerDef("cursor").name, "Cursor");
+  assert.ok(!visibleProviders(settings()).some(p => p.id === "cursor"));
+  assert.ok(visibleProviders(settings({ chatProvider: "cursor" })).some(p => p.id === "cursor"));
+  assert.equal(activeModel(settings({ chatProvider: "cursor" })), "");
+});

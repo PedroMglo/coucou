@@ -351,7 +351,7 @@ fn file_part(path: &str) -> Option<Part> {
         let url = format!("data:{media};base64,{}", crate::claude::base64_for(&bytes));
         return Some(Part::Media(json!({ "type": "image_url", "image_url": { "url": url } })));
     }
-    if ext == "pdf" || len > MAX_INLINE_TEXT {
+    if len > MAX_INLINE_TEXT {
         return None;
     }
     crate::pet_documents::content::text(path,MAX_INLINE_TEXT as usize).map(Part::Text)
@@ -546,5 +546,52 @@ mod tests {
     #[test]
     fn an_unknown_answer_gives_an_empty_list() {
         assert!(parse_models(p("openai"), &json!({"nope":true})).is_empty());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_pdf_attachment_uses_the_bounded_document_reader() {
+        use lopdf::content::{Content, Operation};
+        use lopdf::{dictionary, Document, Object, Stream};
+
+        let files = crate::pet_documents::fixtures::Files::new();
+        let pdf_path = files.root.join("exercises.pdf");
+
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+        });
+        let resources_id = doc.add_object(dictionary! { "Font" => dictionary! { "F1" => font_id } });
+        let content = Content {
+            operations: vec![
+                Operation::new("BT", vec![]),
+                Operation::new("Tf", vec!["F1".into(), 12.into()]),
+                Operation::new("Td", vec![50.into(), 700.into()]),
+                Operation::new("Tj", vec![Object::string_literal("Solve: 2 + 2 = ?")]),
+                Operation::new("ET", vec![]),
+            ],
+        };
+        let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
+        });
+        let pages = dictionary! {
+            "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1, "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        };
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+        let catalog = dictionary! { "Type" => "Catalog", "Pages" => pages_id };
+        let catalog_id = doc.add_object(catalog);
+        doc.trailer.set("Root", catalog_id);
+        doc.save(&pdf_path).unwrap();
+
+        let context = files.context(&[("exercises.pdf", "exercises.pdf")]);
+        let (message, preparation) = prepared_message(true, Some(&context), "Please answer");
+        let parts = message["content"].as_array().unwrap();
+        assert!(parts[0]["text"].as_str().unwrap().contains("exercises.pdf"));
+        assert!(parts[1]["text"].as_str().unwrap().contains("Solve: 2 + 2 = ?"));
+        assert_eq!(parts[2]["text"], "Please answer");
+        assert!(parts[1]["text"].as_str().unwrap().contains("at most the first 40 pages"));
+        assert!(preparation.is_empty());
     }
 }

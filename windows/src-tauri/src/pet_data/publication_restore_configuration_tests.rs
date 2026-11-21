@@ -33,8 +33,46 @@ impl Fixture{
 }
 #[test]fn current_settings_fields_are_classified_once_and_no_missing_file_is_created(){
  let hash="a".repeat(64);assert_eq!(value(History::Quarantined{history_hash:hash.clone()}).unwrap(),json!({"quarantined":{"historyHash":hash}}));
- let report=inspect(None,None).unwrap();let groups=report["settings"]["resolvedGroups"].as_object().unwrap();assert!(!groups.contains_key("requiresClassification"));let fields:usize=groups.values().map(|v|v.as_object().unwrap().len()).sum();assert_eq!(fields,value(crate::settings::Settings::default()).unwrap().as_object().unwrap().len());assert_eq!(report["settings"]["present"],false);assert_eq!(report["pets"]["present"],false);assert_eq!(report["runtimeActivationAvailable"],false);
+ let current = crate::settings::Settings::default();
+ let bytes = serde_json::to_vec(&current).unwrap();
+ let report = inspect(Some(&bytes), None).unwrap();
+ let groups = report["settings"]["resolvedGroups"].as_object().unwrap();
+ assert!(!groups.contains_key("requiresClassification"));
+ let fields: usize = groups.values().map(|v| v.as_object().unwrap().len()).sum();
+ assert_eq!(fields, value(current).unwrap().as_object().unwrap().len());
+ let legacy = inspect(None, None).unwrap();
+ assert_eq!(legacy["settings"]["present"], false);
+ assert_eq!(legacy["pets"]["present"], false);
+ assert_eq!(legacy["runtimeActivationAvailable"], false);
+ let legacy_groups = legacy["settings"]["resolvedGroups"].as_object().unwrap();
+ assert_eq!(legacy_groups.values().map(|v| v.as_object().unwrap().len()).sum::<usize>(),
+            fields - crate::settings::RECONCILED_FIELDS.len());
 }
+#[test]
+fn projection_preserves_previous_wire_shape_and_keeps_new_native_permissions_inactive() {
+ let choices = crate::pet_data::restored_projection::Choices::parse(
+     &serde_json::to_vec(&json!({
+         "schemaVersion":1, "inspectionReceipt":"a".repeat(64),
+         "mainPet":"ai_ollama", "activePets":["ai_ollama"], "grants":[]
+     })).unwrap()
+ ).unwrap();
+ let project = |source: &[u8]| {
+     let report = inspect(Some(source), None).unwrap();
+     let projection = crate::pet_data::restored_projection::project(&report, &choices, None, None).unwrap();
+     serde_json::from_slice::<Value>(&projection.settings).unwrap()
+ };
+ let old = project(br#"{"soundVolume":0.2}"#);
+ for key in crate::settings::RECONCILED_FIELDS {
+     assert!(old.get(key).is_none(), "{key}");
+ }
+ assert_eq!(old["soundVolume"], 0.2);
+ let new = project(br#"{"agyApprovalsEnabled":true,"phoneRecap":true,"showClock":true,"chatSubscriptions":{"anthropic":true}}"#);
+ assert_eq!(new["agyApprovalsEnabled"], false);
+ assert_eq!(new["phoneRecap"], false);
+ assert_eq!(new["showClock"], true);
+ assert_eq!(new["chatSubscriptions"]["anthropic"], true);
+}
+
 #[test]fn native_review_is_read_only_then_receipt_changes_only_control_and_cannot_admit_bootstrap(){
  let f=Fixture::new();let before=f.bytes();let review=f.review();let p=review.preview().unwrap();assert_eq!(f.bytes(),before);assert_eq!(p["consentPurpose"],"configurationInspectionOnly");assert_eq!(p["history"],"noOriginalAuthority");let result=review.apply(p["fingerprint"].as_str().unwrap()).unwrap();assert_eq!(result["settingsActivated"],false);assert!(!f.config().join(ADMITTED).exists());assert_eq!(fs::read(f.config().join(PAYLOAD).join("settings.json")).unwrap(),settings());let layout=f.target.layout();assert!(bootstrap::Session::prepare(f.owner.claim(&layout).unwrap(),layout).is_err());assert_eq!(fs::read(f.source.layout().config().join(PAYLOAD).join("settings.json")).unwrap(),settings());
 }

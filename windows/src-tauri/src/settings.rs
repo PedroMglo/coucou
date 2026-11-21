@@ -43,6 +43,7 @@ pub struct Settings {
     /// Hovering the island opens it all the way, and it folds again shortly
     /// after the pointer leaves (the Mac's "Open on hover"). Off by default.
     pub open_on_hover: bool,
+    pub alerts_from_all_pills: bool,
     pub absence_interval: f64,
     pub active_integrations: Vec<String>,
     /// The always-on workspace pill (src/core/pills.ts checks it is one).
@@ -65,6 +66,8 @@ pub struct Settings {
     /// Show the Claude plan pill (5 h and weekly limits) in the island's header.
     /// Off until the user turns it on, so the header stays as it shipped.
     pub show_plan_in_notch: bool,
+    /// Show the Claude plan percentage in the compact island next to the agent dots.
+    pub show_plan_in_compact_island: bool,
     /// Coucou's status line relay is the one in Claude Code's settings.json.
     /// Like `hooks_installed`, the real state wins at launch over what was stored.
     pub plan_relay_installed: bool,
@@ -93,6 +96,10 @@ pub struct Settings {
     /// auto keeps an existing Whisper setup; otherwise use built-in Parakeet.
     pub voice_asr_engine: String,
     pub voice_models: BTreeMap<String, String>,
+    /// Settings → Chat → Your AI subscriptions: the switch of each provider
+    /// that can answer through its own terminal tool (cli_relay.rs). A
+    /// provider not in it was never switched: see cli_relay::uses_subscription.
+    pub chat_subscriptions: BTreeMap<String, bool>,
     /// Addresses of the model servers once connected; empty means not connected.
     pub ollama_url: String,
     pub lmstudio_url: String,
@@ -137,6 +144,8 @@ pub struct Settings {
     pub phone_diffs: bool,
     /// Show the Claude and Codex plan usage on the phone (cap `usage`). Off by default; owned by Rust like the other phone switches.
     pub phone_usage: bool,
+    /// Show last week's recap (counts only) on the phone (cap `recap`). Off by default; owned by Rust like the other phone switches.
+    pub phone_recap: bool,
     /// The service pills whose cards the phone may see, by pill id (cap `services`). None by default; owned by Rust like the other phone switches.
     pub phone_services: Vec<String>,
     /// Reach the phone through the user's own relay when it is not on this network (phone_link/relay_client.rs).
@@ -145,6 +154,20 @@ pub struct Settings {
     pub phone_relay: bool,
     /// The relay's address (`wss://…`), empty until the user enters it. Not a secret. Owned by Rust.
     pub phone_relay_url: String,
+    /// The date and time in the middle of the compact island. Off by default.
+    pub show_clock: bool,
+    /// What the closed island shows at the top of the screen, where the Mac
+    /// has its notch: "mochi" (the Mac's island on a screen without a notch),
+    /// "time", "datetime", "claude" (the plan's usage), "music" (what plays),
+    /// "empty" (the black shape alone) or "hidden" (nothing; the top edge of
+    /// the screen wakes it). Kept as it comes, like `mochi_outfit`: the island
+    /// reads what it doesn't know as "mochi".
+    pub closed_island: String,
+    /// Settings → Agents → Antigravity → Approve commands from the notch: a shell command
+    /// none of Antigravity's rules covers waits for Allow / Deny on the island
+    /// (agy_approvals.rs). Off by default; owned by the Rust side like `phone_link`, so
+    /// what a webview sends back is ignored. The Mac's key is the same.
+    pub agy_approvals_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -178,6 +201,7 @@ impl Default for Settings {
             sound_volume: 0.12,
             auto_close_interval: 15.0,
             open_on_hover: false,
+            alerts_from_all_pills: false,
             absence_interval: 180.0,
             active_integrations: vec![
                 "integration_resend".into(),
@@ -197,6 +221,7 @@ impl Default for Settings {
             hooks_installed: false,
             model: default_model(),
             show_plan_in_notch: false,
+            show_plan_in_compact_island: false,
             plan_relay_installed: false,
             show_codex_plan_in_notch: false,
             chat_provider: crate::chat::ANTHROPIC.into(),
@@ -212,6 +237,7 @@ impl Default for Settings {
             voice_asr_model: String::new(),
             voice_asr_engine: "auto".into(),
             voice_models: BTreeMap::from([("codex".into(), "gpt-6-luna".into())]),
+            chat_subscriptions: BTreeMap::new(),
             ollama_url: String::new(),
             lmstudio_url: String::new(),
             custom_url: String::new(),
@@ -227,9 +253,13 @@ impl Default for Settings {
             phone_answers: false,
             phone_diffs: false,
             phone_usage: false,
+            phone_recap: false,
             phone_services: Vec::new(),
             phone_relay: false,
             phone_relay_url: String::new(),
+            show_clock: false,
+            closed_island: "mochi".into(),
+            agy_approvals_enabled: false,
         }
     }
 }
@@ -307,6 +337,16 @@ static NOT_LOADED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 fn not_loaded() -> MutexGuard<'static, Vec<PathBuf>> {
     NOT_LOADED.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Serializes saves across all threads so concurrent writes do not collide on
+/// the temporary file or interleave file renames.
+#[cfg(not(target_os = "linux"))]
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(not(target_os = "linux"))]
+fn save_lock() -> MutexGuard<'static, ()> {
+    SAVE_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// One line in coucou.log. Tests must never write to the real one.
@@ -509,6 +549,7 @@ fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
     #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed()?;
     #[cfg(target_os="linux")]{return revision::save_to(path,settings);}
     #[cfg(not(target_os="linux"))]{
+    let _lock = save_lock();
     keep_what_was_not_loaded(path)?;
     let json = serde_json::to_vec_pretty(settings)
         .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
@@ -551,6 +592,7 @@ mod tests {
   "soundVolume": 0.5,
   "autoCloseInterval": 30.0,
   "openOnHover": true,
+  "alertsFromAllPills": true,
   "absenceInterval": 60.0,
   "activeIntegrations": ["integration_notion"],
   "mainPill": "agent_cursor",
@@ -565,6 +607,7 @@ mod tests {
   "hooksInstalled": true,
   "model": "some-model",
   "showPlanInNotch": true,
+  "showPlanInCompactIsland": true,
   "planRelayInstalled": true,
   "showCodexPlanInNotch": true,
   "chatProvider": "ollama",
@@ -580,6 +623,7 @@ mod tests {
   "voiceAsrPython": "/tmp/whisper/bin/python",
   "voiceAsrModel": "/tmp/whisper-model",
   "voiceAsrEngine": "whisper",
+  "chatSubscriptions": { "google": true, "anthropic": false },
   "ollamaUrl": "http://127.0.0.1:11434",
   "lmstudioUrl": "http://127.0.0.1:1234",
   "customUrl": "https://llm.example.com",
@@ -595,9 +639,13 @@ mod tests {
   "phoneAnswers": true,
   "phoneDiffs": true,
   "phoneUsage": true,
+  "phoneRecap": true,
   "phoneServices": ["integration_stripe"],
   "phoneRelay": true,
-  "phoneRelayUrl": "wss://relay.example.workers.dev"
+  "phoneRelayUrl": "wss://relay.example.workers.dev",
+  "showClock": true,
+  "closedIsland": "music",
+  "agyApprovalsEnabled": true
 }"##;
 
     fn custom() -> Value {
@@ -776,6 +824,15 @@ mod tests {
         assert!(!parse(&custom_with("phoneUsage", None)).unwrap().phone_usage);
         assert!(parse(&custom_with("phoneUsage", Some(serde_json::json!(true)))).unwrap().phone_usage);
         assert!(!parse(&custom_with("phoneUsage", Some(serde_json::json!("yes")))).unwrap().phone_usage, "a wrong type does not switch it on");
+    }
+
+    #[test]
+    fn a_file_from_before_the_weekly_recap_on_the_phone_keeps_it_off() {
+        // Sending last week's numbers to the phone is never on by default; an older file is not consent.
+        assert!(!Settings::default().phone_recap);
+        assert!(!parse(&custom_with("phoneRecap", None)).unwrap().phone_recap);
+        assert!(parse(&custom_with("phoneRecap", Some(serde_json::json!(true)))).unwrap().phone_recap);
+        assert!(!parse(&custom_with("phoneRecap", Some(serde_json::json!("yes")))).unwrap().phone_recap, "a wrong type does not switch it on");
     }
 
     #[test]
@@ -1089,6 +1146,7 @@ mod tests {
                 "soundVolume",
                 "autoCloseInterval",
                 "openOnHover",
+                "alertsFromAllPills",
                 "absenceInterval",
                 "activeIntegrations",
                 "mainPill",
@@ -1103,6 +1161,7 @@ mod tests {
                 "hooksInstalled",
                 "model",
                 "showPlanInNotch",
+                "showPlanInCompactIsland",
                 "planRelayInstalled",
                 "showCodexPlanInNotch",
                 "chatProvider",
@@ -1118,6 +1177,7 @@ mod tests {
                 "voiceAsrModel",
                 "voiceAsrEngine",
                 "voiceModels",
+                "chatSubscriptions",
                 "ollamaUrl",
                 "lmstudioUrl",
                 "customUrl",
@@ -1133,9 +1193,13 @@ mod tests {
                 "phoneAnswers",
                 "phoneDiffs",
                 "phoneUsage",
+                "phoneRecap",
                 "phoneServices",
                 "phoneRelay",
                 "phoneRelayUrl",
+                "showClock",
+                "closedIsland",
+                "agyApprovalsEnabled",
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -1171,6 +1235,31 @@ mod tests {
 
         assert!(save_to(&file, &Settings::default()).is_err());
         assert_eq!(std::fs::read(&file).unwrap(), CUSTOM.as_bytes());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn concurrent_saves_never_collide() {
+        let (dir, file) = scratch("concurrent");
+        let handles: Vec<_> = (0..20)
+            .map(|i| {
+                let path = file.clone();
+                std::thread::spawn(move || {
+                    let mut s = Settings::default();
+                    s.sound_volume = (i as f64) * 0.05;
+                    save_to(&path, &s)
+                })
+            })
+            .collect();
+
+        for h in handles {
+            assert!(h.join().unwrap().is_ok());
+        }
+
+        // Must still be valid settings that load cleanly without corruption
+        let loaded = load_from(&file);
+        assert!(loaded.sound_volume >= 0.0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1225,7 +1314,14 @@ mod tests {
     }
 }
 
-/// Canonical restored initialization never uses salvage or implicit new fields.
+// Fields introduced together by the upstream reconciliation. A complete earlier
+// projection is valid as written, with these features inactive by default.
+pub(crate) const RECONCILED_FIELDS: [&str; 7] = [
+    "alertsFromAllPills", "showPlanInCompactIsland", "chatSubscriptions",
+    "phoneRecap", "showClock", "closedIsland", "agyApprovalsEnabled",
+];
+
+/// Canonical restored initialization accepts either complete schema.
 #[cfg(target_os="linux")]
 pub(crate)fn load_for_review(path:&Path)->Settings{revision::load_for_review(path)}
 pub(crate)fn read_initialized(path:&Path)->Result<Settings,String>{
@@ -1238,7 +1334,13 @@ pub(crate)fn read_initialized(path:&Path)->Result<Settings,String>{
  if b.len()as u64!=metadata.len(){return Err("A configuração restaurada mudou durante a leitura.".into());}
  #[cfg(unix)]{use std::os::unix::fs::MetadataExt;let identity=|m:&std::fs::Metadata|(m.dev(),m.ino(),m.mode(),m.uid(),m.nlink(),m.len(),m.mtime(),m.mtime_nsec(),m.ctime(),m.ctime_nsec());let after=file.metadata().map_err(|_|"A configuração restaurada está indisponível.")?;let named=std::fs::symlink_metadata(path).map_err(|_|"A configuração restaurada está indisponível.")?;if identity(&metadata)!=identity(&after)||identity(&metadata)!=identity(&named){return Err("A configuração restaurada mudou durante a leitura.".into());}}
  let raw:Value=serde_json::from_slice(&b).map_err(|_|"A configuração restaurada é inválida.")?;let expected=serde_json::to_value(Settings::default()).map_err(|_|"A configuração restaurada é inválida.")?;
- if raw.as_object().map(|v|v.keys().collect::<Vec<_>>())!=expected.as_object().map(|v|v.keys().collect::<Vec<_>>()){return Err("O formato da configuração restaurada exige nova revisão.".into());}
+ let shape_error = || "O formato da configuração restaurada exige nova revisão.".to_string();
+ let fields = raw.as_object().ok_or_else(shape_error)?;
+ let current = expected.as_object().ok_or_else(shape_error)?;
+ let previous = current.keys().filter(|key| !RECONCILED_FIELDS.contains(&key.as_str()));
+ if !fields.keys().eq(current.keys()) && !fields.keys().eq(previous) {
+     return Err(shape_error());
+ }
  let mut settings=serde_json::from_value(raw).map_err(|_|"A configuração restaurada contém campos inválidos.")?;
  #[cfg(target_os="linux")]revision::bind_strict(path,&metadata,&b,&mut settings)?;
  Ok(settings)

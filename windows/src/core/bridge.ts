@@ -15,6 +15,8 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { Settings } from "./state";
 import type { RecapHistory, RecapPrefs } from "../recap/summary";
 import type { SpotifyState } from "./spotify";
+import type { UpdateStatus } from "./update";
+import type { WaIslandView, WaSettingsView, WaTestResult } from "./whatsapp";
 import type {PetConfiguration,PetDocument,InferenceUpdate} from "../mochi/pet-preferences";
 import {reportSettingsError} from './settings-feedback';
 import {cardPresentation} from './card-presentation';
@@ -103,6 +105,8 @@ export interface PhoneRelayStatus {
   url: string;
   hasAccess: boolean;
   state: PhoneRelayState;
+  /** The relay settings are shown: for testers (COUCOU_RELAY_SETTINGS=1), or when a relay is already on. */
+  shown: boolean;
 }
 
 /** Session details for the phone: the switch (off by default). */
@@ -186,6 +190,25 @@ export interface PhoneLinkUsage {
   codex: PhoneLinkPlan | null;
 }
 
+/**
+ * Last week's recap as the phone gets it: counts, the week's Monday and the busiest agent's name (cap `recap`). The project is a folder name that
+ * Rust sends only to a phone that also may see session details. A week with no session is not sent: all zero clears the phone's card.
+ */
+export interface PhoneLinkRecap {
+  /** The Monday that starts the week, YYYY-MM-DD (local). */
+  week: string;
+  minutes: number;
+  sessions: number;
+  files: number;
+  linesAdded: number;
+  linesRemoved: number;
+  commands: number;
+  allowed: number;
+  denied: number;
+  topAgent?: string;
+  topProject?: string;
+}
+
 /** What one service pill says, for a phone whose user allowed it (Rust cuts every text to size). */
 export interface PhoneLinkService {
   id: string;
@@ -201,6 +224,10 @@ export interface PhoneServicesStatus {
 }
 
 export interface PhoneUsageStatus {
+  enabled: boolean;
+}
+
+export interface PhoneRecapStatus {
   enabled: boolean;
 }
 
@@ -284,7 +311,9 @@ export const Bridge = {
   cliAgentPending:()=>callOrThrow<AgentRequest[]>("cli_agent_pending"),
 
   /** Shrink the window down to the invisible wake strip (hidden) or back to full. */
-  setCollapsed: (collapsed: boolean) => call<void>("set_collapsed", { collapsed }),
+  /** Folds the window to `width`×`height` (the closed island) or grows it back to the panel. */
+  setCollapsed: (collapsed: boolean, width?: number, height?: number) =>
+    call<void>("set_collapsed", { collapsed, width: width ?? null, height: height ?? null }),
 
   /**
    * Pushes the island shape in window coordinates. Rust flips click-through from
@@ -303,6 +332,12 @@ export const Bridge = {
   listMonitors: () => call<{ key: string; label: string }[]>("list_monitors"),
 
   openUrl: (url: string) => call<void>("open_url", { url }),
+  /** Opens a GitLab link only when it belongs to the configured instance. */
+  openGitLabUrl: (url: string) => call<void>("open_gitlab_url", { url }),
+  /** Opens the configured Gitea instance without exposing its URL to the page. */
+  openGitea: () => call<void>("open_gitea"),
+  /** Opens a Gitea link only if it belongs to the configured instance. */
+  openGiteaUrl: (url: string) => call<void>("open_gitea_url", { url }),
 
   /** Which of these sounds have a file of the user's own in the sounds folder. */
   customSounds: (names: readonly string[]) => call<string[]>("custom_sounds", { names }),
@@ -324,6 +359,20 @@ export const Bridge = {
 
   /** The Claude desktop app, for the Claude Desktop pill (Windows only). */
   openClaudeDesktop: () => call<boolean>("open_claude_desktop"),
+
+  /**
+   * A new Claude Code session: the user's terminal in `folder`, running
+   * Claude Code with the prompt (src-tauri/src/launch.rs). False when it couldn't.
+   */
+  launchSession: (folder: string, prompt: string) => call<boolean>("launch_session", { folder, prompt }),
+
+  /** The system's folder picker, `start` open in it; null when cancelled. */
+  pickFolder: (start: string | null) => call<string | null>("pick_folder", { start }),
+
+  /**
+   * A file dropped on a session: its window comes forward and the paths are
+   * pasted into it. "pasted", "copied" (on the clipboard only) or "failed".
+   */
 
   /** The diff card's ↗: an existing file, in VS Code; never launched by its type. */
   openFileInVSCode: (path: string) => call<boolean>("open_file_in_vscode", { path }),
@@ -361,6 +410,11 @@ export const Bridge = {
    */
   agentHooksApply: (agent: string, install: boolean, fingerprint: string) =>
     callOrThrow<string>("agent_hooks_apply", { agent, install, fingerprint }),
+  /** Settings → Agents → Antigravity → Approve commands from the notch, and whether its hooks can wait. */
+  agyApprovalsStatus: () => call<AgyApprovalsStatus>("agy_approvals_status"),
+  /** Off by default; only from the switch in Settings. */
+  agyApprovalsSetEnabled: (enabled: boolean) =>
+    callOrThrow<AgyApprovalsStatus>("agy_approvals_set_enabled", { enabled }),
   // ── Plan usage: the status line relay, installed apart from the hooks ──────
   /** Diff of the status line change. `install: false` previews taking the relay out. */
   statusLinePreview: (install: boolean) => callOrThrow<HookPreview>("status_line_preview", { install }),
@@ -427,6 +481,9 @@ export const Bridge = {
   /** Off by default; only from the switch in Settings. Phones are reconnected so they learn about it. */
   phoneUsageSetEnabled: (enabled: boolean) => callOrThrow<PhoneUsageStatus>("phone_usage_set_enabled", { enabled }),
   phoneLinkPublishUsage: (usage: PhoneLinkUsage) => call<void>("phone_link_publish_usage", { usage }),
+  phoneRecapStatus: () => call<PhoneRecapStatus>("phone_recap_status"),
+  phoneRecapSetEnabled: (enabled: boolean) => callOrThrow<PhoneRecapStatus>("phone_recap_set_enabled", { enabled }),
+  phoneLinkPublishRecap: (recap: PhoneLinkRecap | null) => call<void>("phone_link_publish_recap", { recap: recap ?? {} }),
   phoneChatStatus: () => call<PhoneChatStatus>("phone_chat_status"),
   /** Off by default; only from the switch in Settings. Phones are reconnected so they learn about it. */
   phoneChatSetEnabled: (enabled: boolean) => callOrThrow<PhoneChatStatus>("phone_chat_set_enabled", { enabled }),
@@ -506,6 +563,7 @@ export const Bridge = {
    * the provider only when it has a key (or a server address).
    */
   chatModels: (provider: string) => callOrThrow<ModelInfo[]>("chat_models", { provider }),
+  claudeApiModels: () => callOrThrow<ModelInfo[]>("claude_api_models"),
   /** Settings → Local models → Connect: does the server answer, and with which models? */
   /** The custom server's key, bound to the address it is entered for. */
   localSetKey: (url: string, key: string,provider?:'lmstudio') => provider!==undefined&&provider!=='lmstudio'?Promise.reject(Error('Servidor de credenciais desconhecido.')):callOrThrow<void>("local_set_key", { url, key,...(provider==='lmstudio'?{provider}:{}) }),
@@ -532,6 +590,16 @@ export const Bridge = {
   petMailDraft:(provider:string,path:string,recipient:string,subject:string,body:string)=>callOrThrow<string>("pet_mail_draft",{provider,path,recipient,subject,body}),
   /** Only ever tells you whether a key exists — never its value. */
   secretPresent: (key: string) => call<boolean>("secret_present", { key }),
+  /** Whether the Anthropic API key is available. */
+  claudeReady: () => call<boolean>("claude_ready"),
+  /** Settings → Chat → Your AI subscriptions: each switch and whether its tool is installed. */
+  subscriptionStatus: () => call<SubscriptionStatus[]>("subscription_status"),
+  /** Updates a legacy subscription binding, returning the saved rows. */
+  subscriptionSet: (provider: string, on: boolean) =>
+    callOrThrow<SubscriptionStatus[]>("subscription_set", { provider, on }),
+  /** Whether the configured provider key is available. */
+  keyReady: (key: string) =>
+    key === "anthropic-api-key" ? call<boolean>("claude_ready") : call<boolean>("secret_present", { key }),
   secretSet: (key: string, value: string) => callOrThrow<void>("secret_set", { key, value }),
   secretClear: (key: string) => callOrThrow<void>("secret_clear", { key }),
 
@@ -713,6 +781,50 @@ export const Bridge = {
   spotifyOpen: () => call<boolean>("spotify_open"),
   /** Whether there is a Spotify to launch (Settings). */
   spotifyInstalled: () => call<boolean>("spotify_installed"),
+
+  // ── WhatsApp (src-tauri/src/whatsapp) ─────────────────────────────────────
+  /** The island's copy, asked once at start (then the "whatsapp" event). Island only. */
+  whatsappIsland: () => call<WaIslandView>("whatsapp_island"),
+  /** A conversation opened in the card: its latest messages, the receipt if Settings says so. */
+  whatsappOpen: (chat: string) => call<void>("whatsapp_open", { chat }),
+  whatsappClose: (chat: string) => call<void>("whatsapp_close", { chat }),
+  /** The card's ↗: WhatsApp Desktop at the open conversation, or WhatsApp Web without it. */
+  whatsappOpenApp: () => call<boolean>("whatsapp_open_app"),
+  /** Enter or the send button only. True once the gateway took it. */
+  whatsappSend: (chat: string, text: string) => call<boolean>("whatsapp_send", { chat, text }),
+  /** A chat id, or (Settings) a phone number. */
+  whatsappIgnore: (chat: string) => call<void>("whatsapp_ignore", { chat }),
+  whatsappUnignore: (chat: string) => call<void>("whatsapp_unignore", { chat }),
+  /** Settings only, from here down. */
+  whatsappSettings: () => call<WaSettingsView>("whatsapp_settings"),
+  whatsappSetOptions: (enabled: boolean, muteGroups: boolean, markReadOnOpen: boolean) =>
+    callOrThrow<void>("whatsapp_set_options", { enabled, muteGroups, markReadOnOpen }),
+  /** `credential`: null keeps the stored one, "" removes it. */
+  whatsappSaveGateway: (g: {
+    gateway: "gowa" | "openwa"; url: string; credential: string | null; port: number; autoStart: boolean; gowaPath: string;
+  }) => callOrThrow<void>("whatsapp_save_gateway", g),
+  whatsappTest: () => call<WaTestResult>("whatsapp_test"),
+  /** "Install WhatsApp" / "Update": GOWA from its GitHub releases, on this click only. */
+  whatsappInstall: () => call<void>("whatsapp_install"),
+
+  // ── New versions (src-tauri/src/update.rs) ────────────────────────────────
+  updateStatus: () => call<UpdateStatus>("update_status"),
+  /** The island's question or Settings' toggle: may Coucou look at GitHub on its own? */
+  updateSetConsent: (allowed: boolean) => call<void>("update_set_consent", { allowed }),
+  /** "Check now": one look at GitHub, the toggle on or off. */
+  updateCheck: () => call<UpdateStatus>("update_check"),
+  /** The island opened the card Rust offered ("ask" or "announce"). */
+  updateShown: (kind: "ask" | "announce") => call<void>("update_shown", { kind }),
+  /** Settings → Install X: opens the island's update card. */
+  updateShow: () => call<void>("update_show"),
+  updateLater: () => call<void>("update_later"),
+  /** Blue Mochi in the tray while a new version waits (tray.rs). */
+  trayUpdateHint: (on: boolean) => call<void>("tray_update_hint", { on }),
+  updateDismiss: () => call<void>("update_dismiss"),
+  /** "Update now" (Windows): download, check the SHA-256, run the installer, quit. */
+  updateInstall: () => call<void>("update_install"),
+  /** The release's page on github.com. */
+  updateOpenPage: () => call<void>("update_open_page"),
 };
 
 export type SpotifyAction = "play" | "playPause" | "next" | "previous" | "seek" | "shuffle" | "repeat" | "volume";
@@ -775,6 +887,19 @@ export interface ModelInfo {
   label: string;
 }
 
+/** One row of Settings → Chat → Your AI subscriptions (cli_relay.rs `Status`). */
+export interface SubscriptionStatus {
+  provider: string;
+  /** The terminal tool that answers, or would once installed. */
+  tool: string;
+  installed: boolean;
+  on: boolean;
+  /** What to type once in a terminal to sign in. */
+  signIn: string;
+  installUrl: string;
+  subscriptionOnly: boolean;
+}
+
 export interface LocalServer {
   /** The address as it is stored. */
   url: string;
@@ -832,9 +957,16 @@ export interface HookStatus {
   settingsPath: string;
   hookPath: string;
   hookReady: boolean;
+  relayError?: string | null;
 }
 
 /** One agent other than Claude Code, as agents.rs reports it. */
+export interface AgyApprovalsStatus {
+  enabled: boolean;
+  /** Coucou's PreToolUse hook can wait for a click (120 s); older hooks (10 s) must be installed again. */
+  hooksReady: boolean;
+}
+
 export interface AgentHookStatus {
   /** The `--agent` name; its pill is `agent_<id>`. */
   id: string;
@@ -882,7 +1014,8 @@ export interface DragDropPayload {
   error?:string;
   dropId?:string;
   paths?: string[];
-  position?: {x:number;y:number};
+  /** Where the pointer is, in physical pixels of the webview (Tauri's own drag events, Linux). */
+  position?: { x: number; y: number };
 }
 
 interface WebView2Bridge {

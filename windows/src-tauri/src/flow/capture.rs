@@ -7,7 +7,11 @@ use super::{Flow,store::{Store,Style},logic::FlowKey,text::{self,Replacement,Sni
 
 #[derive(Clone,PartialEq)]
 pub(super) struct Options {
-    pub key:FlowKey,pub mic:String,pub enabled:bool,pub keep_days:i64,
+    pub key_codes: Vec<String>,
+    key: FlowKey,
+    key_combo: Vec<String>,
+    pub mute_others: bool,
+    pub mic:String,pub enabled:bool,pub keep_days:i64,
     pub cleanup:bool,pub style:Style,pub words:Vec<String>,
     replacements:Vec<Replacement>,snippets:Vec<Snippet>,
 }
@@ -22,12 +26,14 @@ impl Options {
             bytes=bytes.checked_add(value.len()).ok_or("As opções do ditado excedem o limite.")?;
             if bytes>8*1024*1024{return Err("O dicionário e os snippets excedem 8 MiB por ditado.".into());}
         }
-        Ok(Self{key:store.prefs.key,mic:store.prefs.mic.clone(),enabled:store.prefs.enabled,
+        Ok(Self{key:store.prefs.key,key_combo:store.prefs.key_combo.clone(),key_codes:store.prefs.key.codes(&store.prefs.key_combo),mute_others:store.prefs.mute_others,mic:store.prefs.mic.clone(),enabled:store.prefs.enabled,
             keep_days:store.prefs.keep_days,cleanup:store.prefs.cleanup,style:store.style_for(front),words:store.words.words.clone(),
             replacements:store.words.replacements.clone(),snippets:store.snippets.clone()})
     }
     fn matches(&self,store:&Store,front:Option<&str>)->bool{
-        self.key==store.prefs.key&&self.mic==store.prefs.mic&&self.enabled==store.prefs.enabled&&self.keep_days==store.prefs.keep_days
+        self.key==store.prefs.key
+            &&self.key_combo==store.prefs.key_combo
+            &&self.mute_others==store.prefs.mute_others&&self.mic==store.prefs.mic&&self.enabled==store.prefs.enabled&&self.keep_days==store.prefs.keep_days
             &&self.cleanup==store.prefs.cleanup&&self.style==store.style_for(front)&&self.words==store.words.words
             &&self.replacements==store.words.replacements&&self.snippets==store.snippets
     }

@@ -302,7 +302,7 @@ test("an undeclared companion also retains a known open session without making t
 });
 
 test("an agent's permission request is declined, never shown as Claude Code's", () => {
-  for (const agent of ["gemini", "antigravity", "cursor", "opencode", "amp", "hermes", "my-tool"]) {
+  for (const agent of ["gemini", "antigravity", "cursor", "amp", "hermes", "my-tool"]) {
     calls.length = 0;
     hook({ hook_event_name: "PermissionRequest", request_id: "r1", coucou_agent: agent, tool_name: "Bash" });
     assert.deepEqual(sent("approval_decline"), [{ requestId: "r1" }], agent);
@@ -311,8 +311,8 @@ test("an agent's permission request is declined, never shown as Claude Code's", 
   }
 });
 
-test("Codex, Copilot CLI and Muse Code get the card on their own pill", () => {
-  for (const agent of ["codex", "copilot", "muse"]) {
+test("the agents supported by the relay get a card on their own pill", () => {
+  for (const agent of ["codex", "copilot", "muse", "opencode"]) {
     State.pendingApproval = null;
     State.focusId = CLAUDE;
     calls.length = 0;
@@ -415,9 +415,11 @@ test("a Claude Desktop session gets the Claude Desktop pill, in its colour (Mac 
   assert.equal(desktop.color, "#D97757");
   assert.equal(desktop.sessionId, "d1");
   assert.equal(task().state, "idle");
-  // Its permission requests are answered in the app, as on macOS.
-  hook({ hook_event_name: "PermissionRequest", request_id: "r1", coucou_agent: "claude-desktop", tool_name: "Bash" });
-  assert.deepEqual(sent("approval_decline"), [{ requestId: "r1" }]);
+  // The reconciled relay supports a human decision for this exact session.
+  hook({ hook_event_name: "PermissionRequest", request_id: "r1", session_id: "d1", coucou_agent: "claude-desktop", tool_name: "Bash" });
+  assert.deepEqual(sent("approval_decline"), []);
+  assert.deepEqual(presented(), [{ requestId: "r1" }]);
+  assert.equal(State.pendingApproval?.pillId, "agent_claude-desktop");
 });
 
 // ── Main tool and Cursor ──────────────────────────────────────────────────────

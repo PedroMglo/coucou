@@ -321,12 +321,26 @@ fn listen_hotword(
     let mut vad = wake::Vad::default();
     let mut mode = Mode::Wake;
     let mut hide_at: Option<Instant> = None;
+    #[cfg(windows)]
+    let mut hush = None;
     let mut quiet_since = None;
     let mut waiting_for_samples = true;
     while !stop.load(Ordering::Acquire) {
         if let Err(error) = input.check() {
             hotword_failure(app, "source changed", error);
             break;
+        }
+        #[cfg(windows)]
+        {
+            let quiet = matches!(mode, Mode::Command { .. } | Mode::FollowUp { .. })
+                && !pill::dictating(app)
+                && !crate::notes::is_recording(app)
+                && crate::flow::get(app).is_some_and(|flow| flow.store.lock().unwrap().prefs.mute_others);
+            if quiet && hush.is_none() {
+                hush = crate::flow::hush::hush(true);
+            } else if !quiet {
+                hush = None;
+            }
         }
         let chunk = match rx.recv_timeout(Duration::from_millis(300)) {
             Ok(samples) => {
@@ -817,7 +831,9 @@ fn find_app(wanted: &str) -> Option<(String, Box<dyn FnOnce()>)> {
     }
     let (_, label, id) = best?;
     Some((label, Box::new(move || {
-        let _ = std::process::Command::new("gtk-launch").arg(&id).spawn();
+        let mut cmd = std::process::Command::new("gtk-launch");
+        cmd.arg(&id);
+        let _ = crate::platform::no_console(&mut cmd).spawn();
     })))
 }
 

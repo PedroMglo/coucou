@@ -80,7 +80,11 @@ impl Brain {
         #[cfg(target_os="linux")]if let Some(text)=crate::cli_chat::goal_recipe_voice(app,provider,transcript,stop.as_deref().unwrap_or(&AtomicBool::new(false))){return Some(Reply{text,acted:false,language:None});}
         if let Err(text)=crate::settings::effect_allowed(){return Some(Reply{text,acted:false,language:None});}
         if let Err(text)=input.check(){return Some(Reply{text,acted:false,language:None});}
-        let settings = Some(input.settings_for(provider));
+        let settings = input.settings_for(provider);
+        if let Err(text) = crate::cli_relay::require_configured_route(&settings, provider) {
+            return Some(Reply { text, acted: false, language: None });
+        }
+        let settings = Some(settings);
         if let Some(settings) = settings.as_ref().filter(|s| s.chat_provider == "ollama") {
             self.messages.clear();
             let not_stopped = AtomicBool::new(false);

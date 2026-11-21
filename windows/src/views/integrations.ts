@@ -1,9 +1,7 @@
 // Integration cards shown in the overview's left card — DOM ports of
 // IntegrationCardView and friends from IslandViewContent.swift.
-//
-// Cal.com is the one simplification: macOS shows a three-level calendar
-// (month → day → booking); here it is the list of upcoming bookings.
 
+import { calendarDetail } from "./calendar";
 import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
 import { State, type AgentTask } from "../core/state";
@@ -12,7 +10,7 @@ import { stripePaymentAmount } from "../core/stripe";
 import { isComingSoon, pillDefinition } from "../core/pills";
 import { refreshHookPills } from "../island/integrations";
 import { readActivity, readPulse, readStats } from "../core/github";
-import { githubDetail, githubPulseCard } from "./github";
+import { githubDetail, githubPulseCard, type ForgeCardOptions } from "./github";
 import { N_, language, t } from "../i18n/i18n";
 
 /** Same shape as the Swift `timeAgo` computed properties. */
@@ -83,7 +81,8 @@ export function idleStatus(
   if (configured && info?.loaded && ["integration_vercel", "integration_resend", "integration_notion"].includes(id)) {
     return ok(t("No recent items"));
   }
-  return configured ? ok(t("Connected · loading…")) : missing(t("Key not configured"));
+  if (!configured) return missing(t("Key not configured"));
+  return ok(info?.loaded ? t("Connected") : t("Connected · loading…"));
 }
 
 function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
@@ -282,6 +281,21 @@ function githubCard(): HTMLElement {
   );
 }
 
+function gitlabCard(): HTMLElement {
+  const d = get("integration_gitlab");
+  return h("div", { class: "int-card" }, header("#FC6D26", "GitLab", t("Overview")), h("div", { class: "int-stats" },
+    statRow(ICONS.stack, "#6B7079", t("Projects"), String(d.projects ?? 0)),
+    statRow(ICONS.pull, "#FC6D26", t("My PRs"), String(d.myMergeRequests ?? 0)),
+    statRow(ICONS.eye, "#8AB4F8", t("To review"), String(d.reviewRequests ?? 0))));
+}
+
+function giteaCard(): HTMLElement {
+  const d = get("integration_gitea");
+  return h("div", { class: "int-card" }, header("#609926", "Gitea", t("Overview")),
+    h("div", { class: "int-stats" }, statRow(ICONS.star, "#F5A524", t("Total stars"), String(d.totalStars ?? 0)),
+      statRow(ICONS.stack, "#6B7079", t("Repositories"), String(d.totalRepos ?? 0))));
+}
+
 // ── Stripe ────────────────────────────────────────────────────────────────────
 
 function stripeCard(): HTMLElement {
@@ -351,7 +365,7 @@ function notionCard(): HTMLElement {
 
 // ── Cal.com ───────────────────────────────────────────────────────────────────
 
-function calcomCard(): HTMLElement {
+function calcomCard(openDetail: () => void): HTMLElement {
   const bookings = arr("integration_calcom", "bookings")
     .slice()
     .sort((a, b) => new Date(String(a.start)).getTime() - new Date(String(b.start)).getTime());
@@ -373,16 +387,33 @@ function calcomCard(): HTMLElement {
       ),
     );
   }
-  return h("div", { class: "int-card" }, header("#C9956A", "Cal.com", t("Schedule")), rows);
+  return h("div", { class: "int-card" }, header("#C9956A", "Cal.com", t("Schedule")), rows,
+    h("div", { class: "int-actions" }, h("button", { class: "link-btn", text: t("Details"), onclick: openDetail })));
 }
 
 // ── n8n ───────────────────────────────────────────────────────────────────────
 
+function n8nRun(): { workflow: string; detail: string | null; success: boolean } | null {
+  const info = State.integrations.integration_n8n;
+  if (!info || info.error) return null;
+  if (info.activity) {
+    return { workflow: info.activity.label, detail: info.activity.detail, success: info.activity.success };
+  }
+  const d = get("integration_n8n");
+  if (typeof d.id === "string" && typeof d.workflow === "string" && d.workflow.length > 0) {
+    return {
+      workflow: d.workflow,
+      detail: typeof d.detail === "string" && d.detail.length > 0 ? d.detail : null,
+      success: d.status === "success",
+    };
+  }
+  return null;
+}
+
 function n8nCard(task: AgentTask, onDetail: () => void, openSettings: () => void): HTMLElement {
-  const hasActivity = task.steps.length > 0 && (task.state === "finished" || task.state === "error");
-  if (!hasActivity) return idleCard(task, openSettings);
-  const success = task.state === "finished";
-  const accent = success ? "#22C55E" : "#F4505E";
+  const run = n8nRun();
+  if (!run) return idleCard(task, openSettings);
+  const accent = run.success ? "#22C55E" : "#F4505E";
   return h(
     "div",
     { class: "int-card" },
@@ -398,17 +429,16 @@ function n8nCard(task: AgentTask, onDetail: () => void, openSettings: () => void
           onclick: onDetail,
         },
         dot(accent, 5),
-        h("span", { class: "int-name", text: task.steps[0] ?? t("Workflow") }),
+        h("span", { class: "int-name", text: run.workflow }),
         svg(ICONS.ellipsis, 8),
       ),
     ),
   );
 }
 
-function n8nDetail(task: AgentTask, onBack: () => void): HTMLElement {
-  const success = task.state === "finished";
+function n8nDetail(run: { workflow: string; detail: string | null; success: boolean }, onBack: () => void): HTMLElement {
+  const { success, detail, workflow } = run;
   const accent = success ? "#22C55E" : "#F4505E";
-  const detail = task.steps[1];
   return h(
     "div",
     { class: "int-card detail" },
@@ -417,7 +447,7 @@ function n8nDetail(task: AgentTask, onBack: () => void): HTMLElement {
       { class: "int-detail-head" },
       h("button", { class: "int-back", onclick: onBack }, svg(ICONS.chevronLeft, 10, { stroke: 2.4 })),
       dot(accent, 6),
-      h("b", { text: task.steps[0] ?? t("Workflow") }),
+      h("b", { text: workflow }),
       h("span", {
         class: "int-badge",
         style: `color:${accent};background:${accent}24`,
@@ -451,12 +481,17 @@ export function hasIntegrationData(id: string): boolean {
   const info = State.integrations[id];
   if (!info || info.error) return false;
   switch (id) {
+    case "integration_n8n":
+      return typeof get(id).workflow === "string" && String(get(id).workflow).length > 0;
     case "integration_vercel":
       return arr(id, "deployments").length > 0;
     case "integration_resend":
       return arr(id, "emails").length > 0;
     case "integration_github":
       return get(id).totalRepos != null || readPulse(get(id)) != null;
+    case "integration_gitlab": return get(id).projects != null;
+    case "integration_gitea":
+      return get(id).totalRepos != null;
     case "integration_stripe":
       return info.loaded;
     case "integration_notion":
@@ -470,9 +505,9 @@ export function hasIntegrationData(id: string): boolean {
 
 export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHooks): HTMLElement {
   if (task.id === "integration_n8n") {
-    const hasActivity = task.steps.length > 0 && (task.state === "finished" || task.state === "error");
-    return hooks.detail && hasActivity
-      ? n8nDetail(task, hooks.closeDetail)
+    const run = n8nRun();
+    return hooks.detail && run
+      ? n8nDetail(run, hooks.closeDetail)
       : n8nCard(task, () => hooks.openDetail(), hooks.openSettings);
   }
   if (task.id === "integration_vercel") {
@@ -495,18 +530,33 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
         : githubPulseCard(pulse, readStats(d), readActivity(d), () => hooks.openDetail());
     }
   }
+  if (task.id === "integration_gitlab") {
+    const d = get(task.id); const pulse = readPulse(d);
+    if (pulse) { const options: ForgeCardOptions = { title: "GitLab", color: "#FC6D26", provider: "gitlab", refreshId: "integration_gitlab", profileUrl: typeof d.profileUrl === "string" ? d.profileUrl : undefined };
+      return hooks.detail ? githubDetail(pulse, readStats(d), readActivity(d), hooks.closeDetail, options) : githubPulseCard(pulse, readStats(d), readActivity(d), hooks.openDetail, options); }
+  }
+  if (task.id === "integration_gitea") {
+    const d = get(task.id); const pulse = readPulse(d);
+    if (pulse) {
+      const options: ForgeCardOptions = { title: "Gitea", color: "#609926", provider: "gitea", refreshId: "integration_gitea", profileUrl: typeof d.profileUrl === "string" ? d.profileUrl : undefined };
+      return hooks.detail ? githubDetail(pulse, readStats(d), readActivity(d), hooks.closeDetail, options) : githubPulseCard(pulse, readStats(d), readActivity(d), hooks.openDetail, options);
+    }
+  }
 
   switch (task.id) {
     case "integration_resend":
       return resendCard();
     case "integration_github":
       return githubCard();
+    case "integration_gitlab": return gitlabCard();
+    case "integration_gitea":
+      return giteaCard();
     case "integration_stripe":
       return stripeCard();
     case "integration_notion":
       return notionCard();
     case "integration_calcom":
-      return calcomCard();
+      return hooks.detail ? calendarDetail(get(task.id), hooks.closeDetail, () => void Bridge.openUrl(OPEN_URLS[task.id])) : calcomCard(hooks.openDetail);
     default:
       return idleCard(task, hooks.openSettings);
   }

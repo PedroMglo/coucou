@@ -1,4 +1,5 @@
 use super::*;
+use crate::settings::{read_initialized, RECONCILED_FIELDS};
 use std::{fs::{self, File}, os::unix::fs::PermissionsExt, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 
 struct Temp { root: PathBuf, profile: PathBuf, path: PathBuf }
@@ -16,6 +17,27 @@ impl Temp {
     }
 }
 impl Drop for Temp { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.root); } }
+
+#[test]
+fn restored_startup_reads_exact_previous_settings_without_rewriting_them() {
+    let temp = Temp::new();
+    temp.write(0.2);
+    let mut former = serde_json::to_value(Settings::default()).unwrap();
+    former["soundVolume"] = serde_json::json!(0.2);
+    let fields = former.as_object_mut().unwrap();
+    fields.retain(|key, _| !RECONCILED_FIELDS.contains(&key.as_str()));
+    let bytes = serde_json::to_vec(&former).unwrap();
+    fs::write(&temp.path, &bytes).unwrap();
+    let restored = read_initialized(&temp.path).unwrap();
+    assert_eq!(restored.sound_volume, 0.2);
+    assert!(restored.chat_subscriptions.is_empty());
+    assert!(!restored.phone_recap && !restored.agy_approvals_enabled);
+    assert_eq!(fs::read(&temp.path).unwrap(), bytes);
+
+    former["agyApprovalsEnabled"] = serde_json::json!(true);
+    fs::write(&temp.path, serde_json::to_vec(&former).unwrap()).unwrap();
+    assert!(read_initialized(&temp.path).is_err());
+}
 
 #[test]
 fn settings_revision_in_place_change_is_not_overwritten_or_announced() {

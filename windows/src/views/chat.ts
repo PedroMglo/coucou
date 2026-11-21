@@ -23,7 +23,7 @@ import { ICONS } from "./icons";
 import { renderMarkdown } from "./markdown";
 import { Bridge, emitToWindow, onEvent,  type ModelInfo,type ChatTurnState,type ConversationView,type PetMemoryDecision } from "../core/bridge";
 import {
-  activeModel, isCliProvider, pickModel, providerDef, providerForPill, visibleProviders, withModel, type ProviderDef,
+  activeModel, isCliProvider, providerDef, providerForPill, visibleProviders, withModel, type ProviderDef,
 } from "../core/providers";
 import { Sound } from "../core/sound";
 import { State, type ChatMessage } from "../core/state";
@@ -213,6 +213,10 @@ function buildPicker(onChange: () => void,onSelect?:(provider:string,model:strin
     const p = providerDef(State.chatProvider);
     const ticket = ++request;
     catalog=null;
+    if (State.settings.chatSubscriptions?.[p.id] === true || p.id === "cursor") {
+      status("Revê a ligação desta conta nas definições de conversa.", true);
+      return;
+    }
     const cached = p.urlField ? undefined : cache.get(p.id);
     if (cached) {
       drawModels(p,profileProvider(p.id)&&!nativeOnly()?[...profileModels,...cached]:cached);
@@ -230,12 +234,6 @@ function buildPicker(onChange: () => void,onSelect?:(provider:string,model:strin
       const models=profileProvider(p.id)&&!nativeOnly()?[...profileModels,...offered]:offered;
       if (ticket !== request) return;
       if (!p.urlField) cache.set(p.id, offered);
-      const keep = pickModel(p, models.map((m) => m.id), activeModel({ ...State.settings, chatProvider: State.chatProvider }));
-      if (!nativeOnly()&&p.id!=='ollama'&&keep && keep !== activeModel({ ...State.settings, chatProvider: State.chatProvider })) {
-        State.settings = { ...withModel(State.settings, p.id, keep), chatProvider: State.settings.chatProvider };
-        saveSettings();
-        onChange();
-      }
       drawModels(p, models);
     } catch (err) {
       if (ticket === request) status(String(err).replace(/^Error:\s*/, ""), Boolean(p.key));
@@ -656,7 +654,10 @@ export function buildPrompt(onHeightChange: () => void,session?:SessionChat,onDo
       State.notify();
       onHeightChange();
       void refreshHistory(sendingProvider);
-      if(document.hasFocus?.()&&State.mode === "expanded" && State.view === "prompt" && State.chatProvider === sendingProvider) input.focus();
+      if (document.hasFocus?.() && State.mode === "expanded" && State.view === "prompt"
+        && State.chatProvider === sendingProvider && !busy(sendingProvider) && !input.disabled) {
+        input.focus();
+      }
     }
   }
 

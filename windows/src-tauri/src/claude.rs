@@ -4,6 +4,10 @@
 // Everything happens here rather than in the island: the API key never leaves
 // the credential store, and file bytes never cross the IPC boundary.
 //
+// Without a key, the chat and the one-shot answers go to the user's own Claude
+// Code instead (claude_code.rs); « OK Coucou » still needs the key, its tools
+// being Coucou's own.
+//
 // COUCOU_ANTHROPIC_BASE_URL points the chat at an Anthropic-compatible gateway
 // instead (issue #180). Only that variable is read: Claude Code's own
 // ANTHROPIC_BASE_URL may name a proxy the user never meant to hand this key to.
@@ -30,6 +34,11 @@ const MAX_TOKENS: u32 = 4096;
 const MAX_INLINE_TEXT: u64 = 200_000;
 
 pub const DEFAULT_MODEL: &str = "claude-opus-5";
+
+/// Whether the configured Anthropic API key is available.
+pub fn ready() -> bool {
+    secrets::present(KEY)
+}
 
 /// The Messages endpoint: Anthropic's, or the gateway in COUCOU_ANTHROPIC_BASE_URL.
 /// Read once; the gateway's host (never the key) goes to the log once.
@@ -174,6 +183,9 @@ pub async fn send(
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
+    // No key: Settings → Chat → Your AI subscriptions lets Claude Code answer
+    // instead (cli_relay.rs); chat.rs sends the turn there before it gets here.
+    crate::settings::effect_allowed()?;
     let key = secrets::get(KEY).ok_or_else(|| t("API key missing. Open settings."))?;
     let endpoint = endpoint()?;
     send_resolved(chat,model,query,context,&endpoint,&key).await
@@ -229,6 +241,7 @@ pub(crate)async fn memory_wire_fixture(chat:&Chat,model:&str,query:String,contex
 /// One question, one answer, no history: the dictation clean-up and the notes
 /// of a call. The text of the answer, or why there is none.
 pub async fn complete(model: &str, system: &str, user: &str, max_tokens: u32, timeout: Duration) -> Result<String, String> {
+    crate::settings::effect_allowed()?;
     let key = secrets::get(KEY).ok_or_else(|| t("API key missing. Open settings."))?;
     let endpoint = endpoint()?;
     let body = json!({
@@ -290,6 +303,11 @@ async fn call_with_timeout(endpoint: &Url, key: &str, body: &Value, timeout: Dur
 }
 
 /// The models on the user's Anthropic account, newest first, as the API lists them.
+pub async fn available_models() -> Result<Vec<ModelInfo>, String> {
+    let key = secrets::get(KEY).ok_or_else(|| t("No API key — add it in Settings."))?;
+    models(&key).await
+}
+
 pub async fn models(key: &str) -> Result<Vec<ModelInfo>, String> {
     let url = models_endpoint(&endpoint()?);
     let response = net::exact_destination_client(&url, Duration::from_secs(10))?
@@ -411,6 +429,19 @@ mod tests {
                 call(&endpoint, "synthetic-key", &json!({"model":"synthetic","messages":[]})).await
             }).await;
         }
+    }
+
+    #[test]
+    #[ignore = "Uses the configured Claude API key for model discovery and one short synthetic request"]
+    fn configured_api_lists_and_calls_sonnet_5_5() {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let models = runtime.block_on(available_models()).unwrap_or_else(|_| panic!("Configured Claude API model discovery failed"));
+        println!("Available Claude API models: {:?}", models.iter().map(|m| &m.id).collect::<Vec<_>>());
+        assert!(models.iter().any(|m| m.id == "claude-sonnet-5-5"), "Sonnet 5.5 is not in this account's model list");
+        let reply = runtime.block_on(complete("claude-sonnet-5-5", "Answer with the single word OK.", "This is a synthetic connection test.", 256, Duration::from_secs(60)))
+            .unwrap_or_else(|_| panic!("Sonnet 5.5 synthetic request failed"));
+        assert_eq!(reply.trim(), "OK");
+        println!("Sonnet 5.5 returned the expected synthetic reply");
     }
 
     #[test]

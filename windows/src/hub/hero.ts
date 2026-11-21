@@ -4,12 +4,12 @@
 // its floor — they hop, look around, wave, and react when poked. Also the
 // glowing cards and the Mochis of empty pages. Port of FlowHubMochis.swift.
 //
-// One animation loop draws the Hub artwork. It runs at display speed during
-// interaction, slows down at rest, and stops when the Hub is hidden.
+// One animation loop draws only the Hub canvases on screen. It slows down
+// at rest and stops when the native window is hidden.
 
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { IS_TAURI, onEvent } from "../core/bridge";
+import { IS_TAURI } from "../core/bridge";
 import { BotEngine, hexToRGB } from "../mochi/engine";
+import { onScreen, shouldAnimate } from "./frames";
 import type { BotEmoteName, BotStateName } from "../core/layout";
 import type { Outfit } from "../mochi/wardrobe";
 
@@ -22,54 +22,78 @@ interface Animated {
 }
 
 const live = new Set<Animated>();
-let nativeVisible = !IS_TAURI;
-let frame: number | null = null;
-let idleTimer: number | null = null;
-let last = performance.now();
-const start = performance.now();
+const windowsWebview = IS_TAURI && navigator.userAgent.includes("Windows");
 const IDLE_DELAY_MS = 80;
 const INTERACTION_MS = 1200;
+const start = performance.now();
+let windowShown = !IS_TAURI;
+let frame: number | null = null;
+let idleTimer: number | null = null;
+let fallback: number | null = null;
+let starved = false;
+let last = start;
 let interactiveUntil = start + INTERACTION_MS;
 
-function canDraw() {
-  return nativeVisible && !document.hidden && live.size > 0;
+function running(): boolean {
+  // WebView2 can retain a hidden visibility state even while it has focus.
+  const visibility = windowsWebview && document.hasFocus() ? "visible" : document.visibilityState;
+  return shouldAnimate(live.size, visibility, windowShown);
 }
 
 function loop(now: number) {
   frame = null;
-  if (!canDraw()) return;
+  if (fallback !== null) window.clearTimeout(fallback);
+  fallback = null;
+  if (!running()) return;
   const dt = Math.min(0.12, (now - last) / 1000);
   last = now;
-  const t = (now - start) / 1000;
-  for (const a of live) {
-    if (!a.el.isConnected) {
-      // Built but not shown yet: wait for it (a few seconds at most).
-      if (a.shown || now - (a.born ??= now) > 5000) live.delete(a);
+  stepVoice(dt, now);
+  for (const item of live) {
+    if (!item.el.isConnected) {
+      if (item.shown || now - (item.born ??= now) > 5000) live.delete(item);
       continue;
     }
-    a.shown = true;
-    a.draw(dt, t);
+    item.shown = true;
+    if (onScreen(item.el.getBoundingClientRect(), window.innerWidth, window.innerHeight)) {
+      item.draw(dt, (now - start) / 1000);
+    }
   }
-  if (!canDraw()) return;
+  if (!running()) return;
   if (now < interactiveUntil) {
-    frame = requestAnimationFrame(loop);
+    requestFrame();
   } else {
     idleTimer = window.setTimeout(() => {
       idleTimer = null;
-      if (canDraw()) frame = requestAnimationFrame(loop);
+      if (running()) requestFrame();
     }, IDLE_DELAY_MS);
   }
 }
 
+function requestFrame() {
+  frame = requestAnimationFrame((now) => {
+    starved = false;
+    loop(now);
+  });
+  if (!windowsWebview) return;
+  // A WebView2 created hidden sometimes needs a timer until native frames return.
+  fallback = window.setTimeout(() => {
+    fallback = null;
+    if (frame === null) return;
+    cancelAnimationFrame(frame);
+    starved = true;
+    loop(performance.now());
+  }, starved ? 33 : 250);
+}
+
 function wake() {
-  if (!canDraw() || frame !== null) return;
+  if (!running() || frame !== null) return;
   if (idleTimer !== null) {
     window.clearTimeout(idleTimer);
     idleTimer = null;
   } else {
     last = performance.now();
   }
-  frame = requestAnimationFrame(loop);
+  requestFrame();
 }
 
 function interact() {
@@ -77,28 +101,51 @@ function interact() {
   wake();
 }
 
-function visibility(visible: boolean) {
-  nativeVisible = visible;
-  updateVisibility();
-}
-
 function updateVisibility() {
-  if (nativeVisible && !document.hidden) {
+  if (running()) {
     interact();
     return;
   }
   if (frame !== null) cancelAnimationFrame(frame);
   if (idleTimer !== null) window.clearTimeout(idleTimer);
-  frame = idleTimer = null;
+  if (fallback !== null) window.clearTimeout(fallback);
+  frame = idleTimer = fallback = null;
+  starved = false;
 }
-if (IS_TAURI) {
-  void onEvent<boolean>("hub-visible", visibility).then(async () => visibility(await getCurrentWindow().isVisible()));
+
+export function setWindowShown(shown: boolean) {
+  windowShown = shown;
+  updateVisibility();
 }
+
 document.addEventListener("visibilitychange", updateVisibility);
+window.addEventListener("focus", updateVisibility);
 document.addEventListener("pointermove", interact, { passive: true });
 document.addEventListener("pointerdown", interact, { passive: true });
 document.addEventListener("keydown", interact);
 document.addEventListener("wheel", interact, { passive: true });
+
+// ── The voice ─────────────────────────────────────────────────────────────────
+
+/** How loud the dictation is, 0…1, as the bands last said (`flow-bands`). */
+let voiceGoal = 0;
+let voiceAt = 0;
+/** The level the bands draw with, eased towards the voice. */
+let voice = 0;
+
+/** While you dictate, the bands' light and particles follow your voice. */
+export function setVoiceLevel(level: number) {
+  voiceGoal = Math.max(0, Math.min(1, level));
+  voiceAt = performance.now();
+  interact();
+}
+
+/** One step of the eased level; the voice fades once the bands stop coming. */
+function stepVoice(dt: number, now: number) {
+  const goal = now - voiceAt > 250 ? 0 : voiceGoal;
+  voice += (goal - voice) * Math.min(1, dt * (goal > voice ? 14 : 4));
+  if (voice < 0.001) voice = 0;
+}
 
 function add(a: Animated) {
   live.add(a);
@@ -118,9 +165,17 @@ function fit(canvas: HTMLCanvasElement): { w: number; h: number; ctx: CanvasRend
   return { w, h, ctx };
 }
 
+/** "r,g,b" of each colour, read once: the particles ask every frame. */
+const channels = new Map<string, string>();
+
 function rgba(hex: string, alpha: number): string {
-  const [r, g, b] = hexToRGB(hex);
-  return `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)},${Math.max(0, Math.min(1, alpha))})`;
+  let rgb = channels.get(hex);
+  if (rgb === undefined) {
+    const [r, g, b] = hexToRGB(hex);
+    rgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)}`;
+    channels.set(hex, rgb);
+  }
+  return `rgba(${rgb},${Math.max(0, Math.min(1, alpha))})`;
 }
 
 // ── The backdrop ──────────────────────────────────────────────────────────────
@@ -181,7 +236,8 @@ export function backdrop(canvas: HTMLCanvasElement, color: string, pointerFrom: 
       lin.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = lin;
       ctx.fillRect(0, 0, w, h);
-      const breath = 0.85 + 0.15 * Math.sin(t * 0.9);
+      // The voice brightens the glow and lifts the particles.
+      const breath = 0.85 + 0.15 * Math.sin(t * 0.9) + voice * 0.55;
       const rad = ctx.createRadialGradient(w * 0.92, -h * 0.15, 0, w * 0.92, -h * 0.15, Math.max(w, h) * 0.55 * breath);
       rad.addColorStop(0, rgba(color, 0.3 * breath));
       rad.addColorStop(0.5, rgba(color, 0.08));
@@ -191,10 +247,11 @@ export function backdrop(canvas: HTMLCanvasElement, color: string, pointerFrom: 
 
       for (const p of particles) {
         // Drift, always; the pointer pushes them away.
+        const lift = 1 + voice * 5;
         p.x += p.vx * dt * p.depth;
-        p.y += p.vy * dt * p.depth;
-        let alpha = (0.22 + 0.5 * (0.5 + 0.5 * Math.sin(t * (1.2 + p.depth) + p.phase))) * p.depth;
-        let r = p.r;
+        p.y += p.vy * dt * p.depth * lift;
+        let alpha = (0.22 + 0.5 * (0.5 + 0.5 * Math.sin(t * (1.2 + p.depth) + p.phase))) * p.depth + voice * 0.35;
+        let r = p.r * (1 + voice * 0.6);
         if (pointer && strength > 0.01) {
           const dx = p.x - pointer.x;
           const dy = p.y - pointer.y;
@@ -424,6 +481,10 @@ export const THEMES: Record<string, Theme> = {
   phone: { color: "#3DDC84", cast: [m("#3DDC84", 56, 0.25), m("#F5F6F8", 46, 0.8, { outfit: "beanie" })] },
   voice: { color: "#F97316", cast: [m("#F97316", 60, 0.3), m("#F5F6F8", 48, 0.85, { outfit: "roundGlasses" })] },
   shortcuts: { color: "#6366F1", cast: [m("#6366F1", 56, 0.2, { outfit: "sunglasses" }), m("#F5F6F8", 46, 0.8)] },
+  mailOverview: { color: "#2F8CFF", cast: [m("#2F8CFF", 58, 0.2, { state: "working" }), m("#F5F6F8", 46, 0.7), m("#F5A524", 40, 1)] },
+  mailRules: { color: "#34D399", cast: [m("#34D399", 56, 0.3, { outfit: "roundGlasses" }), m("#8E939C", 46, 0.85)] },
+  mailBanned: { color: "#FF453A", cast: [m("#FF453A", 54, 0.25, { outfit: "sunglasses" }), m("#F5F6F8", 44, 0.8, { state: "sleeping", roams: false })] },
+  mailVIP: { color: "#F5A524", cast: [m("#F5A524", 60, 0.3, { outfit: "crown" }), m("#2F8CFF", 46, 0.85)] },
 };
 
 /** The band itself: title, line, actions, and the Mochis. */
@@ -432,6 +493,8 @@ export function hero(page: string, title: string, subtitle: string | null, actio
   const el = document.createElement("div");
   el.className = compact ? "hub-hero compact" : "hub-hero";
   el.style.setProperty("--hero-line", rgba(theme.color, 0.16));
+  el.style.setProperty("--hero-glow", rgba(theme.color, 0.3));
+  el.style.setProperty("--hero-tint", rgba(theme.color, 0.1));
   const back = document.createElement("canvas");
   back.className = "backdrop";
   const mochis = document.createElement("canvas");
@@ -463,6 +526,8 @@ export function glowCard(color: string, ...content: (HTMLElement | string)[]): H
   const el = document.createElement("div");
   el.className = "hub-glow";
   el.style.setProperty("--glow-line", rgba(color, 0.18));
+  el.style.setProperty("--hero-glow", rgba(color, 0.3));
+  el.style.setProperty("--hero-tint", rgba(color, 0.1));
   const canvas = document.createElement("canvas");
   const inner = document.createElement("div");
   inner.className = "inner";

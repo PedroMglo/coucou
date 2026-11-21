@@ -9,6 +9,9 @@ import { FrameLoop } from "../core/frame-loop";
 import { Tracked, Spring, clamp } from "../core/anim";
 import { Bridge, IS_TAURI, onDragDrop, onEvent } from "../core/bridge";
 import {
+  CLOSED_BOT_D, CLOSED_H, closedContent, closedIsland, closedWidth, type ClosedContent,
+} from "../core/closed";
+import {
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
   ROUNDED_CORNER, VIEW_LAYOUTS, botGlowColor, botGlowOpacity, botPosition, chatPromptHeight,
   islandSize,
@@ -19,19 +22,22 @@ import { Sound } from "../core/sound";
 import { State } from "../core/state";
 import { providerForPill } from "../core/providers";
 import {dialogueId} from '../core/chat-dialogue';
-import { SPOTIFY_ID, islandDances } from "../core/spotify";
+import { SPOTIFY_ID, Spotify, islandDances } from "../core/spotify";
 import { BotEngine, hexToRGB } from "../mochi/engine";
 import { Greeting } from "../mochi/greeting";
 import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
 import { SeasonCache, parseOutfit } from "../mochi/wardrobe";
 import { UploadCanvas } from "../upload/canvas";
-import { USC, UploadSeq } from "../upload/sequence";
-import { closePlanCard, openPlanColor, planCardOpen } from "../views/usage";
+import { USC, UploadSeq, uploadProgressCurve } from "../upload/sequence";
+import { dominantPct, planColor } from "../core/plan";
+import { language, tl } from "../i18n/i18n";
+import { claudeCompactPillVisible, closePlanCard, openPlanColor, planCardOpen } from "../views/usage";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
 import {CardLifecycle} from './card-lifecycle';
 import { refreshHookPills } from "./integrations";
+import { restoreAlertFocus } from "./hooks";
 import { DesktopLink } from "./desktop";
 import type { ViewCommand } from "./shortcuts";
 import { DRAG_THRESHOLD } from "../mochi/desktop-logic";
@@ -42,13 +48,19 @@ import {sameSession} from '../core/session-chat';
 import {cardPresentation,registerCardPresentation} from '../core/card-presentation';
 import {approvalContext,sameApproval,canAnswerApproval,presentApproval,type ApprovalContext} from '../core/approval-presentation';
 import {handoffPendingApproval} from './hooks';
+import { Updates } from "./update";
+import { UPDATE_BLUE, showsUpdateHint } from "../whats-new/whats-new";
 
 const BOT_OVERHANG = 40;
+const UPDATE_BLUE_RGB = hexToRGB(UPDATE_BLUE);
 const CLAUDE_DESKTOP_ID = "agent_claude-desktop";
 /** Extra canvas on each side of Mochi, for the witch hat's brim and the Santa hat's tip. */
 const BOT_SIDE = 24;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
 const HIT_MARGIN = 14;
+
+/** The views with a text field: the island takes the keyboard while one is on. */
+const TYPING_VIEWS: ReadonlySet<IslandViewName> = new Set(["prompt", "launch"]);
 
 /** The three views the drop sequence owns; leaving them stops the engine. */
 const UPLOAD_VIEWS: ReadonlySet<IslandViewName> = new Set(["upload", "uploading", "choose"]);
@@ -72,8 +84,27 @@ export class Island {
   private botGlow!: HTMLElement;
   private greetingCanvas: HTMLCanvasElement | null = null;
   private miniGrid: HTMLElement | null = null;
+  private clockEl!: HTMLElement;
+  private clockTimer?: number;
+  /** The closed island's one line (core/closed.ts), and what it last showed. */
+  private closedEl!: HTMLElement;
+  private closedDot!: HTMLElement;
+  private closedText!: HTMLElement;
+  private closedKey = "";
+  /** Width of the closed island for what it shows now. */
+  private closedW = 120;
+  /** Mochi's little life in the closed island: where he looks, and until when
+   *  the loop runs for what he is doing (a blink, a glance). */
+  private closedLook = { x: 0, y: 0 };
+  private closedAwakeUntil = 0;
+  private closedLife: number | null = null;
+  /** The size the window was last folded to, so a new one is only sent on a change. */
+  private collapsedTo = { w: 0, h: 0 };
   private countdown!: HTMLElement;
   private wakeStrip: HTMLElement | null = null;
+  private compactPlan!: HTMLElement;
+  private compactPlanDot!: HTMLElement;
+  private compactPlanLabel!: HTMLElement;
 
   private header!: ViewHost;
   private views!: Map<IslandViewName, ViewHost>;
@@ -81,6 +112,7 @@ export class Island {
   private approvalOpening:{context:ApprovalContext;generation:number;promise:Promise<boolean>}|null=null;
   private approvalLatest:{context:ApprovalContext;generation:number}|null=null;
   private uploadCanvas!: UploadCanvas;
+  /** The sessions listed on the drop card while a file is over it. */
 
   private width = new Tracked(NOTCH_W);
   private height = new Tracked(0);
@@ -100,11 +132,15 @@ export class Island {
   });
   private dirty = true;
   private canvasPx = 0;
+  /** The pixel ratio Mochi's bitmap was sized for: it changes with the monitor. */
+  private canvasDpr = 0;
 
   // Rust starts the window at full size so the launch greeting has room.
   private collapsed = false;
   private collapseTimer: number | null = null;
   private wasInIsland = false;
+  /** A reply is being typed in a card (WhatsApp): the island stays open. */
+  private holdingOpen = false;
   /** Last shape handed to Rust for the click-through test. */
   private pushedRect = { x: -1, y: -1, w: -1, h: -1 };
 
@@ -300,6 +336,9 @@ export class Island {
           else if(task.sessionId&&task.sessionBackend)void Bridge.petFocusSession(task.sessionBackend,task.sessionId).catch(()=>Bridge.petPanelOpen(360,50,task.id,'sessions'));
           else void Bridge.openSession(task.sessionId ?? null, task.sessionCwd ?? null);
         } else if (task.id === "integration_n8n") void Bridge.openN8n();
+        // WhatsApp Desktop at the open conversation; WhatsApp Web when it isn't installed.
+        else if (task.id === "integration_whatsapp") void Bridge.whatsappOpenApp();
+        else if (task.id === "integration_gitea") void Bridge.openGitea();
         else if (task.id === SPOTIFY_ID) void Bridge.spotifyOpen();
         else if (urls[task.id]) void Bridge.openUrl(urls[task.id]);
       },
@@ -347,16 +386,60 @@ export class Island {
         State.wardrobePreview = outfit;
         State.notify();
       },
+      keyboard: (on) => {
+        // The chat and launch views manage the keyboard on their own.
+        if (on) void Bridge.focusWindow(true);
+        else if (!TYPING_VIEWS.has(State.view) && State.mode === "expanded") void Bridge.focusWindow(false);
+      },
+      launched: () => {
+        Sound.play("send");
+        this.engine.triggerEmote("happy");
+        this.collapse();
+      },
+      holdOpen: (on) => {
+        if (this.holdingOpen === on) return;
+        this.holdingOpen = on;
+        if (on) {
+          this.fsm.pinned = true;
+          this.fsm.cancelTimers();
+        } else {
+          this.fsm.pinned = State.isPinned || State.pendingApproval != null;
+          if (!this.fsm.pinned && !this.wasInIsland && this.fsm.state === "home") this.fsm.mouseLeft();
+        }
+      },
     };
 
     if (!this.cardsOnly) this.wakeStrip = h("div", { id: "wake-strip" });
+    this.closedDot = h("span", { class: "dot" });
+    this.closedText = h("span", { class: "text" });
+    this.closedEl = h("div", { id: "island-closed" }, this.closedDot, this.closedText);
     this.botGlow = h("div", { id: "bot-glow" });
     this.botCanvas = h("canvas", { id: "bot-canvas" });
     if (!this.cardsOnly) {
       this.greetingCanvas = h("canvas", { id: "greeting-canvas" });
       this.miniGrid = h("div", { id: "mini-grid" });
     }
+    this.clockEl = h("div", { id: "island-clock" });
     this.countdown = h("div", { id: "countdown" });
+    this.compactPlanDot = h("i", { class: "compact-plan-dot" });
+    this.compactPlanLabel = h("span", { class: "compact-plan-label" });
+    this.compactPlan = h(
+      "button",
+      {
+        id: "compact-plan",
+        title: tl("Claude plan usage"),
+        onmousedown: (e) => {
+          e.stopPropagation();
+        },
+        onclick: (e) => {
+          e.stopPropagation();
+          const me = e as MouseEvent;
+          if (me.button === 0) this.openClaudePlan();
+        },
+      },
+      this.compactPlanDot,
+      this.compactPlanLabel,
+    );
 
     this.header = this.cardsOnly ? buildPetCardHeader(actions) : buildHeader(actions);
     this.views = buildViews(actions, () => this.animateGeometry(false), {cardsOnly: this.cardsOnly});
@@ -390,6 +473,9 @@ export class Island {
       this.botGlow,
       this.botCanvas,
       ...(this.miniGrid ? [this.miniGrid] : []),
+      this.compactPlan,
+      this.clockEl,
+      this.closedEl,
       this.countdown,
     );
 
@@ -446,7 +532,7 @@ export class Island {
           if (!this.wasInIsland&&!(this.fsm instanceof CardLifecycle&&this.fsm.manual)) this.fsm.mouseLeft();
           break;
         case "home":
-          this.expand(State.defaultView());
+          this.expand(this.openingView());
           if (!this.wasInIsland&&!(this.fsm instanceof CardLifecycle&&this.fsm.manual)) this.fsm.mouseLeft();
           // Hooks may have been installed in a terminal since: the idle cards
           // say so on the next open, without polling while the island is shut.
@@ -511,6 +597,8 @@ export class Island {
       // A folded card is still waiting: it keeps the island pinned.
       if (!State.pendingApproval) State.isPinned = false;
       void Bridge.focusWindow(false);
+      // Another pill's alert borrowed the front: the pill you had comes back (Mac).
+      restoreAlertFocus();
     }
     if (mode !== "expanded") {
       closePlanCard();
@@ -520,6 +608,10 @@ export class Island {
       // nothing while hidden.
       UploadSeq.deactivate();
     }
+    // Folding all the way: the closed island's width for what it will show.
+    if (mode === "hidden") this.updateClosed();
+    else this.closedEl.classList.remove("on");
+    this.scheduleClosedLife();
     this.updateWindowCollapsed();
     this.animateGeometry(modeOrder(mode) < modeOrder(prev));
     State.notify();
@@ -534,6 +626,18 @@ export class Island {
   private stopSequenceIfLeaving(view: IslandViewName) {
     if (UploadSeq.isActive && !UPLOAD_VIEWS.has(view)) UploadSeq.deactivate();
     if(!UPLOAD_VIEWS.has(view)){this.dragHeight=null;this.dragOwner=null;State.fileDragOver=false;}
+  }
+
+  /** Click on compact plan gauge: opens the Claude plan card on the overview. */
+  openClaudePlan() {
+    Sound.resume();
+    State.lastActivity = performance.now();
+    this.fsm.userInteracted();
+    State.planDetailIsCodex = false;
+    State.showingPlanDetail = true;
+    this.fsm.forceHome();
+    this.expand("overview");
+    State.notify();
   }
 
   expand(view: IslandViewName) {
@@ -681,6 +785,20 @@ export class Island {
       else req.feedback='Não foi possível confirmar esta resposta. O pedido mantém-se por resolver.';
     }catch(error){if(sameApproval(context,State.pendingApproval))req.feedback=String(error).replace(/^Error:\s*/,'');}
     finally{if(sameApproval(context,State.pendingApproval)){req.answering=false;State.notify();}}
+  }
+
+  /** A new Coucou waits and Mochi has nothing else to say (he is blue). */
+  private updateHintOn(): boolean {
+    return !State.paused && showsUpdateHint(Updates.waiting(), State.effectiveState, State.pendingApproval != null);
+  }
+
+  /**
+   * What a click or a hover opens on: while Mochi is blue, the new version
+   * ("Coucou X is out", Update now); otherwise the usual view. A waiting
+   * permission or question always comes first.
+   */
+  private openingView(): IslandViewName {
+    return this.updateHintOn() ? "update" : State.defaultView();
   }
 
   reveal() {
@@ -895,6 +1013,10 @@ export class Island {
     const dur = State.uploadDuration;
     const p = Math.max(0, Math.min(1, (since - PRE_PROGRESS) / dur));
 
+    // The bar and the percentage follow the same eased curve as Mochi.
+    State.uploadProgress = uploadProgressCurve(p);
+    if (State.view === "uploading") this.views.get("uploading")?.sync();
+
     const tens = Math.floor(p * 10);
     if (tens > this.uploadTens && tens < 10) {
       this.uploadTens = tens;
@@ -914,7 +1036,15 @@ export class Island {
 
   // ── Geometry ────────────────────────────────────────────────────────────────
 
+  /** The closed island stays on screen (anything but "hidden"). */
+  private get closedShows(): boolean {
+    return !this.cardsOnly && closedIsland(State.settings.closedIsland) !== "hidden";
+  }
+
   private targetSize(): { w: number; h: number; r: number } {
+    if (State.mode === "hidden" && this.closedShows) {
+      return { w: this.closedW, h: CLOSED_H, r: 10 };
+    }
     let { w, h } = islandSize(State.mode, State.view, State.chatHistory.length);
     if (State.mode === "expanded" && State.view === "overview") {
       if (State.settings.companionMode || this.cardsOnly) {
@@ -968,6 +1098,7 @@ export class Island {
       this.miniGrid.style.top = `${hh / 2 - 14.5}px`;
     }
     if (this.greetingCanvas) this.greetingCanvas.style.left = `${(w - EXPANDED_W) / 2}px`;
+    this.clockEl.style.height = `${hh}px`;
     this.uploadCanvas.el.style.left = `${(w - EXPANDED_W) / 2}px`;
 
     const viewportW = window.innerWidth > 0 ? window.innerWidth : PANEL_W;
@@ -997,7 +1128,7 @@ export class Island {
         this.collapseTimer = null;
         if (State.mode !== "hidden") return;
         this.collapsed = true;
-        void Bridge.setCollapsed(true);
+        this.sendCollapsedSize(true);
       }, 420);
       return;
     }
@@ -1007,7 +1138,87 @@ export class Island {
     }
     if (this.collapsed) {
       this.collapsed = false;
+      this.collapsedTo = { w: 0, h: 0 };
       void Bridge.setCollapsed(false);
+    }
+  }
+
+  /**
+   * Mochi in the closed island now and then blinks or glances around, as he
+   * does on a Mac without a notch: a few frames every few seconds, the loop
+   * asleep in between. Nothing runs for the other closed islands.
+   */
+  private scheduleClosedLife() {
+    if (this.closedLife != null) window.clearTimeout(this.closedLife);
+    this.closedLife = null;
+    if (!this.closedShows || State.mode !== "hidden" || closedIsland(State.settings.closedIsland) !== "mochi") {
+      this.closedLook = { x: 0, y: 0 };
+      return;
+    }
+    this.closedLife = window.setTimeout(() => {
+      this.closedLife = null;
+      if (State.mode !== "hidden" || State.paused) return this.scheduleClosedLife();
+      if (Math.random() < 0.55) {
+        this.engine.blink();
+      } else {
+        this.closedLook = { x: (Math.random() * 2 - 1) * 0.8, y: (Math.random() * 2 - 1) * 0.3 };
+      }
+      this.closedAwakeUntil = performance.now() + 700;
+      this.ensureRunning();
+      this.scheduleClosedLife();
+    }, 2500 + Math.random() * 3500);
+  }
+
+  /** The pointer is on the folded window (Rust's `closed-hover`): the island wakes. */
+  wakeFromClosed() {
+    if (this.cardsOnly || State.mode !== "hidden") return;
+    Sound.resume();
+    this.fsm.mouseEntered();
+  }
+
+  /** Tells Rust the folded window's size: the closed island's, or none (the strip). */
+  private sendCollapsedSize(force = false) {
+    const size = this.closedShows ? { w: this.closedW, h: CLOSED_H } : { w: 0, h: 0 };
+    if (!force && size.w === this.collapsedTo.w && size.h === this.collapsedTo.h) return;
+    this.collapsedTo = size;
+    if (size.w > 0) void Bridge.setCollapsed(true, size.w, size.h);
+    else void Bridge.setCollapsed(true);
+  }
+
+  /**
+   * What the closed island shows, redrawn when it changes (the minute, the
+   * song, the plan): a new width animates the island and, once folded,
+   * resizes the window to it.
+   */
+  private updateClosed() {
+    const style = closedIsland(State.settings.closedIsland);
+    const track = Spotify.state.track;
+    const content: ClosedContent | null = State.mode === "hidden" || this.collapsed
+      ? closedContent(style, {
+        now: new Date(),
+        locale: language(),
+        planUsage: State.planUsage,
+        music: State.spotifyPlaying && track ? { title: track.title, artist: track.artist } : null,
+      })
+      : null;
+    const key = content ? `${style}|${content.text}|${content.dot ?? ""}|${content.note}` : style;
+    const shown = State.mode === "hidden" && this.closedShows;
+    this.closedEl.classList.toggle("on", shown && content != null);
+    if (key === this.closedKey) return;
+    this.closedKey = key;
+    this.closedText.textContent = content?.text ?? "";
+    this.closedEl.classList.toggle("note", content?.note === true);
+    this.closedDot.style.display = content?.dot ? "" : "none";
+    if (content?.dot) this.closedDot.style.background = content.dot;
+    // Measured as drawn: the font and the language decide the width.
+    const extras = (content?.dot ? 12 : 0) + (content?.note ? 16 : 0);
+    const w = closedWidth(content ? this.closedText.scrollWidth : 0, extras);
+    if (w !== this.closedW) {
+      this.closedW = w;
+      if (State.mode === "hidden") {
+        this.animateGeometry(w < this.width.value);
+        if (this.collapsed) this.sendCollapsedSize();
+      }
     }
   }
 
@@ -1015,11 +1226,14 @@ export class Island {
 
   private wireInput() {
     if (this.cardsOnly) { this.wireCardInput(); return; }
-    // The wake strip is the only thing the OS can hit while the island is hidden.
-    this.wakeStrip?.addEventListener("mouseenter", () => {
+    const wake = () => {
       if (this.desktop.companionsActive || this.desktop.centerSupported) return;
       Sound.resume();
       if (State.mode === "hidden") this.fsm.mouseEntered();
+    };
+    this.wakeStrip?.addEventListener("mouseenter", wake);
+    this.root.addEventListener("mouseover", () => {
+      if (this.collapsed) wake();
     });
 
     this.islandEl.addEventListener("mousedown", (e) => {
@@ -1282,6 +1496,10 @@ export class Island {
       const gctx = this.greetingCanvas.getContext("2d");
       if (gctx) {
         const dpr = Math.min(2, window.devicePixelRatio || 1);
+        if (this.greetingCanvas.width !== Math.round(EXPANDED_W * dpr)) {
+          this.greetingCanvas.width = Math.round(EXPANDED_W * dpr);
+          this.greetingCanvas.height = Math.round(150 * dpr);
+        }
         gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         this.greeting.draw(gctx);
       }
@@ -1310,8 +1528,11 @@ export class Island {
     // spends most of its life in. Geometry still has to finish retracting.
     const settling =
       this.width.animating || this.height.animating || this.radius.animating;
+    const botMoving = !this.botCx.settled || !this.botCy.settled || !this.botSize.settled;
+    // Closed, only the folding — and Mochi reaching his place in the closed island.
     const busy = State.mode === "hidden"
-      ? settling
+      ? settling || (closedIsland(State.settings.closedIsland) === "mochi" &&
+        (botMoving || nowMs < this.closedAwakeUntil))
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
         greetingActive || this.engine.busy || UploadSeq.isActive || viewAnimating;
@@ -1321,7 +1542,11 @@ export class Island {
   }
 
   private updateBotTargets() {
-    const p = botPosition(State.mode, State.view, this.height.value, State.uploadProgress);
+    let p = botPosition(State.mode, State.view, this.height.value, State.uploadProgress);
+    // The closed island with Mochi in it, as on a Mac without a notch.
+    if (State.mode === "hidden" && closedIsland(State.settings.closedIsland) === "mochi") {
+      p = { cx: this.width.value / 2, cy: this.height.value / 2, diameter: CLOSED_BOT_D, opacity: 1 };
+    }
     this.botCx.target = p.cx;
     this.botCy.target = p.cy;
     this.botSize.target = p.diameter / 0.6;
@@ -1354,8 +1579,11 @@ export class Island {
     const hCss = w + BOT_OVERHANG;
     const wCss = w + BOT_SIDE * 2;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (this.canvasPx !== w) {
+    // Drawn at the current ratio, so a bitmap sized for another monitor's
+    // would show Mochi too big and cut, or too small.
+    if (this.canvasPx !== w || this.canvasDpr !== dpr) {
       this.canvasPx = w;
+      this.canvasDpr = dpr;
       this.botCanvas.width = Math.round(wCss * dpr);
       this.botCanvas.height = Math.round(hCss * dpr);
       this.botCanvas.style.width = `${wCss}px`;
@@ -1368,12 +1596,17 @@ export class Island {
     if (!ctx) return;
 
     const focus = State.focusTask;
+    // A new Coucou waits: over an idle or sleeping Mochi, the blue and the arrow
+    // badge (whats-new.ts). Anything Mochi has to say comes first.
+    this.engine.setUpdateHint(this.updateHintOn() ? UPDATE_BLUE_RGB : null);
     // While a plan card is open Mochi wears the plan's colour, like its pill.
     this.engine.bodyColor = planCardOpen()
       ? hexToRGB(openPlanColor())
-      : focus?.isIntegration
-        ? hexToRGB(focus.color)
-        : null;
+      : this.engine.showsUpdateHint
+        ? UPDATE_BLUE_RGB
+        : focus?.isIntegration
+          ? hexToRGB(focus.color)
+          : null;
     this.engine.particleOverhang = BOT_OVERHANG;
     this.engine.lookX = this.lookX();
     this.engine.lookY = this.lookY();
@@ -1406,8 +1639,13 @@ export class Island {
     }));
 
     this.engine.update(dt);
+    // Cleared in device pixels, the whole canvas. At a fractional scale (150 %)
+    // the canvas is a whole number of pixels but `hCss * dpr` is not: clearing
+    // in CSS units left the last row half-cleared, and whatever once passed
+    // through it (a hat in a roll) piled up there into a coloured bar.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.botCanvas.width, this.botCanvas.height);
     ctx.setTransform(dpr, 0, 0, dpr, BOT_SIDE * dpr, 0);
-    ctx.clearRect(-BOT_SIDE, 0, wCss, hCss);
     ctx.save();
     this.engine.applyDance(ctx, w, hCss);
     this.engine.draw(ctx, w, hCss);
@@ -1416,12 +1654,15 @@ export class Island {
 
   /** BotCanvasView.lookX / lookY — tanh of the distance to the bot. */
   private lookX(): number {
+    // In the closed island the cursor isn't followed: he looks around by himself.
+    if (State.mode === "hidden") return this.closedLook.x;
     const rect = this.islandRect();
     const botScreenX = rect.x + this.botCx.value;
     return Math.tanh((State.mouse.x - botScreenX) / 260);
   }
 
   private lookY(): number {
+    if (State.mode === "hidden") return this.closedLook.y;
     return -Math.tanh((State.mouse.y - this.botCy.value) / 200);
   }
 
@@ -1477,7 +1718,7 @@ export class Island {
     }
 
     // Chat and the explicit email draft form accept text input.
-    const keyboardView=State.mode==='expanded'&&(State.view==='prompt'||State.view==='mail')?State.view:'';
+    const keyboardView=State.mode==='expanded'&&(TYPING_VIEWS.has(State.view) || State.view === 'mail')?State.view:'';
     if (this.keyboardView !== keyboardView) {
       this.keyboardView = keyboardView;
       if (keyboardView) {
@@ -1505,18 +1746,56 @@ export class Island {
       }
     }
 
+    // Compact Claude plan indicator
+    const showPlan = claudeCompactPillVisible();
+    this.compactPlan.style.opacity = showPlan ? "1" : "0";
+    this.compactPlan.style.pointerEvents = showPlan ? "auto" : "none";
+    if (showPlan) {
+      const others = State.otherTasks.slice(0, 4);
+      this.compactPlan.style.right = others.length > 0 ? "58px" : "20px";
+      const pct = dominantPct(State.planUsage);
+      const color = planColor(pct);
+      this.compactPlan.style.setProperty("--plan", color);
+      this.compactPlanLabel.textContent = pct != null ? `${Math.round(pct)}%` : "—";
+    }
+
+    this.updateClock();
+
     syncMiniBotStates(State.tasks);
     this.engine.setState(State.effectiveState);
   }
 
+  /** The clock sits in the middle of the compact island, where the notch is on a Mac. */
+  private updateClock() {
+    this.updateClosed();
+    const on = State.mode === "compact" && State.settings.showClock;
+    this.clockEl.style.opacity = on ? "1" : "0";
+    if (!on) return;
+    const now = new Date();
+    const date = now.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+    const time = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const text = `${date}  ${time}`;
+    if (this.clockEl.textContent !== text) this.clockEl.textContent = text;
+  }
+
   /** Applies settings coming from Rust at boot. */
   applySettings() {
+    // The closed island may have changed: what it shows, or whether it shows.
+    this.closedKey = "";
+    this.updateClosed();
+    if (State.mode === "hidden") {
+      this.animateGeometry(true);
+      if (this.collapsed) this.sendCollapsedSize();
+    }
+    this.scheduleClosedLife();
     Sound.setEnabled(State.settings.soundEnabled);
     Sound.setVolume(State.settings.soundVolume);
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;
     this.fsm.petitToHiddenDelay = this.cardsOnly ? 0 : State.settings.companionMode ? 2 : 60;
     this.fsm.openOnHover = !this.cardsOnly && State.settings.openOnHover;
     State.notify();
+    // ponytail: one timer for the life of the window; a minute is the clock's finest tick.
+    this.clockTimer ??= window.setInterval(() => this.updateClock(), 10_000);
   }
 
   get panelSize() {

@@ -111,17 +111,18 @@ const BUILDERS: Record<string, Builder> = {
     };
   },
   integration_n8n: () => {
-    const task = State.tasks.find((x) => x.id === "integration_n8n");
+    if (!usable("integration_n8n")) return null;
+    const data = obj("integration_n8n");
     const activity = State.integrations.integration_n8n?.activity;
-    if (!task || !activity) return null;
-    // The selected task may be the pet's assistant conversation. Only the
-    // native integration notification describes a workflow and its lifetime.
-    // The workflow's name and whether it worked; the error text stays on the computer.
+    const label = activity?.label || (typeof data.id === "string" && typeof data.workflow === "string" ? data.workflow : "");
+    if (!label) return null;
+    const success = activity?.success ?? data.status === "success";
+    // The workflow's name and result are enough. The error detail stays on the computer.
     return {
       id: "integration_n8n", title: "n8n",
-      headline: activity.success ? t("Success") : t("Failed"),
+      headline: success ? t("Success") : t("Failed"),
       reason: t("Workflow"),
-      items: activity.label ? [{ label: activity.label, detail: "" }] : [],
+      items: [{ label, detail: "" }],
     };
   },
 };

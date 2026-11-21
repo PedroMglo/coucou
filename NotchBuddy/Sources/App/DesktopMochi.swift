@@ -29,13 +29,16 @@ struct DesktopBotView: View {
     @ObservedObject var viewState: DesktopBotViewState
 
     var body: some View {
-        TimelineView(.animation(paused: viewState.paused)) { timeline in
+        // 60 fps like the open island (see MochiFrameClock, #1116).
+        TimelineView(.animation(minimumInterval: MochiFrameClock.interval(fps: 60),
+                                paused: viewState.paused)) { timeline in
             Canvas { ctx, size in
                 _ = timeline.date   // force redraw every tick (see BotCanvasView)
 
                 // Eye tracking based on the panel's own screen position
                 engine.lookX = tanh((appState.mousePosition.x - viewState.lookOrigin.x) / 260)
                 engine.lookY = -tanh((appState.mousePosition.y - viewState.lookOrigin.y) / 200)
+                engine.moodTarget = MachineVitals.shared.mood
 
                 // Desktop Mochi is always the "main" Mochi — always dressed
                 engine.setOutfit(appState.resolvedOutfit, animated: true)
@@ -201,6 +204,7 @@ final class DesktopMochiController {
         p.level = .floating
         p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         p.ignoresMouseEvents = true
+        p.hidesOnDeactivate = false
         if !p.isVisible { p.orderFront(nil) }
 
         // Squash emote + sound on landing
@@ -259,8 +263,7 @@ final class DesktopMochiController {
 
         phase = .flyingOut
         let s = DesktopMochiController.panelSize
-        let screen = IslandWindowController.islandScreen()
-        let startOrigin = NSPoint(x: screen.frame.midX - s/2, y: screen.frame.maxY - s)
+        let startOrigin = IslandWindowController.homeOrigin(size: s)
         let target = loadSavedPosition()
 
         let p = makeBlankPanel()
@@ -331,8 +334,7 @@ final class DesktopMochiController {
         cancellables.removeAll()
         isSleeping = false
         let s = DesktopMochiController.panelSize
-        let screen = IslandWindowController.islandScreen()
-        let targetOrigin = NSPoint(x: screen.frame.midX - s/2, y: screen.frame.maxY - s)
+        let targetOrigin = IslandWindowController.homeOrigin(size: s)
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.45
             ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -359,8 +361,7 @@ final class DesktopMochiController {
         isSleeping = false
 
         let s = DesktopMochiController.panelSize
-        let screen = IslandWindowController.islandScreen()
-        let targetOrigin = NSPoint(x: screen.frame.midX - s/2, y: screen.frame.maxY - s)
+        let targetOrigin = IslandWindowController.homeOrigin(size: s)
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.45
             ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -416,6 +417,7 @@ final class DesktopMochiController {
         p.backgroundColor = .clear
         p.isOpaque = false
         p.hasShadow = false
+        p.hidesOnDeactivate = false
         return p
     }
 
