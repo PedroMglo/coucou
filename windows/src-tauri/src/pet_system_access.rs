@@ -61,6 +61,7 @@ pub(crate)fn addressed(window:&tauri::WebviewWindow,app:&AppHandle,pet_id:&str)-
  if settings.main_pill!=pet_id&&!settings.active_integrations.iter().any(|p|p==pet_id){return Err("Este pet não está ativo.".into());}Ok(())
 }
 fn allowed(label:&str)->bool{[crate::HUB_LABEL,crate::companions::LABEL,crate::pet_panel::LABEL,crate::pet_control::LABEL].contains(&label)}
+#[cfg(target_os="linux")]
 #[tauri::command]
 pub async fn pet_system_access_set(app:AppHandle,window:tauri::WebviewWindow,request:Change)->Result<Document,String>{
  if !allowed(window.label()){return Err("Revê as concessões na gestão nativa do pet.".into());}
@@ -112,4 +113,10 @@ impl Captured{
  #[cfg(test)]pub(crate)fn fixture(file:&Path,pet_id:&str,operation:Operation,key:Option<&str>)->Result<Self,String>{let mut capture=Self::from_config(&read_existing_at(file)?,pet_id,operation,key)?;capture.file=Some(file.into());Ok(capture)}
 }
 
-#[cfg(test)]#[path="pet_system_access_tests.rs"]mod tests;
+#[cfg(not(target_os="linux"))]
+#[tauri::command]
+pub async fn pet_system_access_set(app:AppHandle,window:tauri::WebviewWindow,request:Change)->Result<Document,String>{
+ let _=(app,window,request);
+ Err("A revisão nativa de Sistema ainda não está disponível nesta plataforma.".into())
+}
+#[cfg(all(test,target_os="linux"))]#[path="pet_system_access_tests.rs"]mod tests;

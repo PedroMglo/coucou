@@ -50,6 +50,7 @@ impl Snapshot{
    }
   ))
  }
+#[cfg(target_os="linux")]
  pub(super)fn reopen_project(&self,path:&std::path::Path,now:u64)->model::Result<Option<crate::pet_memory::context::Capture>>{
   let Some(source)=&self.project else{return Ok(None);};
   if !self.references_valid(){return Err(model::Error::Conflict);}
@@ -91,4 +92,4 @@ impl Published{
  pub(super)fn model_metadata(&self)->serde_json::Value{let mut value=serde_json::json!({"kind":"plannedPeerMemoryData","contextHash":self.source.context_hash,"sourceMemoryCount":self.source.references.len(),"planningOutputHash":self.generated_plan.output.body_hash,"sourceModel":match &self.source.destination{Destination::Server{provider,model,..}=>serde_json::json!({"provider":provider,"model":model}),_=>serde_json::Value::Null},"authorizesActions":false,"sourceModelConsentTransfers":false});if let Some(source)=&self.source.received_request{value["kind"]=serde_json::json!("plannedPeerSelectedReceivedData");value["sourceReceivedData"]=serde_json::json!({"selectionHash":model::fingerprint(source).ok(),"sourceEnvelopeHash":source.source.envelope_hash,"sourceReceiptHash":source.source.receipt_hash,"transitiveDataOnly":true,"sourceConsentTransfers":false});}if self.round_data.is_some(){value["kind"]=serde_json::json!(if self.schema_version==4{"plannedPeerSelectedReceivedAndRoundDerivedData"}else if self.schema_version==3{"plannedPeerMemoryAndRoundDerivedData"}else{"plannedPeerRoundMetadataDerivedData"});value["sourceMetadataHash"]=serde_json::json!(self.round_data.as_ref().map(|d|&d.source.information_hash));}value}
 
 }
-#[cfg(test)]#[path="planned_peer_data_tests.rs"]mod tests;
+#[cfg(all(test,target_os="linux"))]#[path="planned_peer_data_tests.rs"]mod tests;

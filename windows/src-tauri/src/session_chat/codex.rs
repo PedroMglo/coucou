@@ -233,7 +233,7 @@ pub async fn managed_readiness(client:&Client,target:&Target)->Result<ManagedRea
     Ok(ManagedReadiness{materialized:!turns.is_empty(),busy:thread["status"]["type"]=="active",turn})
 }
 
-#[cfg(test)]
+#[cfg(all(test,unix))]
 mod managed_tests {
     use super::*;
     use std::{path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}}, time::{Duration, SystemTime, UNIX_EPOCH}};

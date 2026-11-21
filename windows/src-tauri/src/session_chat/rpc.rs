@@ -1,10 +1,11 @@
 //! Codex daemon JSON-RPC over the user's existing local Unix WebSocket.
 //! This client never starts an executor, imports a transcript, or retries a write.
 use std::{collections::HashMap, path::{Path,PathBuf},sync::{Arc,Mutex,atomic::{AtomicBool,AtomicU64,Ordering}},time::{Duration,Instant}};
-use futures_util::{SinkExt,StreamExt};
+#[cfg(unix)]use futures_util::{SinkExt,StreamExt};
 use serde_json::{json,Value};
-use tokio::{net::UnixStream,sync::{broadcast,mpsc,oneshot},time::timeout};
-use tokio_tungstenite::{client_async_with_config,tungstenite::{Message,protocol::WebSocketConfig}};
+use tokio::{sync::{broadcast,mpsc,oneshot},time::timeout};
+#[cfg(unix)]use tokio::net::UnixStream;
+#[cfg(unix)]use tokio_tungstenite::{client_async_with_config,tungstenite::{Message,protocol::WebSocketConfig}};
 
 #[path="native_settings.rs"]
 pub(crate) mod native_settings;
@@ -69,6 +70,7 @@ pub fn socket_path(home:&Path)->PathBuf {
     codex_home.join("app-server-control/app-server-control.sock")
 }
 
+#[cfg(unix)]
 fn validate_socket(path:&Path)->Result<(),Error>{
     use std::os::unix::fs::{FileTypeExt,MetadataExt};
     let meta=std::fs::symlink_metadata(path).map_err(|_|Error::local("O daemon Codex não está disponível. Abre uma sessão Codex com o controlo local ativo."))?;
@@ -78,6 +80,7 @@ fn validate_socket(path:&Path)->Result<(),Error>{
     Ok(())
 }
 
+#[cfg(unix)]
 fn socket_identity(path:&Path)->Result<(u64,u64,i64,i64),Error>{
     use std::os::unix::fs::MetadataExt;
     validate_socket(path)?;
@@ -85,7 +88,21 @@ fn socket_identity(path:&Path)->Result<(u64,u64,i64,i64),Error>{
     Ok((meta.dev(),meta.ino(),meta.ctime(),meta.ctime_nsec()))
 }
 
+#[cfg(not(unix))]
+const UNSUPPORTED_ENDPOINT: &str = "O controlo local de sessões Codex ainda não está disponível nesta plataforma.";
+
+#[cfg(not(unix))]
+fn socket_identity(_: &Path) -> Result<(u64,u64,i64,i64),Error> {
+    Err(Error::local(UNSUPPORTED_ENDPOINT))
+}
+
 impl Client {
+    #[cfg(not(unix))]
+    pub async fn connect(_: &Path) -> Result<Arc<Self>,Error> {
+        Err(Error::local(UNSUPPORTED_ENDPOINT))
+    }
+
+    #[cfg(unix)]
     pub async fn connect(path:&Path)->Result<Arc<Self>,Error>{
         // Codex may publish its control endpoint through a stable symlink.
         let path=path.canonicalize().map_err(|_|Error::local("O socket de controlo Codex não está disponível."))?;
@@ -270,7 +287,7 @@ fn allowed_event(message:&Value)->bool{
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test,unix))]
 mod endpoint_tests {
     use super::*;
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};

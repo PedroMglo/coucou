@@ -50,6 +50,7 @@ fn delta(text:&str)->Value{event("item/agentMessage/delta",json!({"threadId":tar
  live.event(&item("item/started","new live answer"));assert_eq!(live.merge(snapshot()).messages[0].content,"new live answer");
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn a_resolved_approval_is_discarded_in_the_writer_without_breaking_the_connection(){
  use std::{sync::{Arc,atomic::{AtomicBool,AtomicUsize,Ordering}},os::unix::fs::PermissionsExt};

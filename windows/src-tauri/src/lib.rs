@@ -60,6 +60,10 @@ mod pet_native_network;
 mod pet_bluetooth;
 mod pet_chat;
 mod session_chat;
+#[cfg(unix)]
+mod session_bridge;
+#[cfg(not(unix))]
+#[path="session_bridge_unsupported.rs"]
 mod session_bridge;
 mod copilot_session;
 #[path="session_chat/adapter.rs"]

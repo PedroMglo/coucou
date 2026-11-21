@@ -1,6 +1,10 @@
 //! Tauri cache/worker integration. Collection is the pure local metadata reader.
-use super::process_census::{self,Census,Cache,PROVIDERS,summarize,stamp};
-use std::{collections::BTreeMap,time::{Duration,Instant}};
+use super::process_census::{Census,PROVIDERS,summarize};
+use std::collections::BTreeMap;
+#[cfg(target_os="linux")]
+use super::process_census::{self,Cache,stamp};
+#[cfg(target_os="linux")]
+use std::time::{Duration,Instant};
 #[cfg(target_os="linux")]
 fn cache()->&'static std::sync::Mutex<Cache>{static CACHE:std::sync::OnceLock<std::sync::Mutex<Cache>>=std::sync::OnceLock::new();CACHE.get_or_init(Default::default)}
 #[cfg(target_os="linux")]

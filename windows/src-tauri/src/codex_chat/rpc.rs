@@ -1184,7 +1184,7 @@ for line in sys.stdin:
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test,unix))]
 #[path="rpc_timing_tests.rs"]
 mod timing_tests;
 

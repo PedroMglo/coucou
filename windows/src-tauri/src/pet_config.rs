@@ -227,7 +227,7 @@ pub(crate) fn read_existing_at(path:&Path)->Result<Configuration,String> {
  let _edit=EDIT.lock().map_err(|_|"As identidades dos pets estão indisponíveis.".to_string())?;
  Ok(read_at_policy(path,false)?.config)
 }
-#[cfg(test)]
+#[cfg(all(test,unix))]
 #[path = "pet_config_read_tests.rs"]
 mod read_existing_tests;
 pub fn identity_name(id:&str)->String {read().ok().and_then(|c|c.pets.get(id).map(|p|p.name.clone())).or_else(||defaults().pets.get(id).map(|p|p.name.clone())).unwrap_or_else(||id.into())}

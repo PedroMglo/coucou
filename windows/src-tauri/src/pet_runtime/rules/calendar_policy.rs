@@ -15,6 +15,7 @@ impl CalendarPolicy{
   self.schema_version==1&&super::super::authority::decode(&self.reader_revision).is_some()&&self.consent==CalendarConsent::BoundedRuleFutureCalendarData&&self.data_class=="nativeCalendarEventsV1"&&self.window=="occurrenceCivilDay"&&self.max_data_bytes==65536&&self.max_input_bytes==262144&&self.max_capture_seconds==10&&self.max_reads_per_occurrence==1&&!sources.is_empty()&&sources.len()<=8&&sources.len()==self.sources.len()
    &&sources.iter().zip(&self.sources).all(|(a,b)|a.id==b.id&&a.revision==b.revision&&model::text(&b.name,160)&&b.path.len()<=4096&&std::path::Path::new(&b.path).is_absolute()&&!b.path.chars().any(char::is_control)&&super::super::authority::decode(&b.enrollment_binding).is_some())
  }
+#[cfg(target_os="linux")]
  pub(in crate::pet_runtime)fn matches_context(&self,b:&model::ContextBinding)->bool{
   b.schema_version==11&&b.memory.is_none()&&b.received_request.is_none()&&b.source_conversation_id.is_none()&&b.calendars.as_ref().is_some_and(|c|c.selection.matches(&crate::pet_calendar::goal::Request{source_scope:Some(crate::pet_sources::PetScope::Pet),selected:self.sources.iter().map(|s|crate::pet_calendar::goal::Pick{id:s.id.clone(),revision:s.revision}).collect(),query:c.selection.query.clone()}))
  }

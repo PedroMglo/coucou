@@ -4,6 +4,7 @@ pub(crate)mod rules;
 pub(crate)mod messages;
 pub(crate)mod delegation;
 mod funding;
+#[cfg(target_os="linux")]
 mod peer_feedback;
 mod peer_round_data;
 mod peer_round_feedback;

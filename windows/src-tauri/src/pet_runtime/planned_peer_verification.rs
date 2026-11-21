@@ -19,6 +19,7 @@ impl Report{
   if self.generated_plan.as_ref()!=Some(r)||self.binding!=Binding::peer_for(g)?{return Err(model::Error::Conflict);}let p=g.plans.iter().find(|p|p.id==r.plan_id).ok_or(model::Error::Conflict)?;
   if self.expected_messages as usize!=p.steps.len()||self.receipts.len()!=p.steps.len()||p.steps.iter().any(|s|!self.receipts.iter().any(|x|x.plan_id==p.id&&x.step_id==s.id&&s.operation.as_ref().is_some_and(|op|crate::pet_runtime::messages::Input::parse(op).is_ok_and(|i|i.to_pet()==x.recipient_pet_id)))){return Err(model::Error::Conflict);}Ok(())
  }
+#[cfg(target_os="linux")]
  pub(super)fn observe_planned(g:&Record,s:&AdmissionSpec,b:&Grant,id:String,target:String,now:u64)->model::Result<Self>{
   let r=crate::pet_runtime::planned_peer::reference(g,s)?;if !super::super::plans::matches(g,s){return Err(model::Error::Conflict);}crate::pet_runtime::authority::Authority::generated_acknowledged(b,s,r).map_err(crate::pet_runtime::authority::Failure::control_error)?;
   let p=g.plans.iter().find(|p|p.id==r.plan_id).ok_or(model::Error::Conflict)?;if p.steps.is_empty()||p.steps.len()>MAX_MESSAGES{return Err(model::Error::InvalidInput);}let binding=Binding::peer_for(g)?;let mut receipts=vec![];

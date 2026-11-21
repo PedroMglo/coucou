@@ -227,7 +227,7 @@ impl Cache {
  }
 }
 
-#[cfg(test)]
+#[cfg(all(test,target_os="linux"))]
 #[path="process_census_tests.rs"]
 mod tests;
 

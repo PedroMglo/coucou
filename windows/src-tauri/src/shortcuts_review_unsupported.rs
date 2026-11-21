@@ -1,4 +1,5 @@
 fn unavailable()->String{"A revisão nativa dos atalhos ainda não está disponível nesta plataforma.".into()}
+#[tauri::command]pub(crate)fn shortcuts_review_prepare_current_scope()->Result<serde_json::Value,String>{Err(unavailable())}
 #[tauri::command]pub(crate)fn shortcuts_review_prepare()->Result<serde_json::Value,String>{Err(unavailable())}
 #[tauri::command]pub(crate)fn shortcuts_review_inspect(request:serde_json::Value)->Result<serde_json::Value,String>{let _=request;Err(unavailable())}
 #[tauri::command]pub(crate)fn shortcuts_review_cancel(request:serde_json::Value)->Result<(),String>{let _=request;Err(unavailable())}

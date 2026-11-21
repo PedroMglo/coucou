@@ -24,7 +24,7 @@ impl Reference{
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super)struct Closure{pub schema_version:u32,pub reference:Reference,pub target_goal_hash:String,pub closed_base_hash:String,pub usage_hash:String,pub evidence_hash:String,pub owner_hash:String}
 impl Closure{
-    #[cfg(target_os="linux")]pub(super)fn valid_for(&self,body:&authority::Grant)->bool{
+    pub(super)fn valid_for(&self,body:&authority::Grant)->bool{
         let r=&self.reference;
         self.schema_version==1&&r.valid()&&r.goal_id==body.goal_id&&r.decision_id==body.decision_id&&body.lease.as_ref().is_some_and(|l|l.id==r.lease_id)
             &&body.runtime_owner.as_ref().is_some_and(|o|model::fingerprint(o).ok().as_ref()==Some(&self.owner_hash))

@@ -1,6 +1,8 @@
 //! Native round-data capture for exact human review. Neither these data nor a
 //! deserialized reference grant a model use. Approval/body/journal path is gated.
-use super::{model,delegation_api::DelegationInput,peer_feedback,store::Store,authority::Authority,Repository};
+use super::model;
+#[cfg(target_os="linux")]
+use super::{delegation_api::DelegationInput,peer_feedback,store::Store,authority::Authority,Repository};
 use crate::{local_chat::Server,pet_memory::context_model::Destination};
 use serde::{Serialize,Deserialize};
 use super::peer_round_sources::Dependency;
@@ -17,17 +19,22 @@ impl Reference{
  pub(super)fn same_observation(&self,other:&Self)->bool{self.valid()&&other.valid()&&self.pet_id==other.pet_id&&self.goal_id==other.goal_id&&self.decision_id==other.decision_id&&self.destination==other.destination&&self.exact_hash==other.exact_hash&&self.projection_hash==other.projection_hash&&self.information_hash==other.information_hash}
 }
 /// Opaque native capture. A DTO/reference alone cannot be used as this value.
+#[cfg(target_os="linux")]
 pub(super)struct Captured{goals:std::path::PathBuf,authority:std::path::PathBuf,input:DelegationInput,reference:Reference,exact:serde_json::Value,projection:serde_json::Value,credential:Option<String>,history:Option<super::peer_round_history::Captured>}
+#[cfg(target_os="linux")]
 fn normalized(v:&peer_feedback::View,facts:&[Fact])->model::Result<serde_json::Value>{let mut data=serde_json::to_value(v).map_err(|_|model::Error::InvalidRecord)?;data["observedAt"]=serde_json::json!(0);data["parentGrantHash"]=serde_json::Value::Null;Ok(serde_json::json!({"observation":data,"facts":facts}))}
+#[cfg(target_os="linux")]
 fn project(v:&peer_feedback::View,facts:&[Fact])->serde_json::Value{
  let rows=v.items.iter().map(|i|{let f=facts.iter().find(|f|f.message_id==i.message_id);serde_json::json!({"recipientPetId":i.recipient_pet_id,"subject":f.map(|f|&f.subject),"status":i.status,"state":i.child.as_ref().map(|c|c.state),"evidenceComplete":i.child.as_ref().map(|c|c.evidence_complete),"criteriaVerified":i.child.as_ref().is_some_and(|c|c.criteria_verified),"goalComplete":i.child.as_ref().is_some_and(|c|c.goal_complete),"resultContentHashes":f.map(|f|f.model_results.iter().filter_map(|r|r.content_hash.as_ref()).collect::<std::collections::BTreeSet<_>>()).unwrap_or_default()})}).collect::<Vec<_>>();
  serde_json::json!({"schemaVersion":1,"kind":"ownDelegatedOutcomeMetadata","untrustedData":true,"executionAuthorized":false,"modelUseAuthorized":false,"recipientOutcomeIsNotParentCompletion":true,"items":rows})
 }
+#[cfg(target_os="linux")]
 fn information(projection:&serde_json::Value)->model::Result<String>{
  // Neither identity/timestamp churn nor duplicate identical branches is new
  // information. Exact references stay distinct in the separate capture hash.
  let mut rows=std::collections::BTreeSet::new();for row in projection["items"].as_array().ok_or(model::Error::InvalidRecord)?{rows.insert(model::fingerprint(row)?);}model::fingerprint(&rows)
 }
+#[cfg(target_os="linux")]
 impl Captured{
  pub(super)fn at(goals:&std::path::Path,authority:&std::path::Path,input:DelegationInput,server:&Server,model:&str,now:u64)->model::Result<Self>{Self::at_history(goals,authority,input,server,model,None,now)}
  fn at_history(goals:&std::path::Path,authority:&std::path::Path,input:DelegationInput,server:&Server,model:&str,history_limit:Option<usize>,now:u64)->model::Result<Self>{

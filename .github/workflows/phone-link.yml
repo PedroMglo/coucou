@@ -56,7 +56,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libgtk-layer-shell-dev libsoup-3.0-dev libssl-dev libxdo-dev libasound2-dev
+            librsvg2-dev libgtk-layer-shell-dev libsoup-3.0-dev libssl-dev libxdo-dev libasound2-dev libpipewire-0.3-dev
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: npm, cache-dependency-path: extensions/copilot/package-lock.json }
+      - name: Build the bundled Copilot bridge
+        working-directory: extensions/copilot
+        run: |
+          npm ci
+          npm run build
       - uses: actions/cache@v6
         with:
           path: |
@@ -109,7 +116,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libgtk-layer-shell-dev libsoup-3.0-dev libssl-dev libxdo-dev libasound2-dev
+            librsvg2-dev libgtk-layer-shell-dev libsoup-3.0-dev libssl-dev libxdo-dev libasound2-dev libpipewire-0.3-dev
       - uses: actions/cache@v6
         with:
           path: |
@@ -119,9 +126,19 @@ jobs:
           key: phone-link-linux-${{ hashFiles('windows/Cargo.lock') }}
           restore-keys: phone-link-linux-
       - uses: actions/setup-node@v7
-        with: { node-version: 24, cache: npm, cache-dependency-path: android/relay/package-lock.json }
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            android/relay/package-lock.json
+            extensions/copilot/package-lock.json
       - run: npm ci
         working-directory: android/relay
+      - name: Build the bundled Copilot bridge
+        working-directory: extensions/copilot
+        run: |
+          npm ci
+          npm run build
       - uses: actions/setup-java@v6
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v5

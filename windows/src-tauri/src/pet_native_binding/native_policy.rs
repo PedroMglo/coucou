@@ -48,4 +48,4 @@ pub(crate) fn run_steps(surface:&mut impl Surface,steps:&[Step],mut allowed:impl
  }
  reconcile(surface)
 }
-#[cfg(test)]#[path="native_policy_tests.rs"]mod tests;
+#[cfg(all(test,target_os="linux"))]#[path="native_policy_tests.rs"]mod tests;

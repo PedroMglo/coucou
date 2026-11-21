@@ -29,6 +29,7 @@ fn set_at(file:&Path,request:&Change,current:impl Fn()->bool)->Result<Document,S
  Ok(result)
 }
 fn allowed(label:&str)->bool{[crate::HUB_LABEL,crate::companions::LABEL,crate::pet_panel::LABEL,crate::pet_control::LABEL].contains(&label)}
+#[cfg(target_os="linux")]
 #[tauri::command]
 pub async fn pet_inference_set(app:AppHandle,window:tauri::WebviewWindow,request:Change)->Result<Document,String>{
  if !allowed(window.label()){return Err("Revê o motor na gestão nativa do pet.".into());}
@@ -40,4 +41,10 @@ pub async fn pet_inference_set(app:AppHandle,window:tauri::WebviewWindow,request
   publish_resource_snapshot(&doc.config);let _=app.emit("pet-configuration-changed",&doc.config);Ok(doc)
  }).await.map_err(|_|"A gravação terminou sem confirmação. Recarrega o perfil antes de repetir.".to_string())?
 }
-#[cfg(test)]#[path="pet_inference_config_tests.rs"]mod tests;
+#[cfg(not(target_os="linux"))]
+#[tauri::command]
+pub async fn pet_inference_set(app:AppHandle,window:tauri::WebviewWindow,request:Change)->Result<Document,String>{
+ let _=(app,window,request);
+ Err("A revisão nativa do motor ainda não está disponível nesta plataforma.".into())
+}
+#[cfg(all(test,target_os="linux"))]#[path="pet_inference_config_tests.rs"]mod tests;

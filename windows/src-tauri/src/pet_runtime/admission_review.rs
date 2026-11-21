@@ -7,18 +7,25 @@ use tauri::{AppHandle,Manager};
 #[derive(Clone,Serialize)]#[serde(rename_all="camelCase")]
 pub struct ReviewTicket{pub token:String,pub proposal:ReviewProposal,pub approval_scope:&'static str}
 #[cfg(target_os="linux")]#[path="admission_confirmation.rs"]mod confirmation;
+#[cfg(target_os="linux")]
 enum Native{
     Review(Review),
     #[cfg(target_os="linux")]Approved{approved:Approved,authority:super::authority::Authority,acknowledged:bool},
     Ended,
 }
+#[cfg(target_os="linux")]
 #[derive(Clone)]pub(super)struct Origin{window:String,frame:crate::settings::review::Frame}
+#[cfg(target_os="linux")]
 impl Origin{fn same(&self,other:&Self)->bool{self.window==other.window&&self.frame.same(&other.frame)&&self.frame.current()&&other.frame.current()}}
 #[cfg(target_os="linux")]#[derive(Clone,Copy,Debug,PartialEq,Eq)]enum ReviewPath{System,Admission,Planning,Continuation,Deterministic,NativeContinuation,ResultDisclosure}
 #[cfg(target_os="linux")]fn path(proposal:&ReviewProposal)->ReviewPath{if proposal.native_system_plan.is_some(){return ReviewPath::System;}if proposal.result_disclosure.is_some(){return ReviewPath::ResultDisclosure;}if proposal.operation=="goalDeterministic"{if proposal.continuation.is_some(){ReviewPath::NativeContinuation}else{ReviewPath::Deterministic}}else if proposal.continuation.is_some(){ReviewPath::Continuation}else if proposal.planning_policy.is_some(){ReviewPath::Planning}else{ReviewPath::Admission}}
+#[cfg(target_os="linux")]
 pub(super)struct Pending{origin:Origin,proposal:ReviewProposal,approval_scope:&'static str,native:Arc<Mutex<Native>>}
+#[cfg(target_os="linux")]
 impl Pending{fn ticket(&self,token:String)->ReviewTicket{ReviewTicket{token,proposal:self.proposal.clone(),approval_scope:self.approval_scope}}}
+#[cfg(target_os="linux")]
 #[derive(Default)]pub(super)struct Reviews{pending:BTreeMap<String,Arc<Pending>>,retired:Vec<Arc<Pending>>}
+#[cfg(target_os="linux")]
 impl Reviews{
     fn sweep(&mut self,now:u64){
         let expired=self.pending.iter().filter_map(|(token,p)|{
@@ -82,12 +89,14 @@ impl Reviews{
         if let Native::Review(review)=old{Ok(review)}else{Err(Error::Conflict)}
     }
 }
+#[cfg(target_os="linux")]
 pub(super)fn sweep_context(){
     let retired=if let Ok(mut cache)=reviews().lock(){cache.sweep(crate::assistant_memory::now());cache.take_retired()}else{return;};
     if !retired.is_empty(){tauri::async_runtime::spawn_blocking(move||drop(retired));}
 }
 /// Only in-memory changes hold the global cache. Native child reaping happens
 /// after releasing it, including rejected/duplicate incoming reviews.
+#[cfg(target_os="linux")]
 fn with_reviews<T>(operation:impl FnOnce(&mut Reviews)->model::Result<T>)->model::Result<T>{
     let(result,retired)={let mut cache=reviews().lock().map_err(|_|Error::StorageUnavailable)?;let result=operation(&mut cache);(result,cache.take_retired())};
     drop(retired);result
@@ -95,6 +104,7 @@ fn with_reviews<T>(operation:impl FnOnce(&mut Reviews)->model::Result<T>)->model
 #[cfg(target_os="linux")]async fn capture_origin(window:&tauri::WebviewWindow)->model::Result<Origin>{
     let frame=crate::settings::review::capture_window(window).await.map_err(|_|Error::Conflict)?;Ok(Origin{window:window.label().into(),frame})
 }
+#[cfg(target_os="linux")]
 fn reviews()->&'static Mutex<Reviews>{static REVIEWS:OnceLock<Mutex<Reviews>>=OnceLock::new();REVIEWS.get_or_init(||Mutex::new(Reviews::default()))}
 #[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct PrepareInput{#[serde(default)]pub not_before_at:Option<u64>,#[serde(default)]pub start:Option<super::planning::Start>,pub pet_id:String,pub goal_id:String,pub revision:String,pub request_id:String,pub budget:Budget}

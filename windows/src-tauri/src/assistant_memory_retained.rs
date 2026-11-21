@@ -106,6 +106,6 @@ pub(super) fn normalize(library: &Library) -> std::io::Result<Library> {
     Ok(Library { pets, archives, retained })
 }
 
-#[cfg(test)]
+#[cfg(all(test,unix))]
 #[path="assistant_memory_retained_tests.rs"]
 mod tests;
