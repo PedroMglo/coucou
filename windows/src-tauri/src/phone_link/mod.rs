@@ -107,6 +107,9 @@ impl server::Features for TauriFeatures {
     fn usage(&self) -> bool {
         self.app.state::<Shared>().settings.lock().unwrap().phone_usage
     }
+    fn recap(&self) -> bool {
+        self.app.state::<Shared>().settings.lock().unwrap().phone_recap
+    }
     fn relay(&self) -> bool {
         self.app.state::<Shared>().settings.lock().unwrap().phone_relay
     }
@@ -387,6 +390,14 @@ pub struct RelayStatus {
     /// An access key is stored. The key itself is never sent back to the window.
     pub has_access: bool,
     pub state: relay_client::State,
+    /// The "Away from home Wi-Fi" block is shown in Settings. It stays hidden until a relay is ready to use, except for
+    /// testers who start Coucou with `COUCOU_RELAY_SETTINGS=1`, and for a relay that is already turned on.
+    pub shown: bool,
+}
+
+/// Testers start Coucou with `COUCOU_RELAY_SETTINGS=1` to see the relay settings (docs/RELAY_DEPLOY.md).
+fn relay_settings_for_testers() -> bool {
+    std::env::var("COUCOU_RELAY_SETTINGS").map(|v| v == "1").unwrap_or(false)
 }
 
 fn relay_status_of(link: &PhoneLink, shared: &Shared) -> RelayStatus {
@@ -396,6 +407,7 @@ fn relay_status_of(link: &PhoneLink, shared: &Shared) -> RelayStatus {
         url: s.phone_relay_url.clone(),
         has_access: relay_client::access_key(&*link.store).is_some(),
         state: link.relay.lock().unwrap().as_ref().map_or(relay_client::State::Off, |h| h.state()),
+        shown: relay_settings_for_testers() || s.phone_relay,
     }
 }
 
@@ -625,6 +637,44 @@ pub fn phone_usage_set_enabled(
     Ok(UsageStatus { enabled })
 }
 
+// ── Weekly recap on the phone: the switch (Settings → Android phone) ──
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecapStatus {
+    pub enabled: bool,
+}
+
+#[tauri::command]
+pub fn phone_recap_status(shared: State<Shared>) -> RecapStatus {
+    RecapStatus { enabled: shared.settings.lock().unwrap().phone_recap }
+}
+
+/// "Show my weekly recap on the phone". Off by default. A change disconnects the phones once so they reconnect and are told (or not) about
+/// the capability.
+#[tauri::command]
+pub fn phone_recap_set_enabled(
+    app: AppHandle,
+    window: WebviewWindow,
+    link: State<PhoneLink>,
+    shared: State<Shared>,
+    enabled: bool,
+) -> Result<RecapStatus, String> {
+    only_settings(&window)?;
+    let updated = {
+        let mut current = shared.settings.lock().unwrap();
+        current.phone_recap = enabled;
+        if let Err(err) = settings::save(&current) {
+            log::line(format!("could not save settings: {err}"));
+        }
+        current.clone()
+    };
+    link.hub.kick_all("closed", "recap setting changed");
+    log::line(format!("phone link: weekly recap on the phone {}", if enabled { "on" } else { "off" }));
+    let _ = app.emit("settings-changed", updated);
+    Ok(RecapStatus { enabled })
+}
+
 // ── Service cards on the phone: one tick per service (Settings → Android phone) ──
 
 #[derive(Serialize)]
@@ -685,6 +735,17 @@ pub fn phone_link_publish_usage(window: WebviewWindow, link: State<PhoneLink>, u
         return Ok(());
     }
     link.hub.publish_usage(usage);
+    Ok(())
+}
+
+/// Last week's recap the island counted, for phones that have `recap`. Only the numbers leave the island (see hub::RecapIn).
+#[tauri::command]
+pub fn phone_link_publish_recap(window: WebviewWindow, link: State<PhoneLink>, recap: hub::RecapIn) -> Result<(), String> {
+    only_island(&window)?;
+    if link.running.lock().unwrap().is_none() {
+        return Ok(());
+    }
+    link.hub.publish_recap(recap);
     Ok(())
 }
 

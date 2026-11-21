@@ -14,8 +14,9 @@ const GITHUB = "integration_github";
 const clearTimers = new Map<string, number>();
 
 export function registerIntegrationHandlers(island: Island) {
-  void onEvent<IntegrationUpdate>("integration", (update) => handle(island, update));
+  void onEvent<IntegrationUpdate>("integration", (update) => handleIntegrationUpdate(island, update));
   void onEvent<GitHubEvent[]>("github-alerts", handleGitHubAlerts);
+  void onEvent<string>("secrets-changed", () => void refreshConfigured());
   void refreshConfigured();
   State.subscribe(refreshGitHubWhenShown);
 }
@@ -57,7 +58,7 @@ export async function refreshConfigured() {
     let configured: boolean;
     switch (def.connect.kind) {
       case "key":
-        configured = (await Bridge.secretPresent(def.connect.key)) ?? false;
+        configured = (await Bridge.keyReady(def.connect.key)) ?? false;
         break;
       case "hooks":
         // Without an answer from Rust (a plain browser), the Claude Code pill
@@ -90,7 +91,7 @@ export async function refreshHookPills() {
   State.notify();
 }
 
-function handle(island: Island, update: IntegrationUpdate) {
+export function handleIntegrationUpdate(island: Pick<Island, "reveal">, update: IntegrationUpdate) {
   if (State.paused) return;
 
   const previous = State.integrations[update.id];
@@ -98,7 +99,7 @@ function handle(island: Island, update: IntegrationUpdate) {
     data: update.error ? (previous?.data ?? {}) : update.data,
     error: update.error,
     loaded: update.error ? (previous?.loaded ?? false) : true,
-    configured: previous?.configured ?? true,
+    configured: true,
   };
 
   const event = update.event;
