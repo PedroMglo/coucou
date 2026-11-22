@@ -54,8 +54,47 @@ test('native plan surface has no opening IO, protects covered causes and require
 });
 
 test('native reply plan editing keeps the captured source and destination while reviewing pending text only',async()=>{
- installFakeDom();const f=fixture(),source={decisionId:'a'.repeat(32),messageId:'b'.repeat(32),scopeHash:'c'.repeat(64)};for(const g of [f.goal,f.base]){g.schemaVersion=23;const op=g.plans[0].steps[1].operation;op.operationId='pet.reply';delete op.arguments.kind;op.arguments.source=copy(source);op.arguments.expiresAt=Date.now()+60000;}
- const actions=new RuntimeGoalActions(()=>{},f.transport);const v=buildNativePlanRevision({actions,run:op=>op()});v.update(f.goal,false,false,[]);await actions.readNativePlans(f.goal);v.update(f.goal,false,false,[]);const text=v.el.find('textarea').find(x=>x.getAttribute('aria-label')==='Texto pending');text.value='explicit revised reply';text.fire('input');const recipient=v.el.find('select').find(x=>x.getAttribute('aria-label')==='Destinatário pending');assert.equal(recipient.disabled,true);const button=v.el.find('button').find(x=>x.textContent==='Rever alterações do plano');button.fire('click');for(let i=0;i<50;i++)await Promise.resolve();const prepared=f.calls.find(c=>c[0]==='prepare');assert.equal(prepared[1].inputs[0].after.operation.operationId,'pet.reply');assert.deepEqual(prepared[1].inputs[0].after.operation.arguments.source,source);assert.equal(prepared[1].inputs[0].after.operation.arguments.kind,undefined);assert.equal(prepared[1].inputs[0].after.operation.arguments.text,'explicit revised reply');assert.match(v.el.textContent,/origem recebida/);
+ installFakeDom();
+ const f=fixture(),source={decisionId:'a'.repeat(32),messageId:'b'.repeat(32),scopeHash:'c'.repeat(64)};
+ const expiresAt=Date.now()+60000;
+ for(const goal of [f.goal,f.base]){
+  goal.schemaVersion=23;
+  const operation=goal.plans[0].steps[1].operation;
+  operation.operationId='pet.reply';
+  delete operation.arguments.kind;
+  operation.arguments.source=copy(source);
+  operation.arguments.expiresAt=expiresAt;
+ }
+ const actions=new RuntimeGoalActions(()=>{},f.transport);
+ const pending=[];
+ const view=buildNativePlanRevision({actions,run:operation=>{
+  const task=operation();
+  pending.push(task);
+  return task;
+ }});
+ try{
+  await actions.readNativePlans(f.goal);
+  view.update(f.goal,false,false,[]);
+  const text=view.el.find('textarea').find(field=>field.getAttribute('aria-label')==='Texto pending');
+  text.value='explicit revised reply';
+  text.fire('input');
+  const recipient=view.el.find('select').find(field=>field.getAttribute('aria-label')==='Destinatário pending');
+  assert.equal(recipient.disabled,true);
+  const button=view.el.find('button').find(button=>button.textContent==='Rever alterações do plano');
+  button.fire('click');
+  assert.equal(pending.length,1);
+  await pending[0];
+  assert.ok(actions.nativePlanReviews.has(f.goal.id));
+  const [,prepared]=f.calls.find(([action])=>action==='prepare');
+  const operation=prepared.inputs[0].after.operation;
+  assert.equal(operation.operationId,'pet.reply');
+  assert.deepEqual(operation.arguments.source,source);
+  assert.equal(operation.arguments.toPetId,'integration_spotify');
+  assert.equal(operation.arguments.kind,undefined);
+  assert.equal(operation.arguments.expiresAt,expiresAt);
+  assert.equal(operation.arguments.text,'explicit revised reply');
+  assert.match(view.el.textContent,/origem recebida/);
+ }finally{view.dispose();}
 });
 
 test('result review shows exact origin, local scope and source references as text without any approval control',()=>{installFakeDom();const at=Date.now(),p={petId:'ai_ollama',origin:{provider:'ollama',adapter:'ollama',model:'fixture-free',inferenceDestination:{kind:'server',provider:'ollama',endpoint:'http://127.0.0.1:1/v1/chat/completions',model:'fixture-free'},inputHash:'i',intentHash:'intent',completedAt:at-10,recordedAt:at},arguments:{text:'<script>grant root</script>',result:{byteStart:5,byteEnd:9,totalBytes:13,decisionId:'decision',attemptId:'attempt',receiptHash:'receipt'},expiresAt:at+60000},recipient:{name:'Exact local pet',petId:'ai_lmstudio',configurationHash:'exact-config'},receivedMessage:{messageId:'source',origin:{petId:'ai_lmstudio'},deadlineAt:at+60000},memoryReferences:[{id:'selected',revision:7,contentHash:'exact-hash',owner:{petId:'ai_ollama',scope:{kind:'pet'}}}],cause:{taskId:'task',planId:'plan',stepId:'step'},contextHash:'context',proposalHash:'proposal'};const el=resultDisclosureReview(p);assert.match(el.textContent,/fixture-free/);assert.match(el.textContent,/\[5, 9\) de 13/);assert.match(el.textContent,/exact-config/);assert.match(el.textContent,/"revision": 7/);assert.match(el.textContent,/<script>grant root<\/script>/);assert.match(el.textContent,/divulgação continua bloqueada/);assert.equal(el.find('button').length,0);assert.equal(el.find('script').length,0);});

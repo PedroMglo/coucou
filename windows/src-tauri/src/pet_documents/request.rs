@@ -9,13 +9,49 @@ impl Drop for PendingCheck{fn drop(&mut self){if !self.accepted{self.cancel.stor
 struct Stamp{
     size:u64,modified:Option<std::time::SystemTime>,directory:bool,
     #[cfg(unix)] native:(u64,u64,i64,i64,u32,u32,u64),
+    #[cfg(windows)] native:(u64,[u8;16]),
 }
 impl Stamp{
     fn at(path:&str)->Option<Self>{
-        let m=std::fs::symlink_metadata(path).ok()?;if !m.is_file()&&!m.is_dir(){return None;}
+        #[cfg(windows)]
+        let (m, native) = {
+            use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+            use std::os::windows::io::AsRawHandle;
+            use windows::Win32::Foundation::HANDLE;
+            use windows::Win32::Storage::FileSystem::{
+                FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+                FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FileIdInfo,
+                GetFileInformationByHandleEx,
+            };
+
+            let file = std::fs::OpenOptions::new()
+                .access_mode(FILE_READ_ATTRIBUTES.0)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0 | FILE_FLAG_BACKUP_SEMANTICS.0)
+                .open(path)
+                .ok()?;
+            let metadata = file.metadata().ok()?;
+            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+                return None;
+            }
+            let mut identity = FILE_ID_INFO::default();
+            // The metadata and identity describe the same open object even during a rename.
+            unsafe {
+                GetFileInformationByHandleEx(
+                    HANDLE(file.as_raw_handle()),
+                    FileIdInfo,
+                    (&mut identity as *mut FILE_ID_INFO).cast(),
+                    std::mem::size_of::<FILE_ID_INFO>() as u32,
+                )
+            }.ok()?;
+            (metadata, (identity.VolumeSerialNumber, identity.FileId.Identifier))
+        };
+        #[cfg(not(windows))]
+        let m=std::fs::symlink_metadata(path).ok()?;
+        if !m.is_file()&&!m.is_dir(){return None;}
         #[cfg(unix)] use std::os::unix::fs::MetadataExt;
         Some(Self{size:m.len(),modified:m.modified().ok(),directory:m.is_dir(),
             #[cfg(unix)] native:(m.dev(),m.ino(),m.ctime(),m.ctime_nsec(),m.uid(),m.mode(),m.nlink()),
+            #[cfg(windows)] native,
         })
     }
 }
@@ -156,8 +192,22 @@ mod tests{
     }
     #[test]
     fn replacing_a_copied_file_or_redirecting_it_revokes_its_stamp(){
-        let dir=std::env::temp_dir().join(format!("coucou-attachment-stamp-{}",crate::assistant_memory::new_id()));std::fs::create_dir(&dir).unwrap();let path=dir.join("synthetic");std::fs::write(&path,"before").unwrap();let before=Stamp::at(path.to_str().unwrap()).unwrap();
-        std::fs::write(dir.join("next"),"before").unwrap();std::fs::rename(dir.join("next"),&path).unwrap();assert!(Stamp::at(path.to_str().unwrap()).as_ref()!=Some(&before));
+        let dir=std::env::temp_dir().join(format!("coucou-attachment-stamp-{}",crate::assistant_memory::new_id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path=dir.join("synthetic");
+        let next=dir.join("next");
+        let modified=std::time::SystemTime::UNIX_EPOCH+Duration::from_secs(1_700_000_000);
+        for candidate in [&path,&next]{
+            std::fs::write(candidate,b"before").unwrap();
+            let file=std::fs::OpenOptions::new().write(true).open(candidate).unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
+        }
+        let before=Stamp::at(path.to_str().unwrap()).unwrap();
+        std::fs::rename(next,&path).unwrap();
+        let after=Stamp::at(path.to_str().unwrap()).unwrap();
+        assert_eq!(before.size,after.size);
+        assert_eq!(before.modified,after.modified);
+        assert!(before!=after);
         #[cfg(unix)] {std::fs::remove_file(&path).unwrap();std::os::unix::fs::symlink(dir.join("elsewhere"),&path).unwrap();assert!(Stamp::at(path.to_str().unwrap()).is_none());}
         std::fs::remove_dir_all(dir).unwrap();
     }
