@@ -1762,10 +1762,10 @@ mod tests {
     fn inference_pets_on_the_same_backend_keep_their_own_sessions() {
         let chat=Chat::default();
         let gravity=chat.begin_cli("antigravity",Arc::default()).unwrap();let _gravity=chat.lease(&gravity);
-        chat.start_task(&gravity,"query","/tmp","antigravity","fast",None).unwrap();chat.remember_session(&gravity,"gravity-own","/tmp",false);
+        chat.start_task(&gravity,"query",crate::native_test_path!("/tmp"),"antigravity","fast",None).unwrap();chat.remember_session(&gravity,"gravity-own",crate::native_test_path!("/tmp"),false);
         let gemini=chat.begin_cli("gemini-cli",Arc::default()).unwrap();let _gemini=chat.lease(&gemini);
         assert!(gemini.first && gemini.history.is_empty() && gemini.session.is_none());
-        chat.start_task(&gemini,"query","/tmp","antigravity","fast",None).unwrap();chat.remember_session(&gemini,"gemini-own","/tmp",false);
+        chat.start_task(&gemini,"query",crate::native_test_path!("/tmp"),"antigravity","fast",None).unwrap();chat.remember_session(&gemini,"gemini-own",crate::native_test_path!("/tmp"),false);
         assert_eq!(chat.hook_owner("antigravity","gemini-own").as_deref(),Some("gemini-cli"));
         assert_eq!(chat.hook_owner("antigravity","gravity-own").as_deref(),Some("antigravity"));assert!(chat.hook_owner("antigravity","external").is_none());
         assert!(chat.cancel_task(&chat.tasks().into_iter().find(|t|t.provider=="gemini-cli").unwrap().id));
@@ -1783,8 +1783,8 @@ mod tests {
     fn fresh_dialogue_never_cancels_or_detaches_an_active_voice_job() {
         let chat=Chat::default();let mic=Arc::new(AtomicBool::new(false));
         let turn=chat.begin_cli("codex",mic.clone()).unwrap();let _lease=chat.lease(&turn);
-        chat.start_task(&turn,"prepara postgres","/tmp","codex","model",None).unwrap();
-        chat.remember_session(&turn,"owned-voice","/tmp",false);
+        chat.start_task(&turn,"prepara postgres",crate::native_test_path!("/tmp"),"codex","model",None).unwrap();
+        chat.remember_session(&turn,"owned-voice",crate::native_test_path!("/tmp"),false);
         let id=chat.tasks()[0].id.clone();
         assert_eq!(chat.reset_provider("codex").unwrap_err(),BUSY_ERROR);
         assert!(chat.is_current(&turn));assert!(!mic.load(Ordering::Relaxed));
@@ -1799,8 +1799,8 @@ mod tests {
         let _=std::fs::remove_dir_all(&dir);let chat=Chat::persistent(path.clone());
         for phase in ["done","stopped","failed","interrupted"] {
             let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);
-            chat.start_task(&turn,"prepara postgres","/tmp","codex","model",None).unwrap();
-            chat.remember_session(&turn,"owned-thread","/tmp",false);
+            chat.start_task(&turn,"prepara postgres",crate::native_test_path!("/tmp"),"codex","model",None).unwrap();
+            chat.remember_session(&turn,"owned-thread",crate::native_test_path!("/tmp"),false);
             chat.task_update(&turn,phase,"Estado público da tarefa");
             if phase=="done" {chat.commit(&turn,json!({"role":"user","content":"work"}),json!({"role":"assistant","content":"ready"}),"work","ready");}
             drop(lease);chat.reset_provider("codex").unwrap();
@@ -1818,8 +1818,8 @@ mod tests {
     #[test]
     fn hook_owner_requires_the_exact_live_session_and_actual_backend() {
         let chat=Chat::default();let turn=chat.begin_cli("gemini-cli",Arc::default()).unwrap();
-        let lease=chat.lease(&turn);chat.start_task(&turn,"build","/tmp","antigravity","gemini-example",None).unwrap();
-        chat.remember_session(&turn,"owned-1","/tmp",false);
+        let lease=chat.lease(&turn);chat.start_task(&turn,"build",crate::native_test_path!("/tmp"),"antigravity","gemini-example",None).unwrap();
+        chat.remember_session(&turn,"owned-1",crate::native_test_path!("/tmp"),false);
         assert_eq!(chat.hook_owner("antigravity","owned-1").as_deref(),Some("gemini-cli"));
         assert!(chat.hook_owner("codex","owned-1").is_none());assert!(chat.hook_owner("antigravity","external-2").is_none());
         assert!(chat.hook_binding("antigravity","owned-1").is_some_and(|binding|chat.hook_activity_bound(&binding,"approval")));assert_eq!(chat.tasks()[0].phase,"approval");
@@ -1865,12 +1865,12 @@ mod tests {
         let dir=std::env::temp_dir().join(format!("coucou-dialogue-{}",std::process::id()));let path=dir.join("conversations.json");
         let _=std::fs::remove_dir_all(&dir);
         let chat=Chat::persistent(path.clone());let mic=Arc::new(AtomicBool::new(false));let voice=chat.begin_cli("codex",mic.clone()).unwrap();
-        chat.remember_session(&voice,"owned-codex-thread","/tmp/assistant-project",false);
+        chat.remember_session(&voice,"owned-codex-thread",crate::native_test_path!("/tmp/assistant-project"),false);
         chat.commit(&voice,json!({"role":"user","content":"work"}),json!({"role":"assistant","content":"ready"}),"work","ready");
         mic.store(true,Ordering::Relaxed);
         let next=chat.begin_cli("codex",Arc::default()).unwrap();assert!(!next.first);assert_eq!(next.session.unwrap().id,"owned-codex-thread");
         let restored=Chat::persistent(path);assert_eq!(restored.history("codex").len(),2);assert!(restored.history("antigravity").is_empty());
-        let continued=restored.begin_cli("codex",Arc::default()).unwrap();let lease=restored.lease(&continued);assert_eq!(continued.session.as_ref().unwrap().cwd,"/tmp/assistant-project");
+        let continued=restored.begin_cli("codex",Arc::default()).unwrap();let lease=restored.lease(&continued);assert_eq!(continued.session.as_ref().unwrap().cwd,crate::native_test_path!("/tmp/assistant-project"));
         assert!(!continued.cancel.load(Ordering::Relaxed));
         drop(lease);
         restored.reset_provider("codex").unwrap();assert!(Chat::persistent(dir.join("conversations.json")).history("codex").is_empty());
@@ -1902,8 +1902,8 @@ mod tests {
 
     fn failed_task(chat:&Chat,session:Option<&str>,text:&str)->crate::assistant_tasks::Task{
         let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);
-        chat.start_task(&turn,text,"/tmp","codex","fixture",None).unwrap();
-        if let Some(id)=session{chat.remember_session(&turn,id,"/tmp",false);}
+        chat.start_task(&turn,text,crate::native_test_path!("/tmp"),"codex","fixture",None).unwrap();
+        if let Some(id)=session{chat.remember_session(&turn,id,crate::native_test_path!("/tmp"),false);}
         chat.commit(&turn,json!({"role":"user","content":text}),json!({"role":"assistant","content":"synthetic"}),text,"synthetic").unwrap();
         chat.task_update(&turn,"failed","");drop(lease);
         chat.tasks().into_iter().find(|task|task.query==text).unwrap()
@@ -1917,7 +1917,7 @@ mod tests {
 
     fn completion_task(chat:&Chat)->(Turn,TurnLease,String){
         let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);
-        chat.start_task(&turn,"synthetic completion","/tmp","codex","fixture",None).unwrap();
+        chat.start_task(&turn,"synthetic completion",crate::native_test_path!("/tmp"),"codex","fixture",None).unwrap();
         let id=chat.tasks()[0].id.clone();(turn,lease,id)
     }
     fn finish_task(chat:&Chat,turn:&Turn)->Result<String,String>{
@@ -1973,7 +1973,7 @@ mod tests {
         assert_eq!(turn.session.as_ref().unwrap().id,"session-b");
         let text=serde_json::to_string(&turn.history).unwrap();assert!(text.contains("history B"));assert!(!text.contains("history A"));
         assert_eq!(chat.read_conversation("codex",&a).unwrap().messages[0]["content"],"history A");
-        channel.start_task(&turn,"resume","/tmp","codex","fixture",Some(&task.id)).unwrap();
+        channel.start_task(&turn,"resume",crate::native_test_path!("/tmp"),"codex","fixture",Some(&task.id)).unwrap();
         drop(lease);drop(reservation);assert!(chat.reserve_task_resume(&old.id).is_err());
     }
 
@@ -1990,7 +1990,7 @@ mod tests {
         let(task,reservation,changed)=chat.reserve_task_resume(&parent.id).unwrap();assert!(changed);
         let channel=reservation.channel();let turn=channel.begin_cli("codex",Arc::default()).unwrap();let lease=channel.lease(&turn);
         assert_eq!(turn.session.as_ref().unwrap().id,native_b);
-        channel.start_task(&turn,&task.resume_prompt().unwrap(),"/tmp","codex","fixture",Some(&task.id)).unwrap();
+        channel.start_task(&turn,&task.resume_prompt().unwrap(),crate::native_test_path!("/tmp"),"codex","fixture",Some(&task.id)).unwrap();
         let child=chat.tasks().into_iter().find(|row|row.resumes.as_deref()==Some(parent.id.as_str())).unwrap();
         assert!(child.session_id.is_none());assert_eq!(child.conversation_id.as_deref(),Some(b.as_str()));
         // No initialize/session callback occurs before this synthetic restart.
@@ -2081,10 +2081,10 @@ mod tests {
     fn library_migrates_v1_and_keeps_public_dialogues_sessions_and_pet_tasks_across_restore() {
         let dir=std::env::temp_dir().join(format!("coucou-library-{}",crate::assistant_memory::new_id()));std::fs::create_dir_all(&dir).unwrap();
         let path=dir.join("conversations.json");
-        std::fs::write(&path,json!({"version":1,"pets":{"codex":{"messages":[{"role":"user","content":"primeira conversa"},{"role":"assistant","content":"pronto"}],"session":{"id":"owned-first","cwd":"/tmp","full_access":false}}}}).to_string()).unwrap();
+        std::fs::write(&path,json!({"version":1,"pets":{"codex":{"messages":[{"role":"user","content":"primeira conversa"},{"role":"assistant","content":"pronto"}],"session":{"id":"owned-first","cwd":crate::native_test_path!("/tmp"),"full_access":false}}}}).to_string()).unwrap();
         let chat=Chat::persistent(path.clone());let original=chat.conversation("codex").unwrap().id;
         let work=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&work);
-        chat.start_task(&work,"tarefa persistente","/tmp","codex","test",None).unwrap();chat.task_update(&work,"done","resultado");drop(lease);
+        chat.start_task(&work,"tarefa persistente",crate::native_test_path!("/tmp"),"codex","test",None).unwrap();chat.task_update(&work,"done","resultado");drop(lease);
         let task=chat.tasks()[0].id.clone();
         chat.reset_provider("codex").unwrap();let fresh=chat.conversation("codex").unwrap().id;assert_ne!(fresh,original);
         let ollama=chat.begin_cli("ollama",Arc::default()).unwrap();
@@ -2308,7 +2308,7 @@ mod tests {
             let backup = scratch.0.join("preserved-baseline.json");
             std::fs::rename(&path, &backup).unwrap();
             std::fs::create_dir(&path).unwrap(); // Deterministic rename obstruction.
-            let result = chat.start_task(&turn, "synthetic new request", "/tmp", "codex",
+            let result = chat.start_task(&turn, "synthetic new request", crate::native_test_path!("/tmp"), "codex",
                 "fixture", if retry { Some(parent.id.as_str()) } else { None });
             assert!(result.is_err(), "journal failure must refuse task admission");
             assert_eq!(task_transaction_snapshot(&chat), before);
@@ -2337,7 +2337,7 @@ mod tests {
         let turn = channel.begin_cli("codex", Arc::default()).unwrap();
         let lease = channel.lease(&turn);
         assert_eq!(turn.session.as_ref().unwrap().id, "synthetic-session-b");
-        channel.start_task(&turn, "synthetic retry", "/tmp", "codex", "fixture",
+        channel.start_task(&turn, "synthetic retry", crate::native_test_path!("/tmp"), "codex", "fixture",
             Some(&parent.id)).unwrap();
         let child = chat.tasks().into_iter()
             .find(|row| row.resumes.as_deref() == Some(parent.id.as_str())).unwrap();
@@ -2471,7 +2471,7 @@ mod stopped_chat_notice_tests {
 
     fn scope(chat:&Chat,query:&str)->(ExecutionScope,TurnLease){
         let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let lease=chat.lease(&turn);
-        chat.start_task(&turn,query,"/tmp","ollama","synthetic-tools",None).unwrap();
+        chat.start_task(&turn,query,crate::native_test_path!("/tmp"),"ollama","synthetic-tools",None).unwrap();
         let(task_id,cid)=chat.local_task_identity(&turn).unwrap();
         (ExecutionScope{target:crate::session_chat::types::Target{pet_id:"ai_ollama".into(),provider:"ollama".into(),origin:crate::session_chat::types::Origin::Mochi,session_id:cid.clone(),conversation_id:Some(cid)},turn,task_id,model:"synthetic-tools".into(),base:reqwest::Url::parse("http://127.0.0.1:1/").unwrap(),deadline:Instant::now()+Duration::from_secs(10),policy:crate::pet_config::LocalExecution::default(),reasoning_effort:None},lease)
     }
@@ -2541,7 +2541,7 @@ mod stopped_chat_notice_tests {
         let before=chat.inner.lock().unwrap().pets["ollama"].task_notice_id.clone();
         let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let lease=chat.lease(&turn);
         std::fs::remove_file(&path).unwrap();std::fs::create_dir(&path).unwrap();
-        assert!(chat.start_task(&turn,"new unpersisted task","/tmp","ollama","different-model",None).is_err());
+        assert!(chat.start_task(&turn,"new unpersisted task",crate::native_test_path!("/tmp"),"ollama","different-model",None).is_err());
         assert_eq!(chat.inner.lock().unwrap().pets["ollama"].task_notice_id,before);assert_eq!(chat.tasks().len(),1);
         drop(lease);assert_eq!(chat.conversation("ollama").unwrap().task_notice.unwrap().task_id,s.task_id);clean(&path);
     }
@@ -2586,7 +2586,7 @@ mod durable_request_history_tests {
     fn clean(path:&Path){std::fs::remove_dir_all(path.parent().unwrap()).unwrap();}
     fn stopped(chat:&Chat,provider:&str,backend:&str,query:&str)->(String,String){
         let turn=chat.begin_cli(provider,Arc::default()).unwrap();let lease=chat.lease(&turn);
-        chat.start_task(&turn,query,"/tmp",backend,"synthetic-fixture",None).unwrap();
+        chat.start_task(&turn,query,crate::native_test_path!("/tmp"),backend,"synthetic-fixture",None).unwrap();
         let c=chat.inner.lock().unwrap().pets[provider].saved();let id=c.tasks.last().unwrap().id.clone();
         assert!(chat.task_update(&turn,"stopped","factual lifecycle only"));drop(lease);(c.id,id)
     }
@@ -2632,8 +2632,8 @@ mod durable_request_history_tests {
     }
     #[test]fn late_terminal_callback_from_a_cannot_relabel_b(){
         let chat=Chat::default();let a=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&a);
-        chat.start_task(&a,"A","/tmp","codex","fixture",None).unwrap();chat.task_update(&a,"stopped","");drop(lease);
-        let b=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&b);chat.start_task(&b,"B","/tmp","codex","fixture",None).unwrap();
+        chat.start_task(&a,"A",crate::native_test_path!("/tmp"),"codex","fixture",None).unwrap();chat.task_update(&a,"stopped","");drop(lease);
+        let b=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&b);chat.start_task(&b,"B",crate::native_test_path!("/tmp"),"codex","fixture",None).unwrap();
         let before=chat.conversation("codex").unwrap().request_history;
         assert!(!chat.task_update(&a,"failed","late A"));assert_eq!(chat.conversation("codex").unwrap().request_history,before);drop(lease);
     }
@@ -2641,12 +2641,12 @@ mod durable_request_history_tests {
         let path=path();let chat=Chat::persistent(path.clone());stopped(&chat,"ollama","ollama","stored original");
         let turn=chat.begin_cli("ollama",Arc::default()).unwrap();let lease=chat.lease(&turn);let before=chat.conversation("ollama").unwrap().request_history;
         std::fs::remove_file(&path).unwrap();std::fs::create_dir(&path).unwrap();
-        assert!(chat.start_task(&turn,"must not become history","/tmp","ollama","fixture",None).is_err());
+        assert!(chat.start_task(&turn,"must not become history",crate::native_test_path!("/tmp"),"ollama","fixture",None).is_err());
         assert_eq!(chat.conversation("ollama").unwrap().request_history,before);assert_eq!(chat.tasks().len(),1);drop(lease);clean(&path);
     }
     #[test]fn terminal_write_failure_retains_factual_history_and_blocks_reset_until_flush(){
         let path=path();let chat=Chat::persistent(path.clone());let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);
-        chat.start_task(&turn,"stopped despite disk failure","/tmp","codex","fixture",None).unwrap();
+        chat.start_task(&turn,"stopped despite disk failure",crate::native_test_path!("/tmp"),"codex","fixture",None).unwrap();
         std::fs::remove_file(&path).unwrap();std::fs::create_dir(&path).unwrap();
         assert!(chat.task_update(&turn,"stopped",""));drop(lease);
         let view=chat.conversation("codex").unwrap();assert_eq!(view.request_history[0].phase,"stopped");assert!(view.notice.unwrap().contains("guardar"));assert!(chat.reset_provider("codex").is_err());
@@ -2657,14 +2657,14 @@ mod durable_request_history_tests {
         let path=path();let chat=Chat::persistent(path.clone());let query="Original".repeat(900);let(_,id)=stopped(&chat,"ollama","ollama",&query);drop(chat);
         let chat=Chat::persistent(path.clone());let(_,reservation,_)=chat.reserve_task_resume(&id).unwrap();let channel=reservation.channel();
         let turn=channel.begin_cli("ollama",Arc::default()).unwrap();let lease=channel.lease(&turn);
-        channel.start_task(&turn,"resume envelope is not the original request","/tmp","ollama","fixture",Some(&id)).unwrap();
+        channel.start_task(&turn,"resume envelope is not the original request",crate::native_test_path!("/tmp"),"ollama","fixture",Some(&id)).unwrap();
         let view=chat.conversation("ollama").unwrap();assert_eq!(view.request_history.len(),2);assert_eq!(view.request_history[0].phase,"stopped");
         assert_eq!(view.request_history[1].phase,"pending");assert_eq!(view.request_history[1].query,query);assert_ne!(view.request_history[0].task_id,view.request_history[1].task_id);
         assert!(turn.history.is_empty());drop(lease);drop(reservation);clean(&path);
     }
     #[test]fn crash_recovery_works_even_without_a_retained_task(){
         let path=path();let chat=Chat::persistent(path.clone());let turn=chat.begin_cli("codex",Arc::default()).unwrap();let lease=chat.lease(&turn);
-        chat.start_task(&turn,"crash original","/tmp","codex","fixture",None).unwrap();
+        chat.start_task(&turn,"crash original",crate::native_test_path!("/tmp"),"codex","fixture",None).unwrap();
         let mut saved=chat.inner.lock().unwrap().pets["codex"].saved();saved.tasks.clear();saved.task_notice_id=None;
         crate::assistant_memory::save(&path,&crate::assistant_memory::Library{pets:HashMap::from([("codex".into(),saved)]),..Default::default()}).unwrap();
         let restored=Chat::persistent(path.clone());let view=restored.conversation("codex").unwrap();assert!(!view.busy);assert!(restored.tasks().is_empty());
@@ -3055,7 +3055,7 @@ mod process_census_chat_tests {
  fn saved()->Chat{
   let chat=Chat::default();let mut c=Conversation::default();c.identify();
   c.plain=vec![json!({"role":"user","content":"old GitHub question"}),json!({"role":"assistant","content":"old GitHub answer"})];
-  let mut task=crate::assistant_tasks::Task::new(OWNER,"old task","/tmp","codex","model",1);
+  let mut task=crate::assistant_tasks::Task::new(OWNER,"old task",crate::native_test_path!("/tmp"),"codex","model",1);
   task.recover();task.conversation_id=Some(c.id.clone());c.tasks.push(task);
   chat.inner.lock().unwrap().pets.insert(OWNER.into(),c);chat
  }

@@ -266,7 +266,7 @@ mod tests {
             session_id: format!("019a734b-0000-7000-8000-{index:012x}"), conversation_id: None }
     }
     fn add(registry: &mut Registry, index: u64, generation: u64) -> ManagedSession {
-        registry.register(target(index), generation, "/fixture/workspace".into(), Some("fixture-model".into())).unwrap()
+        registry.register(target(index), generation, crate::native_test_path!("/fixture/workspace").into(), Some("fixture-model".into())).unwrap()
     }
     fn entry(registry: &Registry, handle: &str) -> ManagedSession {
         registry.list().into_iter().find(|session| session.handle == handle).unwrap()
@@ -299,10 +299,10 @@ mod tests {
         let mut value = target(1); value.session_id = "not-native-uuid".into(); invalid.push(value);
         for value in invalid {
             let mut registry = Registry::default();
-            assert!(registry.register(value, 1, "/fixture".into(), None).is_err()); assert!(registry.list().is_empty());
+            assert!(registry.register(value, 1, crate::native_test_path!("/fixture").into(), None).is_err()); assert!(registry.list().is_empty());
         }
-        for (generation, cwd, model) in [(0, "/fixture".into(), None), (1, "relative".into(), None),
-            (1, "/fixture".into(), Some("x".repeat(513))), (1, "/fixture".into(), Some("bad\nmodel".into()))] {
+        for (generation, cwd, model) in [(0, crate::native_test_path!("/fixture").into(), None), (1, "relative".into(), None),
+            (1, crate::native_test_path!("/fixture").into(), Some("x".repeat(513))), (1, crate::native_test_path!("/fixture").into(), Some("bad\nmodel".into()))] {
             assert!(Registry::default().register(target(1), generation, cwd, model).is_err());
         }
     }
@@ -322,7 +322,7 @@ mod tests {
         let mut registry = Registry::default();
         let sessions: Vec<_> = (0..16).map(|index| add(&mut registry, index, 1)).collect();
         assert!(registry.ensure_capacity().is_err());
-        assert!(registry.register(target(99), 1, "/fixture".into(), None).is_err());
+        assert!(registry.register(target(99), 1, crate::native_test_path!("/fixture").into(), None).is_err());
         assert_eq!(registry.disconnect(1).len(), 16); assert!(registry.ensure_capacity().is_err());
         registry.release(&sessions[0].handle, &sessions[0].target, 1).unwrap();
         assert!(registry.ensure_capacity().is_ok()); add(&mut registry, 99, 2);
@@ -332,9 +332,9 @@ mod tests {
     #[test]
     fn duplicate_thread_is_never_registered_as_a_new_managed_generation() {
         let mut registry = Registry::default(); let session = add(&mut registry, 1, 1);
-        assert!(registry.register(session.target.clone(), 1, "/fixture".into(), None).is_err());
+        assert!(registry.register(session.target.clone(), 1, crate::native_test_path!("/fixture").into(), None).is_err());
         registry.disconnect(1);
-        assert!(registry.register(session.target, 2, "/fixture".into(), None).is_err());
+        assert!(registry.register(session.target, 2, crate::native_test_path!("/fixture").into(), None).is_err());
         assert_eq!(registry.list().len(), 1);
     }
 
@@ -543,6 +543,7 @@ mod tests {
         assert!(registry.terminal_result(&session.handle, false, Some("x".repeat(2049))).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn terminal_arguments_are_literal_and_reject_invalid_paths_or_thread_ids() {
         let id = target(1).session_id;

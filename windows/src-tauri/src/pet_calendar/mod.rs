@@ -543,6 +543,18 @@ mod linux {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_calendar_has_no_authorized_read(result: Result<Option<Note>, String>) {
+        #[cfg(target_os = "linux")]
+        assert!(result.is_err());
+        #[cfg(not(target_os = "linux"))]
+        {
+            let note = result.unwrap().unwrap();
+            assert!(note.text.contains("runtimeUnavailable"));
+            assert!(note.guard.is_none() && note.query.is_none());
+        }
+    }
+
     #[test]
     fn a_unique_calendar_only_replaces_its_own_entry_and_keeps_other_attachments(){
         let fixture=crate::pet_documents::fixtures::Files::new();let context=fixture.context(&[("calendar.ics","agenda"),("report.pdf","report"),("picture.png","picture")]);
@@ -551,7 +563,7 @@ mod tests {
     #[test]
     fn multiple_calendar_exports_are_not_silently_reduced_to_the_first(){
         let fixture=crate::pet_documents::fixtures::Files::new();let context=fixture.context(&[("a.ics","first"),("b.ics","second"),("c.txt","notes")]);assert!(selected(Some(&context)));assert_eq!(ordinary_context(Some(&context)).unwrap().file_paths().len(),1);
-        let chat=Chat::default();let turn=chat.begin_cli("codex",Default::default()).unwrap();assert!(note(&chat,&turn,Some(&context)).is_err(),"a multi-calendar status cannot bypass the native document grant");
+        let chat=Chat::default();let turn=chat.begin_cli("codex",Default::default()).unwrap();assert_calendar_has_no_authorized_read(note(&chat,&turn,Some(&context)));
     }
     #[test]
     fn no_calendar_means_no_context_io_or_worker_even_for_an_inactive_turn() {
@@ -566,9 +578,9 @@ mod tests {
     fn unselected_or_other_conversation_calendar_is_rejected_before_read() {
         let chat = Chat::default(); let turn = chat.begin_cli("codex", Default::default()).unwrap();
         let context = ChatContext::File { name:"synthetic.ics".into(),path:"/never-authorized.ics".into() };
-        assert!(note(&chat, &turn, Some(&context)).is_err());
+        assert_calendar_has_no_authorized_read(note(&chat, &turn, Some(&context)));
         let mut other = turn.clone(); other.provider = "copilot".into();
-        assert!(note(&chat, &other, Some(&context)).is_err());
+        assert_calendar_has_no_authorized_read(note(&chat, &other, Some(&context)));
         assert!(chat.is_current(&turn));
     }
     #[test]

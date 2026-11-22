@@ -204,7 +204,7 @@ impl<W:Write> Write for Limited<W>{
     use super::*;
     use serde_json::json;
     #[test]fn retains_public_dialogue_and_session_but_never_native_tool_blocks(){
-        let c=public(SavedConversation{messages:vec![json!({"role":"user","content":"Cria o projeto"}),json!({"role":"assistant","content":[{"type":"thinking","text":"private"}]}),json!({"role":"tool","content":"secret arguments"}),json!({"role":"assistant","content":"Concluído"})],session:Some(crate::chat::CliSession{id:"owned".into(),cwd:"/tmp/project".into(),full_access:false}),..Default::default()});
+        let c=public(SavedConversation{messages:vec![json!({"role":"user","content":"Cria o projeto"}),json!({"role":"assistant","content":[{"type":"thinking","text":"private"}]}),json!({"role":"tool","content":"secret arguments"}),json!({"role":"assistant","content":"Concluído"})],session:Some(crate::chat::CliSession{id:"owned".into(),cwd:crate::native_test_path!("/tmp/project").into(),full_access:false}),..Default::default()});
         assert_eq!(c.messages.len(),2);assert_eq!(c.session.unwrap().id,"owned");
         assert!(!serde_json::to_string(&c.messages).unwrap().contains("private"));
     }

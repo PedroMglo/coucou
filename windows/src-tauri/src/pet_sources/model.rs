@@ -110,7 +110,7 @@ pub(super) mod tests{
     use super::*;
     use serde_json::{json,Value};
     pub(crate) fn fixture()->Registry{
-        serde_json::from_value(json!({"version":1,"generation":1,"sources":[{"id":"agenda","revision":1,"kind":"ics","name":"Agenda pessoal","path":"/not-opened-by-metadata/calendar.ics","enabled":true,"owners":[{"petId":"agent_codex","conversationId":"cid-one"}]}]})).unwrap()
+        serde_json::from_value(json!({"version":1,"generation":1,"sources":[{"id":"agenda","revision":1,"kind":"ics","name":"Agenda pessoal","path":crate::native_test_path!("/not-opened-by-metadata/calendar.ics"),"enabled":true,"owners":[{"petId":"agent_codex","conversationId":"cid-one"}]}]})).unwrap()
     }
     #[test]
     fn missing_registry_is_disabled_and_metadata_resolution_has_no_source_io(){
@@ -134,8 +134,8 @@ pub(super) mod tests{
     }
     #[test]
     fn limits_paths_duplicates_and_ambiguous_selection_are_rejected(){
-        for path in ["relative.ics","/tmp/../private.ics","/tmp/./private.ics","/tmp/calendar.pdf","https://example.invalid/calendar.ics","/tmp/a\n.ics"]{let mut v=fixture();v.sources[0].path=path.into();assert!(v.validate().is_err(),"{path}");}
-        let mut v=fixture();v.sources[0].path="/tmp/Export.ICS".into();assert!(v.validate().is_ok());
+        for path in ["relative.ics",crate::native_test_path!("/tmp/../private.ics"),crate::native_test_path!("/tmp/./private.ics"),crate::native_test_path!("/tmp/calendar.pdf"),"https://example.invalid/calendar.ics",crate::native_test_path!("/tmp/a\n.ics")]{let mut v=fixture();v.sources[0].path=path.into();assert!(v.validate().is_err(),"{path}");}
+        let mut v=fixture();v.sources[0].path=crate::native_test_path!("/tmp/Export.ICS").into();assert!(v.validate().is_ok());
         let mut v=fixture();v.sources.push(v.sources[0].clone());assert!(v.validate().is_err());v.sources[1].id="other".into();assert_eq!(v.validate(),Err("ambiguousSourceSelection"));v.sources[1].enabled=false;assert!(v.validate().is_ok());
         let mut v=fixture();let owner=v.sources[0].owners[0].clone();v.sources[0].owners.push(owner);assert!(v.validate().is_err());
         let mut v=fixture();v.sources[0].owners.clear();assert!(v.validate().is_err());v.sources[0].enabled=false;assert!(v.validate().is_ok());

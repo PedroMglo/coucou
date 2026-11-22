@@ -1214,8 +1214,10 @@ mod tests {
             assert!(cmd.ends_with(&format!("--agent antigravity {event}")), "{cmd}");
             if cfg!(target_os="linux") && *event=="PreToolUse" {assert!(cmd.contains("--gravity-pre-tool --relay"));assert_eq!(ours[event][0]["hooks"][0]["timeout"],115);assert!(!cmd.contains("dangerously-skip-permissions"));}
         }
-        // Linux uses the scoped Gravity relay. Windows uses the island card.
-        let pre_tool_timeout = if cfg!(target_os = "linux") { 115 } else { 120 };
+        // round_trip uses the Unix relay; only Linux layers the scoped approval wrapper over it.
+        let pre_tool_timeout = if cfg!(target_os = "linux") { 115 } else { 10 };
+        assert_eq!(antigravity_block(&windows(WIN))["PreToolUse"][0]["hooks"][0]["timeout"],
+            crate::agy_approvals::HOOK_TIMEOUT);
         assert_eq!(ours["PreToolUse"][0]["hooks"][0]["timeout"], pre_tool_timeout);
         assert_eq!(ours["PostToolUse"][0]["hooks"][0]["timeout"], 10);
         // And Settings reads it back as hooks that can wait.

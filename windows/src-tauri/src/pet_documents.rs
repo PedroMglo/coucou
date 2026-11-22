@@ -646,7 +646,7 @@ mod tests {
         let mut state=Store::default();let now=Instant::now();let a=ticket(&mut state,"a-ready","ollama","a",now);let removed=state.finish(&a,"a",file("a.txt")).unwrap();
         let b=ticket(&mut state,"b-ready","ollama","b",now);let kept=state.finish(&b,"b",file("b.txt")).unwrap();let b_fence=state.review_fence("ollama","b").unwrap();let a_fence=state.review_fence("ollama","a").unwrap();
         let _a=ticket(&mut state,"a-pending","ollama","a",now);let b_pending=ticket(&mut state,"b-pending","ollama","b",now);let foreign=ticket(&mut state,"other-pending","codex","a",now);
-        capture(&mut state,"shared-drop",&["/source/shared.txt"],&[("ollama","a"),("openai","x")],now);
+        capture(&mut state,"shared-drop",&[crate::native_test_path!("/source/shared.txt")],&[("ollama","a"),("openai","x")],now);
         assert_eq!(state.forget_conversation("ollama","a").iter().map(|a|&a.id).collect::<Vec<_>>(),vec![&removed.id]);
         assert!(state.contexts("ollama","a").is_empty());assert_eq!(state.contexts("ollama","b")[0].id,kept.id);assert!(!state.pending.contains_key(&("ollama".into(),"a-pending".into())));
         assert!(state.pending.get(&("ollama".into(),"b-pending".into()))==Some(&b_pending));assert!(state.pending.get(&("codex".into(),"other-pending".into()))==Some(&foreign));
@@ -685,34 +685,34 @@ mod tests {
         let mut s=Store::default();let now=Instant::now();let a=ticket(&mut s,"a","ollama","cid",now);let a=s.finish(&a,"cid",file("a.pdf")).unwrap();let reference=a.context_file();
         assert_eq!(s.references("ollama","cid",std::slice::from_ref(&reference)).unwrap()[0].id,a.id);
         assert!(s.references("codex","cid",std::slice::from_ref(&reference)).is_err());assert!(s.references("ollama","other",std::slice::from_ref(&reference)).is_err());assert!(s.references("ollama","cid",&[reference.clone(),reference.clone()]).is_err());
-        for field in ["id","path","sequence"]{let mut changed=reference.clone();match field{"id"=>changed.id="another-id".into(),"path"=>changed.path="/private/not-dropped".into(),_=>changed.sequence+=1};assert!(s.references("ollama","cid",&[changed]).is_err());}
+        for field in ["id","path","sequence"]{let mut changed=reference.clone();match field{"id"=>changed.id="another-id".into(),"path"=>changed.path=crate::native_test_path!("/private/not-dropped").into(),_=>changed.sequence+=1};assert!(s.references("ollama","cid",&[changed]).is_err());}
         let mut changed=reference;changed.name="caller tries to rename the copy".into();assert_eq!(s.references("ollama","cid",&[changed]).unwrap()[0].file.name,"a.pdf");
     }
     #[test]
     fn collection_ipc_requires_exact_item_fields_and_uses_ids_instead_of_bare_paths(){
         use serde_json::json;
-        let valid=json!({"kind":"files","files":[{"id":"fixture-id","name":"file","path":"/inbox/file","sequence":1}]});assert!(serde_json::from_value::<crate::chat::ChatContext>(valid.clone()).is_ok());
+        let valid=json!({"kind":"files","files":[{"id":"fixture-id","name":"file","path":crate::native_test_path!("/inbox/file"),"sequence":1}]});assert!(serde_json::from_value::<crate::chat::ChatContext>(valid.clone()).is_ok());
         for key in ["id","name","path","sequence"]{let mut value=valid.clone();value["files"][0].as_object_mut().unwrap().remove(key);assert!(serde_json::from_value::<crate::chat::ChatContext>(value).is_err(),"{key}");}
         let mut value=valid;value["files"][0]["permission"]=json!("always");assert!(serde_json::from_value::<crate::chat::ChatContext>(value).is_err());
     }
-    fn file(name: &str) -> crate::files::DroppedFile { crate::files::DroppedFile { name: name.into(), path: format!("/inbox/{name}"), size: 1, kind: "file".into(), entries: 1 } }
+    fn file(name: &str) -> crate::files::DroppedFile { crate::files::DroppedFile { name: name.into(), path: format!("{}{name}", crate::native_test_path!("/inbox/")), size: 1, kind: "file".into(), entries: 1 } }
     fn capture(s: &mut Store, token: &str, paths: &[&str], owners: &[(&str, &str)], now: Instant) {
         let providers = owners.iter().map(|(p, _)| (*p).into()).collect::<Vec<_>>();
         let capture = s.prepare_capture(&providers, now).unwrap();
         s.finish_capture(capture, token.into(), paths.iter().map(|p| (*p).into()).collect(), owners.iter().map(|(p, id)| ((*p).into(), (*id).into())).collect(), now).unwrap();
     }
     fn ticket(s: &mut Store, token: &str, provider: &str, id: &str, now: Instant) -> Ticket {
-        capture(s, token, &["/source/document.pdf"], &[(provider, id)], now);
-        s.claim(token, provider, "/source/document.pdf", Some(id), id, now).unwrap()
+        capture(s, token, &[crate::native_test_path!("/source/document.pdf")], &[(provider, id)], now);
+        s.claim(token, provider, crate::native_test_path!("/source/document.pdf"), Some(id), id, now).unwrap()
     }
 
     #[test]
     fn reset_before_ingest_revokes_the_old_drop_even_after_restoring_the_same_id() {
         let mut s = Store::default(); let now = Instant::now();
-        capture(&mut s, "a", &["/source/a.pdf"], &[("ollama", "old"), ("codex", "other")], now);
+        capture(&mut s, "a", &[crate::native_test_path!("/source/a.pdf")], &[("ollama", "old"), ("codex", "other")], now);
         s.invalidate(Some("ollama"));
-        assert!(s.claim("a", "ollama", "/source/a.pdf", Some("old"), "old", now).is_err());
-        assert!(s.claim("a", "codex", "/source/a.pdf", Some("other"), "other", now).is_ok());
+        assert!(s.claim("a", "ollama", crate::native_test_path!("/source/a.pdf"), Some("old"), "old", now).is_err());
+        assert!(s.claim("a", "codex", crate::native_test_path!("/source/a.pdf"), Some("other"), "other", now).is_ok());
     }
 
     #[test]
@@ -721,9 +721,9 @@ mod tests {
         let pending = s.prepare_capture(&["ollama".into()], now).unwrap();
         let owners = BTreeMap::from([("ollama".into(), "at-release".into())]);
         assert!(s.drops.is_empty());
-        assert!(s.claim("pending", "ollama", "/source/a.pdf", Some("at-release"), "at-release", now).is_err());
-        s.finish_capture(pending, "completed".into(), vec!["/source/a.pdf".into()], owners, now).unwrap();
-        assert!(s.claim("completed", "ollama", "/source/a.pdf", Some("later-conversation"), "later-conversation", now).is_err());
+        assert!(s.claim("pending", "ollama", crate::native_test_path!("/source/a.pdf"), Some("at-release"), "at-release", now).is_err());
+        s.finish_capture(pending, "completed".into(), vec![crate::native_test_path!("/source/a.pdf").into()], owners, now).unwrap();
+        assert!(s.claim("completed", "ollama", crate::native_test_path!("/source/a.pdf"), Some("later-conversation"), "later-conversation", now).is_err());
         assert!(s.drops.is_empty());
         assert!(s.context("ollama", "later-conversation").is_none());
     }
@@ -734,7 +734,7 @@ mod tests {
         let pending = s.prepare_capture(&["ollama".into()], now).unwrap();
         let owners = BTreeMap::from([("ollama".into(), "at-release".into())]);
         s.invalidate(Some("ollama"));
-        assert!(s.finish_capture(pending, "completed".into(), vec!["/source/a.pdf".into()], owners, now).is_err());
+        assert!(s.finish_capture(pending, "completed".into(), vec![crate::native_test_path!("/source/a.pdf").into()], owners, now).is_err());
         assert!(s.drops.is_empty());
         assert!(s.pending.is_empty());
         assert!(s.context("ollama", "at-release").is_none());
@@ -745,7 +745,7 @@ mod tests {
         let mut s = Store::default(); let now = Instant::now();
         let pending = s.prepare_capture(&["ollama".into()], now).unwrap();
         let owners = BTreeMap::from([("ollama".into(), "at-release".into())]);
-        assert!(s.finish_capture(pending, "completed".into(), vec!["/source/a.pdf".into()], owners, now + DROP_TTL).is_err());
+        assert!(s.finish_capture(pending, "completed".into(), vec![crate::native_test_path!("/source/a.pdf").into()], owners, now + DROP_TTL).is_err());
         assert!(s.drops.is_empty());
     }
 
@@ -755,12 +755,12 @@ mod tests {
         let providers = vec!["ollama".into(), "codex".into()];
         let pending = s.prepare_capture(&providers, now).unwrap();
         s.invalidate(Some("ollama"));
-        s.finish_capture(pending, "a".into(), vec!["/source/a".into()], BTreeMap::from([("ollama".into(), "same".into()), ("codex".into(), "other".into())]), now).unwrap();
+        s.finish_capture(pending, "a".into(), vec![crate::native_test_path!("/source/a").into()], BTreeMap::from([("ollama".into(), "same".into()), ("codex".into(), "other".into())]), now).unwrap();
         assert!(!s.drops["a"].owners.contains_key("ollama"));
         assert!(s.drops["a"].owners.contains_key("codex"));
         let pending = s.prepare_capture(&providers, now).unwrap();
         s.invalidate(None);
-        assert!(s.finish_capture(pending, "b".into(), vec!["/source/a".into()], BTreeMap::from([("codex".into(), "other".into())]), now).is_err());
+        assert!(s.finish_capture(pending, "b".into(), vec![crate::native_test_path!("/source/a").into()], BTreeMap::from([("codex".into(), "other".into())]), now).is_err());
     }
 
     #[test]
@@ -777,11 +777,11 @@ mod tests {
     #[test]
     fn reverse_ipc_order_preserves_both_drops_in_native_capture_order() {
         let mut s = Store::default(); let now = Instant::now();
-        capture(&mut s, "a", &["/source/same.pdf"], &[("ollama", "one")], now);
-        capture(&mut s, "b", &["/source/same.pdf"], &[("ollama", "one")], now);
-        let b = s.claim("b", "ollama", "/source/same.pdf", None, "one", now).unwrap();
+        capture(&mut s, "a", &[crate::native_test_path!("/source/same.pdf")], &[("ollama", "one")], now);
+        capture(&mut s, "b", &[crate::native_test_path!("/source/same.pdf")], &[("ollama", "one")], now);
+        let b = s.claim("b", "ollama", crate::native_test_path!("/source/same.pdf"), None, "one", now).unwrap();
         s.finish(&b, "one", file("b.pdf")).unwrap();
-        let a=s.claim("a", "ollama", "/source/same.pdf", None, "one", now).unwrap();s.finish(&a,"one",file("a.pdf")).unwrap();
+        let a=s.claim("a", "ollama", crate::native_test_path!("/source/same.pdf"), None, "one", now).unwrap();s.finish(&a,"one",file("a.pdf")).unwrap();
         assert_eq!(s.contexts("ollama","one").len(),2);
         assert_eq!(s.context("ollama", "one").unwrap().sequence, b.sequence);
     }
@@ -790,7 +790,7 @@ mod tests {
     fn the_same_path_needs_distinct_one_use_tokens() {
         let mut s = Store::default(); let now = Instant::now();
         let a = ticket(&mut s, "a", "ollama", "one", now);
-        assert!(s.claim("a", "ollama", "/source/document.pdf", None, "one", now).is_err());
+        assert!(s.claim("a", "ollama", crate::native_test_path!("/source/document.pdf"), None, "one", now).is_err());
         let b = ticket(&mut s, "b", "ollama", "one", now);
         assert!(b.sequence > a.sequence);
         assert_ne!(b.drop_id, a.drop_id);
@@ -799,33 +799,33 @@ mod tests {
     #[test]
     fn a_claim_consumes_the_entire_drop_and_requires_exact_path_owner_and_conversation() {
         let mut s = Store::default(); let now = Instant::now();
-        capture(&mut s, "a", &["/source/a.pdf", "/source/b.pdf"], &[("ollama", "one")], now);
-        for (provider, path) in [("codex", "/source/a.pdf"), ("ollama", "/source/../source/a.pdf"), ("ollama", "/private/key"), ("ollama", "/source//a.pdf")] {
+        capture(&mut s, "a", &[crate::native_test_path!("/source/a.pdf"), crate::native_test_path!("/source/b.pdf")], &[("ollama", "one")], now);
+        for (provider, path) in [("codex", crate::native_test_path!("/source/a.pdf")), ("ollama", crate::native_test_path!("/source/../source/a.pdf")), ("ollama", crate::native_test_path!("/private/key")), ("ollama", crate::native_test_path!("/source//a.pdf"))] {
             assert!(s.claim("a", provider, path, Some("one"), "one", now).is_err());
         }
         assert!(s.drops.contains_key("a"));
-        s.claim("a", "ollama", "/source/a.pdf", Some("one"), "one", now).unwrap();
-        assert!(s.claim("a", "ollama", "/source/b.pdf", None, "one", now).is_err());
-        capture(&mut s, "b", &["/source/a.pdf"], &[("ollama", "one")], now);
-        assert!(s.claim("b", "ollama", "/source/a.pdf", Some("other"), "one", now).is_err());
+        s.claim("a", "ollama", crate::native_test_path!("/source/a.pdf"), Some("one"), "one", now).unwrap();
+        assert!(s.claim("a", "ollama", crate::native_test_path!("/source/b.pdf"), None, "one", now).is_err());
+        capture(&mut s, "b", &[crate::native_test_path!("/source/a.pdf")], &[("ollama", "one")], now);
+        assert!(s.claim("b", "ollama", crate::native_test_path!("/source/a.pdf"), Some("other"), "one", now).is_err());
         assert!(!s.drops.contains_key("b"));
-        capture(&mut s, "c", &["/source/a.pdf"], &[("ollama", "one")], now);
-        assert!(s.claim("c", "ollama", "/source/a.pdf", None, "other", now).is_err());
+        capture(&mut s, "c", &[crate::native_test_path!("/source/a.pdf")], &[("ollama", "one")], now);
+        assert!(s.claim("c", "ollama", crate::native_test_path!("/source/a.pdf"), None, "other", now).is_err());
     }
 
     #[test]
     fn expiry_and_limits_are_explicit_without_evicting_a_live_grant() {
         let mut s = Store::default(); let now = Instant::now();
-        for i in 0..MAX_DROPS { capture(&mut s, &format!("{i}"), &["/source/a"], &[("ollama", "one")], now); }
+        for i in 0..MAX_DROPS { capture(&mut s, &format!("{i}"), &[crate::native_test_path!("/source/a")], &[("ollama", "one")], now); }
         assert!(s.prepare_capture(&["ollama".into()], now).is_err());
         assert_eq!(s.drops.len(), MAX_DROPS);
-        assert!(s.claim("0", "ollama", "/source/a", None, "one", now + DROP_TTL).is_err());
+        assert!(s.claim("0", "ollama", crate::native_test_path!("/source/a"), None, "one", now + DROP_TTL).is_err());
         assert!(s.drops.is_empty());
         assert!(s.prepare_capture(&["ollama".into()], now + DROP_TTL).is_ok());
-        assert!(validate_paths(&vec!["/source/a".into(); MAX_PATHS + 1]).is_err());
-        assert!(validate_paths(&[format!("/{}", "a".repeat(MAX_PATH_BYTES))]).is_err());
-        assert!(validate_paths(&vec![format!("/{}", "a".repeat(MAX_PATH_BYTES - 1)); MAX_PATHS]).is_err());
-        for path in ["relative", "/source/../a", "/source/./a", "/source/a\0b", "/source/a\nb"] { assert!(validate_paths(&[path.into()]).is_err()); }
+        assert!(validate_paths(&vec![crate::native_test_path!("/source/a").into(); MAX_PATHS + 1]).is_err());
+        assert!(validate_paths(&[format!("{}{}", crate::native_test_path!("/"), "a".repeat(MAX_PATH_BYTES))]).is_err());
+        assert!(validate_paths(&vec![format!("{}{}", crate::native_test_path!("/"), "a".repeat(MAX_PATH_BYTES - 1)); MAX_PATHS]).is_err());
+        for path in ["relative", crate::native_test_path!("/source/../a"), crate::native_test_path!("/source/./a"), crate::native_test_path!("/source/a\0b"), crate::native_test_path!("/source/a\nb")] { assert!(validate_paths(&[path.into()]).is_err()); }
     }
 
     #[test]
@@ -854,7 +854,7 @@ mod tests {
         assert!(s.validate("ollama", "one", &a.file.path, a.sequence).is_ok());
         assert!(s.validate("codex", "one", &a.file.path, a.sequence).is_err());
         assert!(s.validate("ollama", "other", &a.file.path, a.sequence).is_err());
-        assert!(s.validate("ollama", "one", "/inbox/other.pdf", a.sequence).is_err());
+        assert!(s.validate("ollama", "one", crate::native_test_path!("/inbox/other.pdf"), a.sequence).is_err());
         assert!(s.validate("ollama", "one", &a.file.path, a.sequence + 1).is_err());
         assert!(!s.clear("codex", "one", a.sequence));
         assert!(!s.clear("ollama", "one", a.sequence + 1));
@@ -874,11 +874,11 @@ mod tests {
     #[test]
     fn cancel_before_ingest_revokes_only_that_owner_and_cannot_reappear() {
         let mut s = Store::default(); let now = Instant::now();
-        capture(&mut s, "a", &["/source/a"], &[("ollama", "one"), ("codex", "other")], now);
+        capture(&mut s, "a", &[crate::native_test_path!("/source/a")], &[("ollama", "one"), ("codex", "other")], now);
         assert!(s.cancel_drop("ollama", "a"));
         assert!(!s.cancel_drop("ollama", "a"));
-        assert!(s.claim("a", "ollama", "/source/a", None, "one", now).is_err());
-        assert!(s.claim("a", "codex", "/source/a", None, "other", now).is_ok());
+        assert!(s.claim("a", "ollama", crate::native_test_path!("/source/a"), None, "one", now).is_err());
+        assert!(s.claim("a", "codex", crate::native_test_path!("/source/a"), None, "other", now).is_ok());
     }
 
     #[test]
@@ -919,9 +919,9 @@ mod tests {
 
     #[test]
     fn a_batch_claim_uses_only_the_complete_native_drop_paths_and_original_owner(){
-        let mut s=Store::default();let now=Instant::now();capture(&mut s,"batch",&["/source/a.pdf","/source/folder"],&[("ollama","one")],now);
+        let mut s=Store::default();let now=Instant::now();capture(&mut s,"batch",&[crate::native_test_path!("/source/a.pdf"),crate::native_test_path!("/source/folder")],&[("ollama","one")],now);
         assert!(s.claim_paths("batch","codex",None,Some("one"),"one",now).is_err());assert!(s.drops.contains_key("batch"));
-        let batch=s.claim_paths("batch","ollama",None,Some("one"),"one",now).unwrap();assert_eq!(batch.paths,["/source/a.pdf","/source/folder"]);assert!(s.claim_paths("batch","ollama",None,None,"one",now).is_err());
+        let batch=s.claim_paths("batch","ollama",None,Some("one"),"one",now).unwrap();assert_eq!(batch.paths,[crate::native_test_path!("/source/a.pdf"),crate::native_test_path!("/source/folder")]);assert!(s.claim_paths("batch","ollama",None,None,"one",now).is_err());
         let mut folder=file("folder");folder.kind="folder".into();folder.entries=3;
         let added=s.finish_batch(&batch,"one",vec![file("a.pdf"),folder]).unwrap();assert_eq!(added.len(),2);assert_ne!(added[0].id,added[1].id);assert!(added.iter().all(|a|crate::assistant_memory::valid_id(&a.id)));assert_eq!(added[1].file.kind,"folder");
         assert_eq!(s.contexts("ollama","one").len(),2);assert!(s.finish_batch(&batch,"one",vec![file("replay.pdf")]).is_err());
@@ -929,7 +929,7 @@ mod tests {
 
     #[test]
     fn an_item_can_be_removed_without_clearing_other_items_in_the_same_drop(){
-        let mut s=Store::default();let now=Instant::now();capture(&mut s,"batch",&["/source/a","/source/b"],&[("ollama","one")],now);
+        let mut s=Store::default();let now=Instant::now();capture(&mut s,"batch",&[crate::native_test_path!("/source/a"),crate::native_test_path!("/source/b")],&[("ollama","one")],now);
         let batch=s.claim_paths("batch","ollama",None,None,"one",now).unwrap();let added=s.finish_batch(&batch,"one",vec![file("a.pdf"),file("b.pdf")]).unwrap();
         assert!(!s.remove("codex","one",&added[0].id));assert!(!s.remove("ollama","other",&added[0].id));assert!(s.remove("ollama","one",&added[0].id));assert!(!s.remove("ollama","one",&added[0].id));
         assert!(s.validate("ollama","one",&added[0].file.path,added[0].sequence).is_err());assert!(s.validate("ollama","one",&added[1].file.path,added[1].sequence).is_ok());assert_eq!(s.contexts("ollama","one").len(),1);
@@ -951,8 +951,8 @@ mod tests {
 
     #[test]
     fn conversation_capacity_reserves_pending_items_without_evicting_ready_items(){
-        let mut s=Store::default();let now=Instant::now();let paths=(0..MAX_CONVERSATION_ATTACHMENTS).map(|i|format!("/source/{i}")).collect::<Vec<_>>();let refs=paths.iter().map(String::as_str).collect::<Vec<_>>();capture(&mut s,"full",&refs,&[("ollama","one")],now);
-        let full=s.claim_paths("full","ollama",None,None,"one",now).unwrap();capture(&mut s,"extra",&["/source/extra"],&[("ollama","one")],now);assert!(s.claim_paths("extra","ollama",None,None,"one",now).is_err());assert!(s.drops.contains_key("extra"));
+        let mut s=Store::default();let now=Instant::now();let paths=(0..MAX_CONVERSATION_ATTACHMENTS).map(|i|format!("{}{i}", crate::native_test_path!("/source/"))).collect::<Vec<_>>();let refs=paths.iter().map(String::as_str).collect::<Vec<_>>();capture(&mut s,"full",&refs,&[("ollama","one")],now);
+        let full=s.claim_paths("full","ollama",None,None,"one",now).unwrap();capture(&mut s,"extra",&[crate::native_test_path!("/source/extra")],&[("ollama","one")],now);assert!(s.claim_paths("extra","ollama",None,None,"one",now).is_err());assert!(s.drops.contains_key("extra"));
         let added=s.finish_batch(&full,"one",(0..MAX_CONVERSATION_ATTACHMENTS).map(|i|file(&format!("{i}.pdf"))).collect()).unwrap();assert!(s.claim_paths("extra","ollama",None,None,"one",now).is_err());assert_eq!(s.contexts("ollama","one").len(),MAX_CONVERSATION_ATTACHMENTS);
         assert!(s.remove("ollama","one",&added[0].id));let extra=s.claim_paths("extra","ollama",None,None,"one",now).unwrap();s.finish(&extra,"one",file("extra.pdf")).unwrap();assert_eq!(s.contexts("ollama","one").len(),MAX_CONVERSATION_ATTACHMENTS);
     }
@@ -966,16 +966,16 @@ mod tests {
 
     #[test]
     fn a_batch_cannot_publish_any_item_after_reset_or_in_another_conversation(){
-        let mut s=Store::default();let now=Instant::now();capture(&mut s,"a",&["/source/a","/source/b"],&[("ollama","one")],now);let a=s.claim_paths("a","ollama",None,None,"one",now).unwrap();
+        let mut s=Store::default();let now=Instant::now();capture(&mut s,"a",&[crate::native_test_path!("/source/a"),crate::native_test_path!("/source/b")],&[("ollama","one")],now);let a=s.claim_paths("a","ollama",None,None,"one",now).unwrap();
         assert!(s.finish_batch(&a,"other",vec![file("a"),file("b")]).is_err());assert!(s.finish_batch(&a,"one",vec![file("a"),file("b")]).is_err());assert!(s.contexts("ollama","one").is_empty());assert!(s.contexts("ollama","other").is_empty());
         let b=ticket(&mut s,"b","ollama","one",now);s.invalidate(Some("ollama"));assert!(s.finish(&b,"one",file("b")).is_err());
     }
 
     #[test]
     fn global_attachment_capacity_is_counted_per_item_across_owners(){
-        let mut s=Store::default();let now=Instant::now();let paths=(0..32).map(|i|format!("/source/{i}")).collect::<Vec<_>>();let refs=paths.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut s=Store::default();let now=Instant::now();let paths=(0..32).map(|i|format!("{}{i}", crate::native_test_path!("/source/"))).collect::<Vec<_>>();let refs=paths.iter().map(String::as_str).collect::<Vec<_>>();
         for (i,provider) in ["codex","copilot","antigravity","ollama"].iter().enumerate(){let token=format!("batch{i}");capture(&mut s,&token,&refs,&[(provider,"cid")],now);let ticket=s.claim_paths(&token,provider,None,None,"cid",now).unwrap();s.finish_batch(&ticket,"cid",(0..32).map(|i|file(&format!("{i}.pdf"))).collect()).unwrap();}
-        capture(&mut s,"extra",&["/source/extra"],&[("lmstudio","cid")],now);assert!(s.claim_paths("extra","lmstudio",None,None,"cid",now).is_err());assert_eq!(s.files.values().map(Vec::len).sum::<usize>(),MAX_ATTACHMENTS);
+        capture(&mut s,"extra",&[crate::native_test_path!("/source/extra")],&[("lmstudio","cid")],now);assert!(s.claim_paths("extra","lmstudio",None,None,"cid",now).is_err());assert_eq!(s.files.values().map(Vec::len).sum::<usize>(),MAX_ATTACHMENTS);
     }
 
     #[test]
@@ -986,7 +986,7 @@ mod tests {
 
     #[test]
     fn partial_batch_success_appends_only_received_items_without_replacing_old_ones(){
-        let mut s=Store::default();let now=Instant::now();let old=ticket(&mut s,"old","ollama","cid",now);let old=s.finish(&old,"cid",file("old.pdf")).unwrap();capture(&mut s,"batch",&["/source/good","/source/fails"],&[("ollama","cid")],now);
+        let mut s=Store::default();let now=Instant::now();let old=ticket(&mut s,"old","ollama","cid",now);let old=s.finish(&old,"cid",file("old.pdf")).unwrap();capture(&mut s,"batch",&[crate::native_test_path!("/source/good"),crate::native_test_path!("/source/fails")],&[("ollama","cid")],now);
         let batch=s.claim_paths("batch","ollama",None,None,"cid",now).unwrap();let received=s.finish_batch(&batch,"cid",vec![file("good.pdf")]).unwrap();assert_eq!(received.len(),1);assert_eq!(s.contexts("ollama","cid").len(),2);assert!(s.validate("ollama","cid",&old.file.path,old.sequence).is_ok());
     }
 

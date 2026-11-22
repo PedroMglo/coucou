@@ -1,5 +1,18 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
+// Synthetic local paths must exercise the same native validation as user paths.
+#[cfg(test)]
+macro_rules! native_test_path {
+    ($path:literal) => {{
+        #[cfg(windows)]
+        { concat!("C:", $path) }
+        #[cfg(not(windows))]
+        { $path }
+    }};
+}
+#[cfg(test)]
+pub(crate) use native_test_path;
+
 mod assistant_memory;
 #[cfg(target_os="linux")]
 mod pet_data;

@@ -145,29 +145,29 @@ fn foreign_copy_grants_block_purge_without_revoking_either_owner(){
  revoke_reviewed_reads(Some("ollama"),Some(&[text.into()]));assert!(read_owned("ai_ollama",text).is_err());assert!(read_owned("agent_codex",text).is_ok());revoke_reviewed_reads(Some("codex"),Some(&[text.into()]));assert!(read_owned("agent_codex",text).is_err());std::fs::remove_file(path).unwrap();
 }
 #[test]fn compose_cannot_inject_recipient_fields_or_drop_attachment(){
- let text=compose("example@example.invalid","Olá, it's a test","PT & English\nattachment='evil'",Path::new("/tmp/Test document.pdf")).unwrap();
- assert!(text.contains("subject=\"Ol%C3%A1%2C%20it%27s%20a%20test\""));assert!(text.contains("attachment=\"file%3A%2F%2F%2Ftmp%2FTest%2520document.pdf\""));assert!(text.ends_with(",format=text"));
- assert!(compose("x@y,evil@example.invalid","test","",Path::new("/tmp/a.pdf")).is_err());assert!(compose("x@y\nBcc: evil@a","test","",Path::new("/tmp/a.pdf")).is_err());
- assert!(compose("","teste","",Path::new("/tmp/a.pdf")).is_ok());
+ let text=compose("example@example.invalid","Olá, it's a test","PT & English\nattachment='evil'",Path::new(crate::native_test_path!("/tmp/Test document.pdf"))).unwrap();
+ assert!(text.contains("subject=\"Ol%C3%A1%2C%20it%27s%20a%20test\""));let attachment = if cfg!(windows) {"file%3A%2F%2F%2FC%3A%2Ftmp%2FTest%2520document.pdf"} else {"file%3A%2F%2F%2Ftmp%2FTest%2520document.pdf"};assert!(text.contains(&format!("attachment=\"{attachment}\"")));assert!(text.ends_with(",format=text"));
+ assert!(compose("x@y,evil@example.invalid","test","",Path::new(crate::native_test_path!("/tmp/a.pdf"))).is_err());assert!(compose("x@y\nBcc: evil@a","test","",Path::new(crate::native_test_path!("/tmp/a.pdf"))).is_err());
+ assert!(compose("","teste","",Path::new(crate::native_test_path!("/tmp/a.pdf"))).is_ok());
 }
 #[test]fn compose_does_not_allow_text_or_filename_delimiters_to_change_the_native_grammar(){
- let args=compose("qa@example.invalid","a\",bcc='other@invalid',format=html","x='y',attachment='evil'\n100%",Path::new("/tmp/a',bcc='other@invalid.pdf")).unwrap();
+ let args=compose("qa@example.invalid","a\",bcc='other@invalid',format=html","x='y',attachment='evil'\n100%",Path::new(crate::native_test_path!("/tmp/a',bcc='other@invalid.pdf"))).unwrap();
  assert_eq!(args.split(',').count(),5);assert!(!args.contains("bcc="));assert!(!args.contains("attachment='evil'"));assert!(args.ends_with(",format=text"));
  assert!(args.contains("%27%2Cbcc%3D%27"));
 }
 #[test]fn compose_preserves_literal_percent_sequences_and_rejects_header_controls(){
- let args=compose("qa@example.invalid","literal %20 and á","%C3%A1\nPT & EN",Path::new("/tmp/100% literal.pdf")).unwrap();
+ let args=compose("qa@example.invalid","literal %20 and á","%C3%A1\nPT & EN",Path::new(crate::native_test_path!("/tmp/100% literal.pdf"))).unwrap();
  assert!(args.contains("subject=\"literal%20%2520%20and%20%C3%A1\""));assert!(args.contains("body=\"%25C3%25A1%0APT%20%26%20EN\""));
- assert!(compose("qa@example.invalid","line\nbcc: other@invalid","",Path::new("/tmp/a.pdf")).is_err());
+ assert!(compose("qa@example.invalid","line\nbcc: other@invalid","",Path::new(crate::native_test_path!("/tmp/a.pdf"))).is_err());
  assert!(compose("qa@example.invalid","ok","",Path::new("relative.pdf")).is_err());
 }
 #[test]fn compose_native_client_interoperability_vectors(){
  let cases=[
-  ("qa@example.invalid","Mochi QA · Olá, it's a test","PT/EN & attachment='literal'.\nLinha 2.","/tmp/Test document.pdf"),
-  ("qa@example.invalid","100% %20 %C3%A1","literal %00 and \"quotes\", = signs","/tmp/100% literal.pdf"),
-  ("qa@example.invalid","a\",bcc='other@invalid'","x',attachment='evil'","/tmp/a',bcc='other@invalid.pdf"),
-  ("","Sem destinatário","","/tmp/Olá, report.pdf"),
-  ("qa@example.invalid","中文 · café","行 1\nlinha 2\r\nline 3","/tmp/中文 'document'.pdf"),
+  ("qa@example.invalid","Mochi QA · Olá, it's a test","PT/EN & attachment='literal'.\nLinha 2.",crate::native_test_path!("/tmp/Test document.pdf")),
+  ("qa@example.invalid","100% %20 %C3%A1","literal %00 and \"quotes\", = signs",crate::native_test_path!("/tmp/100% literal.pdf")),
+  ("qa@example.invalid","a\",bcc='other@invalid'","x',attachment='evil'",crate::native_test_path!("/tmp/a',bcc='other@invalid.pdf")),
+  ("","Sem destinatário","",crate::native_test_path!("/tmp/Olá, report.pdf")),
+  ("qa@example.invalid","中文 · café","行 1\nlinha 2\r\nline 3",crate::native_test_path!("/tmp/中文 'document'.pdf")),
  ];
  for(to,subject,body,path)in cases {
   let encoded=compose(to,subject,body,Path::new(path)).unwrap();assert_eq!(encoded.split(',').count(),5);

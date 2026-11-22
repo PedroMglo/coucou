@@ -2,14 +2,14 @@ use super::*;
 use serde_json::json;
 const A:&str="11111111-1111-1111-1111-111111111111";
 const B:&str="22222222-2222-2222-2222-222222222222";
-fn update(id:&str)->Value{json!({"method":"thread/settings/updated","params":{"threadId":id,"threadSettings":{"approvalPolicy":"on-request","approvalsReviewer":"user","sandboxPolicy":{"type":"workspaceWrite","writableRoots":["/fixture/repo"]},"cwd":"/fixture/repo","model":"not-exported","collaborationMode":{"settings":{"developer_instructions":"PRIVATE INSTRUCTIONS"}}}}})}
+fn update(id:&str)->Value{json!({"method":"thread/settings/updated","params":{"threadId":id,"threadSettings":{"approvalPolicy":"on-request","approvalsReviewer":"user","sandboxPolicy":{"type":"workspaceWrite","writableRoots":[crate::native_test_path!("/fixture/repo")]},"cwd":crate::native_test_path!("/fixture/repo"),"model":"not-exported","collaborationMode":{"settings":{"developer_instructions":"PRIVATE INSTRUCTIONS"}}}}})}
 #[test]fn missing_or_invalid_identity_is_unknown_instead_of_default_permission(){
  let c=Cache::default();let s=c.snapshot(A,100,30);assert_eq!(s.reason,Some(Reason::NotObserved));assert!(s.stale);assert!(s.last_observed.is_none());
  for id in ["","latest","00000000-0000-0000-0000-000000000000","../../session"]{assert_eq!(c.snapshot(id,100,30).reason,Some(Reason::InvalidThread));}
 }
 #[test]fn valid_notification_retains_only_permission_projection_and_a_bounded_marker(){
  let mut c=Cache::default();let marker=c.event(&update(A),100).unwrap();let s=c.snapshot(A,100,30);
- assert!(!s.stale);assert_eq!(s.reason,None);assert_eq!(s.observed_at,Some(100));assert_eq!(s.sequence,Some(1));let settings=s.last_observed.unwrap();assert_eq!(settings.approval_policy,ApprovalPolicy::OnRequest);assert_eq!(settings.cwd,"/fixture/repo");
+ assert!(!s.stale);assert_eq!(s.reason,None);assert_eq!(s.observed_at,Some(100));assert_eq!(s.sequence,Some(1));let settings=s.last_observed.unwrap();assert_eq!(settings.approval_policy,ApprovalPolicy::OnRequest);assert_eq!(settings.cwd,crate::native_test_path!("/fixture/repo"));
  let public=marker.to_string();assert_eq!(marker["method"],"mochi/threadSettingsObserved");assert_eq!(marker["params"]["threadId"],A);assert_eq!(marker["params"]["observationOnly"],true);
  assert!(!public.contains("PRIVATE"));assert!(!public.contains("approvalPolicy"));assert!(marker["params"].get("threadSettings").is_none());assert!(!format!("{settings:?}").contains("PRIVATE"));
 }
@@ -28,9 +28,9 @@ fn update(id:&str)->Value{json!({"method":"thread/settings/updated","params":{"t
  assert!(sandbox(&json!({"type":"externalSandbox","networkAccess":"yes"})).is_none());
 }
 #[test]fn root_lists_profile_names_and_paths_are_bounded(){
- assert!(sandbox(&json!({"type":"workspaceWrite","writableRoots":vec!["/fixture";33]})).is_none());
- assert!(sandbox(&json!({"type":"workspaceWrite","writableRoots":vec![format!("/{}","a".repeat(2048));9]})).is_none());
- assert!(path(&json!("/fixture/../other")).is_none());assert!(path(&json!("/fixture\nother")).is_none());
+ assert!(sandbox(&json!({"type":"workspaceWrite","writableRoots":vec![crate::native_test_path!("/fixture");33]})).is_none());
+ assert!(sandbox(&json!({"type":"workspaceWrite","writableRoots":vec![format!("{}{}",crate::native_test_path!("/"),"a".repeat(2048));9]})).is_none());
+ assert!(path(&json!(crate::native_test_path!("/fixture/../other"))).is_none());assert!(path(&json!(crate::native_test_path!("/fixture\nother"))).is_none());
  let mut event=update(A);event["params"]["threadSettings"]["activePermissionProfile"]=json!({"id":":workspace","extends":"parent"});let parsed=settings(&event["params"]["threadSettings"]).unwrap();assert_eq!(parsed.profile,Some(Profile{id:":workspace".into(),extends:Some("parent".into())}));
  event["params"]["threadSettings"]["activePermissionProfile"]["id"]=json!("x".repeat(257));assert!(settings(&event["params"]["threadSettings"]).is_none());
 }
