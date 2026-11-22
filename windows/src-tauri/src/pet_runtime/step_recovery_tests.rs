@@ -14,11 +14,16 @@ fn input(g:&Record,s:&Scope)->RecoverInput{RecoverInput{pet_id:g.spec.owner.pet_
 #[test]fn native_receipt_recovery_keeps_the_goal_guard_until_original_authority_settlement(){
     use std::os::fd::AsRawFd;
     let(f,mut a,g,_p,o,_main)=setup_plan();let bus=Bus::new();let player=Player::new(&bus,"Serialized receipt recovery");let ready=grant(&a,&g,&o,&bus);a.fault=Fault::AfterStepEvidencePublish;assert!(o.run_step_with_authority(&g,&ready,&config(),&a).is_err());a.fault=Fault::None;assert_eq!(ledger(&f,&g)["attempts"][0]["phase"],"started");
-    let authority=root(&f);let store=Arc::new(crate::pet_runtime::store::Store::existing_verified(&f.path.join("goals"),&authority).unwrap().unwrap());let lock=fs::OpenOptions::new().read(true).write(true).open(authority.join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(lock.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);
-    let request=input(&g,&ready.scope);let thread_store=store.clone();let thread_authority=authority.clone();let recovery=std::thread::spawn(move||thread_store.recover_step_native(&thread_authority,&request,crate::assistant_memory::now()));let until=std::time::Instant::now()+std::time::Duration::from_secs(2);let mut observed=false;
-    while std::time::Instant::now()<until{match store.test_lock(true){Err(crate::pet_runtime::model::Error::Busy)=>{observed=true;break;},Ok(guard)=>drop(guard),Err(error)=>panic!("unexpected goal guard error: {error:?}")};std::thread::sleep(std::time::Duration::from_millis(1));}
-    assert!(observed,"the production recovery must hold the goal guard while waiting for authority");assert_eq!(store.mutate(&g.id,&g.spec.owner.pet_id,&g.revision,"concurrent-control".into(),crate::pet_runtime::model::Action::Cancel,crate::assistant_memory::now()).err(),Some(crate::pet_runtime::model::Error::Busy));drop(lock);
-    let view=recovery.join().unwrap().unwrap();assert_eq!(view.phase,Phase::Finished);assert!(!view.execution_available&&!view.recovery.accounting_frozen);assert_eq!(store.read(&g.id,&g.spec.owner.pet_id).unwrap().revision,g.revision);assert_eq!(player.calls.lock().unwrap().len(),1);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),1);
+    let authority=root(&f);let store=crate::pet_runtime::store::Store::existing_verified(&f.path.join("goals"),&authority).unwrap().unwrap();let lock=fs::OpenOptions::new().read(true).write(true).open(authority.join(".catalog.lock")).unwrap();assert_eq!(unsafe{libc::flock(lock.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)},0);
+    let request=input(&g,&ready.scope);
+    let view=store.recover_step_native_using(&authority,&request,crate::assistant_memory::now(),||{
+        // Check the real goal guard at the settlement boundary. A polling
+        // thread can miss the authority lock's entire bounded retry window.
+        assert_eq!(store.test_lock(true).err(),Some(crate::pet_runtime::model::Error::Busy));
+        assert_eq!(store.mutate(&g.id,&g.spec.owner.pet_id,&g.revision,"concurrent-control".into(),crate::pet_runtime::model::Action::Cancel,crate::assistant_memory::now()).err(),Some(crate::pet_runtime::model::Error::Busy));
+        drop(lock);
+    }).unwrap();
+    assert_eq!(view.phase,Phase::Finished);assert!(!view.execution_available&&!view.recovery.accounting_frozen);assert_eq!(store.read(&g.id,&g.spec.owner.pet_id).unwrap().revision,g.revision);assert_eq!(player.calls.lock().unwrap().len(),1);assert_eq!(ledger(&f,&g)["attempts"].as_array().unwrap().len(),1);
     let before=crate::pet_runtime::reconciliation_tests::inventory(&f.path);let again=store.recover_step_native(&authority,&input(&g,&ready.scope),crate::assistant_memory::now()).unwrap();assert_eq!(again.phase,Phase::Finished);assert_eq!(crate::pet_runtime::reconciliation_tests::inventory(&f.path),before);assert_eq!(player.calls.lock().unwrap().len(),1);
 }
 
