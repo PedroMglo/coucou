@@ -22,6 +22,8 @@ test("versions compare as numbers", () => {
   assert.equal(compareVersions("0.5", "0.5.0"), 0);
   assert.equal(compareVersions("0.5.0", "0.5.1"), -1);
   assert.equal(compareVersions("1.0.0", "0.99.99"), 1);
+  assert.equal(compareVersions("0.5.1-mochi.67", "0.5.1-mochi.63"), 1);
+  assert.equal(compareVersions("0.5.1-mochi.67", "0.5.1"), -1);
 });
 
 test("the entry of exactly the running version", () => {

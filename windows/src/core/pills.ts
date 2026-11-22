@@ -10,6 +10,7 @@
 
 import type { AgentSource } from "./state";
 import { N_ } from "../i18n/i18n";
+import { petRetired } from "./pet-factory";
 
 export type PillCategory = "workspace" | "agent" | "ai" | "service";
 
@@ -113,6 +114,8 @@ export const PILL_CATALOG: readonly PillDefinition[] = [
     subtitle: N_("Chat"), source: "n8n", support: "yes", connect: server("ollamaUrl") },
   { id: "ai_lmstudio", name: "LM Studio", color: ACCENT.lmstudio, category: "ai",
     subtitle: N_("Chat"), source: "n8n", support: "yes", connect: server("lmstudioUrl") },
+  { id: "agent_system_guardian", name: "System Guardian", color: "#38BDF8", category: "agent",
+    subtitle: N_("System health"), source: "agent", support: "linux", connect: none },
   // ── Services ───────────────────────────────────────────────────────────────
   { id: "integration_resend", name: "Resend", color: "#22C55E", category: "service",
     subtitle: N_("Integration"), source: "n8n", support: "yes", connect: key("resend-api-key") },
@@ -152,7 +155,7 @@ export const PILL_CATALOG: readonly PillDefinition[] = [
 export const DEFAULT_MAIN_PILL = "integration_claude";
 
 /** How many declared pills may sit next to the main one. */
-export const MAX_DECLARED = 4;
+export const MAX_DECLARED = 6;
 
 /** The OS this page runs on. Only the Windows webview says "Windows". */
 export const HOST_OS: HostOs =
@@ -163,7 +166,7 @@ export function pillDefinition(id: string): PillDefinition | undefined {
 }
 
 function offeredOn(def: PillDefinition, os: HostOs): boolean {
-  return def.support === "yes" || def.support === "soon" || def.support === os;
+  return !petRetired(def.id)&&(def.support === "yes" || def.support === "soon" || def.support === os);
 }
 
 /** The pills this build offers, in catalog order. */

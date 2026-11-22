@@ -2,6 +2,46 @@
   "about": "What's new, shown once in the island after Coucou updates itself (src/whats-new/). Every Windows and Linux release adds its entry here, in the 14 languages: 1 to 4 items, a short title and one line each, an icon from scripts/test-whats-new.py. python3 scripts/test-whats-new.py checks it.",
   "releases": [
     {
+      "version": "0.5.1-mochi.53",
+      "items": [
+        {
+          "icon": "chat",
+          "title": {
+            "en": "Separate sessions for chat pets",
+            "zh-Hans": "支持聊天的宠物各有会话",
+            "hi": "चैट वाले पेट के अलग सत्र",
+            "es": "Sesiones independientes para mascotas con chat",
+            "ar": "جلسات منفصلة للحيوانات التي تدعم المحادثة",
+            "fr": "Sessions propres aux compagnons avec chat",
+            "bn": "চ্যাট সমর্থনকারী পেটের আলাদা সেশন",
+            "pt-BR": "Sessões separadas para pets com chat",
+            "ru": "Отдельные сеансы питомцев с чатом",
+            "id": "Sesi terpisah untuk pet yang mendukung chat",
+            "de": "Eigene Sitzungen für Haustiere mit Chat",
+            "tr": "Sohbetli yardımcılar için ayrı oturumlar",
+            "ko": "채팅을 지원하는 펫의 개별 세션",
+            "ja": "チャット対応ペットの個別セッション"
+          },
+          "detail": {
+            "en": "Open a pet's own sessions and use its configured account.",
+            "zh-Hans": "打开宠物的专属会话，使用为它配置的账户。",
+            "hi": "पेट के अपने सत्र खोलें और उसके लिए कॉन्फ़िगर किया गया खाता इस्तेमाल करें।",
+            "es": "Abre las sesiones de la mascota con la cuenta configurada para ella.",
+            "ar": "افتح جلسات الحيوان باستخدام الحساب الذي أعددته له.",
+            "fr": "Ouvrez les sessions du compagnon avec le compte configuré pour lui.",
+            "bn": "পেটের নিজস্ব সেশন খুলুন এবং তার জন্য সেট করা অ্যাকাউন্ট ব্যবহার করুন।",
+            "pt-BR": "Abra as sessões do pet e use a conta configurada para ele.",
+            "ru": "Открывайте сеансы питомца и используйте настроенный для него аккаунт.",
+            "id": "Buka sesi pet dan gunakan akun yang dikonfigurasi untuknya.",
+            "de": "Öffne die Sitzungen des Haustiers mit dem dafür eingerichteten Konto.",
+            "tr": "Yardımcının kendi oturumlarını aç ve onun için ayarlanan hesabı kullan.",
+            "ko": "펫의 세션을 열고 그 펫에 설정된 계정을 사용하세요.",
+            "ja": "ペットのセッションを開き、そのペットに設定したアカウントを使えます。"
+          }
+        }
+      ]
+    },
+    {
       "version": "0.6.0",
       "items": [
         {

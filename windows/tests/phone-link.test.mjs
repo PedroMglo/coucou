@@ -395,7 +395,17 @@ function service(id, data, extra = {}) {
 test("service cards say what the pills say and never an address, a subject, a description or a link", async () => {
   const { serviceCards } = await import("../src/island/phone-services.ts");
   const now = Date.now();
-  service("integration_stripe", { balance: 1250, currency: "eur", payments: [{ status: "succeeded", amount: 900, description: "Alice Martin invoice 42", createdAt: now - 120_000 }, { status: "failed", amount: 100, createdAt: now - 3_600_000 * 3 }] });
+  service("integration_stripe", {
+    balances: [
+      { currency: "eur", available: "12.50", pending: "5.00" },
+      { currency: "jpy", available: "900", pending: null },
+      { currency: "usd", available: null, pending: "14.00" },
+    ],
+    payments: [
+      { status: "succeeded", amountText: "900", currency: "jpy", description: "Alice Martin invoice 42", createdAt: now - 120_000 },
+      { status: "failed", amountText: "1.00", currency: "eur", createdAt: now - 3_600_000 * 3 },
+    ],
+  });
   service("integration_resend", { total: 31, emails: [{ to: ["alice@example.com"], subject: "Your secret order", lastEvent: "delivered", createdAt: now - 60_000 }] });
   service("integration_notion", { pages: [{ title: "Roadmap", url: "https://notion.so/secret", lastEditedAt: now - 5_000 }] });
   service("integration_github", { totalStars: 1520, totalRepos: 12 });
@@ -403,13 +413,14 @@ test("service cards say what the pills say and never an address, a subject, a de
   service("integration_calcom", { bookings: [{ title: "Intro call", start: new Date(now + 3_600_000).toISOString() }] });
   const cards = serviceCards(now);
   const byId = Object.fromEntries(cards.map((c) => [c.id, c]));
-  assert.equal(byId.integration_stripe.headline, "12.50 EUR");
-  assert.deepEqual(byId.integration_stripe.items[0], { label: "Payment", detail: "+9.00 · 2m" });
+  assert.equal(byId.integration_stripe.headline, "12.50 EUR · 900 JPY");
+  assert.equal(byId.integration_stripe.reason, "Available balance");
+  assert.deepEqual(byId.integration_stripe.items[0], { label: "Payment", detail: "+900 JPY · 2m" });
   assert.equal(byId.integration_stripe.items[1].label, "Payment failed");
   assert.equal(byId.integration_resend.headline, "31");
   assert.deepEqual(byId.integration_resend.items, [{ label: "Delivered", detail: "1m" }]);
   assert.equal(byId.integration_notion.items[0].label, "Roadmap");
-  assert.equal(byId.integration_github.headline, "1.5k Total stars");
+  assert.equal(byId.integration_github, undefined, "retired entity is not published from saved data");
   assert.equal(byId.integration_vercel.items[0].label, "shop");
   assert.equal(byId.integration_calcom.items[0].label, "Intro call");
   const all = JSON.stringify(cards);
@@ -425,6 +436,7 @@ test("a service that is not configured or is failing has no card, and n8n shows 
   assert.deepEqual(serviceCards().map((c) => c.id), []);
   const n8n = { id: "integration_n8n", name: "n8n", color: "#fff", state: "error", stepIndex: 0, steps: ["Nightly sync", "Error: password=hunter2 at node 3"], source: "n8n", isIntegration: true };
   State.tasks.push(n8n);
+  service("integration_n8n", {}, { activity: { success: false, label: "Nightly sync", detail: "Error: password=hunter2 at node 3" } });
   const card = serviceCards().find((c) => c.id === "integration_n8n");
   assert.equal(card.headline, "Failed");
   assert.deepEqual(card.items, [{ label: "Nightly sync", detail: "" }]);
@@ -434,17 +446,17 @@ test("a service that is not configured or is failing has no card, and n8n shows 
 });
 
 test("service cards are published when the link comes up and when they change, and not repeated", async () => {
-  service("integration_github", { totalStars: 3, totalRepos: 1 });
+  service("integration_notion", { pages: [{ title: "First note" }] });
   dispose = registerPhoneLink(island);
   await settle();
   tick(250);
   const p = () => sent("phone_link_publish_services");
   assert.equal(p().length, 1);
-  assert.equal(p()[0].services[0].id, "integration_github");
+  assert.equal(p()[0].services[0].id, "integration_notion");
   State.notify();
   tick(250);
   assert.equal(p().length, 1);
-  service("integration_github", { totalStars: 4, totalRepos: 1 });
+  service("integration_notion", { pages: [{ title: "Updated note" }] });
   State.notify();
   tick(250);
   assert.equal(p().length, 2);

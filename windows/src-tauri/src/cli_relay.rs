@@ -25,7 +25,7 @@ use tokio::io::AsyncWriteExt;
 use crate::chat::{self, Chat, ChatContext, ChatReply, ModelInfo};
 use crate::i18n::tf;
 use crate::settings::Settings;
-use crate::{claude_code, platform, secrets, settings};
+use crate::{claude_code, platform, settings};
 
 /// How long a chat turn may take: it may search the web.
 const CHAT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -118,34 +118,26 @@ pub fn subscription_only(provider: &str) -> bool {
     matches!(provider, "cursor" | "copilot")
 }
 
-fn key_for(provider: &str) -> Option<&'static str> {
-    match provider {
-        "anthropic" => Some(crate::claude::KEY),
-        "google" => Some("google-api-key"),
-        "openai" => Some("openai-api-key"),
-        _ => None,
-    }
-}
-
 /// The installed tool that answers for `provider`, if any.
 pub fn installed(provider: &str) -> Option<(Cli, PathBuf)> {
     clis_for(provider).iter().find_map(|cli| cli.exe().map(|path| (*cli, path)))
 }
 
-/// Whether the chat with `provider` goes through the user's subscription.
-pub fn uses_subscription(settings: &Settings, provider: &str) -> bool {
-    if clis_for(provider).is_empty() {
-        return false;
+/// A saved upstream subscription is a distinct route, even when an API
+/// key or a different native CLI account is available. Keep that preference
+/// until it is explicitly cleared. Route selection must never depend on PATH.
+fn saved_subscription(settings: &Settings, provider: &str) -> bool {
+    settings.chat_subscriptions.get(provider) == Some(&true)
+}
+
+pub(crate) fn require_configured_route(settings: &Settings, provider: &str) -> Result<(), String> {
+    if saved_subscription(settings, provider) {
+        return Err("A ligação de subscrição antiga requer revisão nas definições de conversa.".into());
     }
-    if let Some(on) = settings.chat_subscriptions.get(provider) {
-        return *on;
+    if provider == "cursor" {
+        return Err("Seleciona uma ligação de conversa configurada para este pet.".into());
     }
-    // Never chosen: on when there is no key to use instead (what 0.5.5 did for
-    // Claude), and for Cursor and Copilot once their tool is installed.
-    if subscription_only(provider) {
-        return installed(provider).is_some();
-    }
-    key_for(provider).is_some_and(|key| !secrets::present(key))
+    Ok(())
 }
 
 /// One row of Settings → Chat → Your AI subscriptions.
@@ -172,7 +164,7 @@ pub fn status(settings: &Settings) -> Vec<Status> {
                 provider,
                 tool: cli.name(),
                 installed: found.is_some(),
-                on: uses_subscription(settings, provider),
+                on: saved_subscription(settings, provider),
                 sign_in: cli.sign_in(),
                 install_url: cli.install_url(),
                 subscription_only: subscription_only(provider),
@@ -522,7 +514,7 @@ pub async fn send(
     };
     // The record keeps the file's name, never its contents: later turns search the web.
     let plain = chat::plain_question(turn.first, context.as_ref(), &query);
-    chat.commit(&turn, json!({ "role": "user", "content": plain }), json!({ "role": "assistant", "content": text }), &plain, &text);
+    chat.commit(&turn, json!({ "role": "user", "content": plain }), json!({ "role": "assistant", "content": text }), &plain, &text)?;
     Ok(ChatReply { text })
 }
 
@@ -540,6 +532,9 @@ fn chat_prompt(history: &[Value], first: bool, context: Option<&ChatContext>, qu
         out.push_str("</conversation>\n\nThe user's new message:\n");
     }
     match context.filter(|_| first) {
+        Some(ChatContext::Files { .. }) => {
+            out.push_str("These attachments require a scoped pet conversation.\n\n");
+        }
         Some(ChatContext::File { name, path }) => match inline_text(Path::new(path)) {
             Some(body) => out.push_str(&format!("File: {name}\nFile contents:\n{body}\n\n")),
             None => out.push_str(&format!("File: {name} (its contents can't be read here)\n\n")),
@@ -563,16 +558,14 @@ fn inline_text(path: &Path) -> Option<String> {
     (!text.contains('\0')).then_some(text)
 }
 
-/// Settings → Chat: the switch of `provider` moved.
-pub fn set(settings: &mut Settings, provider: &str, on: bool) {
-    if clis_for(provider).is_empty() {
-        return;
+/// Clear only the selected legacy binding. Changing the active provider
+/// or enabling a different connection is a separate user decision.
+pub(crate) fn clear_binding(settings: &mut Settings, provider: &str) -> std::io::Result<()> {
+    if !saved_subscription(settings, provider) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Não há ligação antiga ativa para esta conta."));
     }
-    settings.chat_subscriptions.insert(provider.to_string(), on);
-    // The chat can't stay on a provider that no longer answers.
-    if !on && subscription_only(provider) && settings.chat_provider == provider {
-        settings.chat_provider = chat::ANTHROPIC.into();
-    }
+    settings.chat_subscriptions.insert(provider.to_string(), false);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -676,17 +669,20 @@ mod tests {
     }
 
     #[test]
-    fn the_switch_defaults_and_choices() {
-        let mut s = Settings::default();
-        // Ollama has no subscription; a choice sticks; turning Cursor off leaves its chat.
-        assert!(!uses_subscription(&s, "ollama"));
-        set(&mut s, "google", true);
-        assert!(uses_subscription(&s, "google"));
-        set(&mut s, "google", false);
-        assert!(!uses_subscription(&s, "google"));
-        s.chat_provider = "cursor".into();
-        set(&mut s, "cursor", false);
-        assert_eq!(s.chat_provider, "anthropic");
-        assert_eq!(status(&s).len(), PROVIDERS.len());
+    fn stored_subscription_blocks_substitution_until_the_exact_binding_is_cleared() {
+        let mut preferences = Settings::default();
+        preferences.chat_provider = "google".into();
+        preferences.chat_models.insert("google".into(), "saved-model".into());
+        assert!(require_configured_route(&preferences, "google").is_ok());
+        preferences.chat_subscriptions.insert("google".into(), true);
+        assert!(require_configured_route(&preferences, "google").is_err());
+        assert!(require_configured_route(&preferences, "ollama").is_ok());
+        assert!(clear_binding(&mut preferences, "openai").is_err());
+        assert!(require_configured_route(&preferences, "google").is_err());
+        clear_binding(&mut preferences, "google").unwrap();
+        assert!(require_configured_route(&preferences, "google").is_ok());
+        assert!(require_configured_route(&preferences, "cursor").is_err());
+        assert_eq!(preferences.chat_provider, "google");
+        assert_eq!(preferences.chat_models["google"], "saved-model");
     }
 }

@@ -1,25 +1,38 @@
+import {buildRelayApprovalRouting} from './relay-approvals';
+import {buildShortcutReconciliation} from './shortcuts-reconciliation';
+import {SettingsRequestIntent} from './request-intent';
 // The Coucou window (settings.html): Flow dictation, the Notetaker and, under
 // Notch, every setting of the island — the place where anything that writes to
 // disk is confirmed. The window's frame and the Flow pages live in ../hub; the
 // island's settings are drawn here, one Notch page at a time.
 
 import "./settings.css";
+import {parseRecapPrefs,parseRecapReceipt,recapReceiptSuccess,recapFailureMessage} from "../recap/recap";
+import {buildIslandAvailability} from "./island-availability";
+import {buildAutostartSetting} from './autostart-setting';
+import {buildAutostartReview} from './autostart-review';
+import {buildShortcutReview} from './shortcuts-review';
+import {ShortcutPreferenceWriter} from '../core/shortcuts-settings';
+import {buildSettingsIoStatus} from './io-status';
+import {islandAvailabilityValues,type IslandAvailabilityValues} from "../core/island-availability";
+import {OllamaModelSelection} from "../core/ollama-selection";
 import { Bridge, onEvent, type HookPreview, type HookStatus, type ShortcutsReport, type SubscriptionStatus } from "../core/bridge";
-import { CUSTOM_SERVER_KEY, providerDef, urlExposure } from "../core/providers";
+import { CUSTOM_SERVER_KEY, providerDef, urlExposure, withModel } from "../core/providers";
 import {
   ISLAND_SHORTCUTS, SHORTCUTS, SHORTCUT_TEXT, activeKeys, displayKeys, duplicates, effective,
   recordPress, type Binding,
 } from "../core/shortcuts";
 import { DEFAULT_SETTINGS, type Settings } from "../core/state";
+import {PetRosterPreferences,type PetRosterRequest} from '../core/pet-roster-settings';
 import { closedIsland } from "../core/closed";
 import type { UpdateStatus } from "../core/update";
 import { SOUND_NAMES } from "../core/sound";
 import {
-  MAX_DECLARED, PILL_CATEGORIES, availablePills, chooseMainPill, isComingSoon, mainPillChoices,
-  sanitizeDeclared, toggleDeclared, type PillDefinition,
+  MAX_DECLARED, PILL_CATEGORIES, availablePills, isComingSoon, mainPillChoices,
+  sanitizeDeclared, type PillDefinition,
 } from "../core/pills";
 import { h, clear } from "../views/dom";
-import { startHub, type PageId } from "../hub/shell";
+import { startHub, type PageId,type HubContext } from "../hub/shell";
 import { FLOW_PAGE_RENDERERS } from "../hub/pages";
 import { claudeModelControl } from "./claude-models";
 import { agentsSection } from "./agents";
@@ -29,6 +42,7 @@ import { WHATSAPP_ID } from "../core/whatsapp";
 import { updateRows, updatesListener } from "./updates";
 import { colorDot } from "./colors";
 import { renderDiff, statusDot } from "./parts";
+import {secretControls} from './secret-controls';
 import {
   LANGUAGES, N_, isRtl, onLanguageChange, resolveLanguage, setLanguage, systemLanguages, t, tn,
 } from "../i18n/i18n";
@@ -39,30 +53,73 @@ const KEY_STORE = navigator.userAgent.includes("Windows")
   : "Secret Service (GNOME Keyring, KWallet)";
 
 let settings: Settings = { ...DEFAULT_SETTINGS };
+const storageStatus=buildSettingsIoStatus(()=>Bridge.settingsIoStatus(),{prepare:()=>Bridge.settingsReviewPrepare(),apply:request=>Bridge.settingsReviewApply(request),cancel:request=>Bridge.settingsReviewCancel(request)});
+let rosterSaving=false;
+const rosterPreferences=new PetRosterPreferences({save:request=>Bridge.petRosterSettingsPatch(request),adopt:roster=>{settings={...settings,...roster};for(const redraw of declaredViews)redraw();}});
+async function changeRoster(request:PetRosterRequest){
+ if(rosterSaving)return;
+ rosterSaving=true;for(const redraw of declaredViews)redraw();
+ try{await rosterPreferences.change(request);}catch(error){Bridge.reportSettingsError(error);}
+ finally{rosterSaving=false;for(const redraw of declaredViews)redraw();}
+}
 let version = "";
+let islandAvailability:ReturnType<typeof buildIslandAvailability>|null=null;
+let autostartSetting:ReturnType<typeof buildAutostartSetting>|ReturnType<typeof buildAutostartReview>|null=null;
+let observedIslandAvailability:IslandAvailabilityValues|null=null;
+let settingsObservation=0,settingsListenerReady=false;
+let settingsSubscription:Promise<boolean>|null=null;
+function availabilityControls(){
+  islandAvailability??=buildIslandAvailability({initial:observedIslandAvailability,save:value=>Bridge.petCenterSettingsPatch(value),read:async()=>{if(!await ensureSettingsSubscription())throw Error("Preferences unavailable");const boot=await Bridge.boot();if(!boot)throw Error("Preferences unavailable");return boot.settings;},adopt:flags=>{observedIslandAvailability={...flags};settings={...settings,...flags};}});
+  islandAvailability.render();return islandAvailability.el;
+}
+function autostartControls(){
+ if(navigator.userAgent.includes('Linux')){
+  autostartSetting??=buildAutostartReview({status:()=>Bridge.autostartReviewStatus(),prepare:request=>Bridge.autostartReviewPrepare(request),apply:request=>Bridge.autostartReviewApply(request),cancel:request=>Bridge.autostartReviewCancel(request)},{initial:settings.autostart,adopt:value=>{settings={...settings,autostart:value};}});
+ }else autostartSetting??=buildAutostartSetting({initial:settings.autostart,save:async value=>{const receipt=await Bridge.autostartSettingsPatch({enabled:value});if(receipt.registration==='unconfirmed')throw Error(receipt.reason??'O registo de arranque não foi confirmado.');return receipt;},read:async()=>{if(!await ensureSettingsSubscription())throw Error('As preferências estão indisponíveis.');const boot=await Bridge.boot();if(!boot)throw Error('As preferências estão indisponíveis.');return boot.settings.autostart;},adopt:value=>{settings={...settings,autostart:value};}});
+ autostartSetting.render();return autostartSetting.el;
+}
 
 const windowRoot = document.getElementById("hub")!;
 /** Where the Notch page being shown draws its sections. */
 let root: HTMLElement = windowRoot;
+let notchContext:HubContext|undefined;
 let hub: { redraw(): void; current(): PageId } | null = null;
 
+/** One section lifetime, including A→leave→A and a hub redraw of the same page. */
+function settingsSectionCurrent(section:HTMLElement){
+ const targetRoot=root,targetPage=notchPage,targetContext=notchContext;
+ const lifetime=new SettingsRequestIntent(()=>root===targetRoot&&notchPage===targetPage&&notchContext===targetContext&&section.isConnected);
+ const ticket=lifetime.begin(),previousLeave=targetContext?.onLeave;
+ if(targetContext)targetContext.onLeave=()=>{lifetime.dispose();previousLeave?.();};
+ return ()=>lifetime.current(ticket);
+}
+
 async function save() {
-  await Bridge.saveSettings(settings);
+  try{await Bridge.saveSettings(settings);}finally{void storageStatus.refresh();}
 }
 
 /** A colour was picked for a pill's Mochi (see ./colors.ts): the island follows. */
 function pickColor(next: Record<string, string>) {
   settings.pillColors = next;
-  void save();
+  void save().catch(Bridge.reportSettingsError);
 }
 
 // ── Reusable bits ─────────────────────────────────────────────────────────────
+
+function desktopVisibilityControl():HTMLElement{
+ const row=h('div',{class:'row'});
+ const draw=()=>{
+  clear(row);row.append(h('label',{text:t("Desktop companion")}),h('button',{class:settings.companionMode?'switch on':'switch','aria-label':t('Show or hide desktop pets'),'aria-pressed':settings.companionMode,'data-desktop-visibility':'toggle',disabled:rosterSaving,onclick:()=>{void changeRoster({action:'setDesktopVisibility',enabled:!settings.companionMode});}}));
+ };
+ declaredViews.push(draw);draw();return row;
+}
 
 function toggle(on: boolean, onChange: (v: boolean) => void): HTMLElement {
   const el = h("button", { class: on ? "switch on" : "switch", "aria-pressed": on });
   el.addEventListener("click", () => {
     const next = !el.classList.contains("on");
     el.classList.toggle("on", next);
+    el.setAttribute('aria-pressed',String(next));
     onChange(next);
   });
   return el;
@@ -300,16 +357,16 @@ function planSection(status: HookStatus): HTMLElement {
     const sw = toggle(settings.showPlanInNotch, (on) => {
       if (!on) {
         settings.showPlanInNotch = false;
-        void save();
+        void save().catch(Bridge.reportSettingsError);
       } else if (status.planRelayInstalled) {
         settings.showPlanInNotch = true;
-        void save();
+        void save().catch(Bridge.reportSettingsError);
       } else {
         // Turned on before the relay is in: install it first; it stays on once confirmed.
         void reviewChange(body, STATUS_LINE_CHANGE, true, () => void rebuild(), () => {
           settings.planRelayInstalled = true;
           settings.showPlanInNotch = true;
-          void save().then(rebuild);
+          void save().then(rebuild).catch(Bridge.reportSettingsError);
         });
       }
     });
@@ -358,7 +415,7 @@ function planSection(status: HookStatus): HTMLElement {
         h("label", { text: PLAN_SETTINGS_TEXT.showCodex }),
         toggle(settings.showCodexPlanInNotch, (on) => {
           settings.showCodexPlanInNotch = on;
-          void save();
+          void save().catch(Bridge.reportSettingsError);
         }),
       ),
     );
@@ -368,81 +425,53 @@ function planSection(status: HookStatus): HTMLElement {
   return section;
 }
 
-// ── Your AI subscriptions ─────────────────────────────────────────────────────
-
-/** The plan people know, by provider. */
-const SUBSCRIPTION_NAMES: Record<string, string> = {
-  anthropic: "Claude", google: "Google Gemini", openai: "ChatGPT", cursor: "Cursor", copilot: "GitHub Copilot",
-};
-
-/**
- * One switch per provider (cli_relay.rs): on, the chat goes through its
- * official terminal tool, signed in with the user's own account; off, through
- * its API key. Says whether the tool is installed and how to sign in.
- */
-function subscriptionsSection(): HTMLElement {
-  const list = h("div", { style: "display:flex;flex-direction:column;gap:12px" });
-  const draw = (rows: SubscriptionStatus[]) => {
-    clear(list);
-    for (const row of rows) {
-      const p = providerDef(row.provider);
-      const sw = toggle(row.on, (on) => {
-        void Bridge.subscriptionSet(row.provider, on).then((next) => {
-          if (next) draw(next);
-        });
+/** Lets the owner explicitly discard an older route before choosing a provider. */
+function legacySubscriptionSection(): HTMLElement {
+  const section = h("section", { hidden: true });
+  const current = settingsSectionCurrent(section);
+  const status = h("div", { role: "status", class: "hint" });
+  const rows = h("div", {});
+  const controls = new Set<HTMLButtonElement>();
+  let pending = false;
+  section.append(h("h2", { text: "Ligações de subscrição anteriores" }), status, rows);
+  const draw = (saved: SubscriptionStatus[]) => {
+    if (!current()) return;
+    const active = saved.filter(row => row.on);
+    clear(rows);
+    controls.clear();
+    section.hidden = active.length === 0;
+    status.textContent = "As conversas destas contas aguardam a tua escolha de ligação.";
+    for (const row of active) {
+      const button = h("button", { text: "Remover ligação antiga" }) as HTMLButtonElement;
+      controls.add(button);
+      button.addEventListener("click", async () => {
+        if (!current() || pending) return;
+        pending = true;
+        for (const control of controls) control.disabled = true;
+        try {
+          const result = await Bridge.subscriptionSet(row.provider, false);
+          if (current()) draw(result);
+        } catch (error) {
+          if (current()) status.textContent = String(error).replace(/^Error:\s*/, "");
+        } finally {
+          pending = false;
+          for (const control of controls) control.disabled = false;
+        }
       });
-      const lines: HTMLElement[] = [];
-      if (row.installed) {
-        lines.push(h("div", { class: "hint", style: "color:#22c55e", text: t("{tool} found ✓", { tool: row.tool }) }));
-        lines.push(h("div", {
-          class: "hint",
-          text: t("Not signed in yet? Run this once in a terminal: {command}", { command: row.signIn }),
-        }));
-      } else {
-        lines.push(h("div", { class: "row" },
-          h("span", { class: "hint", text: t("{tool} not found.", { tool: row.tool }) }),
-          h("button", { text: t("Install it"), onclick: () => void Bridge.openUrl(row.installUrl) }),
-        ));
-      }
-      if (!row.subscriptionOnly && !row.on) {
-        lines.push(h("div", { class: "hint", text: t("Off: the chat uses your API key below.") }));
-      }
-      list.append(h("div", {},
-        h("div", { class: "row" },
-          h("i", { class: "dot", style: `background:${p.accent}` }),
-          h("label", { text: SUBSCRIPTION_NAMES[row.provider] ?? p.name }),
-          sw,
-        ),
-        ...lines,
-      ));
+      rows.append(h("div", { class: "row" }, h("span", { text: providerDef(row.provider).name }), button));
     }
   };
-  void Bridge.subscriptionStatus().then((rows) => draw(rows ?? []));
-  return h(
-    "section",
-    {},
-    h("h2", { text: t("Your AI subscriptions") }),
-    h("div", {
-      class: "hint",
-      text: t("Chat on the plan you already pay for. Coucou asks your AI's official terminal tool, signed in with your own account: it never sees your password or your key."),
-    }),
-    list,
-  );
+  void Bridge.subscriptionStatus().then(saved => { if (saved) draw(saved); });
+  return section;
 }
 
 // ── Claude API section ────────────────────────────────────────────────────────
 
-/** The state line under Claude: the key, else Claude Code (switched on above), else what is missing. */
-function apiState(hasKey: boolean, relay: boolean): string {
-  if (hasKey) return t("Key saved in the {store}.", { store: KEY_STORE });
-  return relay
-    ? t("No key: the chat can go through your Claude subscription above.")
-    : t("No key yet — the chat needs one.");
-}
-
-function apiSection(hasKey: boolean, relay: boolean): HTMLElement {
-  const dot = statusDot(hasKey || relay);
-  const state = h("span", { class: "hint", text: apiState(hasKey, relay) });
+function apiSection(hasKey: boolean|null): HTMLElement {
+  const section=h("section",{}),viewCurrent=settingsSectionCurrent(section),intent=new SettingsRequestIntent(viewCurrent);
+  const dot = statusDot(hasKey===true);
+  if(hasKey===null)dot.style.background="#94a3b8";
+  const state = h("span", { class: "hint", text: hasKey===null?"Estado da chave por confirmar.":hasKey ? t("Key saved in the {store}.", { store: KEY_STORE }) : t("No key yet — the chat needs one.") });
 
   const field = h("input", {
     type: "password",
@@ -456,58 +485,53 @@ function apiSection(hasKey: boolean, relay: boolean): HTMLElement {
   const clearBtn = h("button", { class: "danger", text: t("Remove") });
   const feedback = h("div", {});
 
-  async function refresh() {
-    const present = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
-    const ready = (await Bridge.claudeReady()) ?? false;
-    dot.style.background = ready ? "#22c55e" : "#f4505e";
-    state.textContent = apiState(present, ready && !present);
-    field.placeholder = present ? `••••••••••••  ${t("(stored)")}` : "sk-ant-...";
-    clearBtn.style.display = present ? "" : "none";
+  let pending:'save'|'remove'|null=null,draft=0;
+  feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');
+  function controls(){saveBtn.disabled=pending!==null||!field.value.trim();clearBtn.disabled=pending!==null;saveBtn.setAttribute('aria-busy',String(pending==='save'));clearBtn.setAttribute('aria-busy',String(pending==='remove'));}
+  field.addEventListener('input',()=>{draft++;controls();});
+  async function refresh(ticket:number){
+    const present=await Bridge.secretPresent("anthropic-api-key");if(!intent.current(ticket))return;
+    if(typeof present!=='boolean'){state.textContent='Estado da chave por confirmar.';dot.style.background='#94a3b8';return;}
+    hasKey=present;dot.style.background=present?'#22c55e':'#f4505e';
+    state.textContent=present?t("Key saved in the {store}.",{store:KEY_STORE}):t("No key yet — the chat needs one.");
+    field.placeholder=present?`••••••••••••  ${t("(stored)")}`:"sk-ant-...";clearBtn.style.display=present?'':'none';
     void model.reload(present);
   }
-
-  saveBtn.addEventListener("click", async () => {
-    const value = field.value.trim();
-    if (!value) return;
-    clear(feedback);
-    try {
-      await Bridge.secretSet("anthropic-api-key", value);
-      field.value = "";
-      feedback.append(h("div", { class: "notice ok", text: t("Saved. It never touches disk.") }));
-      await refresh();
-    } catch (err) {
-      feedback.append(h("div", { class: "notice err", text: t("Could not save: {error}", { error: String(err) }) }));
-    }
-  });
-
-  clearBtn.addEventListener("click", async () => {
-    clear(feedback);
-    try {
-      await Bridge.secretClear("anthropic-api-key");
-      feedback.append(h("div", { class: "notice ok", text: t("Key removed.") }));
-      await refresh();
-    } catch (err) {
-      feedback.append(h("div", { class: "notice err", text: t("Could not remove: {error}", { error: String(err) }) }));
-    }
-  });
+  async function apply(remove:boolean){
+    const value=field.value.trim();if(pending||!viewCurrent()||!remove&&!value)return;
+    const ticket=intent.begin(),savedDraft=draft;pending=remove?'remove':'save';controls();clear(feedback);feedback.append(h('div',{class:'hint',text:remove?'A remover…':'A guardar…'}));
+    try{
+      if(remove)await Bridge.secretClear("anthropic-api-key");else await Bridge.secretSet("anthropic-api-key",value);
+      if(!intent.current(ticket))return;
+      hasKey=!remove;if(!remove&&draft===savedDraft)field.value='';
+      clearBtn.style.display=hasKey?'':'none';
+      clear(feedback);feedback.append(h('div',{class:'notice ok',text:remove?t("Key removed."):draft!==savedDraft?"A gravação anterior da chave foi concluída.":t("Key saved in the {store}.",{store:KEY_STORE})}));
+      if(field.value)feedback.append(h('div',{class:'hint',text:'O rascunho neste campo continua por guardar.'}));
+      await refresh(ticket);
+    }catch{
+      if(intent.current(ticket)){clear(feedback);feedback.append(h('div',{class:'notice err',text:remove?'Não foi possível confirmar a remoção da chave.':'Não foi possível confirmar a gravação da chave enviada.'}));}
+    }finally{if(intent.current(ticket)){pending=null;controls();}}
+  }
+  saveBtn.onclick=()=>void apply(false);clearBtn.onclick=()=>void apply(true);
+  field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();void apply(false);}});controls();
 
   const model = claudeModelControl(() => settings.model, async (value) => {
+    if (!viewCurrent()) return;
     await Bridge.saveSettings({ ...settings, model: value });
-    settings.model = value;
+    if (viewCurrent()) settings = { ...settings, model: value };
   });
-  void model.reload(hasKey);
+  void model.reload(hasKey === true);
 
   clearBtn.style.display = hasKey ? "" : "none";
 
-  return h(
-    "section",
-    {},
+  section.append(
     h("h2", {}, dot, h("span", { text: "Claude" })),
     state,
     h("div", { class: "row" }, h("label", { text: t("API key") }), field, saveBtn, clearBtn),
     model.element,
     feedback,
   );
+  return section;
 }
 
 // ── Active pills section ──────────────────────────────────────────────────────
@@ -522,11 +546,8 @@ function activePillsSection(connected: Record<string, boolean>): HTMLElement {
   const main = h("select", {}) as HTMLSelectElement;
   for (const def of mainPillChoices()) main.append(h("option", { value: def.id, text: def.name }));
   main.addEventListener("change", () => {
-    const next = chooseMainPill(settings, main.value);
-    if (!next) return;
-    settings.mainPill = next.mainPill;
-    settings.activeIntegrations = next.activeIntegrations;
-    declaredChanged();
+    const id=main.value;main.value=settings.mainPill;
+    void changeRoster({action:'setMain',id});
   });
   const groups = h("div", { style: "display:flex;flex-direction:column;gap:12px" });
 
@@ -553,13 +574,10 @@ function activePillsSection(connected: Record<string, boolean>): HTMLElement {
     }
     const why = hint(def);
     el.append(h("span", { class: "state", text: why ?? "" }));
-    const sw = h("button", { class: on ? "switch on" : "switch" }) as HTMLButtonElement;
-    sw.disabled = full;
+    const sw = h("button", { class: on ? "switch on" : "switch",'aria-label':`${def.name} · Mostrar pet`,'aria-pressed':on }) as HTMLButtonElement;
+    sw.disabled = full||rosterSaving;
     sw.addEventListener("click", () => {
-      const next = toggleDeclared(settings, def.id);
-      if (!next) return;
-      settings.activeIntegrations = next;
-      declaredChanged();
+      void changeRoster({action:'setActive',id:def.id,enabled:!settings.activeIntegrations.includes(def.id)});
     });
     el.append(sw);
     return el;
@@ -570,6 +588,7 @@ function activePillsSection(connected: Record<string, boolean>): HTMLElement {
     slots.textContent = t("{used}/{max} slots in use — the main tool doesn't take one.", { used, max: MAX_ACTIVE });
     slots.classList.toggle("full", used >= MAX_ACTIVE);
     main.value = settings.mainPill;
+    main.disabled=rosterSaving;
     clear(groups);
     for (const cat of PILL_CATEGORIES) {
       if (cat.id === "service") continue;
@@ -638,58 +657,46 @@ function chatProvidersSection(
   for (const def of CLOUD) {
     const p = providerDef(def.id);
     const key = p.key!;
-    const input = h("input", {
-      type: "password",
-      placeholder: present[key] ? CHAT_STRINGS.stored : def.placeholder,
-      autocomplete: "off",
-      spellcheck: "false",
-      style: "flex:1 1 auto;min-width:0",
-    }) as HTMLInputElement;
-    const dotEl = statusDot(present[key] ?? false);
-    const saveBtn = h("button", { text: CHAT_STRINGS.save });
-    const removeBtn = h("button", { class: "danger", text: CHAT_STRINGS.remove });
-    const refresh = () => {
-      input.placeholder = present[key] ? CHAT_STRINGS.stored : def.placeholder;
-      dotEl.style.background = present[key] ? "#22c55e" : "#f4505e";
-      removeBtn.style.display = present[key] ? "" : "none";
-    };
-    saveBtn.addEventListener("click", async () => {
-      const value = input.value.trim();
-      if (!value) return;
-      try {
-        await Bridge.secretSet(key, value);
-        present[key] = true;
-        input.value = "";
-        keyChanged(key, true);
-      } catch {
-        dotEl.style.background = "#f5a524";
-        return;
-      }
-      refresh();
-    });
-    removeBtn.addEventListener("click", async () => {
-      try {
-        await Bridge.secretClear(key);
-        present[key] = false;
-        keyChanged(key, false);
-      } catch {
-        dotEl.style.background = "#f5a524";
-        return;
-      }
-      refresh();
-    });
-    refresh();
+    const fields=secretControls(key,present[key]??false,def.placeholder,on=>{present[key]=on;keyChanged(key,on);});
     list.append(
       h("div", { class: "row" },
         h("label", {},
           h("i", { class: "dot", style: `background:${p.accent};margin-right:8px` }),
           h("span", { text: def.name }),
         ),
-        input, saveBtn, removeBtn, dotEl,
+        fields.input, fields.save, fields.remove, fields.dot,
       ),
       h("div", { class: "hint", style: "margin:-4px 0 0 144px", text: t("Key from {site}", { site: def.where }) }),
+      fields.feedback,
     );
   }
+  for (const id of ["codex", "antigravity"] as const) {
+    const provider = providerDef(id);
+    const status = h("div", { class: "hint", text: t("Connect {provider}", {provider:provider.name}) });
+    const connect = h("button", { text: t("Connect {provider}", { provider: provider.name }) }) as HTMLButtonElement;
+    connect.addEventListener("click", async () => {
+      connect.disabled = true;
+      status.textContent = t("Connecting…");
+      try {
+        const models = await Bridge.chatModels(id);
+        if (!models.length) throw new Error(t("The CLI returned no available models."));
+        const model = models.find((m) => m.id === settings.chatModels[id]) ?? models[0];
+        settings = {...withModel(settings,id,model.id),chatProvider:settings.chatProvider};
+        await save();
+        status.textContent = t("{provider} connected.", { provider: provider.name });
+      } catch (err) { status.textContent = String(err).replace(/^Error:\s*/, ""); }
+      finally { connect.disabled = false; }
+    });
+    list.append(h("div", { class: "row" }, h("label", { text: provider.name }), connect), status);
+  }
+  list.append(buildRelayApprovalRouting({read:()=>Bridge.relayExternalApprovalStatus(),change:request=>Bridge.relayExternalApprovalSet(request)}).el);
+  const workspace = h("input", { type: "text", value: settings.cliWorkspace, placeholder: t("Home folder"), style: "flex:1" }) as HTMLInputElement;
+  workspace.addEventListener("change", () => { settings.cliWorkspace = workspace.value.trim(); void save().catch(Bridge.reportSettingsError); });
+  list.append(h("div", { class: "row" }, h("label", { text: t("Working folder") }), workspace));
+  const fullAccess = h("input", { type: "checkbox", checked: settings.cliFullAccess }) as HTMLInputElement;
+  fullAccess.addEventListener("change", () => { settings.cliFullAccess = fullAccess.checked; void save().catch(Bridge.reportSettingsError); });
+  list.append(h("label", { class: "row" }, fullAccess, h("span", { text: t("Full access in new Codex/Gravity conversations") })),
+    h("div", { class: "hint", text: t("Full access runs commands and file changes with your user account. It applies only to new Codex/Gravity conversations. Existing sessions keep their native policy; choose a new conversation after changing this option or the working folder. Copilot keeps its native permissions.") }));
   return h(
     "section",
     {},
@@ -729,18 +736,26 @@ function exposureNotice(url: string, withKey: boolean): HTMLElement | null {
   }
 }
 
-function localSection(customKey: boolean): HTMLElement {
+function localSection(customKey: boolean,lmstudioKey=false): HTMLElement {
   const body = h("div", { style: "display:flex;flex-direction:column;gap:14px" });
   const section = h(
     "section",
     {},
     h("h2", {}, h("span", { text: CHAT_STRINGS.localTitle })),
-    h("div", { class: "hint", text: CHAT_STRINGS.localHint }),
+    h("div", { class: "hint", text: settings.companionMode ? "Liga o servidor para consultar os modelos. Depois escolhe o motor, endereço, modelo e credencial na gestão do pet que o vai usar. Ligar ou desligar aqui não altera a escolha explícita de cada pet." : CHAT_STRINGS.localHint }),
     body,
   );
+  const viewCurrent=settingsSectionCurrent(section);
+  const blocks=new Map<LocalId,{el:HTMLElement;key:string}>();
+  const drafts=new WeakMap<HTMLElement,{dirty:()=>boolean;changed:()=>void}>();
   const redraw = () => {
-    clear(body);
-    for (const id of Object.keys(LOCAL) as LocalId[]) body.append(serverBlock(id));
+    for(const id of Object.keys(LOCAL) as LocalId[]){
+      const url=settings[providerDef(id).urlField!],key=JSON.stringify([url,url!==""&&settings.chatProvider===id]);
+      const previous=blocks.get(id);if(previous?.key===key)continue;
+      const draft=previous&&drafts.get(previous.el);if(draft?.dirty()){draft.changed();continue;}
+      const el=serverBlock(id);blocks.set(id,{el,key});
+      if(previous)previous.el.replaceWith(el);else body.append(el);
+    }
   };
 
   function serverBlock(id: LocalId): HTMLElement {
@@ -758,28 +773,32 @@ function localSection(customKey: boolean): HTMLElement {
 
     if (connected) {
       const inUse = settings.chatProvider === id;
-      const use = h("button", { class: inUse ? "" : "primary", text: inUse ? CHAT_STRINGS.inUse : CHAT_STRINGS.useInChat });
-      use.disabled = inUse;
+      const petChoice = settings.companionMode;
+      const use = h("button", { class: !petChoice && inUse ? "" : "primary", text: petChoice ? "Configurar num pet" : inUse ? CHAT_STRINGS.inUse : CHAT_STRINGS.useInChat });
+      use.disabled = !petChoice && inUse;
       use.addEventListener("click", () => {
+        if (petChoice) {
+          void Bridge.openSettingsWindow('pets').catch(Bridge.reportSettingsError);
+          return;
+        }
         settings.chatProvider = id;
-        void save().then(redraw);
+        void save().then(redraw).catch(Bridge.reportSettingsError);
       });
       const disconnect = h("button", { class: "danger", text: CHAT_STRINGS.disconnect });
       disconnect.addEventListener("click", async () => {
         settings[field] = "";
         if (settings.chatProvider === id) settings.chatProvider = "anthropic";
-        if (id === "custom") {
-          await Bridge.secretClear(CUSTOM_SERVER_KEY).catch(() => {});
-          customKey = false;
+        if (["custom","lmstudio"].includes(id)) {
+          await Bridge.secretClear(id==="lmstudio"?"lmstudio-local-api-key":CUSTOM_SERVER_KEY).catch(() => {});
+          if(id==="lmstudio")lmstudioKey=false;else customKey=false;
         }
-        await save();
-        redraw();
+        try{await save();redraw();}catch(error){Bridge.reportSettingsError(error);}
       });
       block.append(
         h("div", { class: "row" }, label, h("span", { class: "path", text: settings[field] }), statusDot(true), use, disconnect),
         status,
       );
-      exposure.append(exposureNotice(settings[field], id === "custom" && customKey) ?? "");
+      exposure.append(exposureNotice(settings[field], id==="lmstudio"?lmstudioKey:id==="custom"&&customKey) ?? "");
       block.append(exposure);
       return block;
     }
@@ -794,16 +813,22 @@ function localSection(customKey: boolean): HTMLElement {
     // A custom server may want a key; it goes to the keychain, never to settings.json.
     const key = h("input", {
       type: "password",
-      placeholder: customKey ? CHAT_STRINGS.stored : CHAT_STRINGS.keyOptional,
+      "aria-label": `${CHAT_STRINGS.keyOptional} · ${t(def.name)}`,
+      placeholder: (id==="lmstudio"?lmstudioKey:customKey) ? CHAT_STRINGS.stored : CHAT_STRINGS.keyOptional,
       style: "flex:1 1 auto;min-width:0",
       autocomplete: "off",
       spellcheck: "false",
     }) as HTMLInputElement;
     const connect = h("button", { class: "primary", text: CHAT_STRINGS.connect });
+    const intent=new SettingsRequestIntent(viewCurrent);
+    let pending:number|null=null,edited=false;
+    drafts.set(block,{dirty:()=>edited,changed:()=>{if(pending===null&&!status.textContent)status.append(h("div",{class:"hint",text:"A configuração mudou. O rascunho neste campo continua por guardar."}));}});
+    const changed=()=>{edited=true;intent.invalidate();pending=null;connect.disabled=false;connect.removeAttribute('aria-busy');clear(status);};
+    input.addEventListener('input',changed);key.addEventListener('input',changed);
 
     const showExposure = () => {
       clear(exposure);
-      const withKey = id === "custom" && (customKey || key.value.trim() !== "");
+      const withKey = ["custom","lmstudio"].includes(id) && ((id==="lmstudio"?lmstudioKey:customKey) || key.value.trim() !== "");
       const notice = exposureNotice(input.value || def.usual, withKey);
       if (notice) exposure.append(notice);
     };
@@ -811,38 +836,43 @@ function localSection(customKey: boolean): HTMLElement {
     key.addEventListener("input", showExposure);
 
     connect.addEventListener("click", async () => {
-      connect.disabled = true;
-      clear(status);
-      status.append(h("div", { class: "hint", text: CHAT_STRINGS.connecting }));
-      try {
-        if (id === "custom" && key.value.trim()) {
-          // Stored with this address: the key is only ever sent there.
-          await Bridge.localSetKey(input.value || def.usual, key.value.trim());
-          key.value = "";
-          customKey = true;
+      if(pending!==null||!viewCurrent()||!block.isConnected)return;
+      const ticket=intent.begin(),address=input.value,secret=key.value.trim();pending=ticket;connect.disabled=true;connect.setAttribute('aria-busy','true');
+      let savedTarget='';
+      const current=()=>pending===ticket&&intent.current(ticket);
+      const attached=()=>current()&&block.isConnected;
+      clear(status);status.append(h("div",{class:"hint",text:CHAT_STRINGS.connecting}));
+      try{
+        if(["custom","lmstudio"].includes(id)&&secret){
+          // Bind the already-authorized key write to the address captured by this gesture.
+          await Bridge.localSetKey(address||def.usual,secret,id==="lmstudio"?"lmstudio":undefined);
+          if(!attached())return;key.value="";if(id==="lmstudio")lmstudioKey=true;else customKey=true;
         }
-        const server = await Bridge.localConnect(id, input.value);
-        if (!server.models.length) {
-          clear(status);
-          status.append(h("div", { class: "notice err", text: CHAT_STRINGS.noModels(t(def.name)) }));
-        } else {
-          settings[field] = server.url;
-          if (!server.models.includes(settings.chatModels[id] ?? "")) {
-            settings.chatModels = { ...settings.chatModels, [id]: server.models[0] };
+        const server=await Bridge.localConnect(id,address);
+        if(!attached())return;
+        if(!server.models.length){clear(status);status.append(h("div",{class:"notice err",text:CHAT_STRINGS.noModels(t(def.name))}));}
+        else{
+          const model=server.models.includes(settings.chatModels[id]??"")?settings.chatModels[id]:server.models[0];
+          const beforeModel=settings.chatModels[id],chatModels=id==="ollama"?{...settings.chatModels}:{...settings.chatModels,[id]:model};
+          savedTarget=server.url;await Bridge.saveSettings({...settings,[field]:server.url,chatModels});if(!current())return;
+          // An observed ACK may have redrawn this block. Do not overwrite a subsequent
+          // disconnect/target or model choice while finishing that dispatched write.
+          if(!block.isConnected&&(settings[field]!==server.url||settings.chatModels[id]!==chatModels[id]))return;
+          if(id==="ollama"&&settings.chatModels.ollama!==beforeModel)return;
+          settings={...settings,[field]:server.url,chatModels:id==="ollama"?settings.chatModels:{...settings.chatModels,[id]:model}};
+          if(id==="ollama"){
+            const selected=await OllamaModelSelection.select(model);if(!current()||settings[field]!==server.url)return;
+            if(!selected)throw new Error('O modelo mudou noutra janela. Volta a escolhê-lo para alterar.');
+            settings.chatModels={...settings.chatModels,ollama:model};
           }
-          await save();
-          redraw();
-          return;
+          edited=false;redraw();return;
         }
-      } catch (err) {
-        clear(status);
-        status.append(h("div", { class: "notice err", text: String(err).replace(/^Error:\s*/, "") }));
-      }
-      connect.disabled = false;
+      }catch(error){if(attached()){clear(status);status.append(h("div",{class:"notice err",text:String(error).replace(/^Error:\s*/,"")}));}else if(current()&&savedTarget&&settings[field]===savedTarget)Bridge.reportSettingsError(error);}
+      finally{if(attached()){pending=null;connect.disabled=false;connect.removeAttribute('aria-busy');}}
     });
 
     block.append(h("div", { class: "row" }, label, input, connect));
-    if (id === "custom") block.append(h("div", { class: "row" }, h("label", { text: "" }), key));
+    if (["custom","lmstudio"].includes(id)) block.append(h("div", { class: "row" }, h("label", { text: "" }), key));
     block.append(status, exposure);
     showExposure();
     return block;
@@ -896,18 +926,13 @@ const INTEGRATIONS: IntegrationDef[] = [
   { id: "integration_calcom", name: "Cal.com", color: "#C9956A",
     fields: [{ key: "calcom-api-key", label: N_("API key"), placeholder: "cal_…", secret: true }] },
   // Nothing to enter: Spotify is read from the OS (src-tauri/src/spotify.rs).
-  { id: "integration_spotify", name: "Spotify", color: "#1DB954", fields: [] },
+  { id: "integration_spotify", name: "Spoty · Música e som", color: "#1DB954", fields: [] },
 ];
 
 const MAX_ACTIVE = MAX_DECLARED;
 
 /** Everything that shows the declared pills, redrawn when any of them changes. */
 const declaredViews: (() => void)[] = [];
-
-function declaredChanged() {
-  for (const redraw of declaredViews) redraw();
-  void save();
-}
 
 function integrationsSection(present: Record<string, boolean>): HTMLElement {
   const note = h("div", { class: "hint" });
@@ -922,47 +947,20 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
   const offered = new Set(availablePills().map((p) => p.id));
   for (const def of INTEGRATIONS.filter((d) => offered.has(d.id))) {
     const active = settings.activeIntegrations.includes(def.id);
-    const sw = h("button", { class: active ? "switch on" : "switch" });
-    sw.addEventListener("click", () => {
-      const on = settings.activeIntegrations.includes(def.id);
-      if (on) {
-        settings.activeIntegrations = settings.activeIntegrations.filter((x) => x !== def.id);
-      } else {
-        if (settings.activeIntegrations.length >= MAX_ACTIVE) return;
-        settings.activeIntegrations = [...settings.activeIntegrations, def.id];
-      }
-      sw.classList.toggle("on", !on);
-      declaredChanged();
-    });
+    const sw = h("button", { class: active ? "switch on" : "switch",'aria-label':`${def.name} · Mostrar pet`,'aria-pressed':active });
+    const redraw=()=>{const on=settings.activeIntegrations.includes(def.id);sw.classList.toggle('on',on);sw.setAttribute('aria-pressed',String(on));sw.disabled=rosterSaving||(!on&&settings.activeIntegrations.length>=MAX_ACTIVE);};
+    declaredViews.push(redraw);redraw();
+    sw.addEventListener("click", () => {void changeRoster({action:'setActive',id:def.id,enabled:!settings.activeIntegrations.includes(def.id)});});
 
     const rows = h("div", { style: "display:flex;flex-direction:column;gap:6px;flex:1 1 auto;min-width:0" });
     for (const field of def.fields) {
-      const input = h("input", {
-        type: field.secret ? "password" : "text",
-        placeholder: present[field.key] ? CHAT_STRINGS.stored : field.placeholder,
-        autocomplete: "off",
-        spellcheck: "false",
-        style: "flex:1 1 auto;min-width:0",
-      }) as HTMLInputElement;
-      const saveBtn = h("button", { text: t("Save") });
-      const dotEl = statusDot(present[field.key] ?? false);
-      saveBtn.addEventListener("click", async () => {
-        const value = input.value.trim();
-        try {
-          await Bridge.secretSet(field.key, value);
-          present[field.key] = value.length > 0;
-          input.value = "";
-          input.placeholder = value ? CHAT_STRINGS.stored : field.placeholder;
-          dotEl.style.background = value ? "#22c55e" : "#f4505e";
-        } catch {
-          dotEl.style.background = "#f5a524";
-        }
-      });
+      const fields=secretControls(field.key,present[field.key]??false,field.placeholder,on=>{present[field.key]=on;});
+      fields.input.type=field.secret?'password':'text';
       rows.append(
         h("div", { class: "row" },
           h("label", { style: "min-width:104px", text: t(field.label) }),
-          input, saveBtn, dotEl,
-        ),
+          fields.input, fields.save, fields.remove, fields.dot,
+        ),fields.feedback,
       );
     }
 
@@ -972,7 +970,7 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
       const hint = h("div", { class: "hint", style: "padding-top:5px" });
       rows.append(hint);
       void Bridge.spotifyInstalled().then((ok) => {
-        hint.textContent = ok === false ? t("Not installed") : "";
+        hint.textContent = ok === false ? "Spotify não instalado. Os controlos de som do PC continuam disponíveis." : "Música, dispositivos e mistura de som por aplicação.";
       });
     }
 
@@ -999,16 +997,8 @@ function whatsappSections(): HTMLElement[] {
     toggle,
     maxPills: MAX_ACTIVE,
     pillActive: () => settings.activeIntegrations.includes(WHATSAPP_ID),
-    setPill: (on) => {
-      const has = settings.activeIntegrations.includes(WHATSAPP_ID);
-      if (on && !has && settings.activeIntegrations.length < MAX_ACTIVE) {
-        settings.activeIntegrations = [...settings.activeIntegrations, WHATSAPP_ID];
-      } else if (!on && has) {
-        settings.activeIntegrations = settings.activeIntegrations.filter((x) => x !== WHATSAPP_ID);
-      } else {
-        return;
-      }
-      declaredChanged();
+    setPill: (enabled) => {
+      void changeRoster({ action: "setActive", id: WHATSAPP_ID, enabled });
     },
   })];
 }
@@ -1028,7 +1018,7 @@ function generalSection(): HTMLElement {
   }) as HTMLInputElement;
   volume.addEventListener("input", () => {
     settings.soundVolume = Number(volume.value);
-    void save();
+    void save().catch(Bridge.reportSettingsError);
   });
 
   // Your own sounds: the folder, a reload, and how many are replaced.
@@ -1053,9 +1043,19 @@ function generalSection(): HTMLElement {
   autoClose.addEventListener("change", () => {
     settings.autoCloseInterval = Math.max(5, Math.min(120, Number(autoClose.value) || 15));
     autoClose.value = String(settings.autoCloseInterval);
-    void save();
+    void save().catch(Bridge.reportSettingsError);
   });
 
+  const companionClearance = h("input", {
+    type: "number", min: "0", max: "240", step: "8",
+    value: String(settings.companionTopClearance), style: "width:72px",
+  }) as HTMLInputElement;
+  companionClearance.addEventListener("change", () => {
+    const value = Number(companionClearance.value);
+    settings.companionTopClearance = Number.isFinite(value) ? Math.max(0, Math.min(240, value)) : 64;
+    companionClearance.value = String(settings.companionTopClearance);
+    void save().catch(Bridge.reportSettingsError);
+  });
   // The closed island (core/closed.ts): what stays at the top of the screen.
   const closed = h("select", {}) as HTMLSelectElement;
   closed.append(
@@ -1070,7 +1070,7 @@ function generalSection(): HTMLElement {
   closed.value = closedIsland(settings.closedIsland);
   closed.addEventListener("change", () => {
     settings.closedIsland = closed.value;
-    void save();
+    void save().catch(Bridge.reportSettingsError);
   });
 
   const screen = h("select", {}) as HTMLSelectElement;
@@ -1096,16 +1096,14 @@ function generalSection(): HTMLElement {
   });
   screen.addEventListener("change", () => {
     settings.screen = screen.value;
-    void save();
+    void save().catch(Bridge.reportSettingsError);
   });
 
-  const sound = toggle(settings.soundEnabled, (v) => { settings.soundEnabled = v; void save(); });
-  const openOnHover = toggle(settings.openOnHover, (v) => { settings.openOnHover = v; void save(); });
-  const autostart = toggle(settings.autostart, (v) => { settings.autostart = v; void save(); });
+  const sound = toggle(settings.soundEnabled, (v) => { settings.soundEnabled = v; void save().catch(Bridge.reportSettingsError); });
+  const openOnHover = toggle(settings.openOnHover, (v) => { settings.openOnHover = v; void save().catch(Bridge.reportSettingsError); });
   generalSync = () => {
     setSwitch(sound, settings.soundEnabled);
     setSwitch(openOnHover, settings.openOnHover);
-    setSwitch(autostart, settings.autostart);
     // A field being edited keeps what is in it; it catches up when it is left.
     if (document.activeElement !== volume) volume.value = String(settings.soundVolume);
     if (document.activeElement !== autoClose) {
@@ -1151,15 +1149,29 @@ function generalSection(): HTMLElement {
       autoClose,
       h("span", { class: "hint", text: t("seconds after you leave the island") }),
     ),
+    desktopVisibilityControl(),
+    h("div", { class: "hint", text: t("Each configured pet can appear on the desktop. Click a pet for its controls; right-click for actions.") }),
+    availabilityControls(),
+    h("div", { class: "row" },
+      h("label", { text: t("Companion movement") }),
+      toggle(settings.companionMotion, v => { settings.companionMotion = v; void save().catch(Bridge.reportSettingsError); }),
+    ),
+    h("div", { class: "row" },
+      h("label", { text: t("Use the free space in the top bar") }),
+      toggle(settings.companionBarMode, v => { settings.companionBarMode = v; void save().catch(Bridge.reportSettingsError); }),
+    ),
+    h("div", { class: "hint", text: t("Live bar geometry keeps pets away from controls and windows. Without free space, use the tray or shortcuts.") }),
+    h("div", { class: "row", style: settings.companionBarMode ? "display:none" : "" },
+      h("label", { text: t("Keep clear of the top bar") }), companionClearance,
+      h("span", { class: "hint", text: t("pixels") }),
+    ),
+    h("div", { class: "hint", style: settings.companionBarMode ? "display:none" : "", text: t("Pets stay in a narrow strip below this margin. Increase it if they cover a bar control. Movement also respects reduced motion.") }),
     h("div", { class: "row" },
       h("label", { text: t("Island lives on") }),
       screen,
     ),
-    h("div", { class: "row" },
-      h("label", { text: t("Launch at startup") }),
-      autostart,
-    ),
-    ...recapRows(),
+    autostartControls(),
+    ...recapRows(notchContext),
     ...updateRows(toggle, version),
     languageRow(),
   );
@@ -1177,7 +1189,7 @@ function languageRow(): HTMLElement {
   select.value = LANGUAGES.some((l) => l.code === settings.language) ? settings.language : "";
   select.addEventListener("change", () => {
     settings.language = select.value;
-    void save();
+    void save().catch(Bridge.reportSettingsError);
     applyLanguage();
   });
   return h("div", { class: "row" }, h("label", { text: t("Language") }), select);
@@ -1219,17 +1231,23 @@ const SHORTCUTS_UI = {
   get refused() { return t("Not set by your desktop"); },
 };
 
-function shortcutsSection(initial: ShortcutsReport | null): HTMLElement {
+function shortcutsSection(initial: ShortcutsReport | null,context?:HubContext): HTMLElement {
+  let sectionAlive=true,shortcutWrite:Promise<void>=Promise.resolve();
+  const shortcutWriter=navigator.userAgent.includes('Linux')?new ShortcutPreferenceWriter({current:()=>settings.shortcuts,observation:()=>settingsObservation,alive:()=>sectionAlive,save:request=>Bridge.shortcutsSettingsPatch(request),adopt:bindings=>{settings={...settings,shortcuts:bindings};}}):null;
+  const nativeReview=navigator.userAgent.includes('Linux')?buildShortcutReview({prepare:()=>Bridge.shortcutsReviewPrepare(),prepareCurrentScope:()=>Bridge.shortcutsReviewPrepareCurrentScope(),inspect:key=>Bridge.shortcutsReviewInspect(key),cancel:key=>Bridge.shortcutsReviewCancel(key),apply:decision=>Bridge.shortcutsReviewApply(decision),status:()=>Bridge.shortcutsReviewStatus()}):null;
+  const nativeReconciliation=navigator.userAgent.includes('Linux')?buildShortcutReconciliation({prepare:()=>Bridge.shortcutsReconcilePrepare(),inspect:key=>Bridge.shortcutsReconcileInspect(key),cancel:key=>Bridge.shortcutsReviewCancel(key),apply:decision=>Bridge.shortcutsReconcileApply(decision)}):null;
   let report = initial;
   const list = h("div", { class: "shortcut-list" });
   const feedback = h("div", {});
   const blockedNote = h("div", {});
 
   let stopRecording: (() => void) | null = null;
+  if(context)context.onLeave=()=>{sectionAlive=false;stopRecording?.();nativeReview?.dispose();nativeReconciliation?.dispose();shortcutsListener=null;};
 
   function store(id: string, binding: Binding) {
-    settings.shortcuts = { ...settings.shortcuts, [id]: binding };
-    void save();
+    nativeReview?.invalidate();nativeReconciliation?.invalidate();
+    if(shortcutWriter)shortcutWrite=shortcutWriter.change(id,binding).catch(Bridge.reportSettingsError).finally(draw);
+    else{settings.shortcuts = { ...settings.shortcuts, [id]: binding };shortcutWrite=save().catch(Bridge.reportSettingsError).finally(draw);}
   }
 
   function tagFor(id: string, dups: Set<string>): HTMLElement | null {
@@ -1242,6 +1260,7 @@ function shortcutsSection(initial: ShortcutsReport | null): HTMLElement {
       case "typesCharacter": return h("span", { class: "tag warn", text: SHORTCUTS_UI.types(st.typed ?? "?") });
       case "unsupported": return h("span", { class: "tag", text: SHORTCUTS_UI.unavailable });
       case "refused": return h("span", { class: "tag warn", text: SHORTCUTS_UI.refused });
+      case "preferencesUnconfirmed": return h("span", { class: "tag warn", text: "As preferências aguardam confirmação; o atalho não foi registado." });
       // Wayland: the desktop may run it on other keys than the ones asked for.
       case "active": return st.trigger ? h("span", { class: "tag", text: SHORTCUTS_UI.desktopKeys(st.trigger) }) : null;
       default: return null;
@@ -1295,7 +1314,7 @@ function shortcutsSection(initial: ShortcutsReport | null): HTMLElement {
       window.removeEventListener("blur", onBlur);
       stopRecording = null;
       // Takes the global shortcuts back, from what is saved by now.
-      void Bridge.shortcutsSuspend(false);
+      void shortcutWrite.then(()=>Bridge.shortcutsSuspend(false));
       draw();
     }
     stopRecording = finish;
@@ -1364,9 +1383,10 @@ function shortcutsSection(initial: ShortcutsReport | null): HTMLElement {
     text: SHORTCUTS_UI.reset,
     onclick: () => {
       stopRecording?.();
-      settings.shortcuts = {};
+      nativeReview?.invalidate();nativeReconciliation?.invalidate();
       clear(feedback);
-      void save();
+      if(shortcutWriter)shortcutWrite=shortcutWriter.reset().catch(Bridge.reportSettingsError).finally(draw);
+      else{settings.shortcuts = {};shortcutWrite=save().catch(Bridge.reportSettingsError).finally(draw);}
       draw();
     },
   });
@@ -1378,6 +1398,7 @@ function shortcutsSection(initial: ShortcutsReport | null): HTMLElement {
       if (!stopRecording) draw();
     },
     settingsChanged() {
+      nativeReview?.invalidate();nativeReconciliation?.invalidate();
       if (!stopRecording) draw();
     },
   };
@@ -1387,6 +1408,8 @@ function shortcutsSection(initial: ShortcutsReport | null): HTMLElement {
     "section",
     {},
     h("h2", {}, h("span", { text: SHORTCUTS_UI.title })),
+    nativeReview?.el??h('span',{}),
+    nativeReconciliation?.el??h('span',{}),
     h("div", { class: "hint", text: SHORTCUTS_UI.hint }),
     h("div", { class: "subhead", text: SHORTCUTS_UI.global }),
     list,
@@ -1399,48 +1422,46 @@ function shortcutsSection(initial: ShortcutsReport | null): HTMLElement {
 }
 
 /** Settings → General → Weekly recap. The prefs live with the history in Rust. */
-function recapRows(): HTMLElement[] {
-  const T = {
-    label: t("Weekly recap"),
-    keep: t("Keep a history of my coding sessions"),
-    clear: t("Clear history"),
-    cleared: t("History cleared."),
-    about: t("Counts and project names only — never commands, files or prompts. Kept on this computer for 12 weeks."),
-  };
-  const feedback = h("span", { class: "hint" });
-  const sw = toggle(true, (v) => { void Bridge.recapSetEnabled(v); });
-  void Bridge.recapPrefs().then((prefs) => {
-    if (prefs) sw.classList.toggle("on", prefs.enabled);
-  });
-  const clearBtn = h("button", {
-    class: "danger",
-    text: T.clear,
-    onclick: async () => {
-      clearBtn.disabled = true;
-      await Bridge.recapClear();
-      feedback.textContent = T.cleared;
-      window.setTimeout(() => {
-        clearBtn.disabled = false;
-        feedback.textContent = "";
-      }, 2400);
-    },
-  }) as HTMLButtonElement;
-  return [
-    h("div", { class: "row" },
-      h("label", { text: T.label }),
-      sw,
-      h("span", { class: "hint", text: T.keep }),
-    ),
-    h("div", { class: "row" },
-      h("label", {}),
-      clearBtn,
-      feedback,
-    ),
-    h("div", { class: "row" },
-      h("label", {}),
-      h("span", { class: "hint", style: "flex:1 1 0;min-width:0", text: T.about }),
-    ),
-  ];
+function recapRows(context?:HubContext): HTMLElement[] {
+  const T={label:t("Weekly recap"),keep:t("Keep a history of my coding sessions"),clear:t("Clear history"),cleared:t("History cleared."),about:t("Counts and project names only — never commands, files or prompts. Kept on this computer for 12 weeks.")};
+  const feedback=h('span',{class:'hint',role:'status','aria-live':'polite'});
+  const sw=h('button',{type:'button',class:'switch','aria-label':T.label,'aria-pressed':'mixed'}) as HTMLButtonElement;
+  const stateHint=h('span',{class:'hint',text:'Por confirmar'});
+  const clearBtn=h('button',{type:'button',class:'danger',text:T.clear}) as HTMLButtonElement;
+  const retryBtn=h('button',{type:'button',text:'Atualizar estado'}) as HTMLButtonElement;retryBtn.hidden=true;
+  let alive=true,intent=0,known=false,prefs:ReturnType<typeof parseRecapPrefs>|null=null,pending:'read'|'enabled'|'clear'|null=null;
+  let lastAttempt:{op:'enabled'|'clear';value?:boolean}|null=null,retry:(()=>void)|null=null;
+  const previousLeave=context?.onLeave;
+  if(context)context.onLeave=()=>{alive=false;intent++;previousLeave?.();};
+  const say=(text:string,error=false)=>{feedback.textContent=text;feedback.className=error?'notice err':'hint';feedback.setAttribute('role',error?'alert':'status');};
+  function render(){
+    const observed=known&&pending===null;sw.classList.toggle('on',prefs?.enabled===true);sw.setAttribute('aria-pressed',observed?String(prefs!.enabled):'mixed');sw.setAttribute('aria-busy',String(pending!==null));sw.disabled=pending!==null||!known;
+    stateHint.hidden=observed;sw.title=observed?`Estado observado: registo ${prefs!.enabled?'ativo':'desativado'}.`:'Estado do registo por confirmar.';
+    clearBtn.disabled=pending!==null||!known;clearBtn.setAttribute('aria-busy',String(pending==='clear'));clearBtn.textContent=pending==='clear'?'A limpar…':T.clear;
+    retryBtn.hidden=!retry;retryBtn.disabled=pending!==null;
+  }
+  async function read(){
+    if(!alive||pending!==null)return;const ticket=++intent;pending='read';say('A carregar as preferências do resumo…');render();
+    try{
+      const value=parseRecapPrefs(await Bridge.recapPrefs());if(!alive||ticket!==intent)return;prefs=value;known=true;
+      if(lastAttempt){say('Estado das preferências atualizado. O pedido anterior continua sem confirmação.',true);retry=lastAttempt.op==='enabled'?()=>void mutate('enabled',lastAttempt!.value):null;retryBtn.textContent='Tentar guardar novamente';}
+      else{say('');retry=null;}
+    }catch{if(alive&&ticket===intent){known=false;say('Não foi possível confirmar as preferências do resumo. Estado do registo desconhecido.',true);retry=()=>void read();retryBtn.textContent='Atualizar estado';}}
+    finally{if(alive&&ticket===intent){pending=null;render();}}
+  }
+  async function mutate(op:'enabled'|'clear',value?:boolean){
+    if(!alive||pending!==null||!known)return;const ticket=++intent;pending=op;retry=null;lastAttempt={op,value};say(op==='clear'?'A limpar e confirmar a gravação…':'A guardar a preferência…');render();
+    try{
+      const receipt=parseRecapReceipt(await (op==='clear'?Bridge.recapClear():Bridge.recapSetEnabled(value!)));if(!alive||ticket!==intent)return;
+      prefs=receipt.prefs;known=true;
+      if(recapReceiptSuccess(op,receipt,value)){say(op==='clear'?T.cleared:'Preferência guardada.');lastAttempt=null;}
+      else{say(recapFailureMessage(op,receipt,value),true);if(op==='enabled'){retry=()=>void mutate(op,value);retryBtn.textContent='Tentar guardar novamente';}}
+    }catch{if(alive&&ticket===intent){known=false;say(op==='clear'?'Não foi possível confirmar a limpeza. Atualiza o estado antes de voltar a tentar.':'Estado do registo por confirmar. Não foi possível confirmar a gravação. Atualiza o estado.',true);retry=()=>void read();retryBtn.textContent='Atualizar estado';}}
+    finally{if(alive&&ticket===intent){pending=null;render();}}
+  }
+  sw.onclick=()=>{if(prefs)void mutate('enabled',!prefs.enabled);};clearBtn.onclick=()=>void mutate('clear');retryBtn.onclick=()=>retry?.();
+  render();void read();
+  return [h('div',{class:'row'},h('label',{text:T.label}),sw,stateHint,h('span',{class:'hint',text:T.keep})),h('div',{class:'row'},h('label',{}),clearBtn,retryBtn,feedback),h('div',{class:'row'},h('label',{}),h('span',{class:'hint',style:'flex:1 1 0',text:T.about}))];
 }
 
 // ── Language ──────────────────────────────────────────────────────────────────
@@ -1463,10 +1484,37 @@ function applyDirection() {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
+function receiveSettings(s:Settings){
+  void storageStatus.refresh();
+  settingsObservation++;
+  const before = `${settings.chatProvider}|${settings.ollamaUrl}|${settings.lmstudioUrl}|${settings.customUrl}`;
+  settings = OllamaModelSelection.applySettings({ ...settings, ...s });
+  rosterPreferences.observe(s);
+  observedIslandAvailability=islandAvailabilityValues(s);
+  islandAvailability?.observe(s);
+  autostartSetting?.observe(s.autostart);
+  shortcutsListener?.settingsChanged();
+  for(const redraw of declaredViews)redraw();
+  const after = `${settings.chatProvider}|${settings.ollamaUrl}|${settings.lmstudioUrl}|${settings.customUrl}`;
+  if(before!==after)localRedraw?.();
+  applyLanguage();
+}
+async function ensureSettingsSubscription():Promise<boolean>{
+  if(settingsListenerReady)return true;
+  if(settingsSubscription)return settingsSubscription;
+  settingsSubscription=onEvent<Settings>("settings-changed",receiveSettings).then(()=>{settingsListenerReady=true;return true;},()=>false).finally(()=>{settingsSubscription=null;});
+  return settingsSubscription;
+}
+
 async function main() {
+  await ensureSettingsSubscription();
+  const observation=settingsObservation;
   const boot = await Bridge.boot();
   if (boot) {
-    settings = { ...settings, ...boot.settings };
+    if(observation===settingsObservation){
+      settings = { ...settings, ...boot.settings };
+      observedIslandAvailability=settingsListenerReady?islandAvailabilityValues(boot.settings):null;
+    }
     version = boot.version;
   }
   setLanguage(resolveLanguage(settings.language, systemLanguages()));
@@ -1474,10 +1522,12 @@ async function main() {
   hub = await startHub(windowRoot, {
     version,
     flowPages: FLOW_PAGE_RENDERERS,
-    renderNotch: async (page, container) => {
+    renderNotch: async (page, container, context) => {
       notchPage = page;
       root = container;
+      notchContext=context;
       await render();
+      container.append(storageStatus.el);void storageStatus.refresh();
     },
   });
   onLanguageChange(() => {
@@ -1504,13 +1554,13 @@ let notchPage: PageId = "general";
 
 /** Reads what the sections of the Notch page show and draws them. */
 async function render() {
+  const targetRoot=root,targetPage=notchPage,targetContext=notchContext;
   const status = (await Bridge.hooksStatus()) ?? {
     installed: false, planRelayInstalled: false, settingsPath: "", hookPath: "", hookReady: false,
   };
   const agents = await Bridge.agentHooksList();
 
-  const hasKey = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
-  const claudeRelay = !hasKey && ((await Bridge.claudeReady()) ?? false);
+  const hasKey = await Bridge.secretPresent("anthropic-api-key");
   const shortcutReport = await Bridge.shortcutsStatus();
 
   const keys = [
@@ -1541,7 +1591,11 @@ async function render() {
     chatKeys[key] = (await Bridge.secretPresent(key)) ?? false;
   }
   const customKey = (await Bridge.secretPresent(CUSTOM_SERVER_KEY)) ?? false;
+  const lmstudioKey=(await Bridge.secretPresent("lmstudio-local-api-key"))??false;
 
+  // A slow metadata read for a page the user left must never redraw the new
+  // page or discard the fields they have already started editing there.
+  if(root!==targetRoot||notchPage!==targetPage)return;
   declaredViews.length = 0;
   localRedraw = null;
   shortcutsListener = null;
@@ -1551,10 +1605,10 @@ async function render() {
     general: () => [generalSection()],
     pills: () => [activePillsSection(connected)],
     agents: () => [claudeSection(status), agentsSection(agents), planSection(status)],
-    chat: () => [subscriptionsSection(), apiSection(hasKey, claudeRelay), chatProvidersSection(chatKeys, keyChanged), localSection(customKey)],
+    chat: () => [legacySubscriptionSection(), apiSection(hasKey), chatProvidersSection(chatKeys, keyChanged), localSection(customKey,lmstudioKey)],
     integrations: () => [integrationsSection(present), ...whatsappSections()],
     phone: () => [phoneSection(settings.phoneLink ?? false, toggle, settings)],
-    shortcuts: () => [shortcutsSection(shortcutReport)],
+    shortcuts: () => [shortcutsSection(shortcutReport,targetContext)],
   };
   root.append(...(sections[notchPage]?.() ?? []));
   if (notchPage === "general") {

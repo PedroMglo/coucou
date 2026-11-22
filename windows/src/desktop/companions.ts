@@ -1,0 +1,896 @@
+import {receiveDocumentDrop,documentBatchMessage} from '../core/document-collection';
+import {taskPet} from "../mochi/tasks";
+import {NativePetSpeech,nativeSpeechTarget,petDialogueOrigin,type NativeSpeech} from '../mochi/native-speech';
+import { shelterLayout, speechPlacement, speechText } from "../mochi/shelter";
+import {voiceFeedback,type VoiceView} from "../mochi/voice-feedback";
+import {TaskBoard} from "./task-board";
+import {petCapabilities} from "../mochi/capabilities";
+import {delegatedRequest} from "../mochi/delegation";
+import {petOpenView} from '../mochi/pet-navigation';
+import { PetDialogues, BUSY, ATTENTION, phaseFor, animationFor, type PetActivity } from "../mochi/dialogue";
+import { NoticeQueue, type PetNotice } from "../mochi/notices";
+import { Bridge, emitToWindow, onEvent, onDragDrop } from "../core/bridge";
+import { FlowBridge, type PillState } from "../core/flow";
+import { Sound } from "../core/sound";
+import { SPOTIFY_ID } from "../core/spotify";
+import { BotEngine, hexToRGB } from "../mochi/engine";
+import { CompanionWorld, PET_EVENTS, PET_SIZE, type CompanionsSnapshot, type PetLife } from "../mochi/companions";
+import { resolveLanguage, setLanguage, systemLanguages, t } from "../i18n/i18n";
+import { registerVoiceSpeech } from "../pill/voice-speech";
+
+interface PetView { button: HTMLButtonElement; canvas: HTMLCanvasElement; label: HTMLSpanElement; engine: BotEngine; sleepKey?: string }
+const world = new CompanionWorld();
+const views = new Map<string, PetView>();
+const root = document.getElementById("pets")!;
+const menu = document.getElementById("menu")!;
+const voice = document.getElementById("voice")!;
+const notice = document.createElement("aside");
+notice.className = "pet-notice"; notice.hidden = true;
+notice.setAttribute("role","status"); notice.setAttribute("aria-live","polite");
+document.body.append(notice);
+const noticeQueue = new NoticeQueue();
+let shownNotice: PetNotice | null = null;
+let noticeTimer: number | null = null;
+function dismissNotice() {
+  if(noticeTimer!=null) window.clearTimeout(noticeTimer);
+  noticeTimer=null; shownNotice=null; notice.hidden=true;
+  world.presented=voicePet??snapshot.presented??null;
+  input(performance.now()/1000,true); showNextNotice(); wake();
+}
+function showNextNotice() {
+  if(shownNotice || !snapshot.enabled || snapshot.paused || !nativeVisible || voicePet || snapshot.presented) return;
+  const next=noticeQueue.take(); if(!next)return;
+  const p=world.pets.get(next.pet);
+  if(p && !p.retired) world.touch(next.pet,performance.now()/1000);
+  if(!p?.shown){showNextNotice();return;}
+  shownNotice=next; world.presented=next.pet; world.touch(next.pet,performance.now()/1000);
+  const name=document.createElement("strong");name.textContent=`${p.identity.name}${next.origin?' · '+next.origin:''}`;
+  const text=document.createElement("p");text.textContent=t(next.text);
+  const review=document.createElement("button");review.textContent=t("Review");
+  review.onclick=()=>{
+    const view=next.view;dismissNotice();
+    if(next.pet===SPOTIFY_ID){open(p,"overview");return;}
+    if(next.session&&view==='floating')void Bridge.petChatOpen(next.pet,{id:next.session.id,backend:next.session.backend,cwd:next.session.cwd??'',title:next.session.title??'',steps:[],finalLine:''});
+    else if(next.session)void emitToWindow('island','pet-session-select',{pet:next.pet,backend:next.session.backend,id:next.session.id,cwd:next.session.cwd,title:next.session.title,owned:next.session.owned,view});
+    else open(p,view);
+  };
+  const close=document.createElement("button");close.textContent=t("Dismiss");close.onclick=dismissNotice;
+  notice.replaceChildren(name,text,review,close);
+  positionNotice();notice.hidden=false;
+  noticeTimer=window.setTimeout(dismissNotice,next.urgent?12000:7000);
+  input(performance.now()/1000,true);wake();
+}
+function positionNotice() {
+  const p=shownNotice && world.pets.get(shownNotice.pet);if(!p)return;
+  const left=Math.max(8,Math.min(world.width-308,p.x-150));
+  notice.style.left=`${left}px`;notice.style.top=`${(world.band?.height??p.y+30)+8}px`;
+  notice.style.setProperty("--tip",`${Math.max(12,Math.min(280,p.x-left-6))}px`);
+}
+const shelter = document.createElement("div"); shelter.id="shelter"; shelter.hidden=true;
+const home = document.createElement("button"); home.type="button"; home.className="shelter-home";
+home.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 12 3l9 8M5 10v10h14V10M9 20v-5a3 3 0 0 1 6 0v5"/></svg>';
+const residents=document.createElement("div");residents.className="shelter-residents";
+const tasksButton=document.createElement("button");tasksButton.type="button";tasksButton.textContent="☷";tasksButton.title="Centro de tarefas";tasksButton.setAttribute("aria-label","Centro de tarefas");
+const taskBoard=new TaskBoard(pet=>{const p=world.pets.get(pet);if(p&&!reviewChatDecision(pet))open(p,[...decisions.values()].some(d=>d.pet===pet)?"prompt":undefined);},()=>{refreshShelter();input(performance.now()/1000,true);wake();});
+function showTasks(pet?:string,section="tasks") {
+  if(shelterOpen)setShelter(false);closeMenu();
+  const room=snapshot.control?null:shelterLayout(snapshot.band,(snapshot.catalog??snapshot.pets).length,false);
+  taskBoard.position(room?room.left+16:world.width/2,(snapshot.band?.height??64)+8,world.width);
+  void Bridge.petPanelOpen(room?room.left+16:world.width/2,(snapshot.band?.height??40)+8,pet,section);input(performance.now()/1000,true);wake();
+}
+tasksButton.onclick=()=>showTasks();
+residents.addEventListener("wheel",event=>{if(residents.scrollWidth>residents.clientWidth){event.preventDefault();residents.scrollLeft+=event.deltaY||event.deltaX;}},{passive:false});
+shelter.append(home,residents);
+let shelterOpen=false,shelterKey="";
+function refreshShelter() {
+  // Availability is independent of the two centre preferences. Turning them
+  // off must never resurrect the retired shelter or its input region.
+  if(snapshot.control){shelterOpen=false;shelter.hidden=true;shelter.remove();residents.replaceChildren();shelterKey='';return;}
+  if(!shelter.isConnected)document.body.append(shelter);
+  const layout=shelterLayout(snapshot.band,(snapshot.catalog??snapshot.pets).length,shelterOpen);
+  shelter.hidden=!layout || !snapshot.enabled || !nativeVisible;
+  if(!layout)return;
+  Object.assign(shelter.style,{left:`${layout.left}px`,top:`${layout.top}px`,width:`${layout.width}px`,height:`${layout.height}px`});
+  home.setAttribute("aria-expanded",String(shelterOpen));
+  const catalog=snapshot.catalog??snapshot.pets;
+  home.title=`Abrigo dos pets · ${catalog.length} disponíveis`;
+  home.setAttribute("aria-label",home.title);
+  home.dataset.taskAttention=String(taskBoard.needsAttention);
+  tasksButton.title=`Centro de tarefas · ${taskBoard.activeCount} em curso`;
+  tasksButton.setAttribute("aria-label",tasksButton.title);
+  residents.hidden=!shelterOpen;
+  const key=JSON.stringify(catalog.map(p=>[p.id,p.name,p.color,p.outfit,p.attention]));
+  if(key===shelterKey)return;shelterKey=key;residents.replaceChildren(tasksButton);
+  for(const identity of catalog) {
+    const button=document.createElement("button");button.type="button";button.title=`${identity.name} · ${petCapabilities(identity.id).role}`;button.setAttribute("aria-label",`Chamar ${identity.name}`);
+    button.dataset.petId=identity.id;
+    button.dataset.attention=String(identity.attention);
+    const canvas=document.createElement("canvas");canvas.width=canvas.height=64;
+    const engine=new BotEngine();engine.bodyColor=hexToRGB(identity.color);engine.setState(identity.attention?"approval":"sleeping",true);engine.setOutfit(identity.outfit,false);engine.update(.016);engine.draw(canvas.getContext("2d")!,64,64);
+    button.append(canvas);button.onclick=()=>{ const p=world.pets.get(identity.id);if(p)open(p);else void emitToWindow("island",PET_EVENTS.summon,{pillId:identity.id}); };
+    residents.append(button);
+  }
+}
+function setShelter(open:boolean) {
+  if(snapshot.control){refreshShelter();return;}
+  if(open&&snapshot.presented)void emitToWindow('island','companions-hide-popup');
+  shelterOpen=open;refreshShelter();
+  world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented,motion:world.motion},window.innerWidth,performance.now()/1000);
+  refreshDialogue();input(performance.now()/1000,true);wake();
+}
+home.onclick=()=>showTasks(undefined,"sessions");
+home.addEventListener("contextmenu",event=>{event.preventDefault();setShelter(!shelterOpen);});
+const nativeMessages=new NativePetSpeech();
+const nativeSpeech=nativeMessages.entries;
+const locatingSpeech=new WeakSet<NativeSpeech>();
+const speechTargets=new WeakMap<NativeSpeech,import('../core/session-chat').SessionTarget>();
+const unavailableSpeech=new WeakSet<NativeSpeech>();
+function locateSpeech(speech:NativeSpeech){
+  if(!speech.session?.id||!speech.session.backend||speech.session.owned){unavailableSpeech.add(speech);return;}
+  locatingSpeech.add(speech);
+  void Bridge.sessionChatList(speech.pet).then(rows=>{
+    if(!nativeMessages.current(speech,performance.now()))return;
+    const target=nativeSpeechTarget(speech,rows);
+    if(target)speechTargets.set(speech,target);else unavailableSpeech.add(speech);
+  }).catch(error=>{
+    if(nativeMessages.current(speech,performance.now()))unavailableSpeech.add(speech);
+    console.error('Não foi possível localizar a sessão da mensagem.',error);
+  }).finally(()=>{locatingSpeech.delete(speech);refreshDialogue();input(performance.now()/1000,true);wake();});
+}
+const dialogues = new PetDialogues();
+const decisions = new Map<string,{pet:string;phase:string;target?:import('../core/session-chat').SessionTarget}>();
+const endedDecisions=new Set<string>();
+function reviewChatDecision(pet:string){
+ const entry=[...decisions].find(([,d])=>d.pet===pet&&d.target);
+ if(!entry)return false;
+ const[id,decision]=entry;
+ void Bridge.petChatOpen(pet,undefined,false,decision.target,id).catch(error=>{
+  if(decisions.get(id)!==decision)return;
+  noticeQueue.push({key:`decision-open:${id}`,pet,text:String(error).replace(/^Error:\s*/,''),urgent:false});showNextNotice();
+ });return true;
+}
+let pendingFold: {pet:string;until:number}|null = null;
+function decisionPhase(pet:string) { return [...decisions.values()].find(d=>d.pet===pet)?.phase; }
+function foldResolvedCard() {
+  const value=pendingFold; if(!value)return;
+  if(performance.now()>value.until){pendingFold=null;return;}
+  const p=snapshot.pets.find(p=>p.id===value.pet);
+  if(decisions.size || p?.attention || ATTENTION.has(p?.state??""))return;
+  pendingFold=null;
+  if(snapshot.presented===value.pet) void emitToWindow("island","companions-hide-popup");
+}
+const dialogue = document.createElement("aside");
+dialogue.className = "pet-dialogue"; dialogue.hidden = true;
+dialogue.setAttribute("role", "status"); dialogue.setAttribute("aria-live", "polite");
+const dialogueTitle = document.createElement("strong");
+const dialogueText = document.createElement("p");
+const dialogueHeard = document.createElement("p"); dialogueHeard.className="dialogue-heard";
+const dialogueAction = document.createElement("button");
+dialogueAction.textContent = "Rever pedido";
+dialogue.append(dialogueTitle, dialogueHeard, dialogueText, dialogueAction); document.body.append(dialogue);
+let dialoguePet: string | null = null;
+let dialogueTimer: number | null = null;
+let liveVoice: VoiceView | null = null;
+let voiceReceivedAt=0;
+const phaseLabel = (phase: string) => ({preparing:"A ligar o microfone",thinking:"A pensar",working:"A trabalhar",searching:"A pesquisar",message:"A responder",speaking:"A falar",listening:"A ouvir",approval:"Precisa da tua aprovação",question:"Precisa de uma resposta tua",error:"Precisa de atenção",ratelimit:"Limite atingido",done:"Resposta pronta",stopped:"Interrompido",failed:"Não conseguiu terminar"}[phase] ?? "Disponível");
+function activeSnapshot(s: CompanionsSnapshot): CompanionsSnapshot {
+  const room=s.control?null:shelterLayout(s.band,(s.catalog??s.pets).length,shelterOpen);
+  return {...s,sheltered:!!room,band:room && s.band ? {...s.band,lanes:room.lanes}:s.band,pets:s.pets.map(identity=>{
+    const phase=decisionPhase(identity.id) ?? phaseFor(dialogues.current(identity.id,performance.now()),identity.state);
+    const busy=BUSY.has(phase),attention=ATTENTION.has(phase);
+    const entry=dialogues.entries.get(identity.id);
+    const reading=!!entry && ["done","stopped","failed"].includes(entry.phase) && performance.now()-entry.changedAt<9000;
+    return {...identity,state:animationFor(phase,identity.state),busy:identity.busy||busy,activity:`${identity.activity}:${entry?.turn}:${entry?.changedAt}`,active:identity.active||busy||attention||reading,attention:identity.attention||attention};
+  })};
+}
+function activityPhase(p: PetLife) {
+  const value = dialogues.current(p.identity.id,performance.now());
+  const native = snapshot.pets.find(identity=>identity.id===p.identity.id)?.state ?? p.identity.state;
+  if(voicePet===p.identity.id && liveVoice) return voiceFeedback(liveVoice,value,p.identity.name,voiceReceivedAt).phase;
+  const attention=decisionPhase(p.identity.id) ?? (ATTENTION.has(native) ? native : null);
+  if(attention)return attention;
+  return phaseFor(value,native);
+}
+function positionDialogue() {
+  if(dialogue.hidden || !dialoguePet)return;
+  const p=world.pets.get(dialoguePet);if(!p?.shown){dialogue.hidden=true;return;}
+  const placement=speechPlacement(p.x,p.y,world.scale,world.band,world.width,[...world.pets.values()].filter(other=>other!==p && other.shown).map(other=>other.x));
+  if(!placement){dialogue.style.visibility="hidden";return;}
+  dialogue.style.visibility="visible";
+  Object.assign(dialogue.style,{left:`${placement.left}px`,top:`${placement.top}px`,width:`${placement.width}px`});
+  dialogue.dataset.side=placement.side;dialogue.dataset.compact=String('height'in placement);
+  dialogue.style.setProperty("--speech-height",`${"height" in placement?placement.height:38}px`);
+  dialogue.style.setProperty("--tip",`${placement.tip}px`);
+}
+function refreshDialogue() {
+  const now = performance.now();
+  const selected=dialogues.selected && world.pets.get(dialogues.selected);
+  const recent=[...nativeSpeech.entries()].filter(([,s])=>now-s.at<=9000).sort((a,b)=>b[1].at-a[1].at)[0]?.[0];
+  const owner = voicePet ?? (selected && dialogues.visible(selected.identity.id,now,false) ? selected.identity.id : null) ?? recent ?? [...world.pets.values()].find(p=>p.identity.attention)?.identity.id;
+  const p = owner ? world.pets.get(owner) : undefined;
+  dialogue.hidden = true; dialoguePet = null;
+  if (!p?.shown || !snapshot.enabled || !nativeVisible || snapshot.paused || (snapshot.presented && !liveVoice) || shelterOpen) return;
+  const value = dialogues.visible(p.identity.id,now,false);
+  const phase = activityPhase(p);
+  const voiced = voicePet === p.identity.id ? liveVoice : null;
+  const native=nativeSpeech.get(p.identity.id);
+  const message = voiced?.phase === "speaking" ? voiced.answer : ATTENTION.has(phase)?'':value?.message ?? native?.text ?? "";
+  const feedback=voiced ? voiceFeedback(voiced,dialogues.current(p.identity.id,now),p.identity.name,voiceReceivedAt) : null;
+  const unavailable=!voiced&&!value&&!ATTENTION.has(phase)&&native&&unavailableSpeech.has(native);
+  const text=feedback?.text ?? (unavailable?'A sessão desta mensagem não está disponível para abrir. Podes procurá-la na lista de sessões.':p.identity.session?.decisionInTerminal&&['approval','question'].includes(phase)?'Este pedido precisa da tua resposta no terminal desta sessão.':speechText(phase,message,value?.messageAt??native?.at??now,now));
+  if(!text)return;
+  dialoguePet = p.identity.id; dialogue.hidden = false;
+  dialogue.dataset.phase = phase; dialogue.style.setProperty("--pet-color",p.identity.color);
+  dialogue.dataset.voice=String(!!voiced);
+  const decision=[...decisions.values()].find(d=>d.pet===p.identity.id&&d.target);
+  const origin=petDialogueOrigin(ATTENTION.has(phase),p.identity.session,decision?.target,value?.origin,native);
+  dialogueTitle.textContent = feedback?.title ?? `${p.identity.name}${origin?' · '+origin:''}`;
+  if (dialogueText.textContent !== text) { dialogueText.textContent = text; dialogueText.classList.remove("arriving");void dialogueText.offsetWidth;dialogueText.classList.add("arriving"); }
+  dialogue.title=feedback ? `${feedback.title}\n${voiced?.heard ? "Ouvi: "+voiced.heard+"\n" : ""}${text}` : text;dialogueText.hidden=false;dialogueHeard.hidden=true;
+  dialogueAction.hidden = !world.band && !ATTENTION.has(phase);
+  dialogueAction.textContent=p.identity.id===SPOTIFY_ID?"Abrir música e som":voiced ? `Abrir conversa do Mochi com ${p.identity.name}` : p.identity.session?.decisionInTerminal&&ATTENTION.has(phase)?'Responder no terminal':ATTENTION.has(phase)?"Rever pedido":unavailable?`Ver sessões de ${p.identity.name}`:!value&&native&&locatingSpeech.has(native)?'A localizar a sessão…':`Ler mensagem de ${p.identity.name}`;
+  dialogueAction.disabled=!!native&&locatingSpeech.has(native)&&!value&&!ATTENTION.has(phase)&&!voiced;
+  dialogueAction.setAttribute("aria-label",dialogueAction.textContent);
+  dialogue.setAttribute("aria-busy",String(BUSY.has(phase)));
+  positionDialogue();
+  if (dialogueTimer != null) window.clearTimeout(dialogueTimer);
+  const remaining=voiced ? 1000 : phase==="speaking" || ATTENTION.has(phase) ? 9500 : Math.max(50,9001-(now-(value?.messageAt??native?.at??now)));
+  dialogueTimer = window.setTimeout(()=>{dialogueTimer=null;world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented,motion:world.motion},window.innerWidth,performance.now()/1000);refreshDialogue();input(performance.now()/1000,true);wake();},remaining);
+}
+dialogueAction.onclick = async () => {
+  const p=dialoguePet && world.pets.get(dialoguePet);if(!p)return;
+  if(p.identity.id===SPOTIFY_ID){open(p,"overview");return;}
+  if(reviewChatDecision(p.identity.id))return;
+  if(liveVoice && voicePet===p.identity.id){open(p,"prompt");return;}
+  if(ATTENTION.has(activityPhase(p))){open(p);return;}
+  const value=dialogues.visible(p.identity.id,performance.now(),false);
+  if(value?.target){
+    const pet=p.identity.id,target=value.target;
+    void Bridge.petChatOpen(pet,undefined,false,target).catch(error=>{
+      if(dialogues.entries.get(pet)!==value)return;
+      noticeQueue.push({key:`message-open:${pet}:${value.turn}`,pet,text:String(error).replace(/^Error:\s*/,''),urgent:false});showNextNotice();
+    });return;
+  }
+  const final=nativeSpeech.get(p.identity.id);
+  if(final&&nativeMessages.current(final,performance.now())&&!value){
+    if(unavailableSpeech.has(final)){showTasks(p.identity.id,'sessions');return;}
+    const target=speechTargets.get(final);if(!target)return;
+    const stillReading=()=>{const current=world.pets.get(final.pet);return !!current&&current.shown&&nativeMessages.current(final,performance.now())&&dialoguePet===final.pet&&!ATTENTION.has(activityPhase(current))&&!dialogues.visible(final.pet,performance.now(),false);};
+    try{
+      // No asynchronous lookup may precede this user intent. The canonical
+      // target is already known; the native opening guard owns ordering now.
+      if(await Bridge.petChatOpen(final.pet,undefined,false,target)!==true&&stillReading())unavailableSpeech.add(final);
+    }catch(error){if(stillReading()){unavailableSpeech.add(final);console.error('Não foi possível localizar a sessão da mensagem.',error);}}
+    finally{refreshDialogue();input(performance.now()/1000,true);wake();}
+    return;
+  }
+  open(p,"prompt");
+};
+let voicePet: string | null = null;
+let voiceActive = false;
+let flowState: PillState | null = null;
+let bubble: {view: VoiceView; dictation: boolean} | null = null;
+function voiceBubble(view: VoiceView | null, dictation = false) {
+  bubble = view ? {view,dictation} : null;
+  if (!dictation) {
+    if(shelterOpen){shelterOpen=false;refreshShelter();}
+    const starting=!liveVoice && view?.phase==="preparing";
+    if(view?.phase==="received")voiceReceivedAt=performance.now();
+    liveVoice = view;
+    voice.hidden = true;
+    voicePet = view?.pet ?? null;
+    home.dataset.listening=String(!!view && !voicePet);
+    if(view && !voicePet){
+      const status=voiceFeedback(view,undefined,"Mochi");
+      const title=document.createElement("strong");title.textContent=status.title;
+      const heard=document.createElement("p");heard.className="heard";heard.textContent=view.heard?`Ouvi: ${view.heard}`:"";
+      const prompt=document.createElement("p");prompt.textContent=status.text;
+      const choices=document.createElement("div");choices.className="voice-pet-choices";
+      for(const identity of snapshot.catalog??snapshot.pets){const capabilities=petCapabilities(identity.id);if(!capabilities.voice)continue;const b=document.createElement("button");b.textContent=identity.name;b.onclick=()=>void Bridge.voiceSessionStart(capabilities.voice!).catch(error=>{prompt.textContent=String(error);});choices.append(b);}
+      const stop=document.createElement("button");stop.textContent="Terminar escuta";stop.onclick=()=>void Bridge.voiceSessionToggle();
+      voice.replaceChildren(title,heard,prompt,choices,stop);voice.hidden=false;
+      const layout=snapshot.control?null:shelterLayout(snapshot.band,(snapshot.catalog??snapshot.pets).length,false);
+      const left=Math.max(8,Math.min(world.width-348,layout?.left??world.width/2));
+      voice.style.left=`${left}px`;voice.style.top=`${(snapshot.band?.height??40)+8}px`;voice.style.setProperty("--tip","18px");
+      if(starting && snapshot.presented && !decisions.size){const current=snapshot.pets.find(p=>p.id===snapshot.presented);if(!current?.attention && !ATTENTION.has(current?.state??""))void emitToWindow("island","companions-hide-popup");}
+      refreshDialogue();input(performance.now()/1000,true);wake();return;
+    }
+    const owner=snapshot.pets.find(p=>p.id===voicePet);
+    if(starting && snapshot.presented===voicePet && !decisions.size && !owner?.attention && !ATTENTION.has(owner?.state??"")) void emitToWindow("island","companions-hide-popup");
+    world.presented = voicePet ?? snapshot.presented ?? null;
+    if (voicePet) { world.touch(voicePet,performance.now()/1000); world.sync({...activeSnapshot(snapshot),presented:voicePet,motion:world.motion},window.innerWidth,performance.now()/1000); }
+    refreshDialogue(); input(performance.now()/1000,true); wake(); return;
+  }
+  voice.hidden = !view;
+  voice.replaceChildren();
+  if (!view) { voicePet = null; showNextNotice(); world.presented = snapshot.presented ?? null; input(performance.now()/1000, true); return; }
+  // Flow is a global tool, independent of the configured inference pets.
+  const p = [snapshot.presented, voicePet].map(id => id ? world.pets.get(id) : undefined)
+    .find(p => p && !p.retired) ?? [...world.pets.values()].find(p => p.shown && !p.retired);
+  if(p && !p.retired) world.touch(p.identity.id,performance.now()/1000);
+  voicePet = p?.identity.id ?? null;
+  if(shownNotice) dismissNotice();
+  world.presented = voicePet ?? snapshot.presented ?? null;
+  world.sync({...activeSnapshot(snapshot),presented:voicePet,motion:world.motion},window.innerWidth,performance.now()/1000);
+  const title = document.createElement("strong");
+  title.textContent = `Flow · ${view.note ? t("Notetaker") : t("Dictation")}`;
+  const heard = document.createElement("p"); heard.className = "heard"; heard.textContent = view.heard;
+  const answer = document.createElement("p"); answer.textContent = view.answer;
+  voice.append(title, heard, answer);
+  const actions = view.announcementId != null ? [[t("Close"),"dismiss"]] :
+    view.note ? [[t("Finish"),"stopNote"]] :
+    [[t("Cancel"), "cancel"], ...(["listening", "locked"].includes(view.phase) ? [[t("Finish"), "finish"]] : [])];
+  for (const [text, action] of actions) {
+    const button = document.createElement("button"); button.textContent = text;
+    button.onclick = () => void FlowBridge.pillAction(action, view.announcementId);
+    voice.append(button);
+  }
+  const anchor = p?.x ?? world.width / 2;
+  const left = Math.max(8, Math.min(world.width - 348, anchor - 170));
+  voice.style.left = `${left}px`;
+  voice.style.top = `${(world.band?.height ?? (p?.y ?? 0) + 30) + 10}px`;
+  voice.style.setProperty("--tip", `${Math.max(12, Math.min(320,anchor-left-6))}px`);
+  input(performance.now()/1000, true); wake();
+}
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+let snapshot: CompanionsSnapshot = { enabled: false, paused: false, motion: true, pets: [] };
+let timer: number | null = null;
+let last = 0;
+let lastShape = "";
+let shapeAt = -Infinity;
+let dragging: { id: string; start: number; x: number; moved: boolean } | null = null;
+let suppressClick = false;
+let nativeVisible = true;
+let menuTimer: number | null = null;
+let menuPet: string | null = null;
+// Ambient behaviour stays silent. The island already owns notification sounds;
+// several pets must not create several audio contexts or repeat an alert.
+Sound.setEnabled(false);
+
+// Events can precede the snapshot that introduces their owner. Keep that
+// exact identity briefly; never substitute a different integration's pet.
+let pendingPresentation: { id: string; view?: string; manual?:boolean; until: number } | null = null;
+let petPointerSequence=0,hoverOpened:string|null=null;
+const petPointers=new Map<string,{context:number;inside:boolean}>();
+const POINTER_PAIR_MS=100;
+let nativePetInside:boolean|null=null,outsideObserved=false,hoverRecoveryArmed=false;
+let hoverMove:{id:string;at:number}|null=null,nativePetPoint:{id:string;at:number}|null=null;
+let recoveredHover:{id:string;context:number}|null=null;
+let hoverEntry:{id:string;context:number}|null=null;
+let pointerPosition:{x:number;y:number;sx:number;sy:number}|null=null;
+const pointerMoves=new WeakSet<MouseEvent>();
+// Surface entry can synthesize a trusted zero-motion mousemove in WebKit too.
+// Compare positions within one continuous visit, never across native exits:
+// Wayland can expose local or zero screen coordinates. A first observation only
+// establishes a position, regardless of cached deltas. Explicit actions need no movement.
+document.addEventListener('mousemove',event=>{
+ if(!event.isTrusted||![event.clientX,event.clientY,event.screenX,event.screenY].every(Number.isFinite))return;
+ const prior=pointerPosition;pointerPosition={x:event.clientX,y:event.clientY,sx:event.screenX,sy:event.screenY};
+ const changed=prior&&(prior.x!==event.clientX||prior.y!==event.clientY);
+ const screenChanged=prior&&(prior.sx!==event.screenX||prior.sy!==event.screenY);
+ const noScreen=prior&&prior.sx===0&&prior.sy===0&&event.screenX===0&&event.screenY===0;
+ if(changed&&(screenChanged||noScreen))pointerMoves.add(event);
+},true);
+document.addEventListener('pointerleave',event=>{
+ if(event.target!==document.documentElement&&event.target!==document)return;
+ if(event.isTrusted)pointerPosition=null;
+},true);
+document.addEventListener('pointerenter',event=>{
+ if(event.isTrusted&&(event.target===document.documentElement||event.target===document))pointerPosition=null;
+},true);
+function clearHoverEvidence(){hoverMove=nativePetPoint=null;hoverEntry=null;}
+function resetHoverRecovery(){nativePetInside=null;outsideObserved=hoverRecoveryArmed=false;recoveredHover=null;pointerPosition=null;clearHoverEvidence();}
+function armHoverRecovery(){
+ clearHoverEvidence();
+ hoverRecoveryArmed=outsideObserved&&nativePetInside===false&&nativeVisible&&!document.hidden&&snapshot.enabled&&!snapshot.presented;
+}
+function canHoverOpen(pet:string){
+ // A pending decision must remain reachable from its own pet. Keep unrelated
+ // hover cards out of the way; opening still uses the exact request target.
+ const ownRequest=[...decisions.values()].some(decision=>decision.pet===pet&&decision.target);
+ return menu.hidden&&!dragging&&!fileTarget&&!snapshot.presented&&(!decisions.size||ownRequest)&&!voicePet&&snapshot.enabled&&!snapshot.paused&&nativeVisible&&!document.hidden;
+}
+function consumeHoverRecovery(){hoverRecoveryArmed=outsideObserved=false;clearHoverEvidence();}
+function tryRecoverHover(){
+ const move=hoverMove,point=nativePetPoint,now=performance.now();
+ if(!hoverRecoveryArmed||nativePetInside!==true||!move||!point||move.id!==point.id||now-move.at>POINTER_PAIR_MS||now-point.at>POINTER_PAIR_MS||!canHoverOpen(move.id))return;
+ const pet=world.pets.get(move.id);if(!pet?.shown||pet.visibility==='leaving'||pet.opacity<=0.05)return;
+ consumeHoverRecovery();reportPetPointer(move.id,true);
+ const context=petPointers.get(move.id)!.context;
+ recoveredHover={id:move.id,context};hoverOpened=move.id;
+ void open(pet,undefined,true,context);
+}
+function rememberPetMove(pet:PetLife,event:MouseEvent){
+ if(!pointerMoves.has(event)||!canHoverOpen(pet.identity.id)||petAtPointer({x:event.clientX,y:event.clientY})!==pet)return;
+ const id=pet.identity.id,pointer=petPointers.get(id);
+ if(nativePetInside!==false&&hoverEntry?.id===id&&pointer?.inside&&hoverEntry.context===pointer.context){
+  const context=pointer.context;consumeHoverRecovery();hoverOpened=id;
+  void open(pet,undefined,true,context);return;
+ }
+ if(!hoverRecoveryArmed)return;
+ hoverMove={id:pet.identity.id,at:performance.now()};tryRecoverHover();
+}
+function reportPetPointer(pillId:string,inside:boolean){
+ if(inside&&(!nativeVisible||document.hidden||!snapshot.enabled))return;
+ if(inside)for(const [other,pointer]of petPointers)if(other!==pillId&&pointer.inside)reportPetPointer(other,false);
+ const prior=petPointers.get(pillId);if(!inside&&!prior)return;
+ if(!inside&&recoveredHover?.id===pillId)recoveredHover=null;
+ const value={context:inside?++petPointerSequence:prior!.context,inside};petPointers.set(pillId,value);
+ void emitToWindow('island','pet-card-pointer',{pillId,...value});
+}
+/** GDK can report a real surface exit without a WebKit DOM pointerleave. */
+function releasePetPointers(){
+ for(const [pillId,pointer]of petPointers)if(pointer.inside)reportPetPointer(pillId,false);
+ hoverOpened=null;
+ if(menu.hidden&&!dragging)world.hovered=null;
+ wake();
+}
+/** Native and trusted DOM coordinates must resolve to a real, visible pet view. */
+function petAtPointer(position:{x:number;y:number}):PetLife|undefined{
+ if(!position||!Number.isFinite(position.x)||!Number.isFinite(position.y)||!nativeVisible||document.hidden||!snapshot.enabled)return;
+ const button=document.elementFromPoint(position.x,position.y)?.closest<HTMLButtonElement>('.pet');
+ if(!button||!root.contains(button)||button.hidden||button.disabled||!button.getClientRects().length)return;
+ const id=button.dataset.petId;if(!id||views.get(id)?.button!==button)return;
+ const pet=world.pets.get(id);
+ if(!pet?.shown||pet.visibility==='leaving'||pet.opacity<=0.05)return;
+ return pet;
+}
+function recoverPetPointer(position:{x:number;y:number}){
+ if(nativePetInside!==true)return;
+ const pet=petAtPointer(position);if(!pet){clearHoverEvidence();return;}
+ const id=pet.identity.id,pointer=petPointers.get(id);
+ if(snapshot.presented===id&&pointer&&!pointer.inside)reportPetPointer(id,true);
+ if(hoverRecoveryArmed&&nativePetInside===true&&canHoverOpen(id)){
+  nativePetPoint={id,at:performance.now()};tryRecoverHover();
+ }
+}
+function presentPending() {
+  const e = pendingPresentation;
+  if (!e) return;
+  if (performance.now() > e.until) { pendingPresentation = null; return; }
+  const p = world.pets.get(e.id);
+  if(p && !p.retired) world.touch(e.id,performance.now()/1000);
+  if (p?.shown && nativeVisible) open(p, e.view,e.manual===true);
+}
+
+async function open(p: PetLife, view?: string, manual=true,hoverContext?:number) {
+  if(p.identity.id===SPOTIFY_ID&&view==="prompt")view="overview";
+  pendingPresentation = null;
+  // A native request has its own exact destination; a projected terminal
+  // marker may belong to another session of this pet. Resolve the request first.
+  if((!view||view==='overview')&&reviewChatDecision(p.identity.id))return;
+  if((!view||['overview','approval','question'].includes(view))&&['approval','question'].includes(activityPhase(p))&&p.identity.session?.decisionInTerminal){
+    const session=p.identity.session;
+    if(session.backend)void Bridge.petFocusSession(session.backend,session.id).catch(error=>{noticeQueue.push({key:`decision-terminal:${session.id}:${Date.now()}`,pet:p.identity.id,text:String(error).replace(/^Error:\s*/,''),urgent:false});showNextNotice();});
+    return;
+  }
+  if(shelterOpen){shelterOpen=false;refreshShelter();}
+  if(shownNotice) { if(noticeTimer!=null)window.clearTimeout(noticeTimer);noticeTimer=null;shownNotice=null;notice.hidden=true; }
+  closeMenu();
+  world.touch(p.identity.id, performance.now() / 1000);
+  world.sync({...activeSnapshot(snapshot),presented:p.identity.id,motion:world.motion},window.innerWidth,performance.now()/1000);
+  const pointer=petPointers.get(p.identity.id);
+  if(manual&&pointer)await emitToWindow('island','pet-card-pointer',{pillId:p.identity.id,...pointer});
+  if(hoverContext!==undefined){const latest=petPointers.get(p.identity.id);if(!latest?.inside||latest.context!==hoverContext)return;}
+  void Bridge.companionsOpen(p.identity.id, p.x, p.y, petOpenView(activityPhase(p),view,!!decisionPhase(p.identity.id)),manual);
+}
+
+function closeMenu() {
+  const wasOpen = !menu.hidden;
+  menuPet = null;
+  if (menuTimer != null) window.clearTimeout(menuTimer);
+  menuTimer = null;
+  menu.hidden = true;
+  if (wasOpen) world.hovered = null;
+}
+function showMenu(p: PetLife) {
+  closeMenu();
+  menu.replaceChildren();
+  const capabilities=petCapabilities(p.identity.id);
+  const role=document.createElement("p");role.className="pet-role";role.textContent=capabilities.role;menu.append(role);
+  const add = (label: string, action: () => void) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.addEventListener("click", () => { closeMenu(); action(); wake(); });
+    menu.append(b);
+  };
+  add(t("Open"), () => open(p));
+  if(capabilities.chat)add(t("Chat"),()=>open(p,"prompt"));
+  if(capabilities.voice)add(p.identity.id===SPOTIFY_ID?"Comando de música ou som":"Conversar por voz",()=>{
+    if(shelterOpen)setShelter(false);
+    void Bridge.voiceSessionStart(capabilities.voice!).catch(error=>{
+      noticeQueue.push({key:`voice-error:${p.identity.id}`,pet:p.identity.id,text:String(error).replace(/^Error:\s*/,""),urgent:true,view:p.identity.id===SPOTIFY_ID?"overview":"prompt"});showNextNotice();
+    });
+  });
+  if(taskBoard.supports(p.identity.id))add("Ver tarefas",()=>showTasks(p.identity.id));
+  if(p.identity.id!==SPOTIFY_ID&&(p.identity.sessions||taskBoard.supports(p.identity.id)))add(`Ver sessões${p.identity.sessions?' · '+p.identity.sessions:''}`,()=>showTasks(p.identity.id,'sessions'));
+  if(delegatedRequest(p.identity.id))add("Preparar pedido no Codex",()=>void emitToWindow("island",PET_EVENTS.delegate,{pet:p.identity.id}));
+  add(t("Dictation"), () => void FlowBridge.pillAction("dictate"));
+  add(t(flowState?.noteStartedAt ? "Finish" : "Record a call"), () => void FlowBridge.pillAction(flowState?.noteStartedAt ? "stopNote" : "note"));
+  add("Flow · " + t("Open Coucou"), () => void Bridge.openSettingsWindow("dictation"));
+  if (p.identity.id === SPOTIFY_ID) add(t("Play / pause"), () => void Bridge.spotifyControl("playPause"));
+  add(t("Pet"), () => world.touch(p.identity.id, performance.now() / 1000));
+  add(snapshot.paused ? t("Resume companions") : t("Pause companions"), () => {
+    void emitToWindow("island", PET_EVENTS.action, { action: "pause" });
+  });
+  add(p.identity.id===SPOTIFY_ID?"Configurar Spoty":"Gerir pet e modelos", () => void Bridge.petPanelOpen(p.x,(snapshot.band?.height??40)+8,p.identity.id,p.identity.id===SPOTIFY_ID?"profiles":"providers"));
+  menu.style.left = `${Math.max(0, Math.min(world.width - 170, p.x - 76))}px`;
+  menu.style.top = `${p.y + 40}px`;
+  menu.hidden = false;
+  menuPet = p.identity.id;
+  menuTimer = window.setTimeout(closeMenu, 8000);
+  world.hovered = p.identity.id;
+  wake();
+}
+
+function create(p: PetLife): PetView {
+  const button = document.createElement("button");
+  button.className = "pet";
+  button.dataset.petId=p.identity.id;
+  button.hidden = true;
+  const canvas = document.createElement("canvas");
+  const label = document.createElement("span");
+  button.append(canvas, label);
+  root.append(button);
+  const engine = new BotEngine();
+  engine.particleOverhang = 0;
+  button.addEventListener("click", () => {
+    if (suppressClick) { suppressClick = false; return; }
+    if(['approval','question'].includes(activityPhase(p))){open(p);return;}
+    if(hoverOpened===p.identity.id&&petPointers.get(p.identity.id)?.inside){hoverOpened=null;return;}
+    if (snapshot.presented === p.identity.id) {
+      pendingPresentation = null;
+      consumeHoverRecovery();
+      void emitToWindow("island", "companions-hide-popup");
+    } else open(p);
+  });
+  button.addEventListener("pointerenter", event => {
+    if(nativePetInside===false)return;
+    const pointer=petPointers.get(p.identity.id);
+    if(recoveredHover?.id===p.identity.id&&pointer?.inside&&pointer.context===recoveredHover.context){world.hovered=p.identity.id;wake();return;}
+    reportPetPointer(p.identity.id,true);world.hovered=p.identity.id;wake();
+    // WebKit also sends trusted boundary events when a moving pet passes under
+    // a stationary (or stale) pointer. Only a trusted move on this entry opens.
+    hoverEntry=event.isTrusted&&canHoverOpen(p.identity.id)?{id:p.identity.id,context:petPointers.get(p.identity.id)!.context}:null;
+  });
+  button.addEventListener('mousemove',event=>rememberPetMove(p,event));
+  button.addEventListener("pointerleave", () => { clearHoverEvidence();reportPetPointer(p.identity.id,false);if (menu.hidden && !dragging) { world.hovered = null; wake(); } });
+  button.addEventListener("contextmenu", e => { e.preventDefault(); showMenu(p); });
+  button.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    dragging = { id: p.identity.id, start: e.clientX, x: p.x, moved: false };
+    button.setPointerCapture(e.pointerId);
+  });
+  button.addEventListener("pointermove", e => {
+    if (!dragging || dragging.id !== p.identity.id) return;
+    const delta = e.clientX - dragging.start;
+    if (Math.abs(delta) > 4) dragging.moved = true;
+    if (!dragging.moved) return;
+    let [left, right] = world.bounds(p);
+    // Keep both bodies clickable when a user drags one into another.
+    for (const other of world.pets.values()) {
+      if (other === p || !other.shown || other.y !== p.y) continue;
+      if (p.x < other.x) right = Math.min(right, other.x - world.spacing);
+      else left = Math.max(left, other.x + world.spacing);
+    }
+    p.x = Math.max(left, Math.min(right, dragging.x + delta));
+    wake();
+  });
+  const endDrag = () => {
+    suppressClick = dragging?.moved ?? false;
+    dragging = null;
+    if (menu.hidden) world.hovered = null;
+  };
+  button.addEventListener("pointerup", endDrag);
+  button.addEventListener("pointercancel", endDrag);
+  return { button, canvas, label, engine };
+}
+
+// Real OS paths arrive through Tauri. A drop belongs to the exact pet under
+// the pointer, never the last selected provider or an unrelated CLI session.
+let fileTarget:string|null=null,receivingPet:string|null=null;
+void onDragDrop(event=>{
+ if(event.type==='rejected'){if(fileTarget){noticeQueue.push({key:`file-rejected:${Date.now()}`,pet:fileTarget,text:event.error??'O documento não foi recebido.',urgent:false,view:'prompt'});showNextNotice();}return;}
+ if(event.position){
+  const scale=window.devicePixelRatio||1;
+  const element=document.elementFromPoint(event.position.x/scale,event.position.y/scale);
+  fileTarget=element?.closest<HTMLElement>('[data-pet-id]')?.dataset.petId??null;
+ }
+ for(const [id,view]of views)view.button.dataset.fileOver=String(id===fileTarget && event.type!=='leave' && event.type!=='drop');
+ if(event.type==='leave'){if(receivingPet)reportPetPointer(receivingPet,false);fileTarget=null;receivingPet=null;world.hovered=null;wake();return;}
+ if(fileTarget){world.hovered=fileTarget;world.touch(fileTarget,performance.now()/1000);wake();}
+ if((event.type==='over'||event.type==='enter')&&fileTarget&&receivingPet!==fileTarget){
+  if(receivingPet&&receivingPet!==fileTarget)reportPetPointer(receivingPet,false);
+  receivingPet=fileTarget;reportPetPointer(fileTarget,true);const p=world.pets.get(fileTarget);
+  if(p&&petCapabilities(fileTarget).chat)open(p,'upload');
+ }
+ if(event.type!=='drop')return;
+ const pet=fileTarget;fileTarget=null;receivingPet=null;world.hovered=null;
+ if(!pet)return;
+ const feedback=(text:string,view='prompt')=>{noticeQueue.push({key:`file:${pet}:${Date.now()}`,pet,text,urgent:false,view});showNextNotice();};
+ const provider=petCapabilities(pet).chat;
+ if(!provider){feedback('Este pet acompanha a aplicação, mas ainda não recebe documentos. Escolhe um pet com conversa.');return;}
+ if(!event.paths?.length)return;
+ const context=event.dropId??crypto.randomUUID();
+ void (async()=>{
+ await emitToWindow('island','pet-card-document-hold',{pillId:pet,context,holding:true});
+ try{const batch=await receiveDocumentDrop(Bridge,provider,event.dropId);
+  const p=world.pets.get(pet);if(p)world.touch(pet,performance.now()/1000);
+  if(batch.attachments.length)await emitToWindow('island','pet-document',{pet,files:batch.attachments,message:documentBatchMessage(batch)});
+  feedback(documentBatchMessage(batch),batch.attachments.length?'choose':'prompt');
+ }catch(error){feedback(String(error).replace(/^Error:\s*/,''));}
+ finally{await emitToWindow('island','pet-card-document-hold',{pillId:pet,context,holding:false});}
+ })();
+});
+
+function input(now: number, force = false) {
+  if (!force && now - shapeAt < 0.1) return;
+  const rects: [number, number, number, number][] = [];
+  if(!shelter.hidden && snapshot.enabled){const r=shelter.getBoundingClientRect();rects.push([r.x,r.y,r.width,r.height]);}
+  if(!taskBoard.hidden && snapshot.enabled){const r=taskBoard.el.getBoundingClientRect();rects.push([r.x,r.y,r.width,r.height]);}
+  if (snapshot.enabled) for (const p of world.pets.values()) {
+    if (!p.shown || p.visibility === "leaving" || p.opacity <= 0.05) continue;
+    const scale = world.scale;
+    // Disc rows around the body, plus its own label. Empty habitat never takes
+    // input. A small margin accommodates the movement between region updates.
+    for (let y = -22; y < 22; y += 4) {
+      const dx = Math.sqrt(23 * 23 - y * y) + 3;
+      rects.push([p.x - dx * scale, p.y + (y - 2) * scale, dx * 2 * scale, 8 * scale]);
+    }
+    if (!world.band) rects.push([p.x - 30, p.y + 19, 60, 23]);
+  }
+  if (!menu.hidden && snapshot.enabled) {
+    const r = menu.getBoundingClientRect();
+    rects.push([r.x, r.y, r.width, r.height]);
+  }
+  if (!notice.hidden && snapshot.enabled) { const r=notice.getBoundingClientRect();rects.push([r.x,r.y,r.width,r.height]); }
+  if (!dialogue.hidden && dialogue.style.visibility!=="hidden" && snapshot.enabled) { const r=dialogue.getBoundingClientRect();rects.push([r.x,r.y,r.width,r.height]); }
+  if (!voice.hidden && snapshot.enabled) { const r = voice.getBoundingClientRect(); rects.push([r.x,r.y,r.width,r.height]); }
+  const key = JSON.stringify(rects.map(r => r.map(Math.round)));
+  shapeAt = now;
+  if (key === lastShape) return;
+  lastShape = key;
+  void Bridge.companionsInput(JSON.parse(key));
+}
+
+function draw(p: PetLife, v: PetView, dt: number, now: number) {
+  const { engine, canvas, button, label } = v;
+  button.hidden = !p.shown;
+  if (!p.shown) { v.sleepKey = undefined; return; }
+  button.disabled = p.visibility === "leaving";
+  button.style.opacity = String(p.opacity);
+  const scale = world.scale * (0.35 + 0.65 * p.opacity);
+  button.style.transform = `translate(${p.x - 32 * scale}px, ${p.y - 32 * scale + (1 - p.opacity) * 8 * world.scale}px) scale(${scale})`;
+  button.style.transformOrigin = "top left";
+  const phase = activityPhase(p);
+  const busy = !snapshot.paused && BUSY.has(phase);
+  const sleeping = p.action === "sleep" && !busy && !ATTENTION.has(phase);
+  const sleepKey = sleeping ? JSON.stringify([p.x,p.y,world.scale,p.identity.color,p.identity.outfit]) : undefined;
+  if (sleeping && v.sleepKey === sleepKey) return;
+  v.sleepKey = sleepKey;
+  engine.setState(sleeping ? "sleeping" : animationFor(phase,p.identity.state), sleeping);
+  engine.bodyColor = hexToRGB(p.identity.color);
+  engine.setOutfit(p.identity.outfit, false);
+  engine.setDancing(p.action === "dance" || (world.motion && p.identity.dancing && p.action === "walk"));
+  engine.lookX = ["walk", "wave"].includes(p.action) ? p.direction * 0.65 : p.action === "look" ? Math.sin(now * 0.4 + p.seed) * 0.8 : 0;
+  if (p.emote) {
+    if (world.motion && !snapshot.paused) {
+      if (p.action === "wave") engine.greet();
+      engine.triggerEmote(p.emote, 1.5);
+    }
+    p.emote = null;
+  }
+  if (world.motion || sleeping) engine.update(dt);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const size = Math.round(PET_SIZE * dpr);
+  if (canvas.width !== size || canvas.height !== size) canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, PET_SIZE, PET_SIZE);
+  ctx.save();
+  if (p.action === "walk") {
+    const stride = Math.sin(now * 11) * 2;
+    // Two little feet and a gait complement the engine's face and breathing.
+    ctx.fillStyle = p.identity.color;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.ellipse(32 + side * 10 + side * stride, 50, 5, 2.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.translate(0, -Math.abs(Math.sin(now * 11)) * 2);
+    ctx.translate(32, 32); ctx.rotate(stride * 0.012); ctx.translate(-32, -32);
+  }
+  if (p.action === "wave") {
+    // Partners face each other, lift a hand and share a small synchronized hop.
+    const phase = (1.8 - Math.max(0, p.until - now)) / 1.8;
+    ctx.translate(0, -Math.sin(Math.PI * phase) * 2);
+    ctx.strokeStyle = p.identity.color;
+    ctx.lineWidth = 4; ctx.lineCap = "round";
+    const side = p.direction;
+    ctx.beginPath(); ctx.moveTo(32 + side * 19, 34);
+    ctx.quadraticCurveTo(32 + side * 28, 26, 32 + side * (26 + Math.sin(now * 12) * 2), 19);
+    ctx.stroke();
+  }
+  engine.applyDance(ctx, PET_SIZE, PET_SIZE);
+  engine.draw(ctx, PET_SIZE, PET_SIZE);
+  if(phase==="speaking" || phase==="message") {
+    ctx.fillStyle="#182032";ctx.beginPath();ctx.ellipse(32,40,3.5,world.motion?1.5+Math.abs(Math.sin(now*12))*2:2,0,0,Math.PI*2);ctx.fill();
+  } else if(phase==="thinking") {
+    ctx.strokeStyle="#182032";ctx.lineWidth=1.6;ctx.lineCap="round";
+    ctx.beginPath();ctx.moveTo(24,22);ctx.lineTo(28,20.5);ctx.stroke();
+    ctx.fillStyle=p.identity.color;ctx.beginPath();ctx.ellipse(41,42,3.5,2.5,-.5,0,Math.PI*2);ctx.fill();
+  } else if(phase==="listening") {
+    ctx.strokeStyle="#93c5fd";ctx.lineWidth=1.4;ctx.lineCap="round";
+    for(const side of [-1,1]) {const pulse=world.motion?Math.sin(now*3)*1.2:0;ctx.beginPath();ctx.ellipse(32+side*19,32,2+pulse*.2,6+pulse,0,-Math.PI/2,Math.PI/2);ctx.stroke();}
+  }
+  if (busy && world.motion && !snapshot.paused) {
+    ctx.strokeStyle = p.identity.color; ctx.lineWidth = 2; ctx.lineCap = "round";
+    for(let i=0;i<3;i++) { const angle=now*2.6+i*Math.PI*2/3;ctx.beginPath();ctx.arc(32,32,23,angle,angle+0.42);ctx.stroke(); }
+  }
+  const quota=p.identity.quota,quotaWarning=quota?.status==='warning'||quota?.status==='blocked';
+  if (p.identity.attention || ATTENTION.has(phase) || quotaWarning) {
+    ctx.fillStyle = quota?.status==='blocked'?"#f87171":"#fbbf24";
+    ctx.beginPath(); ctx.arc(52, 11, 5, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+  button.style.clipPath = world.band ? "circle(25px at 32px 32px)" : "none";
+  label.hidden = !!world.band;
+  button.dataset.attention = String(p.identity.attention||quotaWarning);
+  button.dataset.quota=quota?.status??'unknown';
+  const description = `${p.identity.name} · ${p.identity.session?.decisionInTerminal&&['approval','question'].includes(phase)?'À espera da tua resposta no terminal':phaseLabel(phase)}${quota?' · '+quota.text:''}`;
+  const hint=`${p.identity.name} · ${phaseLabel(phase)}`;
+  if(button.title!==hint)button.title=hint;
+  if(button.getAttribute('aria-label')!==description)button.setAttribute("aria-label",description);
+  if (label.textContent !== p.identity.name) label.textContent = p.identity.name;
+}
+
+function wake() {
+  if (timer != null || !snapshot.enabled || !nativeVisible || document.hidden) return;
+  timer = window.setTimeout(frame, 0);
+}
+function frame() {
+  timer = null;
+  if (!snapshot.enabled || !nativeVisible || document.hidden) return;
+  const now = performance.now() / 1000;
+  const dt = Math.min(0.1, Math.max(0, now - last));
+  last = now;
+  try {
+    world.tick(dt, now);
+    for (const [id, v] of views) if (!world.pets.has(id)) { v.button.remove(); views.delete(id); }
+    for (const p of world.pets.values()) draw(p, views.get(p.identity.id)!, dt, now);
+    positionDialogue();
+    input(now);
+  } catch (error) {
+    // A drawing failure must not leave invisible input regions over the apps.
+    console.error("[coucou] companions frame", error);
+    void Bridge.companionsInput([]);
+    lastShape = "";
+    return;
+  }
+  if (world.needsFrames || (!snapshot.paused && [...world.pets.values()].some(p=>p.shown && BUSY.has(activityPhase(p))))) {
+    const moving = [...world.pets.values()].some(p => p.shown && (p.visibility !== "visible" || BUSY.has(activityPhase(p)) || ["walk","wave","dance","celebrate"].includes(p.action)));
+    timer = window.setTimeout(frame, !world.motion ? 1000 : moving ? 1000 / 24 : 250);
+  }
+}
+
+async function start() {
+  await taskBoard.init();
+  await registerVoiceSpeech("companions");
+  const projectDecisions=()=>{
+    const now=performance.now()/1000;
+    // Native requests arrive independently of the periodic habitat snapshot.
+    // Project their current phase before choosing the pet's dialogue owner.
+    world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented??shownNotice?.pet,motion:world.motion},window.innerWidth,now);
+    refreshDialogue();input(now,true);
+    if(timer!==null)window.clearTimeout(timer);
+    timer=null;wake();
+  };
+  const rememberDecision=(request:import('../core/bridge').AgentRequest)=>{
+    if(endedDecisions.has(request.id))return;
+    const pet=request.goalTarget?.petId??request.target?.petId??taskPet(request.provider.toLowerCase())??({copilot:"agent_copilot"} as Record<string,string>)[request.provider.toLowerCase()];
+    if(pet&&!decisions.has(request.id))decisions.set(request.id,{pet,phase:request.kind==="question"?"question":"approval",target:request.target?Object.freeze({...request.target}):undefined});
+    projectDecisions();
+  };
+  await onEvent("agent-request",rememberDecision);
+  await onEvent<{id:string}>("agent-request-ended", request=>{
+    const decision=decisions.get(request.id);decisions.delete(request.id);endedDecisions.add(request.id);if(endedDecisions.size>256)endedDecisions.delete(endedDecisions.values().next().value!);
+    if(decision)pendingFold={pet:decision.pet,until:performance.now()+3000};
+    projectDecisions();
+  });
+  void Bridge.cliAgentPending().then(requests=>requests.forEach(rememberDecision)).catch(error=>console.error('Não foi possível recuperar os pedidos pendentes.',error));
+  await onEvent<PetActivity>("pet-activity", value => {
+    const before=dialogues.entries.get(value.pet);
+    if (!dialogues.update(value,performance.now())) return;
+    if(!before || before.turn!==value.turn) pendingFold={pet:value.pet,until:performance.now()+3000};
+    foldResolvedCard();
+    const p=world.pets.get(value.pet); if(p) world.touch(value.pet,performance.now()/1000);
+    world.sync({...activeSnapshot(snapshot),presented:voicePet??snapshot.presented,motion:world.motion},window.innerWidth,performance.now()/1000);
+    refreshDialogue(); input(performance.now()/1000,true); wake();
+  }, "companions");
+  await onEvent<PetNotice>("companions-notice", n=>{noticeQueue.push(n);showNextNotice();});
+  await onEvent<VoiceView | null>("companions-voice", view => { voiceActive = !!view; voiceBubble(view); });
+  await onEvent<PillState>("companions-flow", state => {
+    flowState = state;
+    if (voiceActive) return;
+    const active = ["listening", "locked", "thinking", "copied", "failed", "pastedAgain"].includes(state.phase);
+    const feedback = state.phase === "copied" ? t("Copied · press Ctrl+V to paste") :
+      state.phase === "failed" ? t("Microphone unavailable") :
+      state.phase === "pastedAgain" ? t("Last dictation pasted") : null;
+    if (active || state.announcement || state.noteStartedAt) {
+      voiceBubble({phase: state.phase, heard: "", announcementId: state.announcement?.id, note: !!state.noteStartedAt, answer: state.announcement?.text ?? feedback ??
+        (state.phase === "thinking" ? t("Thinking…") : state.noteStartedAt ? t("Notetaker") : t("Listening"))}, true);
+    } else voiceBubble(null, true);
+  });
+  await onEvent<{ id: string; view?: string; manual?:boolean }>("companions-present", e => {
+    if (!e.id) return;
+    pendingPresentation = { ...e, until: performance.now() + 10000 };
+    presentPending();
+  });
+  await onEvent<boolean>("companions-pointer-inside",inside=>{
+    nativePetInside=inside;
+    if(!inside){pointerPosition=null;outsideObserved=nativeVisible&&!document.hidden&&snapshot.enabled;recoveredHover=null;armHoverRecovery();releasePetPointers();}
+  });
+  await onEvent<{x:number;y:number}>("companions-pointer-position",recoverPetPointer);
+  await onEvent<boolean>("companions-visible", visible => {
+    resetHoverRecovery();
+    nativeVisible = visible;if(!visible)releasePetPointers();
+    taskBoard.setVisible(visible && snapshot.enabled);
+    if (!visible && timer != null) { window.clearTimeout(timer); timer = null; }
+    if (visible) { void emitToWindow("island",PET_EVENTS.ready);presentPending();showNextNotice();wake(); }
+    refreshShelter();refreshDialogue();input(performance.now()/1000,true);
+  });
+  await onEvent<CompanionsSnapshot>(PET_EVENTS.state, s => {
+    const previousPresentation=snapshot.presented;
+    const previousEnabled=snapshot.enabled,previousPaused=snapshot.paused;
+    snapshot = s;
+    if(previousEnabled!==s.enabled)resetHoverRecovery();
+    if(previousPresentation!==s.presented||previousPaused!==s.paused)armHoverRecovery();
+    if(s.paused){hoverRecoveryArmed=false;clearHoverEvidence();}
+    taskBoard.setExternal(s.pets);
+    taskBoard.setVisible(s.enabled && nativeVisible);
+    if(s.presented)taskBoard.hide();
+    const room=s.control?null:shelterLayout(s.band,(s.catalog??s.pets).length,false);taskBoard.position(room?room.left+16:world.width/2,(s.band?.height??64)+8,window.innerWidth);
+    if(s.presented&&s.presented!==previousPresentation)shelterOpen=false;
+    for(const pet of s.pets){const before=nativeSpeech.get(pet.id);nativeMessages.observe(pet,performance.now());const speech=nativeSpeech.get(pet.id);if(speech&&speech!==before)locateSpeech(speech);}
+    refreshShelter();
+    setLanguage(resolveLanguage(s.language ?? "", systemLanguages()));
+    if (!s.enabled || (menuPet && !s.pets.some(p=>p.id===menuPet))) closeMenu();
+    const oldPet = s.presented ? world.pets.get(s.presented) : null;
+    const oldPosition = oldPet ? [oldPet.x, oldPet.y] : null;
+    world.sync({ ...activeSnapshot(s), presented: voicePet ?? s.presented ?? shownNotice?.pet, motion: s.motion && !reducedMotion.matches }, window.innerWidth, performance.now() / 1000);
+    for (const [id, v] of views) if (!world.pets.has(id)) { v.button.remove(); views.delete(id); }
+    for (const p of world.pets.values()) if (!views.has(p.identity.id)) views.set(p.identity.id, create(p));
+    if (shownNotice && (s.paused || !s.enabled || s.presented)) dismissNotice();
+    presentPending();
+    positionNotice();
+    foldResolvedCard();
+    refreshDialogue();
+    showNextNotice();
+    if (bubble) voiceBubble(bubble.view,bubble.dictation);
+    else if (oldPet?.shown && oldPosition && (oldPet.x !== oldPosition[0] || oldPet.y !== oldPosition[1])) {
+      void Bridge.companionsAnchor(oldPet.x,oldPet.y);
+    }
+    if (timer != null) window.clearTimeout(timer);
+    timer = null;
+    if (!s.enabled) { releasePetPointers();root.hidden = true; input(performance.now() / 1000, true); }
+    else { root.hidden = false; last = performance.now() / 1000; wake(); }
+  });
+  document.addEventListener("visibilitychange", () => {
+    resetHoverRecovery();
+    if (document.hidden) {
+      releasePetPointers();
+      if (timer != null) window.clearTimeout(timer);
+      timer = null;
+    } else wake();
+  });
+  document.addEventListener("pointerdown", e => { if (e.target === document.body) { closeMenu(); wake(); } });
+  reducedMotion.addEventListener("change", () => { world.motion = snapshot.motion && !reducedMotion.matches; wake(); });
+  window.addEventListener("resize", () => {
+    pointerPosition=null;clearHoverEvidence();
+    world.sync({ ...activeSnapshot(snapshot), motion: snapshot.motion && !reducedMotion.matches }, window.innerWidth, performance.now() / 1000);
+    wake();
+  });
+  await emitToWindow("island", PET_EVENTS.ready);
+}
+void start();

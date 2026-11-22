@@ -18,37 +18,31 @@ use std::time::Duration;
 use reqwest::Url;
 use serde_json::{json, Value};
 
+use crate::attachment_history::{Coverage, Preparation};
 use crate::chat::{self, Chat, ChatContext, ChatReply, ModelInfo};
 use crate::i18n::{t, tf};
-use crate::{claude_code, net, secrets};
+use crate::pet_documents::content::{Budget, Part, text_coverage, unavailable};
+use crate::{net, secrets};
 
 /// Credential store entry of the Anthropic API key.
 pub const KEY: &str = "anthropic-api-key";
 const DEFAULT_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const BASE_URL_VAR: &str = "COUCOU_ANTHROPIC_BASE_URL";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// Server-side fallback: on a policy decline the API retries the same request on
-/// a fallback model inside the same call, so the island never shows a dead end.
-const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 const MAX_TOKENS: u32 = 4096;
 /// Text and code files are inlined; anything larger is skipped, as on macOS.
 const MAX_INLINE_TEXT: u64 = 200_000;
 
 pub const DEFAULT_MODEL: &str = "claude-opus-5";
 
-/// Whether Claude can answer at all: an API key, or else Claude Code.
+/// Whether the configured Anthropic API key is available.
 pub fn ready() -> bool {
-    secrets::present(KEY) || claude_code::available()
-}
-
-/// True when the answers come from Claude Code rather than the API.
-pub fn uses_relay() -> bool {
-    !secrets::present(KEY) && claude_code::available()
+    secrets::present(KEY)
 }
 
 /// The Messages endpoint: Anthropic's, or the gateway in COUCOU_ANTHROPIC_BASE_URL.
 /// Read once; the gateway's host (never the key) goes to the log once.
-fn endpoint() -> Result<Url, String> {
+pub(crate) fn endpoint() -> Result<Url, String> {
     static ENDPOINT: OnceLock<Result<Url, String>> = OnceLock::new();
     ENDPOINT
         .get_or_init(|| {
@@ -81,13 +75,15 @@ fn models_endpoint(messages: &Url) -> Url {
 
 /// The user's content blocks for one turn. File / window context rides along
 /// with the first message only, exactly like ClaudeService.chat().
-fn user_content(first: bool, context: Option<&ChatContext>, query: &str) -> Vec<Value> {
+fn prepared_content(first: bool, context: Option<&ChatContext>, query: &str) -> (Vec<Value>, Vec<Preparation>) {
     let mut content: Vec<Value> = Vec::new();
-    if first {
+    let mut preparation = vec![];
+    if first||matches!(context,Some(ChatContext::Files{..})) {
+        let mut budget = Budget::default();
         match context {
             Some(ChatContext::File { name, path }) => {
-                if let Some(block) = file_block(path) {
-                    content.push(block);
+                if let Some(part) = file_block(path) {
+                    content.push(part.into_block());
                 }
                 content.push(json!({ "type": "text", "text": format!("File: {name}") }));
             }
@@ -95,11 +91,42 @@ fn user_content(first: bool, context: Option<&ChatContext>, query: &str) -> Vec<
                 let line = chat::window_line(app_name, title, url.as_deref());
                 content.push(json!({ "type": "text", "text": line }));
             }
+            Some(ChatContext::Files { files }) => {
+                for (index, file) in files.iter().enumerate() {
+                    let (name, path) = (file.name.as_str(), file.path.as_str());
+                    content.push(json!({"type":"text","text":file.label(index)}));
+                    let (block, coverage) = if !budget.available() {
+                        (unavailable(name, "combined extraction deadline"), Some(Coverage::Unavailable))
+                    } else if std::path::Path::new(path).is_dir() {
+                        let (text, coverage) = crate::local_chat::bounded_attachment_note(name, path, &mut budget);
+                        (json!({"type":"text","text":text}), coverage)
+                    } else if let Some(part) = file_block(path) {
+                        let (block, coverage) = part.fit(&mut budget, name);
+                        (block, Some(coverage))
+                    } else if crate::pet_documents::policy::format(path, false) == crate::pet_documents::policy::Format::Pdf {
+                        match crate::document_text::pdf(path) {
+                            Ok(body) => {
+                                let prefix = format!("File: {name}\n");
+                                let (text, kept) = budget.bounded_text(format!("{prefix}{body}"));
+                                let coverage = text_coverage(kept, prefix.len(), prefix.len() + body.len(), None);
+                                (json!({"type":"text","text":text}), coverage)
+                            }
+                            Err(error) => (unavailable(name, &error), Some(Coverage::Unavailable)),
+                        }
+                    } else {
+                        (unavailable(name, "unsupported format, size or unreadable copy"), Some(Coverage::Unavailable))
+                    };
+                    content.push(block);
+                    if let Some(coverage) = coverage {
+                        preparation.push(Preparation { id: file.id.clone(), coverage });
+                    }
+                }
+            }
             None => {}
         }
     }
     content.push(json!({ "type": "text", "text": query }));
-    content
+    (content, preparation)
 }
 
 fn request_body(model: &str, system: &str, history: &[Value], user: &Value) -> Value {
@@ -110,7 +137,6 @@ fn request_body(model: &str, system: &str, history: &[Value], user: &Value) -> V
         "max_tokens": MAX_TOKENS,
         "system": system,
         "tools": [{ "type": "web_search_20260209", "name": "web_search", "max_uses": 5 }],
-        "fallbacks": "default",
         "messages": messages,
     })
 }
@@ -159,35 +185,64 @@ pub async fn send(
 ) -> Result<ChatReply, String> {
     // No key: Settings → Chat → Your AI subscriptions lets Claude Code answer
     // instead (cli_relay.rs); chat.rs sends the turn there before it gets here.
-    let Some(key) = secrets::get(KEY) else {
-        return Err(t("API key missing. Open settings."));
-    };
+    crate::settings::effect_allowed()?;
+    let key = secrets::get(KEY).ok_or_else(|| t("API key missing. Open settings."))?;
     let endpoint = endpoint()?;
+    send_resolved(chat,model,query,context,&endpoint,&key).await
+}
 
-    let turn = chat.begin(chat::ANTHROPIC);
-    let user = json!({ "role": "user", "content": user_content(turn.first, context.as_ref(), &query) });
-    let body = request_body(model, &chat::system_prompt(true), &turn.history, &user);
+// Shared native path after credential/endpoint resolution. Neither a new IPC
+// endpoint nor a fallback: production always calls this from send above.
+async fn send_resolved(chat:&Chat,model:&str,query:String,context:Option<ChatContext>,endpoint:&Url,key:&str)->Result<ChatReply,String>{
+    chat.check_new_effect()?;
+    let turn = chat.begin_cli(chat::ANTHROPIC,std::sync::Arc::default())?;
+    let _lease=chat.lease(&turn);
+    let documents=crate::pet_documents::Request::capture_async(chat,&turn,context.as_ref()).await?;
+    let calendar = crate::pet_calendar::note_async(chat, &turn, context.as_ref()).await?;
+    let ordinary=crate::pet_calendar::ordinary_context(context.as_ref());let (first,question)=(turn.first,query.clone());
+    let (content, preparation)=tokio::task::spawn_blocking(move||prepared_content(first,ordinary.as_ref(),&question)).await.map_err(|_|"A preparação dos anexos foi interrompida.".to_string())?;
+    let user=crate::pet_calendar::prepend_message(calendar.as_ref(),json!({"role":"user","content":content}))?;
+    let mut body = request_body(model, &chat::system_prompt(true), &turn.history, &user);
+    chat.append_selected_memory(chat::ANTHROPIC,&query,&crate::pet_memory::context_model::Destination::Api{provider:chat::ANTHROPIC.into(),endpoint:endpoint.to_string(),model:model.into()},Some(key),body["messages"].as_array_mut().unwrap())?;
+    let mut calendar_tools = crate::pet_calendar::wire::Session::new(calendar.as_ref(),crate::pet_calendar::wire::Format::Claude);
+    if let Some(tools) = &calendar_tools {tools.prepare(&mut body)?;}
 
-    let response = call(&endpoint, &key, &body).await?;
-    let (blocks, text) = interpret(&response)?;
+    let mut preparation = Some(preparation);
+    let response = loop {
+        documents.validate_contents().await?;
+        crate::pet_calendar::validate(calendar.as_ref())?;
+        if let Some(preparation) = preparation.take() { chat.record_attachment_preparation(&turn, preparation)?; }
+        let response = net::while_current(
+            || chat.is_current(&turn) && documents.validate().is_ok() && crate::pet_calendar::validate(calendar.as_ref()).is_ok()
+                && calendar_tools.as_ref().is_none_or(|tools|tools.validate().is_ok()),
+            || async {chat.check_new_effect()?;call(endpoint,key,&body).await},
+        ).await?;
+        if let Some(tools) = &mut calendar_tools {
+            if tools.follow_up(&response,&mut body).await? {continue;}
+        }
+        break response;
+    };
+    documents.validate_contents().await?;crate::pet_calendar::validate(calendar.as_ref())?;
+    let (mut blocks,text) = interpret(&response)?;
+    if calendar_tools.is_some() {blocks=vec![json!({"type":"text","text":text})];}
 
-    // Store the whole content — tool_use / tool_result blocks included — so the
-    // next turn has the right context.
+    // Calendar tool exchanges are ephemeral; persist a complete public answer
+    // without dangling tool IDs. Ordinary web-search history is unchanged.
     let plain = chat::plain_question(turn.first, context.as_ref(), &query);
-    chat.commit(&turn, user, json!({ "role": "assistant", "content": blocks }), &plain, &text);
+    chat.commit_reply(&turn, user, json!({ "role": "assistant", "content": blocks }), &plain, &text)?;
     Ok(ChatReply { text })
+}
+
+#[cfg(test)]
+pub(crate)async fn memory_wire_fixture(chat:&Chat,model:&str,query:String,context:Option<ChatContext>,endpoint:&Url,key:&str)->Result<ChatReply,String>{
+    send_resolved(chat,model,query,context,endpoint,key).await
 }
 
 /// One question, one answer, no history: the dictation clean-up and the notes
 /// of a call. The text of the answer, or why there is none.
 pub async fn complete(model: &str, system: &str, user: &str, max_tokens: u32, timeout: Duration) -> Result<String, String> {
-    let Some(key) = secrets::get(KEY) else {
-        if !claude_code::available() {
-            return Err(t("API key missing. Open settings."));
-        }
-        let request = claude_code::Request { model, system, prompt: user, tools: &[], read_dir: None, timeout };
-        return claude_code::ask(&request).await;
-    };
+    crate::settings::effect_allowed()?;
+    let key = secrets::get(KEY).ok_or_else(|| t("API key missing. Open settings."))?;
     let endpoint = endpoint()?;
     let body = json!({
         "model": model,
@@ -209,6 +264,7 @@ pub async fn complete(model: &str, system: &str, user: &str, max_tokens: u32, ti
 /// One turn of « OK Coucou »'s conversation with tools: the API's whole answer
 /// (content blocks and stop_reason).
 pub async fn voice_turn(model: &str, system: &str, messages: &[Value], tools: &[Value]) -> Result<Value, String> {
+    crate::settings::effect_allowed()?;
     let key = secrets::get(KEY).ok_or_else(|| t("API key missing. Open settings."))?;
     let endpoint = endpoint()?;
     let body = json!({
@@ -226,11 +282,10 @@ async fn call(endpoint: &Url, key: &str, body: &Value) -> Result<Value, String> 
 }
 
 async fn call_with_timeout(endpoint: &Url, key: &str, body: &Value, timeout: Duration) -> Result<Value, String> {
-    let response = net::client(endpoint, timeout)?
+    let response = net::exact_destination_client(endpoint, timeout)?
         .post(endpoint.clone())
         .header("x-api-key", key)
         .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("anthropic-beta", FALLBACK_BETA)
         .header("content-type", "application/json")
         .json(body)
         .send()
@@ -255,7 +310,7 @@ pub async fn available_models() -> Result<Vec<ModelInfo>, String> {
 
 pub async fn models(key: &str) -> Result<Vec<ModelInfo>, String> {
     let url = models_endpoint(&endpoint()?);
-    let response = net::client(&url, Duration::from_secs(10))?
+    let response = net::exact_destination_client(&url, Duration::from_secs(10))?
         .get(url.clone())
         .header("x-api-key", key)
         .header("anthropic-version", ANTHROPIC_VERSION)
@@ -287,7 +342,8 @@ fn parse_models(json: &Value) -> Vec<ModelInfo> {
 
 /// PDF → document block, image → image block, text/code → inline text.
 /// Mirrors readFileAsBlock() in ClaudeService.swift.
-fn file_block(path: &str) -> Option<Value> {
+fn file_block(path: &str) -> Option<Part> {
+    if crate::pet_documents::policy::format(path,false)==crate::pet_documents::policy::Format::Binary{return None;}
     let ext = std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -304,19 +360,20 @@ fn file_block(path: &str) -> Option<Value> {
     };
 
     if let Some((block_type, media)) = media_type {
-        let bytes = std::fs::read(path).ok()?;
-        return Some(json!({
+        let bytes = crate::pet_documents::content::bytes(path,crate::pet_documents::content::MAX_MEDIA)?;
+        if bytes.is_empty() { return None; }
+        return Some(Part::Media(json!({
             "type": block_type,
             "source": { "type": "base64", "media_type": media, "data": base64(&bytes) },
-        }));
+        })));
     }
 
     let len = std::fs::metadata(path).ok()?.len();
     if len > MAX_INLINE_TEXT {
         return None;
     }
-    let text = std::fs::read_to_string(path).ok()?;
-    Some(json!({ "type": "text", "text": format!("File contents:\n{text}") }))
+    let text = crate::pet_documents::content::text(path,MAX_INLINE_TEXT as usize)?;
+    Some(Part::Text(text))
 }
 
 /// Small standalone base64 encoder — not worth another dependency.
@@ -342,6 +399,37 @@ fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn user_content(first: bool, context: Option<&ChatContext>, query: &str) -> Vec<Value> {
+        prepared_content(first, context, query).0
+    }
+    #[test]
+    fn anthropic_folder_context_uses_the_shared_text_and_media_policy(){
+        let files=crate::pet_documents::fixtures::Files::new();files.write("folder/nested/notes.md",b"anthropic folder sentinel");files.write("folder/archive.zip",b"binary format even when UTF8");
+        let context=files.context(&[("folder","Folder")]);let content=user_content(false,Some(&context),"use folder");let text=serde_json::to_string(&content).unwrap();assert!(text.contains("anthropic folder sentinel"));assert!(text.contains("unsupported for text extraction"));assert!(!text.contains("binary format even when UTF8"));
+        files.write("legacy.zip",b"readable but unsupported archive");assert!(file_block(files.root.join("legacy.zip").to_str().unwrap()).is_none());
+        let policy:Value=serde_json::from_str(include_str!("../documents.policy.json")).unwrap();for extension in policy["images"].as_array().unwrap(){let name=format!("image.{}",extension.as_str().unwrap());files.write(&name,b"synthetic image bytes");assert_eq!(file_block(files.root.join(&name).to_str().unwrap()).unwrap().into_block()["type"],"image","{name}");}
+    }
+    #[test]
+    fn attachment_collection_keeps_native_document_image_and_text_blocks_on_later_turns(){
+        let fixture=crate::pet_documents::fixtures::Files::new();fixture.write("report.pdf",b"synthetic PDF payload");fixture.write("image.png",b"synthetic image payload");fixture.write("notes.txt",b"synthetic text payload");let context=fixture.context(&[("report.pdf","report"),("image.png","image"),("notes.txt","notes")]);
+        let (parts, coverage)=prepared_content(false,Some(&context),"compare sources");assert_eq!(parts.len(),7);assert!(parts[0]["text"].as_str().unwrap().contains("fixture-1"));assert_eq!(parts[1]["type"],"document");assert_eq!(parts[1]["source"]["data"],base64_for(b"synthetic PDF payload"));assert!(parts[2]["text"].as_str().unwrap().contains("fixture-2"));assert_eq!(parts[3]["type"],"image");assert!(parts[5]["text"].as_str().unwrap().contains("synthetic text payload"));assert_eq!(parts[6]["text"],"compare sources");
+        assert_eq!(coverage.iter().map(|item| item.coverage).collect::<Vec<_>>(), [Coverage::Encoded, Coverage::Encoded, Coverage::Full]);
+    }
+    #[test]
+    fn attachment_media_over_the_budget_is_explicitly_unavailable(){
+        let fixture=crate::pet_documents::fixtures::Files::new();fixture.write("large.pdf",&vec![b'x';crate::pet_documents::content::MAX_MEDIA+1]);let context=fixture.context(&[("large.pdf","large")]);let (parts, observed)=prepared_content(true,Some(&context),"q");assert_eq!(parts[1]["type"],"text");assert!(parts[1]["text"].as_str().unwrap().contains("content unavailable"));assert_eq!(parts.last().unwrap()["text"],"q");
+        assert_eq!(observed, vec![Preparation { id: "fixture-1".into(), coverage: Coverage::Unavailable }]);
+    }
+
+    #[tokio::test]
+    async fn turn_cancellation_closes_anthropic_transport_during_headers_and_body() {
+        use crate::net::cancel_tests::{assert_http_cancelled, Stage};
+        for stage in [Stage::Headers, Stage::Body] {
+            assert_http_cancelled(stage, |endpoint| async move {
+                call(&endpoint, "synthetic-key", &json!({"model":"synthetic","messages":[]})).await
+            }).await;
+        }
+    }
 
     #[test]
     #[ignore = "Uses the configured Claude API key for model discovery and one short synthetic request"]

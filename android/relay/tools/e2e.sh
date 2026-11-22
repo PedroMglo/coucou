@@ -19,7 +19,12 @@ LOG="$(mktemp -d)"
 export WRANGLER_SEND_METRICS=false
 export COUCOU_E2E_RELAY_URL="ws://127.0.0.1:${PORT}"
 
-cleanup() { kill "${RELAY_PID:-0}" "${PC_PID:-0}" 2>/dev/null || true; }
+cleanup() {
+  local pid
+  for pid in "${RELAY_PID:-}" "${PC_PID:-}"; do
+    if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
+  done
+}
 trap cleanup EXIT
 
 case "$MODE" in
@@ -41,12 +46,19 @@ for _ in $(seq 1 120); do
 done
 curl -fsS "http://127.0.0.1:${PORT}/" | grep -q "Coucou link relay" || { echo "the relay did not start"; cat "$LOG/relay.log"; exit 1; }
 
-# Build the Rust test binary first: with a cold cache it takes minutes, longer than the phone side waits for the welcome.
+# Build once and run the exact artifact. A second Cargo invocation can rebuild
+# after Tauri generates resources, while the phone is already waiting.
 echo "building the computer side (Rust)"
-(cd "$ROOT/windows" && cargo test -p coucou --lib --no-run)
+(cd "$ROOT/windows" && cargo test -p coucou --lib --locked --no-run --message-format=json-render-diagnostics) >"$LOG/cargo.jsonl"
+PC_TEST="$(jq -ser '
+  [.[] | select(.reason == "compiler-artifact" and .target.name == "coucou_lib"
+    and .profile.test and .executable != null) | .executable]
+  | if length == 1 then .[0] else error("expected one Coucou test executable") end
+' "$LOG/cargo.jsonl")"
+test -x "$PC_TEST"
 
 echo "starting the computer side (Rust)"
-(cd "$ROOT/windows" && cargo test -p coucou --lib relay_client::tests::e2e -- --ignored --nocapture >"$LOG/pc.log" 2>&1) &
+(cd "$ROOT/windows" && exec "$PC_TEST" relay_client::tests::e2e --ignored --nocapture >"$LOG/pc.log" 2>&1) &
 PC_PID=$!
 
 echo "running the phone side (Kotlin)"

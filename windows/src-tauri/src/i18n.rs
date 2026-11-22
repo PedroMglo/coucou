@@ -202,7 +202,12 @@ pub fn t(key: &str) -> String {
 
 /// `t` with `{name}` placeholders filled in.
 pub fn tf(key: &str, vars: &[(&str, &str)]) -> String {
-    let lang = current();
+    tf_in(current(), key, vars)
+}
+
+/// Format a bounded domain response in its selected language without changing
+/// the application's or another task's language.
+pub(crate) fn tf_in(lang: &str, key: &str, vars: &[(&str, &str)]) -> String {
     let text = match lookup_in(lang, key) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Object(forms)) => pick_plural(forms, "other").unwrap_or_else(|| key.to_string()),

@@ -1,3 +1,6 @@
+import {petBlueprint} from './pet-factory';
+import {isServiceProvider,petName,type ServiceProvider} from "../mochi/pet-preferences";
+import {pillDefinition} from "./pills";
 // Who the chat can talk to — the island's side of chat.rs. The Mac's
 // ChatProvider (IslandTypes.swift) plus OpenRouter and any OpenAI-compatible
 // server. Pure data and helpers, so they can be tested without a webview.
@@ -6,9 +9,8 @@ import type { Settings } from "./state";
 import { N_ } from "../i18n/i18n";
 
 export type ProviderId =
-  | "anthropic" | "openai" | "google" | "openrouter"
-  | "ollama" | "lmstudio" | "custom"
-  | "cursor" | "copilot";
+  | "anthropic" | "openai" | "google" | "openrouter" | "codex" | "copilot" | "antigravity" | "gemini-cli" | "claude-cli"
+  | "ollama" | "lmstudio" | "custom" | "cursor" | ServiceProvider;
 
 export interface ProviderDef {
   id: ProviderId;
@@ -29,29 +31,42 @@ export const PROVIDERS: readonly ProviderDef[] = [
   { id: "google", name: "Google", accent: "#4285F4", key: "google-api-key", urlField: null, defaultModel: "gemini-2.0-flash", prefer: "flash" },
   { id: "openai", name: "OpenAI", accent: "#10A37F", key: "openai-api-key", urlField: null, defaultModel: "gpt-4o", prefer: "mini" },
   { id: "openrouter", name: "OpenRouter", accent: "#6467F2", key: "openrouter-api-key", urlField: null, defaultModel: "openrouter/auto", prefer: null },
+  { id: "codex", name: "Codex", accent: "#10A37F", key: null, urlField: null, defaultModel: "", prefer: null },
+  { id: "antigravity", name: "Antigravity", accent: "#E879F9", key: null, urlField: null, defaultModel: "", prefer: null },
+  { id: "copilot", name: "Copilot", accent: "#A78BFA", key: null, urlField: null, defaultModel: "", prefer: null },
+  { id: "gemini-cli", name: "Gemini · via Gravity", accent: "#4285F4", key: null, urlField: null, defaultModel: "", prefer: null },
+  { id: "claude-cli", name: "Claude · via Gravity", accent: "#E07950", key: null, urlField: null, defaultModel: "", prefer: null },
   { id: "ollama", name: "Ollama", accent: "#FACC15", key: null, urlField: "ollamaUrl", defaultModel: "", prefer: null },
   { id: "lmstudio", name: "LM Studio", accent: "#A3E635", key: null, urlField: "lmstudioUrl", defaultModel: "", prefer: null },
   { id: "custom", name: N_("Custom server"), accent: "#C0C4CC", key: null, urlField: "customUrl", defaultModel: "", prefer: null },
-  // Only through the user's own subscription (cli_relay.rs): no key, no address.
-  { id: "cursor", name: "Cursor", accent: "#A1A1AA", key: null, urlField: null, defaultModel: "", prefer: null },
-  { id: "copilot", name: "GitHub Copilot", accent: "#8B5CF6", key: null, urlField: null, defaultModel: "", prefer: null },
 ];
 
-/** Answered only through the user's subscription, switched on in Settings → Chat. */
-export const SUBSCRIPTION_ONLY: readonly ProviderId[] = ["cursor", "copilot"];
+// Saved upstream profiles still show the original name while the user reviews
+// the route. Cursor's upstream CLI is not a configured Coucou pet adapter.
+const LEGACY_CURSOR: ProviderDef = {
+  id: "cursor", name: "Cursor", accent: "#A1A1AA", key: null,
+  urlField: null, defaultModel: "", prefer: null,
+};
 
 /** Credential store entry of the custom server's optional key. */
 export const CUSTOM_SERVER_KEY = "openai-compatible-key";
 
 export function providerDef(id: string): ProviderDef {
+  if (id === LEGACY_CURSOR.id) return LEGACY_CURSOR;
+  if(isServiceProvider(id)){const def=pillDefinition(id);return {id,name:`${petName(id,def?.name??id)} · via Codex`,accent:def?.color??"#2dd4bf",key:null,urlField:null,defaultModel:"@default",prefer:null};}
   return PROVIDERS.find((p) => p.id === id) ?? PROVIDERS[0];
+}
+
+/** A chat opened from an agent's Mochi uses that agent's own CLI account. */
+export function providerForPill(id: string | undefined): ProviderId | null {
+  return (id?petBlueprint(id)?.routing.chat??null:null) as ProviderId|null;
 }
 
 /** The model the chat uses for the active provider. */
 export function activeModel(settings: Settings): string {
   const p = providerDef(settings.chatProvider);
   if (p.id === "anthropic") return settings.model || p.defaultModel;
-  return settings.chatModels[p.id] || p.defaultModel;
+  return settings.chatModels[p.id] || (isCliProvider(p.id) || p.id==="ollama" ? "@default" : p.defaultModel);
 }
 
 /** `settings` with `model` picked for `provider`. */
@@ -62,18 +77,20 @@ export function withModel(settings: Settings, provider: ProviderId, model: strin
 
 /**
  * The chips of the picker: every cloud provider (one without a key says so
- * when picked), a model server once it is connected, and Cursor or Copilot
- * once their subscription is on (`subscribed`: the providers whose switch is
- * on, from Rust) — or while it is the active one, so the picker never hides
- * where the chat goes.
+ * when picked), and a model server once it is connected — or while it is the
+ * active one, so the picker never hides where the chat goes.
  */
-export function visibleProviders(settings: Settings, subscribed: ReadonlySet<string> = new Set()): ProviderDef[] {
-  return PROVIDERS.filter((p) => {
-    if (settings.chatProvider === p.id) return true;
-    if (SUBSCRIPTION_ONLY.includes(p.id)) return subscribed.has(p.id) || settings.chatSubscriptions?.[p.id] === true;
-    return !p.urlField || settings[p.urlField] !== "";
-  });
+export function visibleProviders(settings: Settings): ProviderDef[] {
+  const preserveLabel = isServiceProvider(settings.chatProvider) || settings.chatProvider === LEGACY_CURSOR.id;
+  const providers = preserveLabel ? [...PROVIDERS, providerDef(settings.chatProvider)] : PROVIDERS;
+  return providers.filter(
+    (p) => (!isGravityFamily(p.id) || settings.chatProvider === p.id) &&
+      (!p.urlField || settings[p.urlField] !== "" || settings.chatProvider === p.id),
+  );
 }
+
+export const isGravityFamily = (id:string) => id === "gemini-cli" || id === "claude-cli";
+export const isCliProvider = (id:string) => id === "codex" || id==="copilot" || id === "antigravity" || isGravityFamily(id) || isServiceProvider(id);
 
 /** The model to keep once the list arrives: the saved one if offered, else a sensible one. */
 export function pickModel(provider: ProviderDef, offered: string[], current: string): string | null {

@@ -1,0 +1,87 @@
+{
+  "dateUtc": "2026-11-01T00:20:30.777114+00:00",
+  "version": "0.5.1-mochi.32",
+  "branch": "feat/mochi-cli-accounts",
+  "sourceCommit": "25b2a0b26c00ccdc47b2155145588597157c7962",
+  "integratedSources": 1003,
+  "sourceMapSha256": "1c10dd5aa9fb0e6ea6f1574e36621759ca4712f50071aa0ae086d1353b9aa25a",
+  "nativeInputs": 601,
+  "fullRust": {
+    "passed": 3182,
+    "failed": 0,
+    "ignored": 38,
+    "result": {
+      "exitCode": 0,
+      "seconds": 254.04,
+      "inputFiles": 601,
+      "compiledInputsUnchanged": true,
+      "logSha256": "be11f32bdfc12681b9a5d10c02b2bfe25e554833041f9bc3069f0d501c6e42cc",
+      "sharedSourceChanged": false,
+      "nativeDataTouched": false,
+      "modelCalls": 0
+    }
+  },
+  "web": {
+    "passed": 1333,
+    "failed": 0,
+    "skipped": 0,
+    "typeScript": true,
+    "vite": true,
+    "resultSha256": "3b63bca0b29a78fe0b236521c8a260e9fb08d75dda4a73aadd6a1d81e20dd2cd"
+  },
+  "native283": {
+    "passed": true,
+    "providerSynthetic": true,
+    "gtkWebkitAndIpcReal": true,
+    "hardwareAudioOrHumanAcceptance": false,
+    "resultSha256": "f88edb2918e31b450b7292b8c2e9e7ee764f7a1b5c6e7f4e4db9bf1cca8909ab"
+  },
+  "releaseNative": {
+    "id": 284,
+    "passed": true,
+    "packagedBinarySha256": "6c799a307ab87b65d22a476218c7bb89bb0902342d5b5cedb426850f781c8d17",
+    "syntheticAudioHelper": true,
+    "gtkWebkitIpcReal": true,
+    "resultSha256": "b2919f5fd9d7ca7a9c715f3dbd06c984ce8223286ea265c4473cdc4c8eff919f",
+    "hardwareAudioOrHumanAcceptance": false
+  },
+  "artifact": {
+    "sha256": "e274213cd618a022218787cdabdfd9b787a5564f7234c9232d86a08be5078400",
+    "projectPath": ".build/release-checkpoints/Coucou-0.5.1-mochi.32-source32-e274213cd618.rpm",
+    "payloadFiles": 13,
+    "copilotFiles": 7,
+    "trustedRelayVerified": true,
+    "sourceGitFilesVerified": 1033,
+    "buildResult": {
+      "exitCode": 0,
+      "seconds": 703.14,
+      "sourceUnchanged": true,
+      "sourceInputsSha256": "b3ebb799b817806813fd8cce6a76f557849ac4bf45e578be9acf5d332c2b02e3",
+      "logSha256": "12d4e4b55dc52a5def84e19dc9d0d58c7a3a7a097638c0282f2d7494c7ed7a8f",
+      "realModelOrQuotaCalls": 0,
+      "installedChanged": false,
+      "hostDisplayAudioOrProfileMounted": false,
+      "artifacts": {
+        "windows/target/release/bundle/rpm/Coucou-0.5.1-mochi.32-1.x86_64.rpm": "e274213cd618a022218787cdabdfd9b787a5564f7234c9232d86a08be5078400"
+      }
+    }
+  },
+  "installed": true,
+  "originalRequirements": 43,
+  "guardianRequirements": 6,
+  "integralRequirementsClosed": 0,
+  "installation": {
+    "activeVersion": "0.5.1-mochi.32",
+    "nativeDbusOwnerVerified": true,
+    "nativeAdmissionObserved": true,
+    "knownLegacyFilesAndNativeCopiesPreserved": 3,
+    "previousBinaryPreserved": true,
+    "changedHomeTargets": [
+      ".local/bin/coucou"
+    ],
+    "newAutostartOrServicesActivated": false,
+    "hardwareOrProviderQa": false,
+    "rollbackReferenceStoredPrivately": true
+  },
+  "publicationEvidence": "signed source commit and remote branch SHA; publication receipt recorded separately after push"
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "routes": {
+    "codex": "native",
+    "copilot": "native",
+    "antigravity": "native",
+    "gemini-cli": "native",
+    "claude-cli": "native",
+    "ollama": "local",
+    "lmstudio": "local",
+    "anthropic": "api",
+    "openai": "api",
+    "google": "api",
+    "openrouter": "api",
+    "custom": "api",
+    "integration_resend": "native",
+    "integration_n8n": "native",
+    "integration_vercel": "native",
+    "integration_github": "native",
+    "integration_notion": "native",
+    "integration_calcom": "native",
+    "integration_stripe": "native"
+  },
+  "images": ["jpg", "jpeg", "png", "gif", "webp"],
+  "pdf": ["pdf"],
+  "unsupportedBinary": [
+    "mp3", "mp4", "wav", "ogg", "flac", "aac", "m4a", "webm", "mov", "avi",
+    "zip", "gz", "bz2", "xz", "7z", "rar", "tar",
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+    "exe", "dll", "so", "bin", "iso", "dmg", "appimage", "deb", "rpm",
+    "heic", "heif", "avif", "tif", "tiff", "bmp", "ico"
+  ]
+}

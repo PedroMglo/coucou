@@ -52,6 +52,12 @@ pub const SERVICE_IDS: [&str; 7] = [
     "integration_stripe", "integration_github", "integration_vercel", "integration_n8n",
     "integration_resend", "integration_notion", "integration_calcom",
 ];
+/// A legacy saved selection cannot reactivate an entity retired by the factory.
+/// Keep SERVICE_IDS as the wire compatibility vocabulary, without deleting data.
+pub(super) fn service_available(id: &str) -> bool {
+    SERVICE_IDS.contains(&id) && !crate::pet_config::retired(id)
+}
+
 const MAX_SERVICE_ITEMS: usize = 3;
 const MAX_SERVICE_TITLE_CHARS: usize = 24;
 const MAX_SERVICE_HEADLINE_CHARS: usize = 40;
@@ -170,7 +176,7 @@ pub const OUTFIT_CHOICES: [&str; 13] = [
 fn clean_services(cards: Vec<ServiceIn>) -> Vec<ServiceIn> {
     let mut out: Vec<ServiceIn> = Vec::new();
     for c in cards {
-        if !SERVICE_IDS.contains(&c.id.as_str()) || out.iter().any(|o| o.id == c.id) {
+        if !service_available(&c.id) || out.iter().any(|o| o.id == c.id) {
             continue;
         }
         let one_line = |s: &str, max: usize| -> String { clip(&s.chars().filter(|c| !c.is_control()).collect::<String>(), max).trim().to_string() };
@@ -2169,6 +2175,25 @@ mod tests {
 
     fn allowed(ids: &[&str]) -> Caps {
         Caps { services: ids.iter().map(|s| s.to_string()).collect(), ..Caps::default() }
+    }
+
+    #[test]
+    fn retired_service_is_not_published_even_with_legacy_phone_permission() {
+        let (hub, _) = hub();
+        let caps = allowed(&["integration_github", "integration_notion"]);
+        let (_, mut live) = sub_with(&hub, caps.clone());
+        drain(&mut live);
+        hub.publish_services(vec![card("integration_github", "LEGACY_RETIRED_DATA", &[]), card("integration_notion", "Allowed note", &[])]);
+        let delivered = drain(&mut live);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0]["services"].as_array().unwrap().len(), 1);
+        assert_eq!(delivered[0]["services"][0]["id"], "integration_notion");
+        let (_, mut reconnect) = sub_with(&hub, caps);
+        assert!(!serde_json::to_string(&drain(&mut reconnect)).unwrap().contains("LEGACY_RETIRED_DATA"));
+        assert!(!hub.inner.lock().unwrap().services.iter().any(|s| s.id == "integration_github"));
+        assert!(!service_available("integration_github"));
+        assert!(service_available("integration_notion"));
+        assert!(!service_available("unknown"));
     }
 
     #[test]

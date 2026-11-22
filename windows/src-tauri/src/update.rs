@@ -5,7 +5,7 @@
 // (again a day later at most if the card was left unanswered), or Settings →
 // General → Updates. "Check now" is a click, so it works either way. Once
 // allowed, Coucou looks at launch and every 6 hours: one unauthenticated
-// `GET /repos/Louis-CFM/coucou/releases`, no cookies, nothing about the user.
+// `GET /repos/PedroMglo/coucou/releases`, no cookies, nothing about the user.
 //
 // Windows: the installer this copy came from — the per-user setup.exe in
 // %LOCALAPPDATA%\Coucou, the per-machine .msi under Program Files — is
@@ -29,9 +29,9 @@ use tauri::{AppHandle, Emitter};
 use crate::i18n::t;
 use crate::island::WINDOW_LABEL;
 
-pub const RELEASES_URL: &str = "https://api.github.com/repos/Louis-CFM/coucou/releases?per_page=30";
+pub const RELEASES_URL: &str = "https://api.github.com/repos/PedroMglo/coucou/releases?per_page=30";
 /// Where "What's new" goes when no release is known.
-pub const RELEASES_PAGE: &str = "https://github.com/Louis-CFM/coucou/releases";
+pub const RELEASES_PAGE: &str = "https://github.com/PedroMglo/coucou/releases";
 
 /// This platform's release tags: `windows-vX.Y.Z` / `linux-vX.Y.Z`. Never the
 /// rolling `windows-latest` / `linux-latest`, nor the Mac's `v…` or Android's.
@@ -77,26 +77,30 @@ pub struct Release {
 /// "windows-v0.5.1" → "0.5.1" with the prefix "windows-v"; "windows-latest",
 /// "v0.5.1", "linux-v0.5.0" or "windows-v0.5.0-beta" → None.
 pub fn version_from_tag(tag: &str, prefix: &str) -> Option<String> {
-    let v = tag.strip_prefix(prefix)?;
-    let parts: Vec<&str> = v.split('.').collect();
-    let numeric = parts.iter().all(|p| !p.is_empty() && p.len() <= 9 && p.bytes().all(|b| b.is_ascii_digit()));
-    ((2..=4).contains(&parts.len()) && numeric).then(|| v.to_string())
+    let version = tag.strip_prefix(prefix)?;
+    let (release, revision) = version.split_once("-mochi.").map_or((version, None), |(a, b)| (a, Some(b)));
+    let digits = |part: &str| !part.is_empty() && part.len() <= 9 && part.bytes().all(|byte| byte.is_ascii_digit());
+    let parts: Vec<_> = release.split('.').collect();
+    ((2..=4).contains(&parts.len()) && parts.into_iter().all(digits) && revision.is_none_or(digits))
+        .then(|| version.to_string())
 }
 
-fn numbers(v: &str) -> Vec<u64> {
-    v.split('.').map(|p| p.parse().unwrap_or(0)).collect()
+fn numbers(v: &str) -> (Vec<u64>, Option<u64>) {
+    let (release, revision) = v.split_once("-mochi.").map_or((v, None), |(a, b)| (a, b.parse().ok()));
+    (release.split('.').map(|part| part.parse().unwrap_or(0)).collect(), revision)
 }
 
 /// Numeric comparison: 0.10.0 is newer than 0.9.3, 0.5.1 than 0.5.
 pub fn is_newer(a: &str, than: &str) -> bool {
-    let (x, y) = (numbers(a), numbers(than));
+    let ((x, xr), (y, yr)) = (numbers(a), numbers(than));
     for i in 0..x.len().max(y.len()) {
         let (l, r) = (x.get(i).copied().unwrap_or(0), y.get(i).copied().unwrap_or(0));
         if l != r {
             return l > r;
         }
     }
-    false
+    // A final release is newer than a development build of that release.
+    xr.unwrap_or(u64::MAX) > yr.unwrap_or(u64::MAX)
 }
 
 /// The bold part of the first bullet under "## What's new", else the bullet's
@@ -132,7 +136,15 @@ pub fn allowed_host(host: Option<&str>) -> bool {
 }
 
 pub fn allowed_url(url: &str) -> bool {
-    Url::parse(url).is_ok_and(|u| u.scheme() == "https" && allowed_host(u.host_str()))
+    Url::parse(url).is_ok_and(|u|
+        u.scheme() == "https" && u.host_str() == Some("github.com") &&
+        u.port_or_known_default() == Some(443) && u.username().is_empty() &&
+        u.password().is_none() && u.path().starts_with("/PedroMglo/coucou/releases/")
+    )
+}
+
+fn allowed_asset_url(url: &str) -> bool {
+    allowed_url(url) && Url::parse(url).is_ok_and(|u| u.path().starts_with("/PedroMglo/coucou/releases/download/"))
 }
 
 /// The newest published release with this platform's tag in `GET /releases`.
@@ -234,7 +246,7 @@ pub fn asset_name(kind: InstallKind, version: &str) -> Option<String> {
 
 pub fn pick_asset(release: &Release, kind: InstallKind) -> Option<&Asset> {
     let name = asset_name(kind, &release.version)?;
-    release.assets.iter().find(|a| a.name == name && allowed_url(&a.url))
+    release.assets.iter().find(|a| a.name == name && allowed_asset_url(&a.url))
 }
 
 /// What runs the downloaded installer. The setup.exe with Tauri's own update
@@ -290,6 +302,7 @@ pub fn should_announce(version: &str, current: &str, snoozed_version: Option<&st
 struct Prefs {
     /// None: not asked yet. true: Coucou may look at GitHub. false: never on its own.
     consent: Option<bool>,
+    origin: Option<String>,
     last_check: Option<i64>,
     snoozed_version: Option<String>,
     snoozed_at: Option<i64>,
@@ -372,7 +385,12 @@ fn prefs_path() -> PathBuf {
 }
 
 fn load_prefs() -> Prefs {
-    std::fs::read(prefs_path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    let mut prefs: Prefs = std::fs::read(prefs_path()).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    // Refusing automatic checks carries over. Old approval cannot authorize a different repository.
+    if prefs.origin.as_deref() != Some(RELEASES_URL) && prefs.consent == Some(true) {
+        prefs.consent = None;
+    }
+    prefs
 }
 
 fn save_prefs(prefs: &Prefs) {
@@ -454,7 +472,6 @@ fn set_phase(app: &AppHandle, phase: Phase) {
 /// At launch: a first look 30 s in, then every hour (GitHub only every 6 h).
 /// The task sleeps in between: nothing runs while nothing is due.
 pub fn start(app: AppHandle) {
-    remove_old_downloads();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_TICK).await;
         let mut launch = true;
@@ -527,6 +544,9 @@ async fn fetch_latest() -> Result<Option<Release>, String> {
         .send()
         .await
         .map_err(|e| e.to_string())?;
+    if response.url().as_str() != RELEASES_URL {
+        return Err("O serviço de atualização mudou de endereço.".into());
+    }
     if response.status().as_u16() != 200 {
         return Err(format!("HTTP {}", response.status().as_u16()));
     }
@@ -537,6 +557,7 @@ async fn fetch_latest() -> Result<Option<Release>, String> {
 /// One look at GitHub. `manual`: "Check now" in Settings, which opens the card
 /// when a new version is out.
 pub async fn check(app: &AppHandle, manual: bool) {
+    if crate::settings::effect_allowed().is_err() { return; }
     {
         let mut s = state();
         if s.busy() || s.check == CheckState::Checking {
@@ -586,19 +607,9 @@ pub async fn check(app: &AppHandle, manual: bool) {
 
 // ── Install (Windows) ─────────────────────────────────────────────────────────
 
-/// Old downloads left in the temp folder by an update that ran: Coucou quits
-/// before the installer is done with its file, so they go at the next launch.
-fn remove_old_downloads() {
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
-    for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with("coucou-update-") {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
-    }
-}
-
 /// "Update now": downloads, checks and runs the installer, then quits.
 pub fn install(app: &AppHandle) {
+    if crate::settings::effect_allowed().is_err() { return; }
     let kind = this_install();
     let release = {
         let mut s = state();
@@ -671,7 +682,7 @@ async fn run(app: &AppHandle, release: &Release, kind: InstallKind) -> Result<()
 async fn download(app: &AppHandle, asset: &Asset, path: &Path) -> Result<String, String> {
     use std::io::Write;
     let failed = || t("The download failed. Try again, or get the new version on GitHub.");
-    if !allowed_url(&asset.url) {
+    if !allowed_asset_url(&asset.url) {
         return Err(failed());
     }
     let mut response = github_client(Duration::from_secs(900))?
@@ -721,6 +732,7 @@ pub fn update_set_consent(app: AppHandle, allowed: bool) {
     {
         let mut s = state();
         s.prefs.consent = Some(allowed);
+        s.prefs.origin = Some(RELEASES_URL.into());
         save_prefs(&s.prefs);
     }
     changed(&app);
@@ -810,48 +822,59 @@ mod tests {
     fn fixture() -> Vec<u8> {
         serde_json::json!([
             { "tag_name": "windows-v0.6.0", "draft": true, "prerelease": false,
-              "html_url": "https://github.com/Louis-CFM/coucou/releases/tag/windows-v0.6.0", "assets": [] },
+              "html_url": "https://github.com/PedroMglo/coucou/releases/tag/windows-v0.6.0", "assets": [] },
             { "tag_name": "windows-v0.7.0", "draft": false, "prerelease": true,
-              "html_url": "https://github.com/Louis-CFM/coucou/releases/tag/windows-v0.7.0", "assets": [] },
+              "html_url": "https://github.com/PedroMglo/coucou/releases/tag/windows-v0.7.0", "assets": [] },
             { "tag_name": "v0.9.0", "draft": false, "prerelease": false,
-              "html_url": "https://github.com/Louis-CFM/coucou/releases/tag/v0.9.0",
+              "html_url": "https://github.com/PedroMglo/coucou/releases/tag/v0.9.0",
               "body": "## What's new\n\n- **WhatsApp in one click** — Mac",
               "assets": [{ "name": "Coucou.zip", "size": 34228988,
-                "browser_download_url": "https://github.com/Louis-CFM/coucou/releases/download/v0.9.0/Coucou.zip",
+                "browser_download_url": "https://github.com/PedroMglo/coucou/releases/download/v0.9.0/Coucou.zip",
                 "digest": "sha256:24175a765704082c8b2e751f8b5ccb76b1eb3440ff2fd1e9c4cbe780c2193baa" }] },
             { "tag_name": "windows-v0.5.0", "draft": false, "prerelease": false,
-              "html_url": "https://github.com/Louis-CFM/coucou/releases/tag/windows-v0.5.0",
+              "html_url": "https://github.com/PedroMglo/coucou/releases/tag/windows-v0.5.0",
               "body": "Coucou for Windows 0.5.0 — Mochi at the top of your screen.\n\n## What's new\n\n- **Flow dictation** on Windows — hold right Ctrl\n- Other things",
               "assets": [
                 { "name": "Coucou-Windows-0.5.0-setup.exe", "size": 10950620,
-                  "browser_download_url": "https://github.com/Louis-CFM/coucou/releases/download/windows-v0.5.0/Coucou-Windows-0.5.0-setup.exe",
+                  "browser_download_url": "https://github.com/PedroMglo/coucou/releases/download/windows-v0.5.0/Coucou-Windows-0.5.0-setup.exe",
                   "digest": "sha256:e8234a092e8fe1bf6eed0395e6db13052be8fe47413949c2b7fa368467342337" },
                 { "name": "Coucou-Windows-0.5.0.msi", "size": 14086144,
-                  "browser_download_url": "https://github.com/Louis-CFM/coucou/releases/download/windows-v0.5.0/Coucou-Windows-0.5.0.msi",
+                  "browser_download_url": "https://github.com/PedroMglo/coucou/releases/download/windows-v0.5.0/Coucou-Windows-0.5.0.msi",
                   "digest": "sha256:79bced83c414722e84d47e99005a37910147624dc5e4edf55aa66ff6462cd09f" }] },
             { "tag_name": "windows-latest", "draft": false, "prerelease": false,
-              "html_url": "https://github.com/Louis-CFM/coucou/releases/tag/windows-latest",
+              "html_url": "https://github.com/PedroMglo/coucou/releases/tag/windows-latest",
               "assets": [{ "name": "Coucou-Windows-setup.exe", "size": 10950620,
-                "browser_download_url": "https://github.com/Louis-CFM/coucou/releases/download/windows-latest/Coucou-Windows-setup.exe",
+                "browser_download_url": "https://github.com/PedroMglo/coucou/releases/download/windows-latest/Coucou-Windows-setup.exe",
                 "digest": "sha256:e8234a092e8fe1bf6eed0395e6db13052be8fe47413949c2b7fa368467342337" }] },
             { "tag_name": "linux-v0.5.0", "draft": false, "prerelease": false,
-              "html_url": "https://github.com/Louis-CFM/coucou/releases/tag/linux-v0.5.0", "body": "Coucou for Linux 0.5.0",
+              "html_url": "https://github.com/PedroMglo/coucou/releases/tag/linux-v0.5.0", "body": "Coucou for Linux 0.5.0",
               "assets": [{ "name": "Coucou-Linux-0.5.0-x86_64.AppImage", "size": 107960824,
-                "browser_download_url": "https://github.com/Louis-CFM/coucou/releases/download/linux-v0.5.0/Coucou-Linux-0.5.0-x86_64.AppImage",
+                "browser_download_url": "https://github.com/PedroMglo/coucou/releases/download/linux-v0.5.0/Coucou-Linux-0.5.0-x86_64.AppImage",
                 "digest": "sha256:b59e0a8e432b782ea029cc825d37675033e7ff4069d70d376c1d268495a242af" }] },
             { "tag_name": "linux-latest", "draft": false, "prerelease": false,
-              "html_url": "https://github.com/Louis-CFM/coucou/releases/tag/linux-latest", "assets": [] },
+              "html_url": "https://github.com/PedroMglo/coucou/releases/tag/linux-latest", "assets": [] },
             { "tag_name": "android-v0.2.0", "draft": false, "prerelease": false,
-              "html_url": "https://github.com/Louis-CFM/coucou/releases/tag/android-v0.2.0", "assets": [] },
+              "html_url": "https://github.com/PedroMglo/coucou/releases/tag/android-v0.2.0", "assets": [] },
             { "tag_name": "windows-v0.10.0", "draft": false, "prerelease": false,
               "html_url": "https://evil.example.com/windows-v0.10.0", "assets": [] },
             { "tag_name": "windows-v0.4.0", "draft": false, "prerelease": false,
-              "html_url": "https://github.com/Louis-CFM/coucou/releases/tag/windows-v0.4.0", "assets": [] },
+              "html_url": "https://github.com/PedroMglo/coucou/releases/tag/windows-v0.4.0", "assets": [] },
             { "tag_name": "linux-v0.4.0", "draft": false, "prerelease": false,
-              "html_url": "https://github.com/Louis-CFM/coucou/releases/tag/linux-v0.4.0", "assets": [] }
+              "html_url": "https://github.com/PedroMglo/coucou/releases/tag/linux-v0.4.0", "assets": [] }
         ])
         .to_string()
         .into_bytes()
+    }
+
+    #[test]
+    fn a_fork_update_keeps_its_release_origin_and_build_number() {
+        assert!(is_newer("0.5.1-mochi.67", "0.5.1-mochi.63"));
+        assert!(!is_newer("0.5.1-mochi.63", "0.5.1-mochi.67"));
+        assert!(!is_newer("0.5.1-mochi.67", "0.5.1"));
+        assert_eq!(version_from_tag("linux-v0.5.1-mochi.67", "linux-v").as_deref(), Some("0.5.1-mochi.67"));
+        assert!(!allowed_url("https://github.com/Louis-CFM/coucou/releases/tag/linux-v0.5.9"));
+        assert!(!allowed_asset_url("https://github.com/PedroMglo/coucou/releases/tag/linux-v0.5.1"));
+        assert!(!allowed_asset_url("https://github.com:444/PedroMglo/coucou/releases/download/v/bad.rpm"));
     }
 
     #[test]
@@ -881,7 +904,7 @@ mod tests {
         // Not the draft 0.6.0, the prerelease 0.7.0, the Mac's 0.9.0 or the 0.10.0 whose page isn't GitHub's.
         assert_eq!(w.version, "0.5.0");
         assert_eq!(w.tag, "windows-v0.5.0");
-        assert_eq!(w.page_url, "https://github.com/Louis-CFM/coucou/releases/tag/windows-v0.5.0");
+        assert_eq!(w.page_url, "https://github.com/PedroMglo/coucou/releases/tag/windows-v0.5.0");
         assert_eq!(w.headline.as_deref(), Some("Flow dictation"));
         assert_eq!(w.assets.len(), 2);
         let l = latest(&fixture(), "linux-v").unwrap();
@@ -915,8 +938,8 @@ mod tests {
             assert!(!allowed_host(Some(host)), "{host}");
         }
         assert!(!allowed_host(None));
-        assert!(allowed_url("https://github.com/Louis-CFM/coucou/releases/download/x/y.msi"));
-        assert!(!allowed_url("http://github.com/Louis-CFM/coucou"));
+        assert!(allowed_url("https://github.com/PedroMglo/coucou/releases/download/x/y.msi"));
+        assert!(!allowed_url("http://github.com/PedroMglo/coucou"));
         assert!(!allowed_url("file:///C:/Windows/notepad.exe"));
         assert!(!allowed_url("not a url"));
     }
@@ -1016,7 +1039,7 @@ mod tests {
         let p: Prefs = serde_json::from_str("{}").unwrap();
         assert_eq!(p, Prefs::default());
         let round: Prefs = serde_json::from_str(&serde_json::to_string(&Prefs {
-            consent: Some(false), last_check: Some(5), snoozed_version: Some("0.6.0".into()), snoozed_at: Some(6), asked_at: Some(7),
+            consent: Some(false), origin: Some(RELEASES_URL.into()), last_check: Some(5), snoozed_version: Some("0.6.0".into()), snoozed_at: Some(6), asked_at: Some(7),
         }).unwrap()).unwrap();
         assert_eq!(round.snoozed_version.as_deref(), Some("0.6.0"));
         assert_eq!(round.asked_at, Some(7));

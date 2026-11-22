@@ -349,9 +349,39 @@ pub fn preview(id: &str, install: bool) -> Result<Plan, String> {
     config_file::preview(&agent.edits(&platform::home_dir(), &Relay::current(), install))
 }
 
+/// Explicit operator maintenance, before the UI starts. Reuses the same strict
+/// reader, fingerprint, mandatory backup and atomic writer as Settings. The
+/// preview exposes only Coucou's generated group, never other hook contents.
+pub fn gravity_config_cli()->bool {
+    let args:Vec<_>=std::env::args().collect();
+    let Some(index)=args.iter().position(|a|a=="--gravity-hook-config") else{return false};
+    let result=(||->Result<Value,String>{
+        if !cfg!(target_os="linux") {return Err("This hook bridge is available on Linux.".into());}
+        let mode=args.get(index+1).map(String::as_str).unwrap_or("");
+        if !["plan","apply","legacy-plan","legacy-apply"].contains(&mode) {return Err("Choose plan, apply, legacy-plan or legacy-apply.".into());}
+        let agent=Agent::Antigravity;let home=platform::home_dir();let relay=Relay::current();
+        if !agent.installed(&home) {return Err("Install Antigravity hooks in Settings before updating them.".into());}
+        let mut block=antigravity_block(&relay);
+        if mode.starts_with("legacy-") {
+            block["PreToolUse"][0]["hooks"][0]=json!({"type":"command","command":relay.command(Shell::Cmd,"--agent antigravity PreToolUse"),"timeout":10});
+        }
+        let replacement=block.clone();let path=agent.files(&home).remove(0);
+        let edits=vec![FileEdit{path,edit:config_file::json_edit("Antigravity hooks".into(),move|root|antigravity_install(root,&block).map(Some))}];
+        let plan=config_file::preview(&edits)?;
+        if mode.ends_with("apply") {
+            let expected=args.get(index+2).ok_or("Supply the fingerprint from plan.")?;
+            let backups=config_file::apply(&edits,expected)?;
+            Ok(json!({"applied":true,"backups":backups}))
+        } else {Ok(json!({"path":plan.path,"fingerprint":plan.fingerprint,"replacement":replacement}))}
+    })();
+    match result {Ok(value)=>println!("{value}"),Err(error)=>{eprintln!("{error}");std::process::exit(1);}}
+    true
+}
+
 /// Only ever called from an explicit click. Returns the backups taken, one per line.
 pub fn apply(id: &str, install: bool, fingerprint: &str) -> Result<String, String> {
     let agent = find(id)?;
+    crate::settings::optional::check(crate::settings::optional::Operation::Hooks)?;
     apply_in(agent, &platform::home_dir(), &Relay::current(), install, fingerprint)
 }
 
@@ -517,21 +547,30 @@ fn gemini_install(root: &Value, commands: &[(String, String, u64)]) -> Result<Va
 // Hooks are named groups at the top level; Coucou's is `coucou`. Tool events
 // take matcher groups, lifecycle events take handlers directly; timeouts are
 // in seconds. Merge and removal come from #298 (kobaltgit). The relay answers
-// PreToolUse with "ask" — Antigravity's own rules and prompt decide — unless
-// Approve commands from the notch is on and the island shows the command
-// (agy_approvals.rs): only a click on Allow there answers "allow". PreToolUse
-// gets 120 s so a card can wait for that click; it answers in a moment
-// otherwise. Hooks written with the old 10 s must be installed again.
+// a pre-tool request through the Linux helper for app-owned sessions. On
+// Windows, the island may request an explicit decision when enabled; all
+// other requests keep the relay's ask behavior.
 
 const ANTIGRAVITY_TOOL_EVENTS: &[&str] = &["PreToolUse", "PostToolUse"];
 const ANTIGRAVITY_LIFECYCLE_EVENTS: &[&str] = &["PreInvocation", "PostInvocation", "Stop"];
 
 fn antigravity_block(relay: &Relay) -> Value {
     let handler = |event: &str| {
-        let timeout = if event == "PreToolUse" { crate::agy_approvals::HOOK_TIMEOUT } else { 10 };
+        let mut command=relay.command(Shell::Cmd, &format!("--agent antigravity {event}"));
+        let mut timeout = if relay.windows && event == "PreToolUse" {
+            crate::agy_approvals::HOOK_TIMEOUT
+        } else {
+            10
+        };
+        if cfg!(target_os="linux") && !relay.windows && event=="PreToolUse" {
+            if let Ok(exe)=std::env::current_exe() {
+                command=format!("{} --gravity-pre-tool --relay {} --agent antigravity PreToolUse",sh_quote(&exe.to_string_lossy()),sh_quote(&relay.exe));
+                timeout=115;
+            }
+        }
         json!({
             "type": "command",
-            "command": relay.command(Shell::Cmd, &format!("--agent antigravity {event}")),
+            "command": command,
             "timeout": timeout,
         })
     };
@@ -616,7 +655,7 @@ const CODEX_EVENTS: &[(&str, u64)] = &[
     ("SessionEnd", 3),
 ];
 
-const CODEX_WAITING: &str = "Waiting for your answer in the island (Coucou)";
+const CODEX_WAITING: &str = "A tentar apresentar o pedido no Coucou…";
 
 fn codex_install(root: &Value, command: &str) -> Result<Value, String> {
     let events = CODEX_EVENTS.iter().map(|(event, timeout)| {
@@ -1173,14 +1212,18 @@ mod tests {
             assert_eq!(ours[event][0]["matcher"], "*");
             let cmd = ours[event][0]["hooks"][0]["command"].as_str().unwrap();
             assert!(cmd.ends_with(&format!("--agent antigravity {event}")), "{cmd}");
+            if cfg!(target_os="linux") && *event=="PreToolUse" {assert!(cmd.contains("--gravity-pre-tool --relay"));assert_eq!(ours[event][0]["hooks"][0]["timeout"],115);assert!(!cmd.contains("dangerously-skip-permissions"));}
         }
-        // PreToolUse may wait for a click on the island's card (agy_approvals.rs).
-        assert_eq!(ours["PreToolUse"][0]["hooks"][0]["timeout"], 120);
+        // round_trip uses the Unix relay; only Linux layers the scoped approval wrapper over it.
+        let pre_tool_timeout = if cfg!(target_os = "linux") { 115 } else { 10 };
+        assert_eq!(antigravity_block(&windows(WIN))["PreToolUse"][0]["hooks"][0]["timeout"],
+            crate::agy_approvals::HOOK_TIMEOUT);
+        assert_eq!(ours["PreToolUse"][0]["hooks"][0]["timeout"], pre_tool_timeout);
         assert_eq!(ours["PostToolUse"][0]["hooks"][0]["timeout"], 10);
         // And Settings reads it back as hooks that can wait.
         let file = Agent::Antigravity.files(&home)[0].clone();
         std::fs::write(&file, installed.to_string()).unwrap();
-        assert_eq!(crate::agy_approvals::pre_tool_timeout(&home), Some(120));
+        assert_eq!(crate::agy_approvals::pre_tool_timeout(&home), Some(pre_tool_timeout));
         for event in ANTIGRAVITY_LIFECYCLE_EVENTS {
             assert_eq!(ours[event][0]["timeout"], 10);
             assert!(ours[event][0]["command"].as_str().unwrap().contains(MARKER));
@@ -1238,6 +1281,12 @@ mod tests {
             assert_eq!(ours["timeout"], *timeout, "{event}");
             assert!(ours["command"].as_str().unwrap().ends_with("--agent codex"), "{event}");
             assert_eq!(ours.get("statusMessage").is_some(), *event == "PermissionRequest");
+            if *event=="PermissionRequest" {
+                assert_eq!(ours["statusMessage"],CODEX_WAITING);
+                assert!(CODEX_WAITING.contains("A tentar apresentar"));
+                assert!(!CODEX_WAITING.contains("à espera"));
+                assert!(!CODEX_WAITING.contains("Waiting for your answer in the island"));
+            }
         }
         assert_eq!(installed["hooks"]["PreToolUse"][0]["matcher"], "Bash");
         assert_eq!(removed.unwrap(), serde_json::from_str::<Value>(existing).unwrap());

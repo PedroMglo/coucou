@@ -263,6 +263,44 @@ WhatsApp in the notch, Mochi who feels your Mac, a screen capture for Claude, an
 - **iPhone** — a request you open from a notification now says whether it expired or was already answered on your Mac
 - The island's error view shows the real error and who stopped (Claude Code, an agent or n8n), with buttons that work; no false "your words are copied" after dictating into Electron apps; the Coucou window's sidebar is centred
 
+## Linux fork 0.5.1-mochi.5 — October 18, 2026
+
+- Show AI work, public progress messages, approval/question waits and completion at the owning pet, with compact animated dialogue and work animation. Decision cards retain priority.
+- Stream Raquel audio before synthesis finishes; read the final Codex answer instead of every progress message. Scope audio events to one surface.
+- Optional private local Whisper Portuguese recognition, warmed during listening, with memory-only PCM and idle process expiry.
+
+## Linux fork 0.5.1-mochi.4 — October 18, 2026
+
+- Unused companions stay absent, with short fade/shrink transitions when an app or session closes. Calls, cards and meaningful events recall only their owning pet.
+- Open, quiet applications rest after one minute; actual work and permission requests stay awake. Unchanged polling does not keep pets awake, and absent/sleeping pets stop recurring frames.
+- Keep a known CLI session after a completed turn, and clear its presence on SessionEnd even for declared integrations.
+- Answering a Codex permission keeps its own card instead of switching to a previously selected Gravity card.
+
+## Linux fork 0.5.1-mochi.3 — October 18, 2026
+
+- Play spoken replies in the visible companion surface instead of the suspended hidden pill. Share playback/cancellation between surfaces and confirm playback completion without logging conversation text.
+- Use GPT-6 Luna by default for Codex voice conversations, with separate voice model preferences that preserve written chat model choices.
+- Add a microphone-free native voice preview for validating the installed audio path.
+
+## Linux fork 0.5.1-mochi.2 — October 18, 2026
+
+- Continuous voice conversations using the native Codex and Gravity CLI accounts, with separate pet contexts and their original tools and permission prompts.
+- Select Codex, Gravity, Gemini, Claude or the existing local Ollama backend by speaking its name. Stop with bare Super, a spoken stop command or inactivity; release capture before inference and playback.
+- Optional Raquel pt-PT Read Aloud speech through a pinned private Python environment, local Parakeet recognition and learned pet-name spellings. Voice feedback follows the selected companion.
+- Preserve independent companions, per-provider text histories, local Ollama voice, trusted upstream relay, Bluetooth handling and existing shortcuts.
+
+This Linux-only build keeps the macOS bundle and Info.plist unchanged. See [voice accounts](docs/LINUX-VOICE-ACCOUNTS.md).
+
+## Linux fork 0.5.1-mochi.1 — October 18, 2026
+
+- One companion per integration, positioned in the free areas of a compatible desktop bar. Unused pets park and sleep; active pets wander and greet without covering bar controls.
+- Cards, permissions and voice feedback belong to their pet. Fix unstable hover targets, overlapping click areas and stale popup wake behavior.
+- Native PipeWire capture and cancellable local Ollama voice turns; close the microphone before inference and keep stereo between turns. Load ASR on demand and evict its cache after idle use.
+- Spotify playback controls do not raise the application; optional desktop helper starts it out of the way. Confirm playback from the actual player.
+- Stop dormant rendering, suspend hidden settings animations and preserve the trusted upstream hook relay.
+
+This is a Linux-only fork build. The macOS bundle and its Info.plist retain the upstream version. See docs/COMPANIONS.md for validation and platform limits.
+
 ## Windows and Linux 0.5.0 — October 15, 2026
 
 Windows and Linux catch up with the Mac's 0.3.0 and 0.4.0: the Coucou window, Flow dictation, the Notetaker and « OK Coucou ». All of it free and open source.

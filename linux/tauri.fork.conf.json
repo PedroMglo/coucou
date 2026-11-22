@@ -1,0 +1,10 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm --prefix ../extensions/copilot run build && node node_modules/typescript/bin/tsc --noEmit && node node_modules/vite/bin/vite.js build"
+  },
+  "bundle": {
+    "targets": [
+      "rpm"
+    ]
+  }
+}

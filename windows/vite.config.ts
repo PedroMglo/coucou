@@ -31,8 +31,7 @@ function sharedSounds(): Plugin {
     closeBundle() {
       const out = resolve(__dirname, "dist/sounds");
       if (!existsSync(SOUNDS_DIR)) {
-        this.warn(`sounds not found at ${SOUNDS_DIR} — the build will ship without audio`);
-        return;
+        this.error(`Required shared sounds are missing at ${SOUNDS_DIR}; refusing an incomplete app bundle`);
       }
       mkdirSync(out, { recursive: true });
       for (const f of readdirSync(SOUNDS_DIR)) {
@@ -62,8 +61,13 @@ export default defineConfig({
     rollupOptions: {
       input: {
         island: resolve(__dirname, "index.html"),
+        petCards: resolve(__dirname, "pet-cards.html"),
         settings: resolve(__dirname, "settings.html"),
         mochi: resolve(__dirname, "mochi.html"),
+        companions: resolve(__dirname, "companions.html"),
+        petManager: resolve(__dirname, "pet-manager.html"),
+        petControl: resolve(__dirname, "pet-control.html"),
+        petChat: resolve(__dirname, "pet-chat.html"),
         pill: resolve(__dirname, "pill.html"),
       },
       output: {

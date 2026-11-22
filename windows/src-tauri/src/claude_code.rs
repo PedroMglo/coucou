@@ -157,6 +157,9 @@ pub fn chat_prompt(history: &[Value], first: bool, context: Option<&ChatContext>
         out.push_str("</conversation>\n\nThe user's new message:\n");
     }
     match context.filter(|_| first) {
+        Some(ChatContext::Files { .. }) => {
+            out.push_str("These attachments require a scoped pet conversation.\n\n");
+        }
         Some(ChatContext::File { name, path }) => {
             out.push_str(&format!("File: {name} (read it at {path})\n\n"));
         }

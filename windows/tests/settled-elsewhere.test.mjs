@@ -13,6 +13,7 @@ const CLAUDE = "integration_claude";
 let asked;
 const island = {
   alert: (view) => asked.push(`alert:${view}`),
+  presentApproval: ({ view }) => { asked.push(`alert:${view}`); return Promise.resolve(true); },
   setView: (view) => asked.push(`setView:${view}`),
   reveal: () => asked.push("reveal"),
   dropPin: () => asked.push("dropPin"),

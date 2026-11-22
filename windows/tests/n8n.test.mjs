@@ -42,7 +42,7 @@ test("n8n card: shows workflow from initial seed and after 60s auto-clear", () =
 
   let revealed = 0;
   const island = { reveal() { revealed += 1; } };
-  const hooks = { detailOpen: false, openDetail() {}, closeDetail() {}, openSettings() {} };
+  const hooks = { detail: null, openDetail() {}, closeDetail() {}, openSettings() {} };
 
   try {
     // 1. Initial seed at launch (event: null) populates the card without triggering reveal/badge.
@@ -62,7 +62,7 @@ test("n8n card: shows workflow from initial seed and after 60s auto-clear", () =
     assert.ok(seededCard.textContent.includes("Nightly sync"));
     assert.ok(!seededCard.textContent.includes("Connected · loading…"));
 
-    const seededDetail = renderIntegrationCard(task, { ...hooks, detailOpen: true });
+    const seededDetail = renderIntegrationCard(task, { ...hooks, detail: {} });
     assert.ok(seededDetail.textContent.includes("Nightly sync"));
     assert.ok(seededDetail.textContent.includes("→ HTTP · 1 item"));
     assert.ok(seededDetail.textContent.includes("Success"));
@@ -99,7 +99,7 @@ test("n8n card: shows workflow from initial seed and after 60s auto-clear", () =
 
     const postClearCard = renderIntegrationCard(task, hooks);
     assert.ok(postClearCard.textContent.includes("Deploy webhook"));
-    const postClearDetail = renderIntegrationCard(task, { ...hooks, detailOpen: true });
+    const postClearDetail = renderIntegrationCard(task, { ...hooks, detail: {} });
     assert.ok(postClearDetail.textContent.includes("Deploy webhook"));
     assert.ok(postClearDetail.textContent.includes("ECONNREFUSED"));
     assert.ok(postClearDetail.textContent.includes("Failed"));
@@ -110,4 +110,3 @@ test("n8n card: shows workflow from initial seed and after 60s auto-clear", () =
     State.focusId = prevFocus;
   }
 });
-

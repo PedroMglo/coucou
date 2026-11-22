@@ -39,10 +39,6 @@ const TIMEOUT: Duration = Duration::from_secs(40);
 const KEEP: usize = 12;
 const MAX_SHOWN: usize = 60;
 
-/// Set around a chat turn sent with the Mail switch on: chat::system_prompt adds the
-/// mail instructions while it is.
-pub static MAIL_TURN: AtomicBool = AtomicBool::new(false);
-
 static BUSY: AtomicBool = AtomicBool::new(false);
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 

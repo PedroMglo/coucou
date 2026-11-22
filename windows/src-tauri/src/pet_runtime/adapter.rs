@@ -1,0 +1,158 @@
+use super::model::*;
+use super::Repository;
+use serde::{Deserialize,Serialize};
+use tauri::{AppHandle,Manager};
+pub(super)fn allowed(label:&str)->bool{[crate::HUB_LABEL,crate::companions::LABEL,crate::pet_control::LABEL,crate::pet_panel::LABEL].contains(&label)}
+/// Project progress in the pet chat uses only these explicit data readers.
+/// Mutation, admission, recovery and execution retain the original allowlist.
+pub(super)fn read_scope_allowed(label:&str,requested:Option<&str>,shown:Option<&str>)->bool{allowed(label)||label==crate::pet_chat::LABEL&&requested.is_some_and(|p|!p.is_empty())&&requested==shown}
+pub(super)fn read_window_check(w:&tauri::WebviewWindow,pet:Option<&str>)->Result<()>{
+ let shown=if w.label()==crate::pet_chat::LABEL{Some(crate::pet_chat::pet_chat_context(w.app_handle().clone()).pet)}else{None};
+ if read_scope_allowed(w.label(),pet,shown.as_deref()){Ok(())}else{Err(Error::InvalidInput)}
+}
+fn window_check(w:&tauri::WebviewWindow)->Result<()>{if allowed(w.label()){Ok(())}else{Err(Error::InvalidInput)}}
+fn pet(id:&str)->Result<()>{if crate::pet_config::defaults().pets.contains_key(id){Ok(())}else{Err(Error::InvalidInput)}}
+pub(super)fn owner(app:&AppHandle,id:&str)->Result<Owner>{
+    let snapshot=crate::pet_capabilities::passive_snapshot(app).map_err(|_|Error::StorageUnavailable)?;
+    let p=snapshot.pets.into_iter().find(|p|p.pet_id==id).ok_or(Error::InvalidInput)?;
+    Owner::from_descriptor(&p)
+}
+pub(super)fn runtime_owner(app:&AppHandle,id:&str)->Result<Owner>{
+    let snapshot=crate::pet_capabilities::passive_snapshot(app).map_err(|_|Error::StorageUnavailable)?;
+    let descriptor=snapshot.pets.iter().find(|p|p.pet_id==id).ok_or(Error::InvalidInput)?;
+    Owner::from_runtime_descriptor(descriptor)
+}
+fn root()->std::path::PathBuf{crate::settings::config_dir().join("pet-runtime-v1")}
+#[cfg(target_os="linux")]fn existing()->Result<super::store::Store>{super::store::Store::existing_native(&root())?.ok_or(Error::NotFound)}
+
+#[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct CreateInput{pub pet_id:String,pub request_id:String,pub intent:String,pub criteria:Vec<String>,pub conversation_id:Option<String>}
+#[derive(Deserialize)]#[serde(tag="kind",rename_all="camelCase",deny_unknown_fields)]
+pub enum DraftAction{ProposeTask{description:String},ProposePlan{#[serde(rename="taskId")]task_id:String,steps:Vec<StepInput>},Pause,ResumeDraft,Cancel}
+impl From<DraftAction> for Action{fn from(a:DraftAction)->Self{match a{DraftAction::ProposeTask{description}=>Self::ProposeTask{description},DraftAction::ProposePlan{task_id,steps}=>Self::ProposePlan{task_id,steps},DraftAction::Pause=>Self::Pause,DraftAction::ResumeDraft=>Self::ResumeDraft,DraftAction::Cancel=>Self::Cancel}}}
+#[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct MutationInput{pub pet_id:String,pub goal_id:String,pub revision:String,pub request_id:String,pub action:DraftAction}
+#[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct ImportInput{pub pet_id:String,pub goal_id:String,pub revision:String,pub request_id:String,pub task_id:String}
+
+#[cfg(target_os="linux")]fn create_for(app:&AppHandle,input:CreateInput,deterministic:bool)->Result<Receipt>{
+    let owner=if deterministic{runtime_owner(app,&input.pet_id)?}else{owner(app,&input.pet_id)?};
+    let context=if let Some(id)=input.conversation_id{
+        if !app.state::<crate::chat::Chat>().has_public_conversation(&owner.provider,&id){return Err(Error::Conflict);}Context::Mochi{conversation_id:id}
+    }else{Context::Unbound};
+    let spec=Spec{received_from:None,restored_from:None,owner,context,request_id:input.request_id,intent:input.intent,criteria:input.criteria};spec.validate()?;
+    Repository::create(&super::store::Store::ensure_native(&root())?,spec,crate::assistant_memory::now())
+}
+#[tauri::command]
+pub async fn pet_runtime_create(app:AppHandle,window:tauri::WebviewWindow,input:CreateInput)->Result<Receipt>{
+    window_check(&window)?;
+    #[cfg(not(target_os="linux"))]{let _=(app,input);Err(Error::UnsupportedPlatform)}
+    #[cfg(target_os="linux")]tauri::async_runtime::spawn_blocking(move||create_for(&app,input,false)).await.map_err(|_|Error::StorageUnavailable)?
+}
+#[tauri::command]
+pub async fn pet_runtime_create_deterministic(app:AppHandle,window:tauri::WebviewWindow,input:CreateInput)->Result<Receipt>{
+    window_check(&window)?;
+    #[cfg(not(target_os="linux"))]{let _=(app,input);Err(Error::UnsupportedPlatform)}
+    #[cfg(target_os="linux")]tauri::async_runtime::spawn_blocking(move||create_for(&app,input,true)).await.map_err(|_|Error::StorageUnavailable)?
+}
+#[tauri::command]
+pub async fn pet_runtime_list(window:tauri::WebviewWindow,pet_id:Option<String>)->Result<Listing>{
+    read_window_check(&window,pet_id.as_deref())?;if let Some(id)=&pet_id{pet(id)?;}
+    #[cfg(not(target_os="linux"))]{let _=pet_id;Err(Error::UnsupportedPlatform)}
+    #[cfg(target_os="linux")]
+    tauri::async_runtime::spawn_blocking(move||match super::store::Store::existing_native(&root())?{
+        Some(store)=>Repository::list(&store,pet_id.as_deref()),None=>Ok(Listing{schema_version:1,goals:vec![],unavailable:0,pending_artifacts:0,complete:true})
+    }).await.map_err(|_|Error::StorageUnavailable)?
+}
+#[tauri::command]
+pub async fn pet_runtime_read(window:tauri::WebviewWindow,pet_id:String,goal_id:String)->Result<Record>{
+    read_window_check(&window,Some(&pet_id))?;pet(&pet_id)?;
+    #[cfg(not(target_os="linux"))]{let _=(pet_id,goal_id);Err(Error::UnsupportedPlatform)}
+    #[cfg(target_os="linux")]
+    tauri::async_runtime::spawn_blocking(move||existing()?.read(&goal_id,&pet_id)).await.map_err(|_|Error::StorageUnavailable)?
+}
+#[tauri::command]
+pub async fn pet_runtime_mutate(app:AppHandle,window:tauri::WebviewWindow,input:MutationInput)->Result<Receipt>{
+    window_check(&window)?;pet(&input.pet_id)?;
+    #[cfg(not(target_os="linux"))]{let _=(app,input);Err(Error::UnsupportedPlatform)}
+    #[cfg(target_os="linux")]
+    tauri::async_runtime::spawn_blocking(move||{
+        let store=existing()?;let action:Action=input.action.into();
+        if !matches!(action,Action::Cancel|Action::Pause){
+            let record=store.read(&input.goal_id,&input.pet_id)?;
+            let current=runtime_owner(&app,&input.pet_id)?;
+            if record.spec.owner.provider!=current.provider||record.spec.owner.adapter!=current.adapter{return Err(Error::Conflict);}
+        }
+        let initial=store.read_control(&input.goal_id,&input.pet_id)?;
+        let replay=initial.replay(&input.request_id,&action)?;let path=super::admission_review::authority_root();let now=crate::assistant_memory::now();let mut revision=input.revision;
+        if !replay&&matches!(action,Action::ResumeDraft){
+            if initial.revision!=revision{return Err(Error::Conflict);}
+            if let Some(cleaned)=super::lease_api::cleanup_unstarted(&store,&path,&initial,now)?{
+                if cleaned.status==CommitStatus::Uncertain{return Err(Error::StorageUnavailable);}
+                // Rebase only the cleanup performed here from the exact input
+                // revision; any concurrent control/admission still fails CAS.
+                if cleaned.record.state!=initial.state{return Err(Error::Conflict);}revision=cleaned.record.revision;
+            }
+        }
+        let control=matches!(action,Action::Pause|Action::Cancel);
+        let receipt=super::authority_store::mutate_with_authority(&store,&path,&input.goal_id,&input.pet_id,&revision,input.request_id,action,now)?;
+        if control&&!replay{
+            super::lease_api::stop_requested(&receipt.record);
+            if let Ok(Some(cleaned))=super::lease_api::cleanup_unstarted(&store,&path,&receipt.record,now){return Ok(cleaned);}
+        }
+        Ok(receipt)
+    }).await.map_err(|_|Error::StorageUnavailable)?
+}
+#[tauri::command]
+pub async fn pet_runtime_import_legacy(app:AppHandle,window:tauri::WebviewWindow,input:ImportInput)->Result<Receipt>{
+    window_check(&window)?;pet(&input.pet_id)?;
+    #[cfg(not(target_os="linux"))]{let _=(app,input);Err(Error::UnsupportedPlatform)}
+    #[cfg(target_os="linux")]
+    tauri::async_runtime::spawn_blocking(move||{
+        let store=existing()?;let record=store.read(&input.goal_id,&input.pet_id)?;
+        let mut matches=app.state::<crate::chat::Chat>().tasks().into_iter().filter(|t|t.id==input.task_id&&t.provider==record.spec.owner.provider&&t.valid()&&match &record.spec.context{Context::Mochi{conversation_id}=>t.conversation_id.as_ref()==Some(conversation_id),Context::Unbound=>true});
+        let task=matches.next().ok_or(Error::NotFound)?;if matches.next().is_some(){return Err(Error::Conflict);}
+        let reference=Legacy{task_id:task.id,provider:task.provider,backend:task.backend,conversation_id:task.conversation_id,phase:task.phase,intent_may_be_incomplete:true,receipts:task.local_execution};
+        store.mutate(&input.goal_id,&input.pet_id,&input.revision,input.request_id,Action::ImportLegacy{reference},crate::assistant_memory::now())
+    }).await.map_err(|_|Error::StorageUnavailable)?
+}
+
+#[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct PrepareContextInput{#[serde(default)]pub selected_project:Option<crate::pet_memory::context_model::SelectedProject>,pub pet_id:String,pub goal_id:String,pub revision:String,pub request_id:String,pub mode:PreparationMode,#[cfg(target_os="linux")]#[serde(default)]pub selected_calendars:Option<crate::pet_calendar::goal::Request>,#[serde(default)]pub selected_memory:Option<Vec<crate::pet_memory::context_model::Selected>>,#[serde(default)]pub include_received_request:bool}
+#[derive(Serialize)]#[serde(rename_all="camelCase")]
+pub struct ContextView{pub binding:ContextBinding,pub messages:Vec<serde_json::Value>,pub message_count:usize,pub truncated:bool}
+fn context_root()->std::path::PathBuf{crate::settings::config_dir().join("pet-runtime-contexts-v1")}
+#[tauri::command]
+pub async fn pet_runtime_prepare_context(app:AppHandle,window:tauri::WebviewWindow,input:PrepareContextInput)->Result<Receipt>{
+    window_check(&window)?;pet(&input.pet_id)?;
+    #[cfg(not(target_os="linux"))]{let _=(app,input);Err(Error::UnsupportedPlatform)}
+    #[cfg(target_os="linux")]
+    tauri::async_runtime::spawn_blocking(move||{
+        let store=std::sync::Arc::new(existing()?);let goal=store.read_control(&input.goal_id,&input.pet_id)?;
+        if let Some(binding)=&goal.execution_context{
+            if binding.request_id!=input.request_id||binding.mode!=input.mode||binding.received_request.is_some()!=input.include_received_request||!crate::pet_memory::context_model::same_selection(binding.memory.as_ref(),input.selected_memory.as_deref())||!super::model::same_memory_project(binding,input.selected_project.as_ref())||!super::context::same_calendars(binding,input.selected_calendars.as_ref()){return Err(Error::Conflict);}
+            let _calendars=if binding.has_calendars(){Some(super::context::open_with_authority(&context_root(),&goal,&app.state::<crate::chat::Chat>(),&super::admission_review::authority_root())?)}else{None};
+            if binding.memory.is_some(){super::context::validate_memory(binding)?;}
+            return store.mutate(&goal.id,&input.pet_id,&input.revision,input.request_id,Action::BindContext{binding:binding.clone()},crate::assistant_memory::now());
+        }
+        if goal.execution_context.is_none(){let current=runtime_owner(&app,&input.pet_id)?;if current.provider!=goal.spec.owner.provider||current.adapter!=goal.spec.owner.adapter{return Err(Error::Conflict);}}
+        let main=app.state::<crate::chat::Chat>();
+        if input.selected_calendars.is_some()&&input.include_received_request||input.selected_project.is_some()&&(input.selected_calendars.is_some()||input.include_received_request){return Err(Error::InvalidInput);}
+        let observed=store.clone();let id=goal.id.clone();let pet=goal.spec.owner.pet_id.clone();let revision=goal.revision.clone();
+        let current=std::sync::Arc::new(move||observed.read_control(&id,&pet).is_ok_and(|g|g.state==State::Draft&&g.revision==revision&&g.execution_context.is_none()));
+        let(binding,_chat)=if let Some(project)=input.selected_project.as_ref(){super::context::prepare_with_project_data(&context_root(),&goal,&main,input.mode,&input.request_id,input.selected_memory.as_deref(),project,&super::admission_review::authority_root())?}else if input.selected_calendars.is_some(){super::context::prepare_with_calendar_data(&context_root(),&goal,&main,input.mode,&input.request_id,input.selected_memory.as_deref(),&super::admission_review::authority_root(),input.selected_calendars.as_ref(),current)?}
+          else{super::context::prepare_with_data(&context_root(),&goal,&main,input.mode,&input.request_id,input.selected_memory.as_deref(),&super::admission_review::authority_root(),input.include_received_request)?};
+        store.mutate(&goal.id,&input.pet_id,&input.revision,input.request_id,Action::BindContext{binding},crate::assistant_memory::now())
+    }).await.map_err(|_|Error::StorageUnavailable)?
+}
+#[tauri::command]
+pub async fn pet_runtime_context_read(app:AppHandle,window:tauri::WebviewWindow,pet_id:String,goal_id:String)->Result<ContextView>{
+    window_check(&window)?;pet(&pet_id)?;
+    #[cfg(not(target_os="linux"))]{let _=(app,pet_id,goal_id);Err(Error::UnsupportedPlatform)}
+    #[cfg(target_os="linux")]
+    tauri::async_runtime::spawn_blocking(move||{
+        let _=app;let goal=existing()?.read(&goal_id,&pet_id)?;
+        let(binding,snapshot)=super::context::read_snapshot(&context_root(),&goal)?;
+        Ok(ContextView{binding,truncated:snapshot.messages.len()<snapshot.source_messages,message_count:snapshot.source_messages,messages:snapshot.messages})
+    }).await.map_err(|_|Error::StorageUnavailable)?
+}

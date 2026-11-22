@@ -3,16 +3,18 @@
 // OpenRouter. One table describes them; one client talks to all three.
 //
 // Same contract as claude.rs: the key never leaves the credential store and
-// file bytes never cross the IPC boundary. Chat only — no tools are sent, so
-// the model can answer but never act on the machine.
+// file bytes never cross the IPC boundary. A selected ICS additionally exposes
+// a sealed read-only calendar query; it never grants machine actions.
 
 use std::time::Duration;
 
 use reqwest::Url;
 use serde_json::{json, Value};
 
+use crate::attachment_history::{Coverage, Preparation};
 use crate::chat::{self, Chat, ChatContext, ChatReply, ModelInfo};
 use crate::i18n::{t, tf};
+use crate::pet_documents::content::{Budget, Part, unavailable};
 use crate::{net, secrets};
 
 pub struct Provider {
@@ -77,6 +79,9 @@ const MAX_INLINE_TEXT: u64 = 200_000;
 /// Images are sent inline as data URLs; past this size they are skipped.
 const MAX_IMAGE: u64 = 5_000_000;
 
+/// Shared dispatch/review route choice. A preview describes the known set,
+/// not provider-side tools, model aliases or internal routing.
+pub(crate)fn completion_tail(provider:&str,calendar:bool)->&'static str{if provider=="openai"&&calendar{"responses"}else{"chat/completions"}}
 fn url(p: &Provider, tail: &str) -> Result<Url, String> {
     let base = Url::parse(p.base_url).map_err(|e| e.to_string())?;
     Url::parse(&net::join(&base, tail)).map_err(|e| e.to_string())
@@ -84,28 +89,50 @@ fn url(p: &Provider, tail: &str) -> Result<Url, String> {
 
 /// The user's message for one turn: plain text, or text and an image part
 /// when the first turn carries a dropped picture.
-fn user_message(first: bool, context: Option<&ChatContext>, query: &str) -> Value {
-    let mut prefix = String::new();
-    let mut image = None;
-    match context.filter(|_| first) {
-        Some(ChatContext::File { name, path }) => match file_part(path) {
-            Some(FilePart::Image(part)) => {
-                image = Some(part);
-                prefix = format!("File: {name}\n\n");
+fn prepared_message(first: bool, context: Option<&ChatContext>, query: &str) -> (Value, Vec<Preparation>) {
+    if let Some(ChatContext::Files{files})=context{
+        let mut parts = vec![];
+        let mut preparation = vec![];
+        let mut budget = Budget::default();
+        for (index, file) in files.iter().enumerate() {
+            let (name, path) = (file.name.as_str(), file.path.as_str());
+            parts.push(json!({"type":"text","text":file.label(index)}));
+            let (part, coverage) = if !budget.available() {
+                (unavailable(name, "combined extraction deadline"), Some(Coverage::Unavailable))
+            } else if let Some(part) = file_part(path) {
+                let (part, coverage) = part.fit(&mut budget, name);
+                (part, Some(coverage))
+            } else if std::path::Path::new(path).is_dir()
+                || crate::pet_documents::policy::format(path, false) == crate::pet_documents::policy::Format::Pdf
+            {
+                let (text, coverage) = crate::local_chat::bounded_attachment_note(name, path, &mut budget);
+                (json!({"type":"text","text":text}), coverage)
+            } else {
+                (unavailable(name, "unsupported format, size or unreadable copy"), Some(Coverage::Unavailable))
+            };
+            parts.push(part);
+            if let Some(coverage) = coverage {
+                preparation.push(Preparation { id: file.id.clone(), coverage });
             }
-            Some(FilePart::Text(body)) => prefix = format!("File: {name}\nFile contents:\n{body}\n\n"),
-            None => prefix = format!("File: {name}\n\n"),
-        },
-        Some(ChatContext::Window { app_name, title, url }) => {
-            prefix = format!("{}\n\n", chat::window_line(app_name, title, url.as_deref()));
         }
-        None => {}
+        parts.push(json!({"type":"text","text":query}));
+        return (json!({"role":"user","content":parts}), preparation);
     }
-    let text = format!("{prefix}{query}");
-    match image {
-        None => json!({ "role": "user", "content": text }),
-        Some(part) => json!({ "role": "user", "content": [part, { "type": "text", "text": text }] }),
+    let mut notes=vec![];let mut media=vec![];let mut budget=Budget::default();
+    if let Some(context)=context.filter(|c|first||matches!(c,ChatContext::Files{..})){
+        if let ChatContext::Window{app_name,title,url}=context{notes.push(chat::window_line(app_name,title,url.as_deref()));}
+        for (name,path) in context.file_paths(){
+            if !budget.available(){notes.push(crate::pet_documents::content::unavailable(name,"combined extraction deadline")["text"].as_str().unwrap().into());continue;}
+            match file_part(path){
+                Some(Part::Media(part))=>{let (part,coverage)=budget.media_block(part,name);if coverage==Coverage::Unavailable{notes.push(part["text"].as_str().unwrap().into());}else{media.push(part);}notes.push(format!("File: {name}"));}
+                Some(Part::Text(body))=>notes.push(budget.text(format!("File: {name}\nFile contents:\n{body}"))),
+                None=>notes.push(format!("File: {name}")),
+            }
+        }
     }
+    notes.push(query.into());let text=notes.join("\n\n");
+    let message=if media.is_empty(){json!({"role":"user","content":text})}else{media.push(json!({"type":"text","text":text}));json!({"role":"user","content":media})};
+    (message, vec![])
 }
 
 fn request_body(p: &Provider, model: &str, system: &str, history: &[Value], user: &Value) -> Value {
@@ -160,18 +187,66 @@ pub async fn send(
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
     let key = secrets::get(p.key).ok_or_else(|| tf("{name} API key missing. Add it in Settings.", &[("name", p.name)]))?;
+    send_resolved(chat,p,model,query,context,&key).await
+}
+
+// Production supplies its original native Provider and credential. Test-only
+// callers use synthetic resolved inputs through the same complete send path.
+async fn send_resolved(chat:&Chat,p:&'static Provider,model:&str,query:String,context:Option<ChatContext>,key:&str)->Result<ChatReply,String>{
+    chat.check_new_effect()?;
     if model.is_empty() {
         return Err(tf("Pick a {name} model above the chat box.", &[("name", p.name)]));
     }
-    let turn = chat.begin(p.id);
-    let user = user_message(turn.first, context.as_ref(), &query);
-    let body = request_body(p, model, &chat::system_prompt(false), &turn.history, &user);
+    let turn = chat.begin_cli(p.id,std::sync::Arc::default())?;
+    let _lease=chat.lease(&turn);
+    let documents=crate::pet_documents::Request::capture_async(chat,&turn,context.as_ref()).await?;
+    let calendar = crate::pet_calendar::note_async(chat, &turn, context.as_ref()).await?;
+    let ordinary=crate::pet_calendar::ordinary_context(context.as_ref());let (first,question)=(turn.first,query.clone());
+    let (user, preparation)=tokio::task::spawn_blocking(move||prepared_message(first,ordinary.as_ref(),&question)).await.map_err(|_|"A preparação dos anexos foi interrompida.".to_string())?;
+    let user=crate::pet_calendar::prepend_message(calendar.as_ref(),user)?;
+    let mut body = request_body(p, model, &chat::system_prompt(false), &turn.history, &user);
+    chat.append_selected_memory(p.id,&query,&crate::pet_memory::context_model::Destination::Api{provider:p.id.into(),endpoint:Url::parse(p.base_url).map_err(|_|"Destino inválido.")?.to_string(),model:model.into()},Some(key),body["messages"].as_array_mut().unwrap())?;
+    use crate::pet_calendar::wire::{Session,Format};
+    let format = if p.id == "openai" {Format::Responses} else {Format::Chat};
+    let mut calendar_tools = Session::new(calendar.as_ref(),format);
+    if let Some(tools) = &calendar_tools { tools.prepare(&mut body)?; }
 
-    let endpoint = url(p, "chat/completions")?;
-    let response = net::client(&endpoint, Duration::from_secs(90))?
-        .post(endpoint)
-        .bearer_auth(&key)
-        .json(&body)
+    let endpoint = url(p,completion_tail(p.id,calendar_tools.is_some()))?;
+    let mut preparation = Some(preparation);
+    let response = loop {
+        documents.validate_contents().await?;
+        crate::pet_calendar::validate(calendar.as_ref())?;
+        if let Some(preparation) = preparation.take() { chat.record_attachment_preparation(&turn, preparation)?; }
+        let response = net::while_current(
+            || chat.is_current(&turn) && documents.validate().is_ok() && crate::pet_calendar::validate(calendar.as_ref()).is_ok()
+                && calendar_tools.as_ref().is_none_or(|tools|tools.validate().is_ok()),
+            || async {chat.check_new_effect()?;call(p,&endpoint,key,&body).await},
+        ).await?;
+        if let Some(tools) = &mut calendar_tools {
+            if tools.follow_up(&response,&mut body).await? {continue;}
+        }
+        break response;
+    };
+    let text = if calendar_tools.is_some() && format == Format::Responses {
+        crate::pet_calendar::wire::responses_text(&response)?
+    } else { reply_text(p,&response)? };
+
+    documents.validate_contents().await?;crate::pet_calendar::validate(calendar.as_ref())?;
+    let plain = chat::plain_question(turn.first, context.as_ref(), &query);
+    chat.commit_reply(&turn, user, json!({ "role": "assistant", "content": text }), &plain, &text)?;
+    Ok(ChatReply { text })
+}
+
+#[cfg(test)]
+pub(crate)async fn memory_wire_fixture(chat:&Chat,p:&'static Provider,model:&str,query:String,context:Option<ChatContext>,key:&str)->Result<ChatReply,String>{
+    send_resolved(chat,p,model,query,context,key).await
+}
+
+async fn call(p: &Provider, endpoint: &Url, key: &str, body: &Value) -> Result<Value, String> {
+    let response = net::exact_destination_client(endpoint, Duration::from_secs(90))?
+        .post(endpoint.clone())
+        .bearer_auth(key)
+        .json(body)
         .send()
         .await
         .map_err(|e| tf("Network error: {error}", &[("error", &e.to_string())]))?;
@@ -181,19 +256,14 @@ pub async fn send(
         return Err(status_error(p, status.as_u16(), &net::error_detail(&body)));
     }
     let bytes = net::read_capped(response, net::MAX_BODY).await?;
-    let json: Value = serde_json::from_slice(&bytes).map_err(|e| tf("Bad API response: {error}", &[("error", &e.to_string())]))?;
-    let text = reply_text(p, &json)?;
-
-    let plain = chat::plain_question(turn.first, context.as_ref(), &query);
-    chat.commit(&turn, user, json!({ "role": "assistant", "content": text }), &plain, &text);
-    Ok(ChatReply { text })
+    serde_json::from_slice(&bytes).map_err(|e| tf("Bad API response: {error}", &[("error", &e.to_string())]))
 }
 
 /// The provider's chat models. Only ever asked with the user's key, once they
 /// picked this provider in the chat.
 pub async fn models(p: &Provider, key: &str) -> Result<Vec<ModelInfo>, String> {
     let endpoint = url(p, p.models_path)?;
-    let response = net::client(&endpoint, Duration::from_secs(15))?
+    let response = net::exact_destination_client(&endpoint, Duration::from_secs(15))?
         .get(endpoint)
         .bearer_auth(key)
         .send()
@@ -255,48 +325,14 @@ fn is_free(m: &Value, id: &str) -> bool {
     id.ends_with(":free") || (zero("/pricing/prompt") && zero("/pricing/completion"))
 }
 
-enum FilePart {
-    Image(Value),
-    Text(String),
-}
+/// Images → image_url data URL, text/code → inline text. PDFs and other binary
+/// files go by name only (there is no portable document part).
+fn file_part(path: &str) -> Option<Part> {
+    use crate::pet_documents::policy::{format, Format};
 
-/// Extracts all text from a PDF file using lopdf, bounded by MAX_INLINE_TEXT.
-/// Returns None if the document cannot be loaded or contains no extractable text.
-fn extract_pdf_text(path: &str) -> Option<String> {
-    let doc = lopdf::Document::load(path).ok()?;
-    let mut numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
-    numbers.sort_unstable();
-    let mut full = String::new();
-    for n in numbers {
-        if let Ok(text) = doc.extract_text(&[n]) {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                if !full.is_empty() {
-                    full.push('\n');
-                }
-                full.push_str(trimmed);
-            }
-        }
-        if full.len() as u64 > MAX_INLINE_TEXT {
-            // On a character boundary: a cut inside an accented letter would panic.
-            let mut cut = MAX_INLINE_TEXT as usize;
-            while !full.is_char_boundary(cut) { cut -= 1; }
-            full.truncate(cut);
-            full.push_str("\n... [truncated]");
-            break;
-        }
+    if matches!(format(path, false), Format::Binary | Format::Pdf) {
+        return None;
     }
-    let trimmed = full.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-/// Images → image_url data URL, text/code/PDF → inline text. Larger files and
-/// binary files without extractable text go by name only.
-fn file_part(path: &str) -> Option<FilePart> {
     let ext = std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -314,25 +350,83 @@ fn file_part(path: &str) -> Option<FilePart> {
         if len > MAX_IMAGE {
             return None;
         }
-        let bytes = std::fs::read(path).ok()?;
+        let bytes = crate::pet_documents::content::bytes(path,MAX_IMAGE as usize)?;
+        if bytes.is_empty() { return None; }
         let url = format!("data:{media};base64,{}", crate::claude::base64_for(&bytes));
-        return Some(FilePart::Image(json!({ "type": "image_url", "image_url": { "url": url } })));
-    }
-    if ext == "pdf" {
-        if len > MAX_IMAGE {
-            return None;
-        }
-        return extract_pdf_text(path).map(FilePart::Text);
+        return Some(Part::Media(json!({ "type": "image_url", "image_url": { "url": url } })));
     }
     if len > MAX_INLINE_TEXT {
         return None;
     }
-    std::fs::read_to_string(path).ok().map(FilePart::Text)
+    crate::pet_documents::content::text(path,MAX_INLINE_TEXT as usize).map(Part::Text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn user_message(first: bool, context: Option<&ChatContext>, query: &str) -> Value {
+        prepared_message(first, context, query).0
+    }
+    #[test]
+    fn api_folder_context_preserves_text_and_honest_unsupported_members(){
+        let files=crate::pet_documents::fixtures::Files::new();files.write("folder/nested/notes.txt",b"cloud folder sentinel");files.write("folder/report.docx",b"not supported as text");
+        let context=files.context(&[("folder","Folder")]);let message=user_message(false,Some(&context),"use this folder");let text=message.to_string();assert!(text.contains("cloud folder sentinel"));assert!(text.contains("report.docx"));assert!(text.contains("unsupported for text extraction"));assert!(!text.contains("not supported as text"));
+        files.write("legacy.docx",b"apparently UTF8 binary format");assert!(file_part(files.root.join("legacy.docx").to_str().unwrap()).is_none());
+        let policy:Value=serde_json::from_str(include_str!("../documents.policy.json")).unwrap();for extension in policy["images"].as_array().unwrap(){let name=format!("image.{}",extension.as_str().unwrap());files.write(&name,b"synthetic image bytes");assert!(matches!(file_part(files.root.join(&name).to_str().unwrap()),Some(Part::Media(_))),"{name}");}
+    }
+    #[test]
+    fn attachment_collection_preserves_ordered_images_text_and_unique_labels_after_first_turn(){
+        let fixture=crate::pet_documents::fixtures::Files::new();fixture.write("a.png",b"first-image");fixture.write("b.png",b"second-image");fixture.write("notes.txt",b"unique document sentinel");
+        let context=fixture.context(&[("a.png","same.png"),("b.png","same.png"),("notes.txt","notes")]);let message=user_message(false,Some(&context),"compare all three");let parts=message["content"].as_array().unwrap();assert_eq!(parts.len(),7);
+        assert!(parts[0]["text"].as_str().unwrap().contains("fixture-1"));assert!(parts[2]["text"].as_str().unwrap().contains("fixture-2"));assert_eq!(parts[1]["type"],"image_url");assert_eq!(parts[3]["type"],"image_url");assert_ne!(parts[1]["image_url"]["url"],parts[3]["image_url"]["url"]);assert!(parts[5]["text"].as_str().unwrap().contains("unique document sentinel"));assert_eq!(parts[6]["text"],"compare all three");
+        let body=request_body(p("google"),"same-model","same-system",&[],&message);assert_eq!(body["messages"][1],message);assert_eq!(body["model"],"same-model");
+    }
+    #[test]
+    fn attachment_collection_reports_missing_content_without_omitting_the_other_documents(){
+        let fixture=crate::pet_documents::fixtures::Files::new();fixture.write("ok.txt",b"retained source");let context=fixture.context(&[("missing.bin","missing"),("ok.txt","kept")]);let message=user_message(true,Some(&context),"q");let parts=message["content"].as_array().unwrap();assert!(parts[1]["text"].as_str().unwrap().contains("content unavailable"));assert!(parts[3]["text"].as_str().unwrap().contains("retained source"));assert_eq!(parts.last().unwrap()["text"],"q");
+    }
+    #[test]
+    fn attachments_distinguish_a_clipped_text_and_an_omitted_body_from_encoded_media() {
+        let files = crate::pet_documents::fixtures::Files::new();
+        files.write("a.txt", &vec![b'a'; 180_000]);
+        files.write("b.txt", format!("second-body\n{}tail-outside-limit", "b".repeat(179_000)).as_bytes());
+        files.write("omitted.txt", b"no-room-for-this-body");
+        files.write("image.png", b"image bytes");
+        let context = files.context(&[("a.txt","same.txt"), ("b.txt","same.txt"), ("omitted.txt","third"), ("image.png","image")]);
+        let (message, preparation) = prepared_message(true, Some(&context), "fixture question");
+        let item = |id: &str, coverage| Preparation { id: id.into(), coverage };
+        assert_eq!(preparation, vec![
+            item("fixture-1", Coverage::Full), item("fixture-2", Coverage::Partial),
+            item("fixture-3", Coverage::Unavailable), item("fixture-4", Coverage::Encoded),
+        ]);
+        let parts = message["content"].as_array().unwrap();
+        let second = parts[3]["text"].as_str().unwrap();
+        assert!(second.contains("second-body") && !second.contains("tail-outside-limit"));
+        assert!(!parts[5]["text"].as_str().unwrap().contains("no-room-for-this-body"));
+        assert_eq!(parts[7]["type"], "image_url");
+    }
+
+    #[tokio::test]
+    async fn turn_cancellation_closes_all_compatible_provider_waits_and_bodies() {
+        use crate::net::cancel_tests::{assert_http_cancelled, Stage};
+        for provider in ["openai", "google", "openrouter"] {
+            for stage in [Stage::Headers, Stage::Body] {
+                assert_http_cancelled(stage, |endpoint| async move {
+                    call(p(provider), &endpoint, "synthetic-key", &json!({"model":"synthetic","messages":[]})).await
+                }).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn compatible_call_keeps_original_success_and_error_interpretation() {
+        let body = br#"{"choices":[{"message":{"content":"synthetic answer"}}]}"#.to_vec();
+        let endpoint = Url::parse(&crate::net::tests::serve_once("200 OK", "", body)).unwrap();
+        let response = call(p("openai"), &endpoint, "synthetic-key", &json!({})).await.unwrap();
+        assert_eq!(reply_text(p("openai"), &response).unwrap(), "synthetic answer");
+        let endpoint = Url::parse(&crate::net::tests::serve_once("400 Bad Request", "", br#"{"error":{"message":"synthetic rejection"}}"#.to_vec())).unwrap();
+        assert!(call(p("openai"), &endpoint, "synthetic-key", &json!({})).await.unwrap_err().contains("synthetic rejection"));
+    }
 
     fn p(id: &str) -> &'static Provider {
         provider(id).unwrap()
@@ -457,14 +551,14 @@ mod tests {
     fn an_unknown_answer_gives_an_empty_list() {
         assert!(parse_models(p("openai"), &json!({"nope":true})).is_empty());
     }
+    #[cfg(unix)]
     #[test]
-    fn a_pdf_with_text_is_inlined_as_file_contents() {
+    fn a_pdf_attachment_uses_the_bounded_document_reader() {
         use lopdf::content::{Content, Operation};
         use lopdf::{dictionary, Document, Object, Stream};
 
-        let dir = std::env::temp_dir().join(format!("coucou-chat-pdf-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let pdf_path = dir.join("exercises.pdf");
+        let files = crate::pet_documents::fixtures::Files::new();
+        let pdf_path = files.root.join("exercises.pdf");
 
         let mut doc = Document::with_version("1.5");
         let pages_id = doc.new_object_id();
@@ -495,16 +589,13 @@ mod tests {
         doc.trailer.set("Root", catalog_id);
         doc.save(&pdf_path).unwrap();
 
-        let ctx = ChatContext::File {
-            name: "exercises.pdf".into(),
-            path: pdf_path.to_string_lossy().into(),
-        };
-        let msg = user_message(true, Some(&ctx), "Please answer");
-        let content = msg["content"].as_str().unwrap();
-        assert!(content.contains("File: exercises.pdf\nFile contents:\n"));
-        assert!(content.contains("Solve: 2 + 2 = ?"));
-        assert!(content.ends_with("\n\nPlease answer"));
-
-        let _ = std::fs::remove_dir_all(dir);
+        let context = files.context(&[("exercises.pdf", "exercises.pdf")]);
+        let (message, preparation) = prepared_message(true, Some(&context), "Please answer");
+        let parts = message["content"].as_array().unwrap();
+        assert!(parts[0]["text"].as_str().unwrap().contains("exercises.pdf"));
+        assert!(parts[1]["text"].as_str().unwrap().contains("Solve: 2 + 2 = ?"));
+        assert_eq!(parts[2]["text"], "Please answer");
+        assert!(parts[1]["text"].as_str().unwrap().contains("at most the first 40 pages"));
+        assert!(preparation.is_empty());
     }
 }

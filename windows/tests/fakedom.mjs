@@ -24,6 +24,7 @@ class FakeElement {
     this.listeners = new Map();
     this.className = "";
     this.title = "";
+    this.value = "";
     this.dataset = {};
     this.scrollTop = 0;
     this.scrollHeight = 0;
@@ -48,6 +49,10 @@ class FakeElement {
   insertAdjacentHTML() {
     throw new Error("insertAdjacentHTML must never be used");
   }
+  contains(node) {
+    for (let current = node; current; current = current.parentNode) if (current === this) return true;
+    return false;
+  }
   get parentElement() {
     return this.parentNode?.nodeType === 1 ? this.parentNode : null;
   }
@@ -57,6 +62,12 @@ class FakeElement {
   get firstChild() {
     return this.childNodes[0] ?? null;
   }
+  get firstElementChild() {
+    return this.children[0] ?? null;
+  }
+  get options() {
+    return this.find('option');
+  }
   get textContent() {
     return this.childNodes.map((n) => n.textContent).join("");
   }
@@ -64,6 +75,8 @@ class FakeElement {
     this.childNodes = [];
     if (text !== "") this.append(new FakeText(text));
   }
+  get disabled() { return this.attributes.has("disabled"); }
+  set disabled(value) { if(value)this.attributes.set("disabled", "");else this.attributes.delete("disabled"); }
   setAttribute(k, v) {
     this.attributes.set(k, String(v));
   }
@@ -81,8 +94,8 @@ class FakeElement {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
   }
   /** Calls the listeners of `type` with a minimal event. */
-  fire(type) {
-    const event = { type, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} };
+  fire(type, properties = {}) {
+    const event = { type, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...properties };
     for (const fn of this.listeners.get(type) ?? []) fn(event);
     return event;
   }
@@ -94,15 +107,29 @@ class FakeElement {
     }
   }
   prepend(...nodes) {
-    const added = nodes.map((n) => (typeof n === "string" ? new FakeText(n) : n));
-    for (const node of added) node.parentNode = this;
-    this.childNodes.unshift(...added);
+    const first = this.firstChild;
+    for (const n of nodes) this.insertBefore(typeof n === 'string' ? new FakeText(n) : n, first);
   }
   replaceChildren(...nodes) {
     // As in a real DOM, the old children no longer have a parent.
     for (const old of this.childNodes) old.parentNode = null;
     this.childNodes = [];
     this.append(...nodes);
+  }
+  insertBefore(node, reference) {
+    if (node === reference) return node;
+    node.parentNode?.removeChild(node);
+    const index = reference == null ? this.childNodes.length : this.childNodes.indexOf(reference);
+    if (index < 0) throw new Error('Reference is not a child');
+    node.parentNode = this;
+    this.childNodes.splice(index, 0, node);
+    return node;
+  }
+  replaceWith(node) {
+    const parent = this.parentNode;
+    if (!parent) return;
+    parent.insertBefore(node, this);
+    parent.removeChild(this);
   }
   removeChild(node) {
     this.childNodes = this.childNodes.filter((n) => n !== node);
@@ -117,6 +144,8 @@ class FakeElement {
     const wanted = selector.split(".").filter(Boolean);
     return [...this.walk()].find((e) => wanted.every((c) => e.classList.contains(c))) ?? null;
   }
+  /** Standard DOM query used by functional management controls. */
+  querySelectorAll(selector) { return this.find(selector); }
   scrollIntoView() {}
   focus() {}
   select() {}
@@ -129,6 +158,10 @@ class FakeElement {
   }
   /** Descendants by tag name ("A") or class (".md-p"). */
   find(selector) {
+    if (selector.includes(',')) {
+      const matches = new Set(selector.split(',').flatMap((part) => this.find(part.trim())));
+      return [...this.walk()].filter((e) => matches.has(e));
+    }
     const match = selector.startsWith(".")
       ? (e) => e.classList.contains(selector.slice(1))
       : (e) => e.tagName === selector.toUpperCase();

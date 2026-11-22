@@ -1,0 +1,35 @@
+# Calendários como dados próprios de um objetivo
+
+Contrato vigente09/11/2026, CTX-04 parcial e dependência de AUTO-03. A privada40 e a composição de desenvolvimento build44 incluem gestão, contexto, revisão, admissão e resposta, com janela Tauri real e HTTP sintético; build44 acrescenta o âmbito próprio do pet. Preservação/restauro, quarentena, ativação sem grants e leitores nativos40/43 passaram no Goal64; os novos Source3/Goal65 passaram agora no backup/restauro inativo, quarentena, ativação sem grants, leitura histórica na build atual e recusa segura na anterior. Entrega e aceitação operacional continuam pendentes. [Composição, comandos, falhas conservadas e limites](../.build/pet-goal-execution-next-r1/goal-calendar-context/VERIFIED.json).
+
+## Seleção e âmbito
+
+O utilizador escolhe fontes ICS próprias do pet ou inscritas numa conversa sua, IDs/revisões, início/fim RFC3339 com offset, fuso IANA e limite. Fontes próprias criam um objetivo unbound; fontes de conversa conservam a origem, sem copiar o histórico. A consulta de metadados não abre calendários ou modelos. Guardar o objetivo prepara um recorte limitado num diálogo próprio e conserva a referência à conversa de origem; não copia o seu histórico. A inscrição PersistentCalendarRead torna a fonte elegível nessa origem, mas não concede utilização por um objetivo autónomo.
+
+A autorização do objetivo usa a revisão existente de dados, origem, conteúdo, destino/modelo e orçamento, com consentimento próprio BoundedGoalContext. O novo âmbito permite uma resposta local finita, uma chamada ao modelo e zero ferramentas. Planeamento, continuação, dados recebidos por mesh e encaminhamento não herdam esta concessão. Codex/Gravity/Copilot nativos e APIs online autónomas não são promovidos por presença no catálogo. Uma configuração explícita de motor local mantém a identidade lógica do pet; não existe fallback silencioso.
+
+## Captura e persistência
+
+`pet_calendar::goal::Captured` é um objeto nativo opaco, não desserializável como autoridade. Reutiliza Selected/private_registry, o leitor regular O_NOFOLLOW e o mesmo parser/helper ICS do chat. A seleção é exata e ordenada, sem escolha da primeira fonte, fusão de UIDs iguais ou descoberta de caminhos por texto do modelo. Ficheiro, conteúdo, livro e permissões ficam vinculados. As falhas/cobertura acompanham cada fonte.
+
+Máximo8 fontes,512KiB por exportação,64KiB de dados selecionados,10s de preparação e os2 slots do helper existente. O contexto conserva os dados e referências no header já publicado atomicamente. ContextBinding10/Goal64/GoalGrant9 distinguem a origem numa conversa; o âmbito próprio usa Selection2/Context11/Goal65/Grant10. A seleção e destino ficam na mesma admissão, sem ledger ou runtime adicional. Campos ausentes conservam os bytes antigos. Header com calendários limita-se a128KiB; antigo mantém16KiB. A observação do novo header usa o stamp privado original, sem reler64KiB em cada tick.
+
+Reabrir valida o recorte original e as fontes físicas, sem consultar outra revisão, atualizar dados ou conceder nova autoridade. Uma revogação observada é terminal para a captura viva. Fonte que estava indisponível não passa implicitamente a contribuir eventos. A origem, intervalo e captura são visíveis; um recorte fixo não é sincronização de conta nem rotina diária.
+
+## Pedido e recuperação
+
+ContextFence e a revisão nativa compõem a mesma mensagem de dados não fiáveis. O escritor verifica os dados/destino e o corpo real antes do fingerprint, reserva e HTTP. O protocolo atual conserva a ordem original do corpo nativo; a prova não afirma equivalência JCS entre objetos reordenados. Não foram alterados os hashes ou assinaturas globais.
+
+O dispatcher, fila, recursos, orçamento, Driver e recibos são os existentes. Resposta textual não conclui critérios automaticamente. Revogar durante HTTP impede publicação tardia e novos usos; não retira o corpo já recebido pelo destino. Retry/restauro não ganham novo saldo ou consentimento. O restauro preservou todos os bytes antes da ativação revista. Esta manteve os três Goal64/Context10, grants e uso históricos, sem renovar autoridade ou orçamento. A40 leu os três objetivos restaurados e a43 recusou-os com invalidRecord sem alterar esses dados. O livro de fontes já revogado permaneceu byte a byte igual. Os arranques acrescentaram apenas recibos verificáveis de importações legadas vazias ao livro de rascunhos; não foi ensaiado um novo rascunho não vazio nesta unidade. [Provas, falhas de harness e limites](../.build/pet-goal-execution-next-r1/goal-calendar-preservation/VERIFIED.json).
+
+## Prova e lacunas
+
+A janela privada selecionou duas fontes, criou Goal64/Context10 com zero mensagens copiadas, mostrou os dados/destino/modelo, exigiu a confirmação própria e enviou uma resposta via servidor sintético. O hash do corpo real coincide com o recibo. Outra admissão sem consentimento próprio foi recusada; revogação durante a segunda resposta HTTP não publicou o sucesso tardio. Fornecedores reais/quota não foram usados.
+
+O runner original terminou com erro no fecho por sombrear uma variável após guardar os recibos e encerrar os processos. Uma verificação independente recuperou a finalização a partir desses recibos e fontes exatas, sem repetir efeitos. As primeiras falhas de harness e a regressão da vista foram conservadas e identificadas no dossier técnico.
+
+Scopes próprios de regra e ocorrência; janelas diárias, DST/agendamento, notificações deduplicadas, percurso CLI/API autónomo e aceitação operacional continuam no objetivo integral. Esta unidade não fecha CTX-04/AUTO-03 nem o produto. Instalada43 e candidata44 preservadas; sem commits/push/merge ou alterações do anfitrião.
+
+## Fontes próprias do pet integradas na composição de desenvolvimento
+
+A inscrição explícita `{petId, scope: "pet"}` é distinta de `{petId, conversationId}` e exige formato3 do mesmo catálogo e consentimento nativo de leitura persistente. Não alarga inscrições antigas nem torna as fontes automaticamente disponíveis a chats, modelos ou outros pets. Um objetivo sem conversa pode selecionar estas referências, capturar o recorte num diálogo dedicado e obter a revisão/consentimento próprios já existentes. Selection2, Context11, Goal65 e Grant10 distinguem esse âmbito; ausência da extensão mantém os formatos e bytes antigos. Conserva a resposta local finita, uma chamada e zero ferramentas. Não autoriza regras ou ocorrências. A gestão comum de perfis, seleção de fontes do pet, objetivo unbound, revisão própria, corpo/hash/reserva e reinício passaram na janela de desenvolvimento com um pedido HTTP sintético. A ponte conserva sourceScope; a concessão deriva a versão da revisão nativa original. Preservação do novo formato passou em perfil gerado; entrega/aceitação humana continuam pendentes. O histórico restaurado conserva os bytes e declara a incerteza posterior ao snapshot, sem novo saldo ou autoridade. [Restauro e leitores](../.build/pet-goal-execution-next-r1/pet-source-preservation/VERIFIED.json). [Fontes/provas/falhas/limites](../.build/pet-goal-execution-next-r1/pet-source-scopes/VERIFIED.json).

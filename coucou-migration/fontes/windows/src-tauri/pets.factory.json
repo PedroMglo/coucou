@@ -1,0 +1,888 @@
+{
+  "schemaVersion": 2,
+  "configuration": {
+    "version": 1,
+    "reasoningTerms": [
+      "pensa a fundo",
+      "raciocínio elevado",
+      "raciocínio profundo",
+      "análise profunda",
+      "arquitetura",
+      "arquitectura",
+      "migração complexa",
+      "investiga a causa",
+      "analisa as causas",
+      "plano detalhado",
+      "refatoração",
+      "refactor",
+      "auditoria de segurança",
+      "root cause",
+      "think deeply",
+      "reason carefully",
+      "high reasoning"
+    ],
+    "reasoningLength": 1600
+  },
+  "molds": {
+    "llm": {},
+    "application": {
+      "presentation": {
+        "profiles": false,
+        "sessions": false,
+        "metrics": false,
+        "contextAction": "open"
+      }
+    }
+  },
+  "extensions": {
+    "codex-account": {
+      "preferences": {
+        "fast": {
+          "model": "gpt-6-luna",
+          "effort": "low"
+        },
+        "reasoning": {
+          "model": "gpt-6.1-sol",
+          "effort": "high"
+        }
+      },
+      "presentation": {
+        "profiles": true,
+        "sessions": true,
+        "metrics": true,
+        "contextAction": "sessions"
+      }
+    }
+  },
+  "pets": {
+    "integration_claude": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Claude Code",
+        "aliases": [
+          "claude"
+        ],
+        "fast": {
+          "model": "claude-sonnet-4-6"
+        },
+        "reasoning": {
+          "model": "claude-opus-4-6-thinking"
+        },
+        "provider": "",
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": null,
+        "voice": null,
+        "execute": false,
+        "taskProvider": "claude-cli",
+        "role": null,
+        "taskName": "Claude"
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
+      }
+    },
+    "agent_cursor": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Cursor",
+        "aliases": [
+          "cursor"
+        ],
+        "provider": "",
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": null,
+        "voice": null,
+        "execute": false,
+        "taskProvider": null,
+        "role": null,
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
+      }
+    },
+    "agent_antigravity": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Gravity",
+        "aliases": [
+          "gravity"
+        ],
+        "provider": "antigravity",
+        "fast": {
+          "model": "gemini-3.8-flash-low"
+        },
+        "reasoning": {
+          "model": "claude-opus-4-6-thinking"
+        },
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": true,
+          "openApps": true
+        }
+      },
+      "routing": {
+        "chat": "antigravity",
+        "voice": "antigravity",
+        "execute": true,
+        "taskProvider": "antigravity",
+        "role": "Tarefas no PC · conta Gravity",
+        "taskName": "Gravity"
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": "antigravity"
+      }
+    },
+    "agent_codex": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Codex",
+        "aliases": [
+          "codex"
+        ],
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": true,
+          "openApps": true
+        },
+        "provider": "codex"
+      },
+      "extension": "codex-account",
+      "routing": {
+        "chat": "codex",
+        "voice": "codex",
+        "execute": true,
+        "taskProvider": "codex",
+        "role": "Tarefas no PC · conta Codex",
+        "taskName": "Codex"
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": "codex"
+      }
+    },
+    "agent_gemini": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Gemini CLI",
+        "aliases": [
+          "gemini"
+        ],
+        "fast": {
+          "model": "gemini-3.8-flash-low"
+        },
+        "reasoning": {
+          "model": "gemini-3.8-flash-high"
+        },
+        "provider": "",
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": null,
+        "voice": null,
+        "execute": false,
+        "taskProvider": "gemini-cli",
+        "role": null,
+        "taskName": "Gemini"
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
+      }
+    },
+    "agent_copilot": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Copilot CLI",
+        "aliases": [
+          "copilot cli",
+          "copilot"
+        ],
+        "provider": "copilot",
+        "fast": {
+          "model": "gpt-6-luna",
+          "effort": "low"
+        },
+        "reasoning": {
+          "model": "claude-sonnet-5.5",
+          "effort": "high"
+        },
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": "copilot",
+        "voice": "copilot",
+        "execute": true,
+        "taskProvider": "copilot",
+        "role": "Tarefas no PC · conta GitHub Copilot",
+        "taskName": "Copilot"
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": "copilot"
+      }
+    },
+    "agent_muse": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Muse Code",
+        "aliases": [
+          "muse code"
+        ],
+        "provider": "",
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": null,
+        "voice": null,
+        "execute": false,
+        "taskProvider": null,
+        "role": null,
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
+      }
+    },
+    "agent_opencode": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "OpenCode",
+        "aliases": [
+          "opencode"
+        ],
+        "provider": "",
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": null,
+        "voice": null,
+        "execute": false,
+        "taskProvider": null,
+        "role": null,
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
+      }
+    },
+    "agent_amp": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Amp",
+        "aliases": [
+          "amp"
+        ],
+        "provider": "",
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": null,
+        "voice": null,
+        "execute": false,
+        "taskProvider": null,
+        "role": null,
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
+      }
+    },
+    "agent_hermes": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Hermes",
+        "aliases": [
+          "hermes"
+        ],
+        "provider": "",
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": null,
+        "voice": null,
+        "execute": false,
+        "taskProvider": null,
+        "role": null,
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
+      }
+    },
+    "agent_claude-desktop": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Claude Desktop",
+        "aliases": [
+          "claude desktop"
+        ],
+        "provider": "",
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": null,
+        "voice": null,
+        "execute": false,
+        "taskProvider": null,
+        "role": null,
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "observer",
+        "adapter": null
+      }
+    },
+    "ai_anthropic": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Anthropic",
+        "aliases": [
+          "anthropic"
+        ],
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": true,
+          "openApps": true
+        },
+        "provider": ""
+      },
+      "routing": {
+        "chat": "anthropic",
+        "voice": null,
+        "execute": false,
+        "taskProvider": null,
+        "role": "Chat por API · requer chave própria",
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": null
+      }
+    },
+    "ai_google": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Google AI",
+        "aliases": [
+          "google ai"
+        ],
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": true,
+          "openApps": true
+        },
+        "provider": ""
+      },
+      "routing": {
+        "chat": "google",
+        "voice": null,
+        "execute": false,
+        "taskProvider": null,
+        "role": "Chat por API · requer chave própria",
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": null
+      }
+    },
+    "ai_openai": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "OpenAI",
+        "aliases": [
+          "openai"
+        ],
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": true,
+          "openApps": true
+        },
+        "provider": ""
+      },
+      "routing": {
+        "chat": "openai",
+        "voice": null,
+        "execute": false,
+        "taskProvider": null,
+        "role": "Chat por API · requer chave própria",
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": null
+      }
+    },
+    "ai_ollama": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "Ollama",
+        "aliases": [
+          "ollama"
+        ],
+        "provider": "ollama",
+        "localExecution": {
+          "mode": "ask"
+        },
+        "fast": {
+          "model": "gemma3:4b"
+        },
+        "reasoning": {
+          "model": "qwen3:8b"
+        },
+        "permissions": {
+          "documents": true,
+          "emailDrafts": true,
+          "music": true,
+          "openApps": true
+        }
+      },
+      "routing": {
+        "chat": "ollama",
+        "voice": "ollama",
+        "execute": false,
+        "taskProvider": "ollama",
+        "role": "Conversa local · ações limitadas do Mochi",
+        "taskName": "Ollama"
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": "ollama"
+      }
+    },
+    "ai_lmstudio": {
+      "mold": "llm",
+      "service": false,
+      "preferences": {
+        "name": "LM Studio",
+        "aliases": [
+          "lm studio"
+        ],
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": true,
+          "openApps": true
+        },
+        "provider": ""
+      },
+      "routing": {
+        "chat": "lmstudio",
+        "voice": null,
+        "execute": false,
+        "taskProvider": "lmstudio",
+        "role": "Conversa no servidor local",
+        "taskName": "LM Studio"
+      },
+      "runtime": {
+        "kind": "llm",
+        "adapter": "lmstudio"
+      },
+      "presentation": {
+        "profiles": true
+      }
+    },
+    "integration_resend": {
+      "mold": "application",
+      "service": true,
+      "preferences": {
+        "name": "Resend",
+        "aliases": [
+          "resend"
+        ],
+        "provider": "codex",
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "extension": "codex-account",
+      "routing": {
+        "chat": "integration_resend",
+        "voice": "integration_resend",
+        "execute": true,
+        "taskProvider": "integration_resend",
+        "role": "service",
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
+      }
+    },
+    "integration_n8n": {
+      "mold": "application",
+      "service": true,
+      "preferences": {
+        "name": "n8n",
+        "aliases": [
+          "n8n"
+        ],
+        "provider": "codex",
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "extension": "codex-account",
+      "routing": {
+        "chat": "integration_n8n",
+        "voice": "integration_n8n",
+        "execute": true,
+        "taskProvider": "integration_n8n",
+        "role": "service",
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
+      }
+    },
+    "integration_vercel": {
+      "mold": "application",
+      "service": true,
+      "preferences": {
+        "name": "Vercel",
+        "aliases": [
+          "vercel"
+        ],
+        "provider": "codex",
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "extension": "codex-account",
+      "routing": {
+        "chat": "integration_vercel",
+        "voice": "integration_vercel",
+        "execute": true,
+        "taskProvider": "integration_vercel",
+        "role": "service",
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
+      }
+    },
+    "integration_github": {
+      "mold": "application",
+      "service": true,
+      "preferences": {
+        "name": "GitHub",
+        "aliases": [
+          "github"
+        ],
+        "provider": "codex",
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "extension": "codex-account",
+      "routing": {
+        "chat": "integration_github",
+        "voice": "integration_github",
+        "execute": true,
+        "taskProvider": "integration_github",
+        "role": "service",
+        "taskName": null
+      },
+      "retired": true,
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
+      }
+    },
+    "integration_notion": {
+      "mold": "application",
+      "service": true,
+      "preferences": {
+        "name": "Notion",
+        "aliases": [
+          "notion"
+        ],
+        "provider": "codex",
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "extension": "codex-account",
+      "routing": {
+        "chat": "integration_notion",
+        "voice": "integration_notion",
+        "execute": true,
+        "taskProvider": "integration_notion",
+        "role": "service",
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
+      }
+    },
+    "integration_calcom": {
+      "mold": "application",
+      "service": true,
+      "preferences": {
+        "name": "Cal.com",
+        "aliases": [
+          "cal.com"
+        ],
+        "provider": "codex",
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "extension": "codex-account",
+      "routing": {
+        "chat": "integration_calcom",
+        "voice": "integration_calcom",
+        "execute": true,
+        "taskProvider": "integration_calcom",
+        "role": "service",
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
+      }
+    },
+    "integration_stripe": {
+      "mold": "application",
+      "service": true,
+      "preferences": {
+        "name": "Stripe",
+        "aliases": [
+          "stripe"
+        ],
+        "provider": "codex",
+        "permissions": {
+          "documents": true,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "extension": "codex-account",
+      "routing": {
+        "chat": "integration_stripe",
+        "voice": "integration_stripe",
+        "execute": true,
+        "taskProvider": "integration_stripe",
+        "role": "service",
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "codex"
+      }
+    },
+    "integration_music": {
+      "mold": "application",
+      "service": false,
+      "preferences": {
+        "name": "Apple Music",
+        "aliases": [
+          "apple music"
+        ],
+        "provider": "",
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": false,
+          "openApps": false
+        }
+      },
+      "routing": {
+        "chat": null,
+        "voice": null,
+        "execute": false,
+        "taskProvider": null,
+        "role": null,
+        "taskName": null
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": null
+      }
+    },
+    "integration_spotify": {
+      "mold": "application",
+      "service": true,
+      "preferences": {
+        "name": "Spotify",
+        "aliases": [
+          "spotify",
+          "spoty"
+        ],
+        "fast": {
+          "model": "gpt-6-luna",
+          "effort": "low"
+        },
+        "reasoning": {
+          "model": "gpt-6.1-sol",
+          "effort": "high"
+        },
+        "permissions": {
+          "documents": false,
+          "emailDrafts": false,
+          "music": true,
+          "openApps": true
+        },
+        "provider": ""
+      },
+      "routing": {
+        "chat": "integration_spotify",
+        "voice": "integration_spotify",
+        "execute": true,
+        "taskProvider": "integration_spotify",
+        "role": "Música e som do PC · controlos de áudio",
+        "taskName": null
+      },
+      "presentation": {
+        "galleryAction": "Música e som",
+        "galleryState": "Música e som do PC",
+        "accessibilityRole": "Controlos de áudio",
+        "permissions": [
+          "music",
+          "openApps"
+        ],
+        "musicLabel": "Controlar música e som do PC",
+        "profiles": true,
+        "sessions": true,
+        "metrics": true
+      },
+      "runtime": {
+        "kind": "service",
+        "adapter": "spotify",
+        "assistantAdapter": "codex"
+      }
+    }
+  },
+  "base": {
+    "preferences": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      }
+    },
+    "presentation": {
+      "galleryAvatarSize": 56,
+      "overviewAvatarSize": 44,
+      "profiles": true,
+      "sessions": true,
+      "metrics": true,
+      "contextAction": "sessions",
+      "galleryAction": "Abrir pet",
+      "galleryState": null,
+      "accessibilityRole": null,
+      "permissions": [
+        "documents",
+        "emailDrafts",
+        "music",
+        "openApps"
+      ],
+      "musicLabel": "Controlar música",
+      "galleryCardRadius": 15,
+      "galleryCardGap": 4
+    }
+  }
+}

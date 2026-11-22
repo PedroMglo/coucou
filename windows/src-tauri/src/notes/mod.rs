@@ -24,6 +24,8 @@ use crate::i18n::{t, tf};
 use crate::speech::{self, audio};
 use builder::{Line, Speaker, TimedWord, Todo};
 
+const MICROPHONE_ONLY: &str = crate::i18n::n_("Microphone only. No computer audio was captured.");
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
@@ -50,6 +52,8 @@ pub struct Note {
     #[serde(default)]
     pub app: Option<String>,
     pub status: Status,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub microphone_only: bool,
     #[serde(default)]
     pub speakers: Vec<Speaker>,
     #[serde(default)]
@@ -137,7 +141,7 @@ pub struct NoteTaker {
 }
 
 pub fn folder() -> PathBuf {
-    crate::settings::local_dir().join("Notes")
+    crate::settings::data_dir().join("Notes")
 }
 
 fn note_dir(id: &str) -> PathBuf {
@@ -263,7 +267,7 @@ fn start_inner(app: &AppHandle, taker: &Arc<NoteTaker>) -> Result<String, String
     let now = now_ms();
     let stamp = local_stamp();
     let id = crate::flow::text::new_id();
-    let note = Note {
+    let mut note = Note {
         id: id.clone(),
         title: tf("Call · {0}", &[("0", stamp.get(5..).unwrap_or(&stamp))]),
         title_edited: false,
@@ -271,6 +275,7 @@ fn start_inner(app: &AppHandle, taker: &Arc<NoteTaker>) -> Result<String, String
         end: None,
         app: crate::flow::os::foreground_app().filter(|(id, _)| !crate::flow::is_shell(id)).map(|(_, name)| name),
         status: Status::Recording,
+        microphone_only: false,
         speakers: Vec::new(),
         lines: Vec::new(),
         summary: None,
@@ -284,7 +289,7 @@ fn start_inner(app: &AppHandle, taker: &Arc<NoteTaker>) -> Result<String, String
     let mic_channel = Arc::new(Mutex::new(Channel::new(&dir.join("mic.wav")).map_err(|e| e.to_string())?));
     let mic_pref = crate::flow::get(app).map(|f| f.store.lock().unwrap().prefs.mic.clone()).unwrap_or_default();
     let sink = mic_channel.clone();
-    let mic = audio::Capture::start(audio::Source::Mic(if mic_pref.is_empty() { None } else { Some(mic_pref) }), move |s| {
+    let mic = audio::Capture::start(audio::Source::Mic(if mic_pref.is_empty() { None } else { Some(mic_pref) }), audio::CaptureUse::MeetingMicrophone, move |s| {
         sink.lock().unwrap().push(s)
     })
     .map_err(|err| {
@@ -297,7 +302,7 @@ fn start_inner(app: &AppHandle, taker: &Arc<NoteTaker>) -> Result<String, String
         Ok(channel) => {
             let channel = Arc::new(Mutex::new(channel));
             let sink = channel.clone();
-            match audio::Capture::start(audio::Source::System, move |s| sink.lock().unwrap().push(s)) {
+            match audio::Capture::start(audio::Source::System, audio::CaptureUse::MeetingSystem, move |s| sink.lock().unwrap().push(s)) {
                 Ok(capture) => (Some(capture), Some(channel)),
                 Err(err) => {
                     crate::log::line(format!("notes: system sound unavailable: {err}"));
@@ -308,6 +313,7 @@ fn start_inner(app: &AppHandle, taker: &Arc<NoteTaker>) -> Result<String, String
         }
         Err(_) => (None, None),
     };
+    note.microphone_only = system.is_none();
     let stop_live = Arc::new(AtomicBool::new(false));
     taker.notes.lock().unwrap().insert(0, note.clone());
     taker.save(&note);
@@ -322,6 +328,9 @@ fn start_inner(app: &AppHandle, taker: &Arc<NoteTaker>) -> Result<String, String
     speech::preload();
     spawn_live(app.clone(), taker.clone(), id.clone(), mic_channel, system_channel, stop_live);
     pill::update(app, |s| s.note_started_at = Some(note.start));
+    if note.microphone_only {
+        pill::announce(app, "mic", "#F59E0B", t(MICROPHONE_ONLY), Some((t("See"), "openNotes")), 8);
+    }
     let _ = app.emit_to(crate::HUB_LABEL, "notes-changed", &id);
     crate::log::line("notes: recording");
     Ok(id)
@@ -474,18 +483,18 @@ fn process(app: &AppHandle, id: &str) {
     taker.working.lock().unwrap().retain(|w| w != id);
     if result.is_ok() {
         let engine = crate::flow::get(app).map(|f| f.store.lock().unwrap().prefs.summary_engine).unwrap_or_default();
-        if engine == SummaryEngine::Claude && crate::flow::cleanup::has_key() {
-            summarize(app, id);
-        }
-        let title = taker.note(id).map(|n| n.title).unwrap_or_default();
-        pill::announce(
-            app,
-            "check",
-            "#34D399",
-            tf("Notes ready: {0}", &[("0", &title)]),
-            Some((t("See"), "openNotes")),
-            12,
-        );
+        let summary_failed = engine == SummaryEngine::Claude
+            && crate::flow::cleanup::has_key()
+            && summarize(app, id).is_err();
+        let (title, microphone_only) = taker.note(id).map(|n| (n.title, n.microphone_only)).unwrap_or_default();
+        let (icon, tint, message) = if summary_failed {
+            ("error", "#FF6B6B", t("The summary could not be written."))
+        } else if microphone_only {
+            ("mic", "#F59E0B", t(MICROPHONE_ONLY))
+        } else {
+            ("check", "#34D399", tf("Notes ready: {0}", &[("0", &title)]))
+        };
+        pill::announce(app, icon, tint, message, Some((t("See"), "openNotes")), 12);
     }
     let _ = app.emit_to(crate::HUB_LABEL, "notes-changed", id);
 }
@@ -500,6 +509,7 @@ fn transcript(app: &AppHandle, taker: &Arc<NoteTaker>, id: &str) -> Result<(), S
     let me = t("Me");
     let (mine, mic_samples) = words_in(&mic_path)?;
     let (theirs, system_samples) = words_in(&system_path)?;
+    let microphone_only = system_samples.iter().all(|&sample| sample == 0.0);
     let built = if theirs.len() >= 5 {
         // A call: you on the microphone, the others on the computer's sound.
         let turns = speech::diarize(&system_samples);
@@ -522,6 +532,7 @@ fn transcript(app: &AppHandle, taker: &Arc<NoteTaker>, id: &str) -> Result<(), S
         n.speakers = speakers;
         n.lines = lines;
         n.status = Status::Ready;
+        n.microphone_only |= microphone_only;
         n.error = None;
     });
     let _ = std::fs::remove_file(&mic_path);
@@ -542,19 +553,24 @@ fn plain_transcript(note: &Note) -> String {
 }
 
 /// Writes (or writes again) the summary, key points and to-dos of a note.
-fn summarize(app: &AppHandle, id: &str) {
-    let Some(taker) = get(app) else { return };
-    let Some(note) = taker.note(id) else { return };
-    if note.lines.is_empty() {
-        return;
-    }
-    taker.working.lock().unwrap().push(id.to_string());
-    let _ = app.emit_to(crate::HUB_LABEL, "notes-changed", id);
+fn summarize(app: &AppHandle, id: &str) -> Result<(), String> {
+    crate::settings::effect_allowed()?;
+    let taker = get(app).ok_or_else(|| t("The summary could not be written."))?;
+    let note = taker.note(id).filter(|note| note.status == Status::Ready && !note.lines.is_empty())
+        .ok_or_else(|| t("The summary requires a finished transcript."))?;
     let model = app
         .try_state::<crate::Shared>()
         .map(|s| s.settings.lock().unwrap().model.clone())
-        .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| crate::claude::DEFAULT_MODEL.to_string());
+        .filter(|m| !m.trim().is_empty())
+        .ok_or_else(|| t("Choose a model"))?;
+    {
+        let mut working = taker.working.lock().unwrap();
+        if working.iter().any(|entry| entry == id) {
+            return Err(t("Writing the summary…"));
+        }
+        working.push(id.to_string());
+    }
+    let _ = app.emit_to(crate::HUB_LABEL, "notes-changed", id);
     let mut transcript = plain_transcript(&note);
     if transcript.len() > 400_000 {
         let mut cut = 400_000;
@@ -564,30 +580,24 @@ fn summarize(app: &AppHandle, id: &str) {
         transcript.truncate(cut);
     }
     let user = format!("<transcript>\n{transcript}\n</transcript>");
-    let reply = tauri::async_runtime::block_on(async {
-        match crate::claude::complete(&model, builder::SUMMARY_INSTRUCTIONS, &user, 2048, Duration::from_secs(120)).await {
-            Ok(text) => Some(text),
-            Err(_) => crate::claude::complete(crate::flow::cleanup::MODEL, builder::SUMMARY_INSTRUCTIONS, &user, 2048, Duration::from_secs(120))
-                .await
-                .ok(),
-        }
-    });
-    taker.working.lock().unwrap().retain(|w| w != id);
-    let Some(reply) = reply else {
-        let _ = app.emit_to(crate::HUB_LABEL, "notes-changed", id);
-        return;
-    };
-    taker.change(app, id, |n| match builder::parse_summary(&reply) {
-        Some(parsed) => {
-            if let Some(title) = parsed.title.filter(|_| !n.title_edited) {
-                n.title = title;
+    let result = tauri::async_runtime::block_on(crate::claude::complete(
+        &model, builder::SUMMARY_INSTRUCTIONS, &user, 2048, Duration::from_secs(120),
+    )).map(|reply| {
+        taker.change(app, id, |n| match builder::parse_summary(&reply) {
+            Some(parsed) => {
+                if let Some(title) = parsed.title.filter(|_| !n.title_edited) {
+                    n.title = title;
+                }
+                n.summary = Some(parsed.summary);
+                n.key_points = parsed.key_points;
+                n.todos = parsed.todos;
             }
-            n.summary = Some(parsed.summary);
-            n.key_points = parsed.key_points;
-            n.todos = parsed.todos;
-        }
-        None => n.summary = Some(reply.trim().to_string()),
+            None => n.summary = Some(reply.trim().to_string()),
+        });
     });
+    taker.working.lock().unwrap().retain(|entry| entry != id);
+    let _ = app.emit_to(crate::HUB_LABEL, "notes-changed", id);
+    result.map_err(|err| format!("{} {err}", tf("Could not write the summary with {model}.", &[("model", &model)])))
 }
 
 /// The note as Markdown: title, date, summary, key points, to-dos, then the transcript.
@@ -599,6 +609,9 @@ pub fn markdown(note: &Note) -> String {
         out += &format!("  \n_{}_", note.speakers.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "));
     }
     out += "\n\n";
+    if note.microphone_only {
+        out += &format!("> {}\n\n", t(MICROPHONE_ONLY));
+    }
     if let Some(summary) = note.summary.as_ref().filter(|s| !s.is_empty()) {
         out += &format!("## {}\n\n{summary}\n\n", t("Summary"));
     }
@@ -718,8 +731,9 @@ pub fn notes_delete(app: AppHandle, taker: State<Arc<NoteTaker>>, id: String) {
 }
 
 #[tauri::command]
-pub fn notes_summarize(app: AppHandle, id: String) {
-    std::thread::spawn(move || summarize(&app, &id));
+pub async fn notes_summarize(app: AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || summarize(&app, &id))
+        .await.map_err(|_| t("The summary could not be written."))?
 }
 
 #[tauri::command]
@@ -737,7 +751,7 @@ pub fn notes_markdown(taker: State<Arc<NoteTaker>>, id: String) -> Option<String
 pub async fn notes_export(window: tauri::WebviewWindow, taker: State<'_, Arc<NoteTaker>>, id: String) -> Result<Option<String>, String> {
     if window.label() != crate::HUB_LABEL { return Err("Open the note in Coucou to export it.".into()); }
     let note = taker.note(&id).ok_or("no such note")?;
-    let safe: String = note
+    let mut safe: String = note
         .title
         .chars()
         .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { ' ' })
@@ -745,11 +759,17 @@ pub async fn notes_export(window: tauri::WebviewWindow, taker: State<'_, Arc<Not
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    let name = if safe.is_empty() { "Coucou notes" } else { &safe };
+    // Leave room for the extension and the collision suffix without splitting a character.
+    let mut last = safe.len().min(240);
+    while !safe.is_char_boundary(last) {
+        last -= 1;
+    }
+    safe.truncate(last);
+    let stem = if safe.is_empty() { "Coucou notes" } else { safe.trim_end() };
     #[cfg(windows)]
     {
         let owner = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
-        let selected = export::choose_path(owner, format!("{name}.md")).await?;
+        let selected = export::choose_path(owner, format!("{stem}.md")).await?;
         let content = markdown(&note);
         tauri::async_runtime::spawn_blocking(move || export::write_selected(selected, &content))
             .await.map_err(|error| error.to_string())?
@@ -758,15 +778,10 @@ pub async fn notes_export(window: tauri::WebviewWindow, taker: State<'_, Arc<Not
     {
         let home = crate::platform::home_dir();
         let dir = [home.join("Documents"), home.clone()].into_iter().find(|d| d.is_dir()).unwrap_or(home);
-        let mut path = dir.join(format!("{name}.md"));
-        let mut n = 2;
-        while path.exists() {
-            path = dir.join(format!("{name} ({n}).md"));
-            n += 1;
-        }
-        std::fs::write(&path, markdown(&note)).map_err(|e| e.to_string())?;
+        let path = crate::platform::write_unique_export(&dir, stem, "md", markdown(&note).as_bytes())
+            .map_err(|err| format!("{} {err}", t("Could not export the note.")))?;
         crate::platform::reveal_folder(&dir.to_string_lossy());
-        Ok(Some(path.to_string_lossy().to_string()))
+        Ok(Some(path.to_string_lossy().into_owned()))
     }
 }
 

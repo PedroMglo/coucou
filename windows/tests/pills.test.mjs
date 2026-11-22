@@ -15,7 +15,7 @@ installFakeDom();
 
 // ── The catalog itself ────────────────────────────────────────────────────────
 
-test("the catalog holds the Mac's pills with the Claude Code label for Windows and Linux", () => {
+test("the catalog preserves original pills and adds the Linux System Guardian", () => {
   // Copied from NotchBuddy/Sources/CoucouKit/PillCatalog.swift: an ID is a
   // contract value, and a colour or subtitle that drifts is a visible bug.
   // Windows and Linux name the Claude Code integration after the agent.
@@ -36,6 +36,7 @@ test("the catalog holds the Mac's pills with the Claude Code label for Windows a
     ["ai_openai", "OpenAI", "#10A37F", "ai", "Chat"],
     ["ai_ollama", "Ollama", "#FACC15", "ai", "Chat"],
     ["ai_lmstudio", "LM Studio", "#A3E635", "ai", "Chat"],
+    ["agent_system_guardian", "System Guardian", "#38BDF8", "agent", "System health"],
     ["integration_resend", "Resend", "#22C55E", "service", "Integration"],
     ["integration_n8n", "n8n", "#F29B38", "service", "Integration"],
     ["integration_vercel", "Vercel", "#7C5CFF", "service", "Integration"],
@@ -116,7 +117,9 @@ test("this build leaves out what only macOS has", () => {
   // Spotify: MPRIS on Linux, the system media controls on Windows.
   assert.ok(linux.includes("integration_spotify"));
   assert.ok(windows.includes("integration_spotify"));
-  assert.deepEqual(linux, windows.filter((id) => id !== "integration_mail"));
+  assert.ok(linux.includes("agent_system_guardian"));
+  assert.ok(!windows.includes("agent_system_guardian"));
+  assert.deepEqual(linux.filter((id) => id !== "agent_system_guardian"), windows.filter((id) => id !== "integration_mail"));
 });
 
 test("Spotify: a service on both systems with nothing to set up", () => {
@@ -190,25 +193,29 @@ test("a declaration from an older or edited settings file is made usable", () =>
   // No mainPill at all: a settings.json from before this version.
   assert.deepEqual(
     sanitizeDeclared({ activeIntegrations: ["integration_github"] }, "windows"),
-    { mainPill: "integration_claude", activeIntegrations: ["integration_github"] },
+    { mainPill: "integration_claude", activeIntegrations: [] },
   );
   assert.equal(sanitizeDeclared({ mainPill: "agent_claude-desktop", activeIntegrations: [] }, "windows").mainPill,
     "integration_claude");
 });
 
-test("up to four pills next to the main one, never the main one itself", () => {
+test("up to six pills next to the main one, never the main one itself", () => {
   const d = {
     mainPill: "integration_claude",
-    activeIntegrations: ["integration_n8n", "integration_github", "integration_stripe"],
+    activeIntegrations: ["integration_n8n", "integration_notion", "integration_stripe"],
   };
   const four = toggleDeclared(d, "agent_gemini", "linux");
-  assert.equal(four.length, MAX_DECLARED);
-  assert.equal(toggleDeclared({ ...d, activeIntegrations: four }, "ai_anthropic", "linux"), null);
+  assert.equal(four.length, 4);
+  const five = toggleDeclared({ ...d, activeIntegrations: four }, "ai_ollama", "linux");
+  const six = toggleDeclared({ ...d, activeIntegrations: five }, "integration_spotify", "linux");
+  assert.equal(six.length, MAX_DECLARED);
+  assert.ok(six.includes("integration_spotify"));
+  assert.equal(toggleDeclared({ ...d, activeIntegrations: six }, "ai_anthropic", "linux"), null);
   assert.equal(toggleDeclared(d, "integration_claude", "linux"), null);
   assert.equal(toggleDeclared(d, "integration_music", "linux"), null);
   assert.ok(toggleDeclared(d, "agent_claude-desktop", "linux").includes("agent_claude-desktop"));
   assert.ok(toggleDeclared(d, "agent_claude-desktop", "windows").includes("agent_claude-desktop"));
-  assert.deepEqual(toggleDeclared(d, "integration_github", "linux"), ["integration_n8n", "integration_stripe"]);
+  assert.deepEqual(toggleDeclared(d, "integration_notion", "linux"), ["integration_n8n", "integration_stripe"]);
   // Every chat provider can be declared now that the chat talks to it.
   assert.ok(toggleDeclared(d, "ai_google", "linux").includes("ai_google"));
   assert.ok(toggleDeclared(d, "ai_ollama", "linux").includes("ai_ollama"));
@@ -250,7 +257,7 @@ test("the main pill always loads, the declared ones join it, and focus starts on
   State.settings.mainPill = "agent_cursor";
   State.settings.activeIntegrations = ["integration_github", "agent_gemini"];
   State.loadIntegrationTasks();
-  assert.deepEqual(ids(), ["agent_cursor", "agent_gemini", "integration_github"]);
+  assert.deepEqual(ids(), ["agent_cursor", "agent_gemini"]);
   assert.equal(State.focusId, "agent_cursor");
   assert.equal(State.tasks[1].name, "Gemini CLI");
   assert.equal(State.tasks[1].color, "#8AB4F8");
@@ -260,7 +267,7 @@ test("an old settings file gets Claude Code as its main pill and keeps its integ
   State.settings = { ...DEFAULT_SETTINGS, mainPill: undefined };
   State.loadIntegrationTasks();
   assert.deepEqual(ids(), [
-    "integration_claude", "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
+    "integration_claude", "integration_resend", "integration_n8n", "integration_vercel",
   ]);
   assert.equal(State.settings.mainPill, "integration_claude");
   assert.equal(State.tasks[0].name, "Claude Code");
@@ -312,14 +319,14 @@ test("a Claude Code session gets its pill even when it is not loaded", () => {
   assert.equal(State.upsertWorkspacePill("not_a_pill", "x", ""), null);
 });
 
-test("toggling declares up to four pills and never the main one", () => {
+test("toggling declares up to six pills and never the main one", () => {
   State.settings.activeIntegrations = [];
   State.loadIntegrationTasks();
-  for (const id of ["integration_n8n", "agent_gemini", "ai_anthropic", "integration_stripe", "integration_github"]) {
+  for (const id of ["integration_n8n", "agent_gemini", "ai_anthropic", "integration_stripe", "integration_notion", "integration_spotify", "ai_ollama"]) {
     State.toggleIntegration(id);
   }
   assert.deepEqual(State.settings.activeIntegrations, [
-    "integration_n8n", "agent_gemini", "ai_anthropic", "integration_stripe",
+    "integration_n8n", "agent_gemini", "ai_anthropic", "integration_stripe", "integration_notion", "integration_spotify",
   ]);
   State.toggleIntegration("integration_claude");
   assert.ok(ids().includes("integration_claude"));

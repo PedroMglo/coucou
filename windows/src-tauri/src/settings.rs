@@ -7,12 +7,36 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+#[cfg(target_os = "linux")]
+#[path = "settings_revision.rs"]
+mod revision;
+#[cfg(target_os="linux")]
+#[path="settings_durable.rs"]
+pub(crate)mod durable;
+#[path = "settings_effects.rs"]
+mod effects;
+#[path="settings_optional.rs"]
+pub(crate) mod optional;
+#[cfg(target_os="linux")]#[path="settings_review.rs"]pub(crate)mod review;
+#[cfg(not(target_os="linux"))]#[path="settings_review_unsupported.rs"]pub(crate)mod review;
+pub(crate) use effects::{EffectProbe, IoPhase, IoStatus, effect_allowed, effect_probe, effect_status, install_effect_source, io_status};
+pub(crate) use effects::{CapturedOrigin,capture_origin};
+pub(crate)use effects::component_revalidated;
+#[cfg(all(test,target_os="linux"))]
+pub(crate) use effects::tests::Fixture as EffectFixture;
+#[cfg(all(test,target_os="linux"))]
+#[path="profile_compatibility_acceptance_tests.rs"]
+mod profile_compatibility_acceptance;
 
 /// A field the file lacks takes its value from `Default`, so a settings.json
 /// written by an older build still loads, whatever has been added since.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    #[cfg(target_os = "linux")]
+    #[serde(skip)]
+    file_revision: revision::Revision,
+    pub spotify_quiet_ads: bool,
     pub sound_enabled: bool,
     pub sound_volume: f64,
     pub auto_close_interval: f64,
@@ -26,6 +50,15 @@ pub struct Settings {
     pub main_pill: String,
     /// "primary" = the main display, "cursor" = whichever display the mouse is on.
     pub screen: String,
+    /// Desktop companion with a nearby popup, instead of a permanent top island.
+    pub companion_mode: bool,
+    pub companion_motion: bool,
+    pub companion_bar_mode: bool,
+    /// Separate native island bar; roaming pets and their cards remain independent.
+    pub pet_control_bar: bool,
+    /// Prepared optional clock and native system-panel shortcuts in the pet island.
+    pub pet_system_center: bool,
+    pub companion_top_clearance: f64,
     pub autostart: bool,
     pub hooks_installed: bool,
     /// Claude model used by the chat. Changeable in the settings window.
@@ -48,6 +81,21 @@ pub struct Settings {
     /// The model picked for each provider other than Anthropic (whose model is
     /// `model`), by provider id.
     pub chat_models: BTreeMap<String, String>,
+    /// Working folder for Mochi's CLI agents; empty means the user's home.
+    pub cli_workspace: String,
+    /// Optional per-pet folders, shared by voice and written tasks.
+    pub cli_workspaces: BTreeMap<String,String>,
+    /// Explicit opt-in to unattended execution for Mochi's CLI sessions only.
+    pub cli_full_access: bool,
+    pub voice_idle_seconds: u64,
+    pub voice_pet_aliases: BTreeMap<String, Vec<String>>,
+    pub local_voice_dirs: BTreeMap<String, String>,
+    pub edge_voice_python: String,
+    pub voice_asr_python: String,
+    pub voice_asr_model: String,
+    /// auto keeps an existing Whisper setup; otherwise use built-in Parakeet.
+    pub voice_asr_engine: String,
+    pub voice_models: BTreeMap<String, String>,
     /// Settings → Chat → Your AI subscriptions: the switch of each provider
     /// that can answer through its own terminal tool (cli_relay.rs). A
     /// provider not in it was never switched: see cli_relay::uses_subscription.
@@ -146,6 +194,9 @@ fn default_model() -> String {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            #[cfg(target_os = "linux")]
+            file_revision: revision::Revision::default(),
+            spotify_quiet_ads: false,
             sound_enabled: true,
             sound_volume: 0.12,
             auto_close_interval: 15.0,
@@ -160,6 +211,12 @@ impl Default for Settings {
             ],
             main_pill: "integration_claude".into(),
             screen: "primary".into(),
+            companion_mode: false,
+            companion_motion: true,
+            companion_bar_mode: false,
+            pet_control_bar: false,
+            pet_system_center: false,
+            companion_top_clearance: 64.0,
             autostart: false,
             hooks_installed: false,
             model: default_model(),
@@ -169,6 +226,17 @@ impl Default for Settings {
             show_codex_plan_in_notch: false,
             chat_provider: crate::chat::ANTHROPIC.into(),
             chat_models: BTreeMap::new(),
+            cli_workspace: String::new(),
+            cli_workspaces: BTreeMap::new(),
+            cli_full_access: false,
+            voice_idle_seconds: 60,
+            voice_pet_aliases: BTreeMap::new(),
+            local_voice_dirs: BTreeMap::new(),
+            edge_voice_python: String::new(),
+            voice_asr_python: String::new(),
+            voice_asr_model: String::new(),
+            voice_asr_engine: "auto".into(),
+            voice_models: BTreeMap::from([("codex".into(), "gpt-6-luna".into())]),
             chat_subscriptions: BTreeMap::new(),
             ollama_url: String::new(),
             lmstudio_url: String::new(),
@@ -196,7 +264,7 @@ impl Default for Settings {
     }
 }
 
-pub use crate::platform::{config_dir, local_dir};
+pub use crate::platform::{config_dir, local_dir, data_dir};
 
 pub fn hook_exe_path() -> PathBuf {
     local_dir().join("bin").join(crate::platform::HOOK_EXE)
@@ -211,10 +279,52 @@ pub fn load() -> Settings {
 }
 
 pub fn save(settings: &Settings) -> std::io::Result<()> {
+    #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed()?;
     let dir = config_dir();
     crate::platform::ensure_private_dir(&dir)?;
     save_to(&settings_path(), settings)
 }
+
+/// Do not turn an IO error into a claim about the previous on-disk state.
+/// In particular, consumers must be ready for a post-publication uncertainty
+/// from the common writer before that error class is introduced.
+pub(crate) fn save_error(context: &str, error: &std::io::Error) -> String {
+    format!("{context}: {error}. Confirma o estado antes de voltar a pedir; este erro não autoriza uma repetição automática.")
+}
+
+/// Serialize a preference change, its durable write and its notification.
+/// Failed writes leave the authoritative in-memory settings unchanged.
+pub(crate) fn update_with(
+    current:&Mutex<Settings>,
+    change:impl FnOnce(&mut Settings),
+    persist:impl FnOnce(&Settings)->std::io::Result<()>,
+    publish:impl FnOnce(&Settings),
+)->std::io::Result<Settings>{
+    update_checked_with(current,|next|{change(next);Ok(())},persist,publish)
+}
+
+/// Validate the proposed change under the same writer lock before any write
+/// or notification. A failed admission never becomes a saved preference.
+pub(crate) fn update_checked_with(
+    current:&Mutex<Settings>,
+    change:impl FnOnce(&mut Settings)->std::io::Result<()>,
+    persist:impl FnOnce(&Settings)->std::io::Result<()>,
+    publish:impl FnOnce(&Settings),
+)->std::io::Result<Settings>{
+    let mut current=current.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut next=current.clone();change(&mut next)?;
+    // A whole candidate deserialized by a webview has no native IO provenance.
+    // Preserve the original backend witness even when a change replaces it.
+    #[cfg(target_os="linux")]{next.file_revision=current.file_revision.clone();}
+    if let Err(error)=persist(&next){note_failed_io(&current,&next);return Err(error);}
+    *current=next;publish(&current);Ok(current.clone())
+}
+pub(crate) fn note_failed_io(current:&Settings,candidate:&Settings){
+    #[cfg(target_os="linux")]revision::note_failed(current,candidate);
+    #[cfg(not(target_os="linux"))]let _=(current,candidate);
+}
+#[cfg(all(test,target_os="linux"))]
+pub(crate)fn fixture_directory_sync_failure(path:&Path,settings:&Settings)->std::io::Result<()>{revision::sync_failure_for_test(path,settings)}
 
 /// How many copies `set_aside` can make within one second before it gives up.
 const MAX_COPIES_PER_SECOND: u32 = 100;
@@ -231,8 +341,10 @@ fn not_loaded() -> MutexGuard<'static, Vec<PathBuf>> {
 
 /// Serializes saves across all threads so concurrent writes do not collide on
 /// the temporary file or interleave file renames.
+#[cfg(not(target_os = "linux"))]
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
+#[cfg(not(target_os = "linux"))]
 fn save_lock() -> MutexGuard<'static, ()> {
     SAVE_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -259,6 +371,15 @@ fn parse(bytes: &[u8]) -> Option<Settings> {
     };
     let whole = serde_json::from_value(Value::Object(fields.clone()));
     Some(whole.unwrap_or_else(|_| salvage(fields)))
+}
+
+/// Salvage supports recovery/display; it does not review a default destination
+/// replacing an invalid field in an existing configuration.
+#[cfg(target_os="linux")]
+fn fully_valid(bytes: &[u8]) -> bool {
+    let text=bytes.strip_prefix(&[0xEF,0xBB,0xBF]).unwrap_or(bytes);
+    text.iter().all(u8::is_ascii_whitespace) || serde_json::from_slice::<Value>(text).ok()
+        .filter(Value::is_object).is_some_and(|v|serde_json::from_value::<Settings>(v).is_ok())
 }
 
 /// Settings from the fields of a settings.json that does not load as a whole.
@@ -292,7 +413,9 @@ fn unusable_field(key: &str) -> String {
 /// Only a file that is not there means "start from the defaults" with nothing
 /// more to do. One that cannot be read, or cannot be used, also gives the
 /// defaults, but it still holds what the user had: it is kept, not written over.
-fn load_from(path: &Path) -> Settings {
+pub(crate)fn load_from(path: &Path) -> Settings {
+    #[cfg(target_os="linux")]{return revision::load_from(path);}
+    #[cfg(not(target_os="linux"))]{
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == ErrorKind::NotFound => return Settings::default(),
@@ -316,6 +439,7 @@ fn load_from(path: &Path) -> Settings {
         }
         Settings::default()
     })
+    }
 }
 
 /// Marks `path` as holding something the next save must not write over.
@@ -422,6 +546,9 @@ fn write_whole(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
 
 /// `save`, for the file at `path`, whose directory already exists.
 fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
+    #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed()?;
+    #[cfg(target_os="linux")]{return revision::save_to(path,settings);}
+    #[cfg(not(target_os="linux"))]{
     let _lock = save_lock();
     keep_what_was_not_loaded(path)?;
     let json = serde_json::to_vec_pretty(settings)
@@ -437,13 +564,19 @@ fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
     // Write beside the target and rename over it: a crash, a full disk or a
     // power cut leaves the previous settings.json intact rather than half a file.
     let temp = path.with_extension(format!("json.coucou-{}", std::process::id()));
-    let written = std::fs::File::create(&temp)
-        .and_then(|mut file| write_whole(&mut file, &json))
-        .and_then(|()| std::fs::rename(&temp, path));
+    let mut options=std::fs::OpenOptions::new();options.write(true).create_new(true);
+    #[cfg(unix)]{use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
+    // Failure to create means this path is not ours, including a pre-existing
+    // regular file. Leave it intact instead of truncating or cleaning it up.
+    let mut file=options.open(&temp)?;
+    let written = write_whole(&mut file, &json);
+    drop(file);
+    let written=written.and_then(|()| std::fs::rename(&temp, path));
     if written.is_err() {
         let _ = std::fs::remove_file(&temp);
     }
     written
+    }
 }
 
 #[cfg(test)]
@@ -454,6 +587,7 @@ mod tests {
     /// A settings.json in which no value is the default one.
     // Two #: the colours in it are written "#RRGGBB".
     const CUSTOM: &str = r##"{
+  "spotifyQuietAds": true,
   "soundEnabled": false,
   "soundVolume": 0.5,
   "autoCloseInterval": 30.0,
@@ -463,6 +597,12 @@ mod tests {
   "activeIntegrations": ["integration_notion"],
   "mainPill": "agent_cursor",
   "screen": "cursor",
+  "companionMode": true,
+  "companionMotion": false,
+  "companionBarMode": false,
+  "petControlBar": true,
+  "petSystemCenter": true,
+  "companionTopClearance": 80.0,
   "autostart": true,
   "hooksInstalled": true,
   "model": "some-model",
@@ -472,6 +612,17 @@ mod tests {
   "showCodexPlanInNotch": true,
   "chatProvider": "ollama",
   "chatModels": { "ollama": "llama3.2", "openai": "gpt-x" },
+  "cliWorkspace": "/tmp/my-project",
+  "cliWorkspaces": {"codex":"/tmp/codex-project"},
+  "cliFullAccess": true,
+  "voiceIdleSeconds": 45,
+  "voicePetAliases": {"codex": ["co dex"]},
+  "localVoiceDirs": {"codex": "/tmp/voice-pt-PT"},
+  "edgeVoicePython": "/tmp/speech-env/bin/python",
+  "voiceModels": {"codex": "gpt-6-luna"},
+  "voiceAsrPython": "/tmp/whisper/bin/python",
+  "voiceAsrModel": "/tmp/whisper-model",
+  "voiceAsrEngine": "whisper",
   "chatSubscriptions": { "google": true, "anthropic": false },
   "ollamaUrl": "http://127.0.0.1:11434",
   "lmstudioUrl": "http://127.0.0.1:1234",
@@ -590,6 +741,18 @@ mod tests {
         assert_eq!(loaded.mochi_outfit, "auto");
         assert_eq!(loaded.model, "some-model");
         assert!(!loaded.sound_enabled);
+    }
+
+    #[test]
+    fn older_settings_never_enable_unattended_cli_execution() {
+        let mut old = custom();
+        old.as_object_mut().unwrap().remove("cliWorkspace");
+        old.as_object_mut().unwrap().remove("cliFullAccess");
+        let loaded = parse(&serde_json::to_vec(&old).unwrap()).unwrap();
+        assert!(!loaded.cli_full_access);
+        assert!(loaded.cli_workspace.is_empty());
+        assert_eq!(loaded.chat_provider, "ollama");
+        assert!(!parse(&custom_with("cliFullAccess", Some(json!("true")))).unwrap().cli_full_access);
     }
 
     #[test]
@@ -955,7 +1118,8 @@ mod tests {
         save_to(&file, &Settings::default()).unwrap();
         assert!(std::fs::symlink_metadata(&file).unwrap().file_type().is_symlink());
         assert_eq!(shown(&parse(&std::fs::read(&real).unwrap()).unwrap()), defaults());
-        assert_eq!(names(&dir), ["dotfiles-settings.json", "settings.json"]);
+        #[cfg(target_os="linux")]assert_eq!(names(&dir), [".settings-io-commit.lock", ".settings-io-record.lock", "dotfiles-settings.json", "settings-io-v1.json", "settings.json"]);
+        #[cfg(not(target_os="linux"))]assert_eq!(names(&dir), ["dotfiles-settings.json", "settings.json"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -977,6 +1141,7 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "spotifyQuietAds",
                 "soundEnabled",
                 "soundVolume",
                 "autoCloseInterval",
@@ -986,6 +1151,12 @@ mod tests {
                 "activeIntegrations",
                 "mainPill",
                 "screen",
+                "companionMode",
+                "companionMotion",
+                "companionBarMode",
+                "petControlBar",
+                "petSystemCenter",
+                "companionTopClearance",
                 "autostart",
                 "hooksInstalled",
                 "model",
@@ -995,6 +1166,17 @@ mod tests {
                 "showCodexPlanInNotch",
                 "chatProvider",
                 "chatModels",
+                "cliWorkspace",
+                "cliWorkspaces",
+                "cliFullAccess",
+                "voiceIdleSeconds",
+                "voicePetAliases",
+                "localVoiceDirs",
+                "edgeVoicePython",
+                "voiceAsrPython",
+                "voiceAsrModel",
+                "voiceAsrEngine",
+                "voiceModels",
                 "chatSubscriptions",
                 "ollamaUrl",
                 "lmstudioUrl",
@@ -1037,7 +1219,8 @@ mod tests {
         let (dir, file) = scratch("tidy");
         save_to(&file, &Settings::default()).unwrap();
         save_to(&file, &Settings::default()).unwrap();
-        assert_eq!(names(&dir), ["settings.json"]);
+        #[cfg(target_os="linux")]assert_eq!(names(&dir), [".settings-io-commit.lock", ".settings-io-record.lock", "settings-io-v1.json", "settings.json"]);
+        #[cfg(not(target_os="linux"))]assert_eq!(names(&dir), ["settings.json"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1056,6 +1239,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn concurrent_saves_never_collide() {
         let (dir, file) = scratch("concurrent");
         let handles: Vec<_> = (0..20)
@@ -1078,4 +1262,86 @@ mod tests {
         assert!(loaded.sound_volume >= 0.0);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn a_failed_preference_commit_keeps_memory_and_does_not_publish(){
+        let current=Mutex::new(Settings::default());let before=shown(&current.lock().unwrap());
+        let result=update_with(&current,|s|s.voice_asr_engine="parakeet".into(),
+            |_|Err(std::io::Error::other("synthetic disk failure")),|_|panic!("failed preference was published"));
+        assert!(result.is_err());assert_eq!(shown(&current.lock().unwrap()),before);
+    }
+
+    #[test]
+    fn restored_feature_admission_failure_precedes_disk_memory_and_event_publication(){
+        let(dir,path)=scratch("restored-feature-admission");save_to(&path,&Settings::default()).unwrap();let before=std::fs::read(&path).unwrap();let current=Mutex::new(Settings::default());
+        let result=update_checked_with(&current,|next|{next.autostart=true;next.sound_volume=0.07;Err(std::io::Error::new(ErrorKind::PermissionDenied,"restored autostart requires its own revalidation"))},|_|panic!("denied feature reached persistence"),|_|panic!("denied feature emitted settings"));
+        assert_eq!(result.unwrap_err().kind(),ErrorKind::PermissionDenied);assert!(!current.lock().unwrap().autostart);assert_eq!(std::fs::read(&path).unwrap(),before);std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]#[test]
+    fn restored_settings_remain_private_and_strictly_readable_after_each_common_save(){
+        use std::os::unix::fs::{PermissionsExt,MetadataExt};let(dir,path)=scratch("restored-settings-private");std::fs::set_permissions(&dir,std::fs::Permissions::from_mode(0o700)).unwrap();
+        for value in [0.04,0.08]{let mut next=Settings::default();next.sound_volume=value;save_to(&path,&next).unwrap();assert_eq!(std::fs::metadata(&path).unwrap().mode()&0o7777,0o600);assert_eq!(read_initialized(&path).unwrap().sound_volume,value);}std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_foreign_regular_settings_temporary_is_neither_truncated_nor_removed(){
+        let(dir,path)=scratch("foreign-settings-temp");save_to(&path,&Settings::default()).unwrap();let before=std::fs::read(&path).unwrap();let temp=path.with_extension(format!("json.coucou-{}",std::process::id()));std::fs::write(&temp,b"another writer's retained data").unwrap();
+        assert!(save_to(&path,&Settings::default()).is_err());assert_eq!(std::fs::read(&temp).unwrap(),b"another writer's retained data");assert_eq!(std::fs::read(&path).unwrap(),before);std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn preference_writes_and_publication_cannot_overtake_a_slow_older_write(){
+        use std::sync::{Arc,mpsc};use std::time::Duration;
+        let current=Arc::new(Mutex::new(Settings::default()));
+        let published=Arc::new(Mutex::new(Vec::new()));
+        let (entered,waiting)=mpsc::channel();let(release,ready)=mpsc::channel();
+        let (requested,started)=mpsc::channel();let(wrote,writing)=mpsc::channel();
+        let first=current.clone();let first_log=published.clone();
+        let a=std::thread::spawn(move||update_with(&first,|s|{s.chat_models.insert("ollama".into(),"a".into());},
+            |_|{entered.send(()).unwrap();ready.recv().unwrap();Ok(())},
+            |s|first_log.lock().unwrap().push(s.chat_models["ollama"].clone())).unwrap());
+        waiting.recv().unwrap();
+        let second=current.clone();let second_log=published.clone();
+        let b=std::thread::spawn(move||{requested.send(()).unwrap();update_with(&second,
+            |s|{s.chat_models.insert("ollama".into(),"b".into());},
+            |_|{wrote.send(()).unwrap();Ok(())},
+            |s|second_log.lock().unwrap().push(s.chat_models["ollama"].clone())).unwrap()});
+        started.recv().unwrap();assert!(writing.recv_timeout(Duration::from_millis(40)).is_err());
+        release.send(()).unwrap();a.join().unwrap();b.join().unwrap();
+        assert_eq!(current.lock().unwrap().chat_models["ollama"],"b");
+        assert_eq!(*published.lock().unwrap(),vec!["a","b"]);
+    }
+}
+
+// Fields introduced together by the upstream reconciliation. A complete earlier
+// projection is valid as written, with these features inactive by default.
+pub(crate) const RECONCILED_FIELDS: [&str; 7] = [
+    "alertsFromAllPills", "showPlanInCompactIsland", "chatSubscriptions",
+    "phoneRecap", "showClock", "closedIsland", "agyApprovalsEnabled",
+];
+
+/// Canonical restored initialization accepts either complete schema.
+#[cfg(target_os="linux")]
+pub(crate)fn load_for_review(path:&Path)->Settings{revision::load_for_review(path)}
+pub(crate)fn read_initialized(path:&Path)->Result<Settings,String>{
+ use std::io::Read;
+ let mut options=std::fs::OpenOptions::new();options.read(true);
+ #[cfg(unix)]{use std::os::unix::fs::OpenOptionsExt;options.custom_flags(libc::O_NOFOLLOW);}
+ let file=options.open(path).map_err(|_|"A configuração restaurada está indisponível.")?;let metadata=file.metadata().map_err(|_|"A configuração restaurada está indisponível.")?;
+ #[cfg(unix)]{use std::os::unix::fs::MetadataExt;if !metadata.is_file()||metadata.mode()&0o7777!=0o600||metadata.nlink()!=1||metadata.uid()!=unsafe{libc::geteuid()}{return Err("A configuração restaurada não é um ficheiro privado.".into());}}
+ if metadata.len()>256*1024{return Err("A configuração restaurada excede o limite.".into());}let mut b=vec![];(&file).take(256*1024+1).read_to_end(&mut b).map_err(|_|"A configuração restaurada está indisponível.")?;
+ if b.len()as u64!=metadata.len(){return Err("A configuração restaurada mudou durante a leitura.".into());}
+ #[cfg(unix)]{use std::os::unix::fs::MetadataExt;let identity=|m:&std::fs::Metadata|(m.dev(),m.ino(),m.mode(),m.uid(),m.nlink(),m.len(),m.mtime(),m.mtime_nsec(),m.ctime(),m.ctime_nsec());let after=file.metadata().map_err(|_|"A configuração restaurada está indisponível.")?;let named=std::fs::symlink_metadata(path).map_err(|_|"A configuração restaurada está indisponível.")?;if identity(&metadata)!=identity(&after)||identity(&metadata)!=identity(&named){return Err("A configuração restaurada mudou durante a leitura.".into());}}
+ let raw:Value=serde_json::from_slice(&b).map_err(|_|"A configuração restaurada é inválida.")?;let expected=serde_json::to_value(Settings::default()).map_err(|_|"A configuração restaurada é inválida.")?;
+ let shape_error = || "O formato da configuração restaurada exige nova revisão.".to_string();
+ let fields = raw.as_object().ok_or_else(shape_error)?;
+ let current = expected.as_object().ok_or_else(shape_error)?;
+ let previous = current.keys().filter(|key| !RECONCILED_FIELDS.contains(&key.as_str()));
+ if !fields.keys().eq(current.keys()) && !fields.keys().eq(previous) {
+     return Err(shape_error());
+ }
+ let mut settings=serde_json::from_value(raw).map_err(|_|"A configuração restaurada contém campos inválidos.")?;
+ #[cfg(target_os="linux")]revision::bind_strict(path,&metadata,&b,&mut settings)?;
+ Ok(settings)
 }

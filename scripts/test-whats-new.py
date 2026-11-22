@@ -53,10 +53,11 @@ def windows_langs():
 
 
 def vkey(v):
-    return tuple(int(x) for x in v.split("."))
+    base, separator, revision = v.partition("-mochi.")
+    return bool(separator), tuple(int(x) for x in base.split(".")), int(revision or "0")
 
 
-def check(label, path, version, langs):
+def check(label, path, version, langs, *, fork_versions=False):
     print(f"\n{label}: {path.relative_to(ROOT)} for {version}")
     before = len(failures)
     try:
@@ -71,9 +72,13 @@ def check(label, path, version, langs):
     versions = [r.get("version", "") for r in releases]
     if len(set(versions)) != len(versions):
         fail(f"a version appears twice: {versions}")
-    if any(not re.fullmatch(r"\d+(\.\d+){1,3}", v) for v in versions):
-        fail(f"a version is not numbers and dots: {versions}")
+    pattern = r"\d+(\.\d+){1,3}"
+    if fork_versions:
+        pattern += r"(?:-mochi\.\d+)?"
+    if any(not re.fullmatch(pattern, v) for v in versions):
+        fail(f"a release has an invalid version: {versions}")
         return
+    # The fork and upstream use different release lines in the shared catalogue.
     if versions != sorted(versions, key=vkey, reverse=True):
         fail(f"newest first, please: {versions}")
     current = next((r for r in releases if r["version"] == version), None)
@@ -118,7 +123,8 @@ def main():
     if only in (None, "mac"):
         check("Mac", ROOT / "NotchBuddy/Resources/whats-new.json", mac_version(), MAC_LANGS)
     if only in (None, "windows"):
-        check("Windows and Linux", ROOT / "windows/src/whats-new/whats-new.json", windows_version(), windows_langs())
+        check("Windows and Linux", ROOT / "windows/src/whats-new/whats-new.json",
+              windows_version(), windows_langs(), fork_versions=True)
     if failures:
         print(f"\n{len(failures)} failure(s)")
         sys.exit(1)

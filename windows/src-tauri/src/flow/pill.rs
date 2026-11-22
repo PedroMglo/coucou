@@ -121,6 +121,7 @@ pub fn setup(app: &AppHandle) {
         }
         match builder.build() {
             Ok(win) => {
+                crate::voice::native_surface::register(&win);
                 // Windows: prepare_pill_window also makes the idle window
                 // click-through. Not here for every system: on Linux the
                 // window is not realized yet, and tao unwraps its GdkWindow.
@@ -242,7 +243,9 @@ pub fn update(app: &AppHandle, change: impl FnOnce(&mut PillState)) {
         (s.clone(), s.edge != edge_before)
     };
     let _ = app.emit_to(LABEL, "pill-state", &state);
-    let visible = (state.enabled && !state.hide_idle) || state.note_started_at.is_some() || state.announcement.is_some() || state.voice.is_some() || state.phase != "idle";
+    let companion = crate::companions::enabled(app);
+    if companion { let _ = app.emit_to(crate::companions::LABEL, "companions-flow", &state); }
+    let visible = !companion && ((state.enabled && !state.hide_idle) || state.note_started_at.is_some() || state.announcement.is_some() || state.voice.is_some() || state.phase != "idle");
     let was = pill.shown.swap(visible, Ordering::Relaxed);
     if visible && (!was || edge_changed) {
         place(app, &pill, &state.edge, state.phase == "listening");

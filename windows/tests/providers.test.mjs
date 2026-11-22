@@ -4,23 +4,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  PROVIDERS, activeModel, isLoopbackHost, pickModel, providerDef, urlExposure, visibleProviders, withModel,
+  PROVIDERS, activeModel, isLoopbackHost, pickModel, providerDef, providerForPill, urlExposure, visibleProviders, withModel,
 } from "../src/core/providers.ts";
 import { DEFAULT_SETTINGS } from "../src/core/state.ts";
 
 const settings = (over = {}) => ({ ...DEFAULT_SETTINGS, ...over });
 
-test("the ids and key names match the Rust side and the Mac", () => {
-  assert.deepEqual(PROVIDERS.map((p) => p.id), [
-    "anthropic", "google", "openai", "openrouter", "ollama", "lmstudio", "custom", "cursor", "copilot",
-  ]);
-  // Cursor and Copilot answer only through the subscription: no key, no address.
-  assert.equal(providerDef("cursor").key, null);
-  assert.equal(providerDef("copilot").urlField, null);
+test("the provider ids and credential requirements match the Rust side", () => {
+  assert.deepEqual(PROVIDERS.map((p) => p.id), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "copilot", "gemini-cli", "claude-cli", "ollama", "lmstudio", "custom"]);
   assert.equal(providerDef("google").key, "google-api-key");
   assert.equal(providerDef("openai").key, "openai-api-key");
   assert.equal(providerDef("openrouter").key, "openrouter-api-key");
   assert.equal(providerDef("ollama").key, null);
+  assert.equal(providerDef("codex").key, null);
+  assert.equal(providerDef("codex").urlField, null);
   // An unknown id (an older or newer settings.json) falls back to Claude.
   assert.equal(providerDef("nope").id, "anthropic");
 });
@@ -28,7 +25,7 @@ test("the ids and key names match the Rust side and the Mac", () => {
 test("Claude's model is the existing setting; the others are kept per provider", () => {
   assert.equal(activeModel(settings()), "claude-opus-5");
   assert.equal(activeModel(settings({ chatProvider: "google" })), "gemini-2.0-flash");
-  assert.equal(activeModel(settings({ chatProvider: "ollama" })), "");
+  assert.equal(activeModel(settings({ chatProvider: "ollama" })), "@default");
   let s = withModel(settings({ chatProvider: "openai" }), "openai", "gpt-5-mini");
   assert.equal(activeModel(s), "gpt-5-mini");
   assert.equal(s.model, "claude-opus-5");
@@ -41,16 +38,9 @@ test("Claude's model is the existing setting; the others are kept per provider",
 
 test("model servers show in the picker once connected, or while in use", () => {
   const ids = (s) => visibleProviders(s).map((p) => p.id);
-  assert.deepEqual(ids(settings()), ["anthropic", "google", "openai", "openrouter"]);
-  assert.deepEqual(ids(settings({ ollamaUrl: "http://127.0.0.1:11434" })), ["anthropic", "google", "openai", "openrouter", "ollama"]);
-  assert.deepEqual(ids(settings({ chatProvider: "custom" })), ["anthropic", "google", "openai", "openrouter", "custom"]);
-});
-
-test("Cursor and Copilot show once their subscription is on, or while in use", () => {
-  const ids = (s, on) => visibleProviders(s, on).map((p) => p.id);
-  assert.deepEqual(ids(settings(), new Set(["cursor"])), ["anthropic", "google", "openai", "openrouter", "cursor"]);
-  assert.deepEqual(ids(settings({ chatSubscriptions: { copilot: true } })), ["anthropic", "google", "openai", "openrouter", "copilot"]);
-  assert.deepEqual(ids(settings({ chatProvider: "copilot" })), ["anthropic", "google", "openai", "openrouter", "copilot"]);
+  assert.deepEqual(ids(settings()), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "copilot"]);
+  assert.deepEqual(ids(settings({ ollamaUrl: "http://127.0.0.1:11434" })), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "copilot", "ollama"]);
+  assert.deepEqual(ids(settings({ chatProvider: "custom" })), ["anthropic", "google", "openai", "openrouter", "codex", "antigravity", "copilot", "custom"]);
 });
 
 test("the saved model is kept when offered, else a sensible one is picked", () => {
@@ -61,6 +51,16 @@ test("the saved model is kept when offered, else a sensible one is picked", () =
   assert.equal(pickModel(providerDef("ollama"), ["llama3.2", "qwen"], ""), "llama3.2");
   assert.equal(pickModel(providerDef("openrouter"), ["a/b", "openrouter/auto"], "gone"), "openrouter/auto");
   assert.equal(pickModel(google, [], "x"), null);
+});
+
+test("each CLI Mochi opens chat with its own account", () => {
+  assert.equal(providerForPill("agent_codex"), "codex");
+  assert.equal(providerForPill("agent_antigravity"), "antigravity");
+  assert.equal(providerForPill("integration_claude"), null);
+  assert.equal(providerForPill("agent_gemini"), null);
+  assert.equal(providerForPill("agent_cursor"), null);
+  assert.equal(providerForPill("vscode"), null);
+  assert.equal(providerForPill(undefined), null);
 });
 
 test("loopback hosts match net.rs", () => {
@@ -83,4 +83,34 @@ test("an address says whether what you type leaves this computer", () => {
   assert.equal(urlExposure("ftp://example.com"), "invalid");
   assert.equal(urlExposure("http://user:pw@example.com"), "invalid");
   assert.equal(urlExposure("http://"), "invalid");
+});
+
+test("Gravity model-family chats never require a separate paid API key",()=>{
+ for(const id of ["gemini-cli","claude-cli"]){
+  assert.equal(providerDef(id).key,null);assert.match(providerDef(id).name,/via Gravity/);
+  assert.ok(visibleProviders(settings({chatProvider:id})).some(p=>p.id===id));
+ }
+});
+
+
+test("service pets do not open model chats and retain the label for stored provider IDs",()=>{
+ for(const id of ["integration_github","integration_notion","integration_n8n","integration_vercel","integration_resend","integration_calcom","integration_stripe"]){
+  assert.equal(providerForPill(id),null);assert.equal(providerDef(id).key,null);assert.match(providerDef(id).name,/via Codex/);
+  assert.ok(!visibleProviders(settings()).some(p=>p.id===id));
+  assert.equal(activeModel(settings({chatProvider:id})),"@default");assert.ok(visibleProviders(settings({chatProvider:id})).some(p=>p.id===id));
+ }
+});
+
+test("Spoty keeps sound commands without a model chat profile",async()=>{
+ const {petCapabilities}=await import('../src/mochi/capabilities.ts');
+ const {profileProvider}=await import('../src/mochi/pet-preferences.ts');
+ assert.equal(providerForPill('integration_spotify'),null);assert.equal(profileProvider('integration_spotify'),false);
+ const cap=petCapabilities('integration_spotify');assert.equal(cap.chat,null);assert.equal(cap.voice,'integration_spotify');assert.match(cap.role,/som do PC/);
+});
+
+test("a saved Cursor route is visible with its own name and never inserted into a fresh picker", () => {
+  assert.equal(providerDef("cursor").name, "Cursor");
+  assert.ok(!visibleProviders(settings()).some(p => p.id === "cursor"));
+  assert.ok(visibleProviders(settings({ chatProvider: "cursor" })).some(p => p.id === "cursor"));
+  assert.equal(activeModel(settings({ chatProvider: "cursor" })), "");
 });

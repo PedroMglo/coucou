@@ -5,81 +5,42 @@
 // the last turn. Port of ClaudeVoiceBrain.swift.
 
 use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-const FAST_MODEL: &str = "claude-haiku-4-5";
 const FORGET_AFTER: Duration = Duration::from_secs(90);
+fn legacy_model(settings:&crate::settings::Settings)->Result<&str,&'static str>{
+    let model=settings.voice_models.get("anthropic").map(String::as_str).unwrap_or(&settings.model);
+    if model.is_empty()||model.len()>200||model.trim()!=model||model.starts_with('@')||model.chars().any(char::is_control){
+        Err("Escolhe um modelo Anthropic explícito para esta conversa por voz.")
+    }else{Ok(model)}
+}
 
 pub struct Brain {
     messages: Vec<Value>,
+    local: super::local::Brain,
     last: Instant,
+    family_models: std::collections::HashMap<String,String>,
 }
 
 impl Default for Brain {
     fn default() -> Self {
-        Self { messages: Vec::new(), last: Instant::now() }
+        Self { messages: Vec::new(), local: Default::default(), last: Instant::now(), family_models: Default::default() }
     }
 }
 
 pub struct Reply {
     pub text: String,
     pub acted: bool,
+    pub language: Option<String>,
 }
 
-fn tools() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "pills",
-            "description": "Add, remove, set as main or list the pills shown in the island at the top of the screen. At most 4 pills besides the main one: remove one first if needed.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["add", "remove", "set_main", "list"] },
-                    "names": { "type": "array", "items": { "type": "string" }, "description": "Pill names as listed (e.g. Stripe, GitHub, Cursor). Empty for list." }
-                },
-                "required": ["action"]
-            }
-        }),
-        json!({
-            "name": "music",
-            "description": "Control Spotify: play or pause, next, previous, set the volume, or search a song, an artist or a playlist in Spotify.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["play_pause", "next", "previous", "set_volume", "search"] },
-                    "query": { "type": "string", "description": "What to search, for search." },
-                    "volume": { "type": "integer", "description": "0-100 for set_volume." }
-                },
-                "required": ["action"]
-            }
-        }),
-        json!({
-            "name": "service_info",
-            "description": "Read the user's real data that Coucou already has, as JSON: the active pills, the agent sessions (Claude Code, Codex…) and what they are doing, Claude or Codex plan usage, Spotify now playing, and the services' latest data (Stripe, GitHub, Vercel, Resend, n8n, Notion, Cal.com).",
-            "input_schema": { "type": "object", "properties": {} }
-        }),
-        json!({
-            "name": "open_app",
-            "description": "Open an app on this computer by name (Firefox, VS Code, Notion, Spotify…).",
-            "input_schema": { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] }
-        }),
-        json!({
-            "name": "prepare_email",
-            "description": "Open the user's mail app with an email filled in, for them to check and send (it is never sent automatically). The recipient must be an email address.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "recipient": { "type": "string", "description": "An email address." },
-                    "subject": { "type": "string" },
-                    "body": { "type": "string", "description": "The full email text, written for the user." }
-                },
-                "required": ["recipient", "subject", "body"]
-            }
-        }),
-        json!({ "type": "web_search_20250305", "name": "web_search", "max_uses": 3 }),
-    ]
+pub(crate) fn tools() -> Vec<Value> {
+    let mut tools = crate::pet_operations::definitions();
+    tools.push(json!({"type":"web_search_20250305","name":"web_search","max_uses":3}));
+    tools
 }
 
 fn system_prompt(pills: &str) -> String {
@@ -103,60 +64,121 @@ Pills: {pills}",
 }
 
 impl Brain {
-    pub fn respond(&mut self, app: &AppHandle, transcript: &str) -> Option<Reply> {
+    /// The legacy hotword conversation keeps its original retention policy.
+    /// CLI pets use the shared assistant memory across microphone sessions.
+    pub fn forget_if_idle(&mut self) {
         if self.last.elapsed() > FORGET_AFTER {
             self.messages.clear();
+            self.local.clear();
         }
+    }
+
+    /// The spoken pet belongs to this dialogue, independent of the text chat's
+    /// provider. CLI context belongs to the logical pet in the shared Chat store.
+    pub(super) fn respond_as(&mut self, app: &AppHandle, transcript: &str, provider: &str, input: &super::input::Input, stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>) -> Option<Reply> {
         self.last = Instant::now();
+        #[cfg(target_os="linux")]if let Some(text)=crate::cli_chat::goal_recipe_voice(app,provider,transcript,stop.as_deref().unwrap_or(&AtomicBool::new(false))){return Some(Reply{text,acted:false,language:None});}
+        if let Err(text)=crate::settings::effect_allowed(){return Some(Reply{text,acted:false,language:None});}
+        if let Err(text)=input.check(){return Some(Reply{text,acted:false,language:None});}
+        let settings = input.settings_for(provider);
+        if let Err(text) = crate::cli_relay::require_configured_route(&settings, provider) {
+            return Some(Reply { text, acted: false, language: None });
+        }
+        let settings = Some(settings);
+        if let Some(settings) = settings.as_ref().filter(|s| s.chat_provider == "ollama") {
+            self.messages.clear();
+            let not_stopped = AtomicBool::new(false);
+            // Additive explicit route. Ordinary voice keeps its native music,
+            // pills, service data, app-opening and prepare-email actions.
+            if super::local_task::requested(transcript){
+                let config=&input.configuration;
+                return Some(match super::local_task::respond(app,settings,&config,transcript,stop.as_deref().unwrap_or(&not_stopped)){
+                    Ok(reply)=>reply,
+                    Err(text)=>Reply{text,acted:false,language:None},
+                });
+            }
+            let activity = crate::pet_activity::Reporter::new(app, provider, stop.clone());
+            activity.update("working", "");
+            let reply = self.local.respond(app, settings, &input.configuration, input, transcript, stop.as_deref().unwrap_or(&not_stopped));
+            if let Some(reply) = &reply { activity.finish("done", &reply.text); }
+            return reply;
+        }
+        self.local.clear();
+        if let Some(settings) = settings.clone().filter(|s| crate::cli_chat::backend(&s.chat_provider).is_some()) {
+            let chat=app.state::<crate::chat::Chat>();
+            let id=match chat.conversation_id(provider){Ok(id)=>id,Err(text)=>return Some(Reply{text,acted:false,language:None})};
+            let reservation=match chat.reserve_conversation(provider,Some(&id)){Ok(r)=>r.broadcast(app,transcript),Err(text)=>return Some(Reply{text,acted:false,language:None})};
+            let channel=reservation.channel();
+            let attachments=crate::pet_documents::contexts(provider,&id);
+            if let Err(text)=crate::pet_documents::validate_attachments(&attachments){return Some(Reply{text,acted:false,language:None});}
+            let context=crate::pet_documents::collection_context(&attachments);
+            let selected=crate::chat::model_for(&settings,provider);
+            let selected=if selected.is_empty() {self.family_models.get(provider).cloned().unwrap_or_default()} else {selected};
+            let model=tauri::async_runtime::block_on(super::until_stopped(crate::cli_chat::resolve_model(&settings,provider,&selected),stop.as_deref()))?;
+            let model=match model {
+                Ok(model)=>model,
+                Err(err)=>return Some(Reply{text:err,acted:false,language:None}),
+            };
+            if matches!(provider,"gemini-cli"|"claude-cli") {self.family_models.insert(provider.into(),model.clone());}
+            let backend=crate::cli_chat::backend(provider)?;
+            if let Err(text)=crate::pet_documents::validate_attachments(&attachments){return Some(Reply{text,acted:false,language:None});}
+            return match crate::cli_chat::run_voice_prepared(app, &channel, &settings, &input.configuration, backend, provider, &model, transcript, context.as_ref(), &tools(), stop.clone(), ||input.check()) {
+                Ok((text, acted)) => {
+                    Some(Reply { text: spoken_text(&text), acted, language: None })
+                }
+                Err(err) => {
+                    if err==crate::chat::BUSY_ERROR {return Some(Reply{text:err,acted:false,language:None});}
+                    if err=="The CLI request was cancelled."||stop.as_ref().is_some_and(|s|s.load(std::sync::atomic::Ordering::Relaxed)) {
+                        return Some(Reply{text:"A tarefa foi interrompida.".into(),acted:false,language:None});
+                    }
+                    crate::log::line(format!("voice: CLI turn failed: {err}"));
+                    Some(Reply { text: crate::i18n::t("The CLI agent could not answer. Check its connection in Settings → Chat."), acted: false, language: None })
+                }
+            };
+        }
+        if !matches!(provider, "" | "anthropic") { return None; }
         self.messages.push(json!({ "role": "user", "content": transcript }));
         self.trim();
         let pills = super::ask_island(app, "pills", json!({ "action": "list" })).unwrap_or_default();
         let system = system_prompt(&pills);
         let tools = tools();
-        let chat_model = app
-            .try_state::<crate::Shared>()
-            .map(|s| s.settings.lock().unwrap().model.clone())
-            .unwrap_or_default();
+        let model=match settings.as_ref().map(legacy_model){Some(Ok(model))=>model.to_string(),_=>return Some(Reply{text:"Escolhe um modelo explícito antes de iniciar esta conversa por voz.".into(),acted:false,language:None})};
         let mut acted = false;
         let mut spoken = String::new();
         for _ in 0..5 {
-            let turn = tauri::async_runtime::block_on(async {
-                match crate::claude::voice_turn(FAST_MODEL, &system, &self.messages, &tools).await {
-                    Ok(v) => Ok(v),
-                    Err(err) if !chat_model.is_empty() => {
-                        crate::log::line(format!("voice: {err}; the chat's model instead"));
-                        crate::claude::voice_turn(&chat_model, &system, &self.messages, &tools).await
-                    }
-                    Err(err) => Err(err),
-                }
-            });
+            if input.check().is_err(){self.repair();return None;}
+            let turn = tauri::async_runtime::block_on(super::until_stopped(async {
+                crate::claude::voice_turn(&model, &system, &self.messages, &tools).await
+            }, stop.as_deref()))?;
             let turn = match turn {
                 Ok(t) => t,
                 Err(err) => {
-                    crate::log::line(format!("voice: Claude turn failed: {err}"));
+                    let _=err;crate::log::line("voice: configured Claude model failed; provider/model unchanged");
                     if self.messages.last().is_some_and(|m| m["content"].is_string()) {
                         self.messages.pop();
                     }
-                    return acted.then(|| Reply { text: String::new(), acted });
+                    return acted.then(|| Reply { text: String::new(), acted, language: None });
                 }
             };
+            if input.check().is_err(){self.repair();return None;}
             let content = turn["content"].as_array().cloned().unwrap_or_default();
             self.messages.push(json!({ "role": "assistant", "content": content.clone() }));
             let text: String = content.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(" ");
             if !text.trim().is_empty() {
                 spoken = text;
             }
-            let stop = turn["stop_reason"].as_str().unwrap_or("end_turn");
-            if stop == "pause_turn" {
+            let reason = turn["stop_reason"].as_str().unwrap_or("end_turn");
+            if reason == "pause_turn" {
                 continue;
             }
             let uses: Vec<&Value> = content.iter().filter(|b| b["type"] == "tool_use").collect();
-            if stop != "tool_use" || uses.is_empty() {
+            if reason != "tool_use" || uses.is_empty() {
                 break;
             }
             let mut results = Vec::new();
             for u in uses {
-                let (result, did) = super::run_tool(app, u["name"].as_str().unwrap_or(""), &u["input"]);
+                if stop.as_ref().is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed)) { self.repair(); return None; }
+                let (result, did) = super::run_tool_for(app,"ai_anthropic",u["name"].as_str().unwrap_or(""),&u["input"],input,||input.check().is_ok()&&!stop.as_ref().is_some_and(|s|s.load(std::sync::atomic::Ordering::Acquire)));
                 acted |= did;
                 results.push(json!({ "type": "tool_result", "tool_use_id": u["id"], "content": result }));
             }
@@ -164,7 +186,7 @@ impl Brain {
             spoken.clear();
         }
         self.repair();
-        Some(Reply { text: spoken_text(&spoken), acted })
+        Some(Reply { text: spoken_text(&spoken), acted, language: None })
     }
 
     /// Keeps the last exchanges, never cutting between a tool call and its result.
@@ -211,6 +233,18 @@ pub fn spoken_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_effect_voice_uses_configured_model_without_error_fallback() {
+        let mut settings=crate::settings::Settings::default();settings.model="explicit-chat-fixture".into();
+        assert_eq!(legacy_model(&settings),Ok("explicit-chat-fixture"));
+        settings.voice_models.insert("anthropic".into(),"explicit-voice-fixture".into());
+        assert_eq!(legacy_model(&settings),Ok("explicit-voice-fixture"));
+        for invalid in ["", "@auto", " chosen", "chosen\n"] {
+            settings.voice_models.insert("anthropic".into(),invalid.into());
+            assert!(legacy_model(&settings).is_err());
+        }
+    }
 
     #[test]
     fn markdown_and_citations_are_not_read_aloud() {

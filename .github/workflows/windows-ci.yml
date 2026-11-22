@@ -39,15 +39,15 @@ jobs:
           cache: npm
           cache-dependency-path: windows/package-lock.json
 
-      - name: Cache cargo
+      # Isolate the loader failure from restored executables and native DLLs.
+      - name: Cache Cargo sources
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            windows/target
-          key: windows-ci-cargo-${{ hashFiles('windows/Cargo.lock') }}
-          restore-keys: windows-ci-cargo-
+          key: windows-ci-cargo-source-${{ hashFiles('windows/Cargo.lock') }}
+          restore-keys: windows-ci-cargo-source-
 
       - name: Install dependencies
         run: npm ci
@@ -69,4 +69,36 @@ jobs:
         run: cargo build --release -p coucou-hook
 
       - name: Rust tests
-        run: cargo test --workspace --locked
+        id: rust_tests
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $log = Join-Path $env:RUNNER_TEMP 'coucou-rust-tests.log'
+          cargo test --workspace --locked 2>&1 | Tee-Object -FilePath $log
+          $status = $LASTEXITCODE
+          $loaderFailure = Select-String -Path $log -SimpleMatch 'STATUS_ENTRYPOINT_NOT_FOUND' -Quiet
+          "loader_failure=$($loaderFailure.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          exit $status
+
+      - name: Identify the DLL entry point missing from the test executable
+        if: failure() && steps.rust_tests.outputs.loader_failure == 'true'
+        timeout-minutes: 2
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $image = Get-ChildItem target/debug/build -Recurse -File -Filter 'coucou_lib-*.exe' |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (!$image) { throw 'The Rust test executable was not found' }
+          $debuggers = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Debuggers\x64'
+          $cdb = Join-Path $debuggers 'cdb.exe'
+          $gflags = Join-Path $debuggers 'gflags.exe'
+          $trace = Join-Path $env:RUNNER_TEMP 'coucou-loader.log'
+          if ((Test-Path $cdb) -and (Test-Path $gflags)) {
+            & $gflags /i $image.Name +sls
+            try {
+              & $cdb -logo $trace -g -G -c 'sxd 0xc0000139; g; q' $image.FullName --list | Out-Null
+              Get-Content $trace | Select-String -Pattern 'Ldrp.*ERROR|0xc0000139|entry point|could not be located'
+            } finally {
+              & $gflags /i $image.Name -sls
+            }
+          } else {
+            llvm-objdump -p $image.FullName
+          }

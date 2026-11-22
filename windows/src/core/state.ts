@@ -1,3 +1,4 @@
+import {petRetired} from "./pet-factory";
 // App state — mirror of AppState.swift (the parts the island needs).
 
 import type { BotEmoteName, BotStateName, IslandMode, IslandViewName } from "./layout";
@@ -7,12 +8,15 @@ import {
   toggleDeclared, type HostOs, type PillDefinition,
 } from "./pills";
 import type { CodexPlanUsage, PlanUsage } from "./plan";
-import type { ProviderId } from "./providers";
+import { providerForPill, type ProviderId } from "./providers";
 import type { FileDiff } from "./diff";
 import type { Bindings } from "./shortcuts";
 import { DEFAULT_OUTFIT, type Outfit } from "../mochi/wardrobe";
 import { pillColor } from "./pill-colors";
 import { Spotify, musicPlaying } from "./spotify";
+import { PetSessions,sessionKey } from './pet-sessions';
+import type {DroppedFile,IntegrationUpdate} from './bridge';
+export type PetFile=Pick<DroppedFile,'name'|'path'>&Partial<DroppedFile>;
 
 export type AgentSource = "claudeCode" | "n8n" | "agent";
 export type PillBadge = "approval" | "finished" | "error";
@@ -37,6 +41,10 @@ export interface AgentTask {
   sessionCwd?: string | null;
   /** Claude Code's session, so "Open terminal" can find the window it runs in. */
   sessionId?: string | null;
+  sessionBackend?: string;
+  sessionOwned?: boolean;
+  decisionInTerminal?:boolean;
+  sessionTitle?: string;
   /** Claude's final message after Stop, one line; cleared when a new turn starts. */
   finalLine?: string | null;
 }
@@ -44,10 +52,19 @@ export interface AgentTask {
 export interface ApprovalInfo {
   requestId: string;
   sessionId: string;
+  /** Captured from this request, never read from the latest provider event. */
+  sessionTitle?:string;
+  cwd?:string;
+  backend?:string;
+  owned?:boolean;
   /** The pill the request belongs to: VS Code's or Cursor's (Claude Code), or an agent's (Codex…). */
   pillId: string;
   tool: string;
   command: string;
+  /** Native receipt for this exact rendered request, never permission to execute. */
+  presentationReady?:boolean;
+  answering?:boolean;
+  feedback?:string;
   /** Set when Claude Code is asking a question rather than for a permission. */
   questions?: AskedQuestion[];
 }
@@ -95,9 +112,12 @@ export interface IntegrationInfo {
   error: string | null;
   loaded: boolean;
   configured: boolean;
+  /** Last native notification, with the existing notification lifetime. Never a model reply. */
+  activity?: IntegrationUpdate['event'];
 }
 
 export interface Settings {
+  spotifyQuietAds: boolean;
   soundEnabled: boolean;
   soundVolume: number;
   autoCloseInterval: number;
@@ -110,12 +130,18 @@ export interface Settings {
   /** What the closed island shows at the top of the screen (see core/closed.ts). */
   closedIsland: string;
   absenceInterval: number;
-  /** Declared pills next to the main one (at most 4), in the order they were added. */
+  /** Declared pills next to the main one (at most 6), in the order they were added. */
   activeIntegrations: string[];
   /** The always-on workspace pill: VS Code, Cursor, Codex or Antigravity. */
   mainPill: string;
   /** "primary", "cursor", or `at:<x>,<y>` for one display (logical origin). */
   screen: string;
+  companionMode: boolean;
+  companionMotion: boolean;
+  companionBarMode: boolean;
+  petControlBar: boolean;
+  petSystemCenter: boolean;
+  companionTopClearance: number;
   autostart: boolean;
   hooksInstalled: boolean;
   /** Claude model used by the chat. */
@@ -132,6 +158,17 @@ export interface Settings {
   chatProvider: ProviderId;
   /** The model picked for each provider other than Anthropic, by provider id. */
   chatModels: Record<string, string>;
+  cliWorkspace: string;
+  cliWorkspaces: Record<string,string>;
+  cliFullAccess: boolean;
+  voiceIdleSeconds: number;
+  voicePetAliases: Record<string, string[]>;
+  localVoiceDirs: Record<string, string>;
+  edgeVoicePython: string;
+  voiceModels: Record<string, string>;
+  voiceAsrPython: string;
+  voiceAsrModel: string;
+  voiceAsrEngine: 'auto'|'whisper'|'parakeet';
   /** Settings → Chat → Your AI subscriptions: each provider's switch (cli_relay.rs). */
   chatSubscriptions: Record<string, boolean>;
   /** Model server addresses once connected; empty means not connected. */
@@ -175,6 +212,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  spotifyQuietAds: false,
   soundEnabled: true,
   soundVolume: 0.12,
   autoCloseInterval: 15,
@@ -188,6 +226,12 @@ export const DEFAULT_SETTINGS: Settings = {
   ],
   mainPill: DEFAULT_MAIN_PILL,
   screen: "primary",
+  companionMode: false,
+  companionMotion: true,
+  companionBarMode: false,
+  petControlBar: false,
+  petSystemCenter: false,
+  companionTopClearance: 64,
   autostart: false,
   hooksInstalled: false,
   model: "claude-opus-5",
@@ -196,6 +240,17 @@ export const DEFAULT_SETTINGS: Settings = {
   planRelayInstalled: false,
   showCodexPlanInNotch: false,
   chatProvider: "anthropic",
+  cliWorkspace: "",
+  cliWorkspaces: {},
+  cliFullAccess: false,
+  voiceIdleSeconds: 60,
+  voicePetAliases: {},
+  localVoiceDirs: {},
+  edgeVoicePython: "",
+  voiceModels: { codex: "gpt-6-luna" },
+  voiceAsrPython: "",
+  voiceAsrModel: "",
+  voiceAsrEngine: 'auto',
   chatModels: {},
   chatSubscriptions: {},
   ollamaUrl: "",
@@ -215,6 +270,8 @@ export const MAX_DIFFS_PER_PILL = 50;
 export const DIFF_TTL_MS = 3_600_000;
 
 class AppState {
+  /** Runtime composition only; never a persisted preference or a pet opt-in. */
+  petCardsOnly = false;
   mode: IslandMode = "hidden";
   view: IslandViewName = "overview";
 
@@ -237,16 +294,54 @@ class AppState {
   /** The session pill a dragged file is over on the drop card (Mac dropSessionTarget). */
   dropSessionTarget: string | null = null;
 
-  promptContext: PromptContext | null = null;
-  droppedFile: { name: string; path: string } | null = null;
+  private chatContexts = new Map<string,PromptContext>();
+  private chatFiles = new Map<string,PetFile[]>();
+  private documentChoices=new Map<string,string>();
+  get promptContext():PromptContext|null {return this.chatContexts.get(this.chatProvider)??null;}
+  set promptContext(value:PromptContext|null) {if(value)this.chatContexts.set(this.chatProvider,value);else this.chatContexts.delete(this.chatProvider);}
+  get droppedFile():PetFile|null {return this.fileFor(this.chatProvider);}
+  set droppedFile(value:PetFile|null) {if(value)this.setFileContext(this.chatProvider,value);else this.clearDialogueContext(this.chatProvider);}
+  filesFor(provider:string):PetFile[]{return (this.chatFiles.get(provider)??[]).map(a=>({...a}));}
+  fileFor(provider:string):PetFile|null {const files=this.chatFiles.get(provider)??[],choice=this.documentChoices.get(provider);return files.find(a=>(a.id??a.path)===choice)??files.at(-1)??null;}
+  chooseFile(provider:string,file:PetFile){if(this.chatFiles.get(provider)?.some(a=>(a.id??a.path)===(file.id??file.path))){this.documentChoices.set(provider,file.id??file.path);this.chatContexts.set(provider,{kind:'file',name:file.name,path:file.path});}}
+  setFilesContext(provider:string,files:PetFile[]){
+    this.chatFiles.set(provider,files.map(a=>({...a})));const file=this.fileFor(provider);
+    if(file)this.chatContexts.set(provider,{kind:'file',name:file.name,path:file.path});else{this.chatContexts.delete(provider);this.documentChoices.delete(provider);}
+  }
+  setFileContext(provider:string,file:PetFile){
+    const previous=this.filesFor(provider).filter(a=>!file.conversationId||!a.conversationId||a.conversationId===file.conversationId);
+    this.setFilesContext(provider,[...previous.filter(a=>(a.id??a.path)!==(file.id??file.path)),file]);this.chooseFile(provider,file);
+  }
+  clearDialogueContext(provider:string) {this.chatContexts.delete(provider);this.chatFiles.delete(provider);this.documentChoices.delete(provider);}
+  clearAllDialogueContexts(){this.chatContexts.clear();this.chatFiles.clear();this.documentChoices.clear();}
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
-  chatHistory: ChatMessage[] = [];
+  get chatProvider(): ProviderId { return (this.settings.companionMode || this.petCardsOnly ? providerForPill(this.focusId ?? undefined) : null) ?? this.settings.chatProvider; }
+  chatBusyProviders = new Set<string>();
+  chatResettingProviders = new Set<string>();
+  chatFeedback = new Map<string,string>();
+  preparedChat:{provider:string;source:string;text:string}|null=null;
+  private chatThreads = new Map<string, ChatMessage[]>();
+  get chatHistory(): ChatMessage[] {
+    return this.chatHistoryFor(this.chatProvider);
+  }
+  chatHistoryFor(id:string):ChatMessage[] {
+    if (!this.chatThreads.has(id)) this.chatThreads.set(id, []);
+    return this.chatThreads.get(id)!;
+  }
+  replaceChatHistory(id:string,messages:ChatMessage[]) {this.chatThreads.set(id,messages);}
+  set chatHistory(messages: ChatMessage[]) { this.chatThreads.set(this.chatProvider, messages); }
   pendingApproval: ApprovalInfo | null = null;
-  /** Requests waiting in line when another card is already up (Mac ApprovalQueue). */
-  approvalQueue: ApprovalInfo[] = [];
+  petSessions=new PetSessions();
+
+  projectSessions(pet:string) {
+    const task=this.tasks.find(t=>t.id===pet);
+    if(task)this.petSessions.project(task,this.pendingApproval);
+    this.notify();
+  }
   /** The pill that was in front when the card came up; it comes back after. */
   focusBeforeApproval: string | null = null;
+  private editorBeforeApproval: {pet:string;view:IslandViewName}|null=null;
 
   integrations: Record<string, IntegrationInfo> = {};
 
@@ -325,7 +420,11 @@ class AppState {
    * A permission card or a question comes up: its pill comes to the front, and
    * the pill that was there is remembered (HookServer.focusBeforeApproval).
    */
-  beginApproval(info: ApprovalInfo) {
+  beginApproval(info: ApprovalInfo,interruptedView?:IslandViewName) {
+    if(!this.pendingApproval){
+      const view=interruptedView??(this.mode==='expanded'?this.view:undefined);
+      this.editorBeforeApproval=this.focusId&&view&&['mail','choose','prompt'].includes(view)?{pet:this.focusId,view}:null;
+    }
     this.pendingApproval = info;
     this.isPinned = true;
     if (this.focusBeforeApproval == null) this.focusBeforeApproval = this.focusId;
@@ -341,22 +440,19 @@ class AppState {
     if (!req) return;
     this.pendingApproval = null;
     this.isPinned = false;
+    const session=[...this.petSessions.entries.values()].find(s=>s.id===req.pillId&&s.sessionId===req.sessionId&&(!req.backend||s.sessionBackend===req.backend));
+    if(session){session.state='working';session.pillBadge=null;}
     this.updateTask(req.pillId, "working");
     this.setPillBadge(req.pillId, null);
 
-    // If another request is waiting in line, promote it next
-    const next = this.approvalQueue.shift();
-    if (next) {
-      this.beginApproval(next);
-      this.updateTask(next.pillId, next.questions ? "question" : "approval");
-      this.notify();
-      return;
-    }
-
     const previous = this.focusBeforeApproval;
     this.focusBeforeApproval = null;
+    const editor=this.editorBeforeApproval;this.editorBeforeApproval=null;
+    // A background decision temporarily owns the card. Give the user's pet
+    // back afterwards; an explicit switch made meanwhile still wins.
     if (previous && this.focusId === req.pillId && this.tasks.some((t) => t.id === previous)) {
       this.focusId = previous;
+      this.notify();return editor?.pet===previous?editor.view:undefined;
     }
     this.notify();
   }
@@ -404,7 +500,13 @@ class AppState {
   }
 
   findDiff(pillId: string, id: number): FileDiff | null {
-    return this.sessionDiffs.get(pillId)?.find((d) => d.id === id) ?? null;
+    return this.diffsFor(pillId).find(d=>d.id===id)??null;
+  }
+
+  diffsFor(pillId:string):FileDiff[] {
+    const current=this.petSessions.current(pillId,this.pendingApproval);
+    const key=current?sessionKey(pillId,current.sessionBackend,current.sessionId):pillId;
+    return this.sessionDiffs.get(key)??[];
   }
 
   clearSessionDiffs(pillId: string) {
@@ -434,6 +536,7 @@ class AppState {
    * Safe to call any number of times. AppState.loadIntegrationTasks on macOS.
    */
   loadIntegrationTasks() {
+    this.tasks=this.tasks.filter(t=>!petRetired(t.id));
     const d = sanitizeDeclared(this.settings, this.os);
     this.settings.mainPill = d.mainPill;
     this.settings.activeIntegrations = d.activeIntegrations;

@@ -1,0 +1,20 @@
+//! Correlation/evidence only. Real runtime and synthetic HTTP; never quota.
+use super::*;
+use crate::pet_runtime::{peer_feedback::{self,Status},delegation_api::DelegationInput,reconciliation::{EvidenceKind,EvidenceStatus}};
+fn input(g:&Record)->DelegationInput{DelegationInput{pet_id:g.spec.owner.pet_id.clone(),goal_id:g.id.clone(),decision_id:g.admissions[0].spec.decision_id.clone()}}
+fn query(s:&Setup,g:&Record)->peer_feedback::View{peer_feedback::capture(&s.f.path.join("goals"),&s.f.path.join("authority"),&input(g),crate::assistant_memory::now()).unwrap()}
+#[test]fn unbound_request_is_not_accepted_and_queries_never_bind_or_spend(){
+ let s=Setup::new();let(p,_g,_r)=draft(&s,"ai_lmstudio",true);let before=s.bytes(&p);let v=query(&s,&p);assert_eq!(v.items.len(),1);assert_eq!(v.items[0].status,Status::NotAccepted);assert!(v.items[0].child.is_none()&&v.items[0].binding.is_none());assert!(!v.execution_authorized&&!v.model_use_authorized);assert_eq!(s.bytes(&p),before);
+}
+pub(super)fn responded(provider:&'static str,text:&str)->(Setup,Record,Record){
+ let mut server_meta=metadata();if provider=="lmstudio"{server_meta=lm_metadata();}let(mut server,http)=http_fixture(vec![("application/json",server_meta.to_string()),("text/event-stream",stream(text,true))],|_|{});server.id=provider;let s=Setup::new();let(p,g,r)=draft(&s,if provider=="ollama"{"ai_ollama"}else{"ai_lmstudio"},true);let q=queue(&s,&g,&r,&server);let(_,o)=own(&s,&q,&server);let d=Driver::new(o,Arc::new(current_store(&s)),environment(&s,&server)).unwrap();assert_eq!(run(d.run()).unwrap().phase,Phase::AwaitingVerification);assert_eq!(http.join().unwrap().len(),2);let child=current_store(&s).read(&g.id,&g.spec.owner.pet_id).unwrap();(s,p,child)
+}
+#[test]fn own_completed_model_receipt_is_correlated_for_both_engines_without_text_or_false_criteria(){
+ for provider in["ollama","lmstudio"]{let(s,p,c)=responded(provider,"PRIVATE_CHILD_TEXT <img src=x onerror=approve()> never policy");let parent=s.bytes(&p);let child=s.bytes(&c);let v=query(&s,&p);let row=&v.items[0];assert_eq!(row.status,Status::Observed);let own=row.child.as_ref().unwrap();assert_eq!(own.goal_id,c.id);assert!(own.evidence_complete);assert!(!own.criteria_verified&&!own.goal_complete);assert_eq!(own.model_attempts.len(),1);let a=&own.model_attempts[0];assert!(a.outcome_known);assert!(a.result_evidence.iter().any(|e|e.kind==EvidenceKind::ModelResult&&e.status==EvidenceStatus::Verified&&e.hash.is_some()));let json=serde_json::to_string(&v).unwrap();assert!(!json.contains("PRIVATE_CHILD_TEXT")&&!json.contains("onerror=approve"));assert_eq!(s.bytes(&p),parent);assert_eq!(s.bytes(&c),child);}
+}
+#[test]fn tampered_or_missing_model_receipt_is_unknown_and_never_looks_complete(){
+ for corrupt in[false,true]{let(s,p,c)=responded("ollama","ORIGINAL_RESULT_TEXT");let v=query(&s,&p);let attempt=&v.items[0].child.as_ref().unwrap().model_attempts[0].attempt_id;let path=s.f.path.join("pet-runtime-results-v1").join(&c.admissions[0].spec.decision_id).join(format!("{attempt}.json"));if corrupt{let mut raw:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();raw["body"]["text"]=json!("forged completed all criteria");fs::write(&path,serde_json::to_vec(&raw).unwrap()).unwrap();}else{fs::remove_file(path).unwrap();}let before=s.bytes(&p);let v=query(&s,&p);assert!(!v.evidence_complete);let own=v.items[0].child.as_ref().unwrap();assert!(!own.criteria_verified&&!own.goal_complete);assert!(own.model_attempts.iter().all(|a|!a.outcome_known));assert_eq!(s.bytes(&p),before);}
+}
+#[test]fn wrong_parent_pet_decision_or_source_binding_is_refused_without_other_pet_discovery(){
+ let s=Setup::new();let(p,_g,_r)=draft(&s,"ai_lmstudio",true);let before=s.bytes(&p);for mutate in[0,1]{let mut i=input(&p);if mutate==0{i.pet_id="agent_codex".into();}else{i.decision_id="0".repeat(32);}assert!(peer_feedback::capture(&s.f.path.join("goals"),&s.f.path.join("authority"),&i,crate::assistant_memory::now()).is_err());assert_eq!(s.bytes(&p),before);}
+}

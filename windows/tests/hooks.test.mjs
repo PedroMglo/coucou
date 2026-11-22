@@ -5,29 +5,63 @@
 import { afterEach, beforeEach, mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { calls, emit, sent } from "./tauri.mjs";
-import { registerHookHandlers, restoreAlertFocus } from "../src/island/hooks.ts";
+import { registerHookHandlers } from "../src/island/hooks.ts";
 import { DEFAULT_SETTINGS, State } from "../src/core/state.ts";
-import { Sound } from "../src/core/sound.ts";
-import { setLanguage } from "../src/i18n/i18n.ts";
+import {PetSessions} from '../src/core/pet-sessions.ts';
 
 const CLAUDE = "integration_claude";
 
 /** What the handler asked the island to do, in order. */
 let asked;
 const island = {
+  // Routing tests supply an already-rendered host. The presentation handshake,
+  // delayed native receipts and stale identities have their own real tests.
+  presentApproval: context=>{
+    assert.equal(context.requestId,State.pendingApproval.requestId);
+    assert.equal(context.sessionId,State.pendingApproval.sessionId);
+    assert.equal(context.petId,State.pendingApproval.pillId);
+    asked.push(`alert:${context.view}`);State.pendingApproval.presentationReady=true;
+    calls.push(['approval_presented',{requestId:context.requestId,sessionId:context.sessionId,petId:context.petId}]);
+    return Promise.resolve(true);
+  },
   alert: (view) => asked.push(`alert:${view}`),
   setView: (view) => asked.push(`setView:${view}`),
   reveal: () => asked.push("reveal"),
   dropPin: () => asked.push("dropPin"),
+  collapse: () => asked.push("collapse"),
 };
 registerHookHandlers(island);
 
 const hook = (payload) => emit("hook", payload);
 const task = (id = CLAUDE) => State.tasks.find((t) => t.id === id);
 const seconds = (n) => mock.timers.tick(n * 1000);
+const presented=()=>sent('approval_presented').map(({requestId})=>({requestId}));
+
+test('two Codex terminals keep their own messages, folders and approvals through interleaved events',()=>{
+ State.settings.companionMode=true;
+ const event=(session,name,extra={})=>hook({coucou_agent:'codex',session_id:session,cwd:`/projects/${session}`,hook_event_name:name,...extra});
+ event('a','UserPromptSubmit',{prompt:'Construir a base de dados'});
+ event('b','UserPromptSubmit',{prompt:'Rever a interface'});
+ event('a','PermissionRequest',{request_id:'approval-a',tool_name:'Bash',tool_input:{command:'createdb example'}});
+ const origin={...State.pendingApproval};
+ event('b','Stop',{last_assistant_message:'A interface está revista.'});
+ assert.deepEqual(State.pendingApproval,origin);assert.equal(task('agent_codex').sessionId,'a');assert.equal(task('agent_codex').state,'approval');
+ assert.equal(State.petSessions.list('agent_codex').find(s=>s.sessionId==='b').finalLine,'A interface está revista.');
+ assert.equal(State.pendingApproval.cwd,'/projects/a');assert.equal(State.pendingApproval.sessionTitle,'Construir a base de dados');
+ seconds(6);assert.equal(task('agent_codex').state,'approval');
+ event('b','SessionEnd');assert.equal(State.pendingApproval.requestId,'approval-a');
+ event('a','Stop');assert.equal(State.pendingApproval,null);
+});
+
+test('a second terminal decision returns to that terminal without replacing the first card',()=>{
+ for(const id of ['first','second'])hook({coucou_agent:'copilot',session_id:id,cwd:`/tmp/${id}`,hook_event_name:'PermissionRequest',request_id:`r-${id}`,tool_name:'Write'});
+ assert.equal(State.pendingApproval.sessionId,'first');
+ assert.deepEqual(sent('approval_decline'),[{requestId:'r-second'}]);
+ const second=State.petSessions.list('agent_copilot').find(s=>s.sessionId==='second');
+ assert.equal(second.state,'approval');assert.equal(second.decisionInTerminal,true);
+});
 
 beforeEach(() => {
-  setLanguage("en");
   mock.timers.enable({ apis: ["setTimeout"] });
   asked = [];
   calls.length = 0;
@@ -38,8 +72,7 @@ beforeEach(() => {
   State.paused = false;
   State.isPinned = false;
   State.pendingApproval = null;
-  State.approvalQueue = [];
-  State.focusBeforeApproval = null;
+  State.petSessions=new PetSessions();
   State.settings = { ...DEFAULT_SETTINGS };
   State.loadIntegrationTasks();
 });
@@ -59,7 +92,7 @@ test("a paused island hands a permission request straight back to the terminal",
   State.paused = true;
   hook({ hook_event_name: "PermissionRequest", request_id: "r1", tool_name: "Bash" });
   assert.deepEqual(sent("approval_decline"), [{ requestId: "r1" }]);
-  assert.deepEqual(sent("approval_ack"), []);
+  assert.deepEqual(presented(), []);
   assert.equal(State.pendingApproval, null);
   assert.equal(task().state, "idle");
 });
@@ -79,16 +112,6 @@ test("a session names the pill after its folder and reveals the island", () => {
   assert.equal(task().name, "proj");
   assert.equal(task().sessionCwd, "C:\\Users\\me\\proj\\");
   assert.deepEqual(asked, ["reveal"]);
-});
-
-test("a prompt sent while the finished card shows takes the card back to the overview", () => {
-  hook({ hook_event_name: "SessionStart", cwd: "/p/proj" });
-  State.setFocus(CLAUDE);
-  State.mode = "expanded";
-  State.view = "finished";
-  asked = [];
-  hook({ hook_event_name: "UserPromptSubmit", cwd: "/p/proj", prompt: "one more thing" });
-  assert.ok(asked.includes("setView:overview"));
 });
 
 test("known project folders get their display name, and no folder is a Session", () => {
@@ -191,29 +214,6 @@ test("a session finishing behind another pill only badges its own, for 5.2 s", (
   assert.equal(task().pillBadge, null);
 });
 
-test("alertsFromAllPills: unfocused pill alert opens the island and restores focus after 5.2 s", () => {
-  State.settings.alertsFromAllPills = true;
-  State.setFocus("integration_n8n");
-  hook({ hook_event_name: "Stop" });
-  assert.equal(State.focusId, "integration_claude");
-  assert.deepEqual(asked, ["alert:finished"]);
-  seconds(5.2);
-  assert.equal(State.focusId, "integration_n8n");
-  State.settings.alertsFromAllPills = false;
-});
-
-test("alertsFromAllPills: while the island is open the alert's pill keeps the front", () => {
-  State.settings.alertsFromAllPills = true;
-  State.setFocus("integration_n8n");
-  hook({ hook_event_name: "Stop" });
-  State.mode = "expanded";
-  seconds(5.2);
-  // The finished card still names the pill that finished; closing gives n8n back.
-  assert.equal(State.focusId, "integration_claude");
-  restoreAlertFocus();
-  assert.equal(State.focusId, "integration_n8n");
-});
-
 test("a failed stop shows the error view, or the error badge behind another pill", () => {
   hook({ hook_event_name: "StopFailure" });
   assert.equal(task().state, "error");
@@ -279,40 +279,39 @@ test("an agent's pill goes away when its session ends, or 5.2 s after it stops",
   assert.equal(task("agent_codex"), undefined);
 });
 
+test("companions retain an open quiet CLI session until SessionEnd, then clear its presence",()=>{
+  State.settings={...DEFAULT_SETTINGS,companionMode:true,activeIntegrations:["agent_codex"]};
+  State.loadIntegrationTasks();
+  hook({hook_event_name:"SessionStart",coucou_agent:"codex",session_id:"open-cli"});
+  hook({hook_event_name:"Stop",coucou_agent:"codex",session_id:"open-cli"});
+  seconds(5.2);
+  assert.equal(task("agent_codex").state,"idle");
+  assert.equal(task("agent_codex").sessionId,"open-cli");
+  hook({hook_event_name:"SessionEnd",coucou_agent:"codex",session_id:"open-cli"});
+  assert.equal(task("agent_codex").sessionId,null);
+  assert.equal(task("agent_codex").state,"idle");
+});
+
+test("an undeclared companion also retains a known open session without making the pill permanent",()=>{
+  State.settings={...DEFAULT_SETTINGS,companionMode:true};
+  hook({hook_event_name:"SessionStart",coucou_agent:"gemini",session_id:"temporary-cli"});
+  hook({hook_event_name:"Stop",coucou_agent:"gemini",session_id:"temporary-cli"});
+  seconds(5.2);assert.equal(task("agent_gemini").state,"idle");
+  hook({hook_event_name:"SessionEnd",coucou_agent:"gemini",session_id:"temporary-cli"});
+  assert.equal(task("agent_gemini"),undefined);
+});
+
 test("an agent's permission request is declined, never shown as Claude Code's", () => {
   for (const agent of ["gemini", "antigravity", "cursor", "amp", "hermes", "my-tool"]) {
     calls.length = 0;
     hook({ hook_event_name: "PermissionRequest", request_id: "r1", coucou_agent: agent, tool_name: "Bash" });
     assert.deepEqual(sent("approval_decline"), [{ requestId: "r1" }], agent);
-    assert.deepEqual(sent("approval_ack"), [], agent);
+    assert.deepEqual(presented(), [], agent);
     assert.equal(State.pendingApproval, null, agent);
   }
 });
 
-test("an Antigravity command Coucou puts on the card waits there on its own pill", () => {
-  State.focusId = CLAUDE;
-  // The event itself comes first, as for any agent; then the card (pipe.rs).
-  const payload = {
-    session_id: "s1", coucou_agent: "antigravity", coucou_kind: "agy_pre_tool",
-    tool_name: "run_command", tool_input: { command: "npm install" },
-  };
-  hook({ ...payload, hook_event_name: "PreToolUse" });
-  assert.equal(State.pendingApproval, null);
-  hook({ ...payload, hook_event_name: "PermissionRequest", request_id: "a1" });
-  assert.deepEqual(State.pendingApproval, {
-    requestId: "a1", sessionId: "s1", pillId: "agent_antigravity", tool: "run_command",
-    command: "run_command · npm install",
-  });
-  assert.deepEqual(sent("approval_ack"), [{ requestId: "a1" }]);
-  assert.deepEqual(sent("approval_decline"), []);
-  assert.equal(task("agent_antigravity").state, "approval");
-  assert.equal(State.focusId, "agent_antigravity");
-  // Antigravity gave up, or Coucou's wait ran out: the card goes.
-  emit("approval-expired", "a1");
-  assert.equal(State.pendingApproval, null);
-});
-
-test("Codex, Copilot CLI, Muse Code and OpenCode get the card on their own pill", () => {
+test("the agents supported by the relay get a card on their own pill", () => {
   for (const agent of ["codex", "copilot", "muse", "opencode"]) {
     State.pendingApproval = null;
     State.focusId = CLAUDE;
@@ -325,8 +324,10 @@ test("Codex, Copilot CLI, Muse Code and OpenCode get the card on their own pill"
     const id = `agent_${agent}`;
     assert.deepEqual(State.pendingApproval, {
       requestId: `r-${agent}`, sessionId: "s1", pillId: id, tool: "Bash", command: "Bash · npm publish",
+      backend:agent,cwd:'',owned:false,sessionTitle:'',
+      presentationReady:true,
     });
-    assert.deepEqual(sent("approval_ack"), [{ requestId: `r-${agent}` }]);
+    assert.deepEqual(presented(), [{ requestId: `r-${agent}` }]);
     assert.deepEqual(sent("approval_decline"), []);
     // The same card as Claude Code's: it comes up and its pill comes to the
     // front, even from behind Claude Code's pill (unified with Mac #120).
@@ -387,21 +388,6 @@ test("the end of the turn takes a waiting card down and releases the relay", () 
   }
 });
 
-test("a card the relay stopped waiting for goes, and the next request gets its card (#857)", () => {
-  hook({ hook_event_name: "PermissionRequest", request_id: "r1", session_id: "s1", tool_name: "Bash" });
-  // Another request's expiry leaves this card alone.
-  emit("approval-expired", "r0");
-  assert.equal(State.pendingApproval?.requestId, "r1");
-  emit("approval-expired", "r1");
-  assert.equal(State.pendingApproval, null);
-  hook({ hook_event_name: "PermissionRequest", request_id: "r2", session_id: "s1", tool_name: "Bash" });
-  assert.equal(State.pendingApproval?.requestId, "r2");
-  assert.deepEqual(sent("approval_decline"), []);
-  // r1's 110 s timer was cancelled: it doesn't take r2's card down.
-  seconds(100);
-  assert.equal(State.pendingApproval?.requestId, "r2");
-});
-
 test("Codex's Interrupt puts its pill back to idle", () => {
   hook({ hook_event_name: "UserPromptSubmit", session_id: "s1", coucou_agent: "codex", prompt: "go" });
   assert.equal(task("agent_codex").state, "thinking");
@@ -429,33 +415,11 @@ test("a Claude Desktop session gets the Claude Desktop pill, in its colour (Mac 
   assert.equal(desktop.color, "#D97757");
   assert.equal(desktop.sessionId, "d1");
   assert.equal(task().state, "idle");
-  // Its permission requests get an approval card on the island (#328).
-  hook({ hook_event_name: "PermissionRequest", request_id: "r1", coucou_agent: "claude-desktop", tool_name: "Bash", tool_input: { command: "npm test" } });
-  assert.equal(State.pendingApproval?.requestId, "r1");
+  // The reconciled relay supports a human decision for this exact session.
+  hook({ hook_event_name: "PermissionRequest", request_id: "r1", session_id: "d1", coucou_agent: "claude-desktop", tool_name: "Bash" });
+  assert.deepEqual(sent("approval_decline"), []);
+  assert.deepEqual(presented(), [{ requestId: "r1" }]);
   assert.equal(State.pendingApproval?.pillId, "agent_claude-desktop");
-  assert.equal(sent("approval_ack").length, 1);
-});
-
-test("Claude Desktop AskUserQuestion gets a question card on the island (#328)", () => {
-  hook({ hook_event_name: "SessionStart", cwd: "C:\\p\\proj", session_id: "d2", coucou_agent: "claude-desktop" });
-  hook({
-    hook_event_name: "PermissionRequest",
-    request_id: "q1",
-    coucou_agent: "claude-desktop",
-    tool_name: "AskUserQuestion",
-    tool_input: {
-      questions: [
-        {
-          question: "Proceed?",
-          options: [{ label: "Yes" }, { label: "No" }],
-        },
-      ],
-    },
-  });
-  assert.equal(State.pendingApproval?.requestId, "q1");
-  assert.equal(State.pendingApproval?.pillId, "agent_claude-desktop");
-  assert.ok(State.pendingApproval?.questions);
-  assert.equal(sent("approval_ack").length, 1);
 });
 
 // ── Main tool and Cursor ──────────────────────────────────────────────────────
@@ -509,11 +473,13 @@ test("a permission request puts the card up, says exactly what it authorises, an
   assert.deepEqual(State.pendingApproval, {
     requestId: "r1",
     sessionId: "s1",
+    backend:'claude',cwd:'C:\\Users\\me\\proj',owned:false,sessionTitle:'',
     pillId: CLAUDE,
     tool: "Write",
     command: "Write · C:\\Users\\me\\proj\\.env",
+    presentationReady:true,
   });
-  assert.deepEqual(sent("approval_ack"), [{ requestId: "r1" }]);
+  assert.deepEqual(presented(), [{ requestId: "r1" }]);
   assert.deepEqual(sent("approval_decline"), []);
   assert.equal(task().state, "approval");
   assert.equal(task().name, "proj");
@@ -539,7 +505,7 @@ test("a request behind another pill comes to the front, and that pill comes back
   ask("r1");
   assert.deepEqual(asked, ["alert:approval"]);
   assert.equal(State.focusId, CLAUDE);
-  assert.deepEqual(sent("approval_ack"), [{ requestId: "r1" }]);
+  assert.deepEqual(presented(), [{ requestId: "r1" }]);
   State.endApproval();
   assert.equal(State.focusId, "integration_n8n");
   assert.equal(State.isPinned, false);
@@ -557,9 +523,9 @@ test("the pill you were on comes back after a withdrawn card too", () => {
 test("a pill picked while the card was up keeps the front after the answer", () => {
   State.setFocus("integration_n8n");
   ask("r1");
-  State.setFocus("integration_github");
+  State.setFocus("integration_vercel");
   State.endApproval();
-  assert.equal(State.focusId, "integration_github");
+  assert.equal(State.focusId, "integration_vercel");
 });
 
 test("the card shows when the island is already open, and is what it reopens on", () => {
@@ -601,81 +567,20 @@ test("a request from Claude Code in Cursor's terminal goes on the Cursor pill", 
   assert.equal(task().state, "idle");
 });
 
-test("a second request is queued in line: it waits for the first card to finish (#870)", () => {
+test("a second request never replaces the card: it goes back to the terminal", () => {
   ask("r1");
   ask("r2", { tool_name: "Bash", tool_input: { command: "ls" } });
   assert.equal(State.pendingApproval.requestId, "r1");
   assert.equal(State.pendingApproval.tool, "Write");
-  assert.equal(State.approvalQueue.length, 1);
-  assert.equal(State.approvalQueue[0].requestId, "r2");
-  assert.deepEqual(sent("approval_decline"), []);
-  assert.deepEqual(sent("approval_ack"), [{ requestId: "r1" }, { requestId: "r2" }]);
-
-  // When r1 finishes, r2 takes the card
-  State.endApproval();
-  assert.equal(State.pendingApproval.requestId, "r2");
-  assert.equal(State.pendingApproval.tool, "Bash");
-  assert.equal(State.approvalQueue.length, 0);
-
-  // Beyond maxPending (5 total), new requests are declined
-  ask("r3"); ask("r4"); ask("r5"); ask("r6");
-  assert.equal(State.approvalQueue.length, 4); // r2 active + r3..r6 queued = 5 total
-  ask("r7");
-  assert.deepEqual(sent("approval_decline"), [{ requestId: "r7" }]);
-});
-
-test("a request waiting in line leaves the card on screen as it is, and sounds once", (context) => {
-  const sound = context.mock.method(Sound, "play", () => {});
-  ask("r1");
-  assert.deepEqual(sound.mock.calls.map((call) => call.arguments), [["approval"]]);
-  hook({ hook_event_name: "SessionStart", session_id: "d2", coucou_agent: "codex" });
-  asked = [];
-  hook({
-    hook_event_name: "PermissionRequest", request_id: "q1", session_id: "s2", tool_name: "AskUserQuestion",
-    tool_input: { questions: [{ question: "Which?", options: [{ label: "A" }, { label: "B" }] }] },
-  });
-  hook({ hook_event_name: "PermissionRequest", request_id: "c1", session_id: "d2", coucou_agent: "codex", tool_name: "Bash" });
-  // No alert: the island stays on r1's approval card, not on the question's view.
-  assert.deepEqual(asked, []);
-  assert.equal(State.pendingApproval.requestId, "r1");
-  assert.equal(task("agent_codex").pillBadge, "approval");
-  assert.deepEqual(sound.mock.calls.map((call) => call.arguments), [["approval"], ["work"], ["question"], ["approval"]]);
-});
-
-test("the next request in line comes up when the card is dropped, and keeps its own clock", () => {
-  ask("r1");
-  seconds(60);
-  ask("r2", { session_id: "s2", tool_name: "Bash", tool_input: { command: "ls" } });
-  emit("approval-expired", "r1");
-  assert.equal(State.pendingApproval.requestId, "r2");
-  assert.deepEqual(asked.at(-1), "alert:approval");
-  // r1's 110 s run out: r2, which arrived 60 s later, is still on the card.
-  seconds(50);
-  assert.equal(State.pendingApproval?.requestId, "r2");
-  seconds(60);
-  assert.equal(State.pendingApproval, null);
-});
-
-test("a turn that ends takes its requests out of the line and releases them", () => {
-  ask("r1");
-  ask("r2", { session_id: "s2", tool_name: "Bash", tool_input: { command: "ls" } });
-  ask("r3", { session_id: "s2", tool_name: "Bash", tool_input: { command: "pwd" } });
-  hook({ hook_event_name: "Stop", session_id: "s2" });
-  assert.deepEqual(State.approvalQueue, []);
-  assert.deepEqual(sent("approval_decline"), [{ requestId: "r2" }, { requestId: "r3" }]);
-  assert.equal(State.pendingApproval.requestId, "r1");
-  // And when the card's own turn ends, nothing of it is left to come up.
-  ask("r4", { tool_name: "Bash", tool_input: { command: "ls" } });
-  hook({ hook_event_name: "Stop", session_id: "s1" });
-  assert.equal(State.pendingApproval, null);
-  assert.deepEqual(State.approvalQueue, []);
+  assert.deepEqual(sent("approval_decline"), [{ requestId: "r2" }]);
+  assert.deepEqual(presented(), [{ requestId: "r1" }]);
 });
 
 test("the same request arriving twice is acknowledged again, not declined", () => {
   ask("r1");
   ask("r1");
   assert.deepEqual(sent("approval_decline"), []);
-  assert.deepEqual(sent("approval_ack"), [{ requestId: "r1" }, { requestId: "r1" }]);
+  assert.deepEqual(presented(), [{ requestId: "r1" }, { requestId: "r1" }]);
 });
 
 test("an unanswered card is withdrawn after 110 s", () => {
@@ -687,7 +592,8 @@ test("an unanswered card is withdrawn after 110 s", () => {
   seconds(1);
   assert.equal(State.pendingApproval, null);
   assert.equal(State.isPinned, false);
-  assert.equal(task().state, "working");
+  assert.equal(task().state, "approval");
+  assert.equal(task().decisionInTerminal,true);
   assert.equal(task().pillBadge, null);
   assert.deepEqual(asked, ["dropPin", "setView:overview"]);
 });
@@ -850,62 +756,88 @@ test("a declined permission request leaves the stop timer running", () => {
     { coucou_agent: "gemini" },
   );
   assert.equal(task("agent_gemini"), undefined);
-  // So is a request from an agent that doesn't take approvals.
+  // So is a second request while a card is already up.
   ask("r1");
-  afterStop(() => hook({ hook_event_name: "PermissionRequest", request_id: "r2", coucou_agent: "gemini", tool_name: "Bash" }));
+  afterStop(() => ask("r2"));
   assert.deepEqual(sent("approval_decline"), [{ requestId: "r1" }, { requestId: "r2" }]);
   assert.equal(task().state, "idle");
 });
 
-for (const tool_name of ["ask_question", "default_api:ask_question"]) {
-  test(`Antigravity ${tool_name} alerts and plays a sound until the question is answered`, (context) => {
-    const sound = context.mock.method(Sound, "play", () => {});
-    hook({
-      hook_event_name: "PreToolUse",
-      coucou_agent: "antigravity",
-      tool_name,
-      tool_input: { questions: [{ question: "Which deployment strategy should we use?" }] },
-    });
-    const active = task("agent_antigravity");
-    assert.equal(active.state, "question");
-    assert.equal(active.steps.at(-1), "Needs input · Which deployment strategy should we use?");
-    assert.deepEqual(asked, ["alert:overview"]);
-    assert.deepEqual(sound.mock.calls.map((call) => call.arguments), [["question"]]);
-    assert.equal(State.pendingApproval, null, "the answer stays in Antigravity");
-    assert.deepEqual(sent("approval_ack"), []);
 
-    hook({ hook_event_name: "PostToolUse", coucou_agent: "antigravity", tool_name });
-    assert.equal(active.state, "working");
-    assert.equal(sound.mock.callCount(), 1);
-  });
-}
-
-test("Antigravity namespaced questions use the selected interface language", () => {
-  setLanguage("fr");
-  try {
-    hook({
-      hook_event_name: "PreToolUse",
-      coucou_agent: "antigravity",
-      tool_name: "default_api:ask_question",
-      tool_input: { questions: [{ question: "Quelle stratégie ?" }] },
-    });
-    assert.equal(task("agent_antigravity").steps.at(-1), "Réponse attendue · Quelle stratégie ?");
-  } finally {
-    setLanguage("en");
-  }
+test("companion permission requests open the original decision card owned by that pet", () => {
+ State.settings={...DEFAULT_SETTINGS,companionMode:true,mainPill:"agent_codex",activeIntegrations:["ai_ollama"]};
+ State.loadIntegrationTasks();State.focusId="ai_ollama";State.mode="expanded";
+ hook({hook_event_name:"PermissionRequest",coucou_agent:"codex",request_id:"pet-permission",session_id:"own-session",tool_name:"Bash",tool_input:{command:"git status"}});
+ assert.equal(State.focusId,"agent_codex");
+ assert.equal(State.pendingApproval.command,"Bash · git status");
+ assert.equal(State.pendingApproval.pillId,"agent_codex");
+ assert.ok(asked.includes("alert:approval"));
+ assert.deepEqual(sent("approval_decision"),[]);
+ assert.deepEqual(presented(),[{requestId:"pet-permission"}]);
+});
+test("a completed companion speaks its result without stealing focus or opening a status card", () => {
+ State.settings={...DEFAULT_SETTINGS,companionMode:true,mainPill:"agent_codex",activeIntegrations:["ai_ollama"]};
+ State.loadIntegrationTasks();State.focusId="ai_ollama";
+ hook({hook_event_name:"Stop",coucou_agent:"codex",session_id:"own-session",last_assistant_message:"The requested change is ready."});
+ assert.equal(State.focusId,"ai_ollama");
+ assert.equal(task("agent_codex").finalLine,"The requested change is ready.");
+ assert.ok(!asked.includes("alert:finished"));
 });
 
-test("Antigravity questions without usable text still alert with a translated label", () => {
-  for (const questions of [undefined, [], [null], [{ question: 3 }], [{ question: "  " }]]) {
-    hook({
-      hook_event_name: "PreToolUse",
-      coucou_agent: "antigravity",
-      tool_name: "default_api:ask_question",
-      tool_input: { questions },
-    });
-    assert.equal(task("agent_antigravity").state, "question");
-    assert.equal(task("agent_antigravity").steps.at(-1), "Needs input");
-  }
-  assert.equal(asked.length, 5);
-  assert.ok(asked.every((request) => request === "alert:overview"));
+test("app-owned Gravity session hooks follow the logical pet while unrelated sessions keep Gravity identity",()=>{
+ hook({hook_event_name:"UserPromptSubmit",coucou_agent:"antigravity",coucou_pet_provider:"gemini-cli",session_id:"owned-gemini",cwd:"/tmp/project",prompt:"build"});
+ assert.equal(State.tasks.find(t=>t.id==="agent_gemini").sessionId,"owned-gemini");
+ assert.equal(State.tasks.find(t=>t.id==="agent_gemini").sessionOwned,true);
+ assert.equal(State.tasks.find(t=>t.id==="agent_gemini").sessionBackend,"antigravity");
+ hook({hook_event_name:"UserPromptSubmit",coucou_agent:"antigravity",session_id:"external-gravity",cwd:"/tmp/other",prompt:"other"});
+ assert.equal(State.tasks.find(t=>t.id==="agent_antigravity").sessionId,"external-gravity");
+ assert.equal(State.tasks.find(t=>t.id==="agent_gemini").sessionId,"owned-gemini");
+});
+
+test("only a trusted owned Gravity gate opens the existing decision card for the logical pet",()=>{
+ const request={hook_event_name:"PermissionRequest",request_id:"owned-gravity-gate",session_id:"owned-gemini",coucou_agent:"antigravity",coucou_pet_provider:"gemini-cli",coucou_assistant_gate:true,tool_name:"Bash",tool_input:{command:"pwd"}};
+ hook(request);assert.equal(State.pendingApproval.pillId,"agent_gemini");assert.equal(State.pendingApproval.command,"Bash · pwd");assert.equal(State.focusId,"agent_gemini");
+ assert.deepEqual(presented(),[{requestId:"owned-gravity-gate"}]);assert.deepEqual(sent("approval_decide"),[]);
+ State.endApproval();calls.length=0;hook({...request,coucou_assistant_gate:false,request_id:"not-a-gate"});
+ assert.deepEqual(sent("approval_decline"),[{requestId:"not-a-gate"}]);assert.equal(State.pendingApproval,null);
+});
+
+test('terminal handoff removes only the exact answerable hook card and preserves its waiting session',()=>{
+ State.settings.companionMode=true;
+ hook({coucou_agent:'codex',session_id:'handoff-session',cwd:'/fixture',hook_event_name:'PermissionRequest',request_id:'handoff-request',tool_name:'Write'});
+ const before=sent('approval_decline').length;
+ emit('approval-handoff',{requestId:'handoff-request',sessionId:'wrong-session',agent:'codex',provider:null,reason:'timeout'});
+ assert.equal(State.pendingApproval.requestId,'handoff-request');
+ emit('approval-handoff',{requestId:'handoff-request',sessionId:'handoff-session',agent:'codex',provider:null,reason:'timeout'});
+ assert.equal(State.pendingApproval,null);const session=State.petSessions.list('agent_codex').find(s=>s.sessionId==='handoff-session');
+ assert.equal(session.state,'approval');assert.equal(session.decisionInTerminal,true);
+ assert.equal(sent('approval_decline').length,before);assert.deepEqual(sent('approval_decision'),[]);
+});
+test('a late terminal handoff cannot close a newer request from the same session',()=>{
+ const payload={coucou_agent:'codex',session_id:'same-session',cwd:'/fixture',hook_event_name:'PermissionRequest',tool_name:'Write'};
+ hook({...payload,request_id:'new-request'});
+ emit('approval-handoff',{requestId:'old-request',sessionId:'same-session',agent:'codex',provider:null,reason:'timeout'});
+ assert.equal(State.pendingApproval.requestId,'new-request');assert.notEqual(State.petSessions.list('agent_codex')[0].decisionInTerminal,true);
+});
+
+
+test('withdrawn native hook removes only its card without changing the current session activity',()=>{
+ const payload={hook_event_name:'PermissionRequest',coucou_agent:'antigravity',coucou_pet_provider:'gemini-cli',coucou_assistant_gate:true,request_id:'native-hook',session_id:'native-session',tool_name:'Bash',tool_input:{command:'synthetic'}};
+ hook(payload);assert.equal(State.pendingApproval.requestId,'native-hook');
+ const session=State.petSessions.list('agent_gemini').find(s=>s.sessionId==='native-session');session.state='working';delete session.decisionInTerminal;
+ emit('approval-handoff',{requestId:'native-hook',sessionId:'native-session',reason:'native-source-ended'});
+ assert.equal(State.pendingApproval,null);assert.equal(session.state,'working');assert.notEqual(session.decisionInTerminal,true);assert.deepEqual(sent('approval_decision'),[]);
+});
+test('late withdrawn Gravity hook cannot close a later review from the same native session',()=>{
+ const payload={hook_event_name:'PermissionRequest',coucou_agent:'antigravity',coucou_pet_provider:'gemini-cli',coucou_assistant_gate:true,session_id:'native-session',tool_name:'Bash',tool_input:{command:'synthetic'}};
+ hook({...payload,request_id:'new-native-hook'});
+ emit('approval-handoff',{requestId:'old-native-hook',sessionId:'native-session',reason:'native-source-ended'});
+ assert.equal(State.pendingApproval.requestId,'new-native-hook');assert.notEqual(State.petSessions.list('agent_gemini')[0].decisionInTerminal,true);
+});
+
+for(const backend of ['codex','copilot','antigravity',''])test(`terminal-only ${backend||'claude'} observation cannot interrupt the open editor or reserve a card`,()=>{
+ State.mode='expanded';State.view='prompt';State.focusId='ai_ollama';
+ hook({coucou_agent:backend,session_id:'independent',hook_event_name:'PermissionRequest',coucou_decision_in_terminal:true,tool_name:'Bash',tool_input:{command:'synthetic-only'}});
+ assert.equal(State.pendingApproval,null);assert.equal(State.focusId,'ai_ollama');assert.equal(State.view,'prompt');assert.deepEqual(asked,[]);assert.deepEqual(presented(),[]);assert.deepEqual(sent('approval_decision'),[]);
+ const pet=backend?'agent_'+backend:CLAUDE;const session=State.petSessions.list(pet).find(s=>s.sessionId==='independent');assert.equal(session.state,'approval');assert.equal(session.decisionInTerminal,true);
 });

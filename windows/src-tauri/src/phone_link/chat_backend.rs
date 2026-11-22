@@ -28,7 +28,8 @@ pub struct AppChat {
 
 impl AppChat {
     pub fn new(app: AppHandle) -> Self {
-        Self { app, chat: Arc::new(Chat::default()) }
+        let resources=app.state::<Chat>().runtime_resources();
+        Self { app, chat: Arc::new(Chat::default().with_runtime_resources(resources)) }
     }
 
     fn settings(&self) -> Settings {
@@ -39,7 +40,8 @@ impl AppChat {
 impl ChatBackend for AppChat {
     fn config(&self) -> ChatConfig {
         let s = self.settings();
-        ChatConfig { enabled: s.phone_chat, allowed: options(&s.phone_chat_models) }
+        let available=crate::settings::effect_allowed().is_ok();
+        ChatConfig { enabled: s.phone_chat&&available, allowed: if available {options(&s.phone_chat_models)}else{vec![]} }
     }
 
     fn send(&self, model_id: &str, text: String, deltas: UnboundedSender<String>) -> BoxFuture<Result<String, ChatFail>> {
@@ -47,6 +49,7 @@ impl ChatBackend for AppChat {
         let chat = self.chat.clone();
         let id = model_id.to_string();
         Box::pin(async move {
+            crate::settings::effect_allowed().map_err(|_|ChatFail::Internal)?;
             let Some((provider, model)) = parse_model_id(&id) else { return Err(ChatFail::Internal) };
             let ready = match key_name(provider) {
                 Some(claude::KEY) => claude::ready(),
@@ -65,7 +68,20 @@ impl ChatBackend for AppChat {
                 Err(err) => {
                     let kind = classify(is_local(provider), &err);
                     // The kind only: the text may echo a key.
-                    log::line(format!("phone link: chat via {provider} failed ({kind:?})"));
+                    // Only fixed native categories: provider-authored error text
+                    // can contain credentials and must never reach the log.
+                    let native = match err.as_str() {
+                        crate::chat::BUSY_ERROR => "turnBusy",
+                        "A configuração de inferência está ocupada."
+                        | "O perfil de inferência está ocupado." => "configurationBusy",
+                        "O perfil de inferência ainda não foi confirmado." => "configurationUnconfirmed",
+                        crate::pet_inference::CAPTURE_BUSY => "inferenceValidationBusy",
+                        "O destino ou a política de inferência mudou. O pedido original não foi redirecionado." => "inferenceOriginChanged",
+                        "A gravação das preferências está em curso. Não foi iniciado outro efeito." => "settingsWriting",
+                        "O estado das preferências está indisponível. Novos efeitos não foram autorizados." => "settingsUnavailable",
+                        _ => "other",
+                    };
+                    log::line(format!("phone link: chat via {provider} failed ({kind:?}, native={native})"));
                     Err(kind)
                 }
             }
@@ -140,6 +156,18 @@ pub fn options(ids: &[String]) -> Vec<ModelOption> {
 /// written for people (and translated), so this looks only at what does not change with the language:
 /// an HTTP status in the text. A model server that answers with no status at all is one that did not answer.
 pub fn classify(local: bool, err: &str) -> ChatFail {
+    // These are fixed native refusals before dispatch, not network failures.
+    if matches!(err, crate::pet_inference::CAPTURE_BUSY | crate::chat::BUSY_ERROR
+        | "A configuração de inferência está ocupada." | "O perfil de inferência está ocupado."
+        | "A gravação das preferências está em curso. Não foi iniciado outro efeito.") {
+        return ChatFail::Busy;
+    }
+    if err == crate::pet_inference::CAPTURE_CHANGED { return ChatFail::Internal; }
+    // Local chat preserves the status at the start of its error. Digits inside
+    // the provider's body must not override that observed HTTP response.
+    if let Some(code) = err.strip_prefix("HTTP ").and_then(|rest| rest.split([':', ' ']).next()).and_then(|code| code.parse::<u16>().ok()).filter(|code| (400..600).contains(code)) {
+        return if matches!(code, 401 | 403) { ChatFail::Auth } else { ChatFail::Provider };
+    }
     let has = |code: &str| err.split(|c: char| !c.is_ascii_digit()).any(|w| w == code);
     if has("401") || has("403") {
         return ChatFail::Auth;
@@ -188,7 +216,25 @@ mod tests {
     }
 
     #[test]
+    fn inference_admission_read_contention_is_not_a_network_failure() {
+        let source = std::sync::Arc::new(std::sync::Mutex::new(Settings::default()));
+        let reader = source.lock().unwrap();
+        let error = match crate::pet_inference::Captured::capture(&source, "ollama") {
+            Err(error) => error,
+            Ok(_) => panic!("a busy source must not admit an inference target"),
+        };
+        drop(reader);
+
+        assert_eq!(classify(true, &error), ChatFail::Busy);
+    }
+
+    #[test]
     fn failures_are_sorted_by_status_and_never_by_wording() {
+        assert_eq!(classify(true, crate::pet_inference::CAPTURE_BUSY), ChatFail::Busy);
+        assert_eq!(classify(true, "A configuração de inferência está ocupada."), ChatFail::Busy);
+        assert_eq!(classify(true, "O perfil de inferência está ocupado."), ChatFail::Busy);
+        assert_eq!(classify(true, crate::chat::BUSY_ERROR), ChatFail::Busy);
+        assert_eq!(classify(true, crate::pet_inference::CAPTURE_CHANGED), ChatFail::Internal);
         assert_eq!(classify(false, "Claude API 401 Unauthorized: invalid x-api-key"), ChatFail::Auth);
         assert_eq!(classify(false, "OpenAI rejected the API key (403). Check it in Settings."), ChatFail::Auth);
         assert_eq!(classify(false, "OpenAI rate limit reached (429): slow down"), ChatFail::Provider);
@@ -196,6 +242,10 @@ mod tests {
         assert_eq!(classify(false, "Network error: connection refused"), ChatFail::Unreachable);
         assert_eq!(classify(true, "Cannot reach http://127.0.0.1:11434. Is the server running?"), ChatFail::Unreachable);
         assert_eq!(classify(true, "Ollama 500: model crashed"), ChatFail::Provider);
+        assert_eq!(classify(true, "HTTP 503: provider body contains 401"), ChatFail::Provider);
+        assert_eq!(classify(true, "HTTP 401: provider body contains 503"), ChatFail::Auth);
+        assert_eq!(classify(true, "HTTP 404: model is not installed"), ChatFail::Provider);
+        assert_eq!(classify(true, "HTTP 429"), ChatFail::Provider);
         // 4010 or 14012 are not 401
         assert_eq!(classify(false, "something 14012 happened"), ChatFail::Provider);
     }

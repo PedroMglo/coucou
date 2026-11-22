@@ -1,0 +1,604 @@
+{
+  "version": 1,
+  "reasoningTerms": [
+    "pensa a fundo",
+    "raciocínio elevado",
+    "raciocínio profundo",
+    "análise profunda",
+    "arquitetura",
+    "arquitectura",
+    "migração complexa",
+    "investiga a causa",
+    "analisa as causas",
+    "plano detalhado",
+    "refatoração",
+    "refactor",
+    "auditoria de segurança",
+    "root cause",
+    "think deeply",
+    "reason carefully",
+    "high reasoning"
+  ],
+  "reasoningLength": 1600,
+  "catalogRevision": 1,
+  "pets": {
+    "integration_claude": {
+      "mode": "auto",
+      "fast": {
+        "model": "claude-sonnet-4-6",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "claude-opus-4-6-thinking",
+        "effort": ""
+      },
+      "name": "Claude Code",
+      "aliases": [
+        "claude"
+      ],
+      "provider": "",
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_cursor": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "Cursor",
+      "aliases": [
+        "cursor"
+      ],
+      "provider": "",
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_antigravity": {
+      "mode": "auto",
+      "fast": {
+        "model": "gemini-3.8-flash-low",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "claude-opus-4-6-thinking",
+        "effort": ""
+      },
+      "name": "Gravity",
+      "aliases": [
+        "gravity"
+      ],
+      "provider": "antigravity",
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      }
+    },
+    "agent_codex": {
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "name": "Codex",
+      "aliases": [
+        "codex"
+      ],
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      },
+      "provider": "codex"
+    },
+    "agent_gemini": {
+      "mode": "auto",
+      "fast": {
+        "model": "gemini-3.8-flash-low",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "gemini-3.8-flash-high",
+        "effort": ""
+      },
+      "name": "Gemini CLI",
+      "aliases": [
+        "gemini"
+      ],
+      "provider": "",
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_copilot": {
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "claude-sonnet-5.5",
+        "effort": "high"
+      },
+      "name": "Copilot CLI",
+      "aliases": [
+        "copilot cli",
+        "copilot"
+      ],
+      "provider": "copilot",
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_muse": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "Muse Code",
+      "aliases": [
+        "muse code"
+      ],
+      "provider": "",
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_opencode": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "OpenCode",
+      "aliases": [
+        "opencode"
+      ],
+      "provider": "",
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_amp": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "Amp",
+      "aliases": [
+        "amp"
+      ],
+      "provider": "",
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_hermes": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "Hermes",
+      "aliases": [
+        "hermes"
+      ],
+      "provider": "",
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "agent_claude-desktop": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "Claude Desktop",
+      "aliases": [
+        "claude desktop"
+      ],
+      "provider": "",
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "ai_anthropic": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "Anthropic",
+      "aliases": [
+        "anthropic"
+      ],
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      },
+      "provider": ""
+    },
+    "ai_google": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "Google AI",
+      "aliases": [
+        "google ai"
+      ],
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      },
+      "provider": ""
+    },
+    "ai_openai": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "OpenAI",
+      "aliases": [
+        "openai"
+      ],
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      },
+      "provider": ""
+    },
+    "ai_ollama": {
+      "mode": "auto",
+      "fast": {
+        "model": "gemma3:4b",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "qwen3:8b",
+        "effort": ""
+      },
+      "name": "Ollama",
+      "aliases": [
+        "ollama"
+      ],
+      "provider": "ollama",
+      "localExecution": {
+        "mode": "ask"
+      },
+      "permissions": {
+        "documents": true,
+        "emailDrafts": true,
+        "music": true,
+        "openApps": true
+      }
+    },
+    "ai_lmstudio": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "LM Studio",
+      "aliases": [
+        "lm studio"
+      ],
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      },
+      "provider": ""
+    },
+    "integration_resend": {
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "name": "Resend",
+      "aliases": [
+        "resend"
+      ],
+      "provider": "codex",
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_n8n": {
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "name": "n8n",
+      "aliases": [
+        "n8n"
+      ],
+      "provider": "codex",
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_vercel": {
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "name": "Vercel",
+      "aliases": [
+        "vercel"
+      ],
+      "provider": "codex",
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_github": {
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "name": "GitHub",
+      "aliases": [
+        "github"
+      ],
+      "provider": "codex",
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_notion": {
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "name": "Notion",
+      "aliases": [
+        "notion"
+      ],
+      "provider": "codex",
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_calcom": {
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "name": "Cal.com",
+      "aliases": [
+        "cal.com"
+      ],
+      "provider": "codex",
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_stripe": {
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "name": "Stripe",
+      "aliases": [
+        "stripe"
+      ],
+      "provider": "codex",
+      "permissions": {
+        "documents": true,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_music": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "Apple Music",
+      "aliases": [
+        "apple music"
+      ],
+      "provider": "",
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    },
+    "integration_spotify": {
+      "mode": "auto",
+      "fast": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "reasoning": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      "name": "Spotify",
+      "aliases": [
+        "spotify",
+        "spoty"
+      ],
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": true,
+        "openApps": true
+      },
+      "provider": ""
+    },
+    "agent_system_guardian": {
+      "mode": "auto",
+      "fast": {
+        "model": "",
+        "effort": ""
+      },
+      "reasoning": {
+        "model": "",
+        "effort": ""
+      },
+      "name": "System Guardian",
+      "aliases": [
+        "guardian",
+        "guardião do sistema"
+      ],
+      "provider": "",
+      "permissions": {
+        "documents": false,
+        "emailDrafts": false,
+        "music": false,
+        "openApps": false
+      }
+    }
+  }
+}

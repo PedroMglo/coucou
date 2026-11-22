@@ -828,6 +828,7 @@ mod chat_tests {
     fn failures_carry_a_fixed_code_and_message_only() {
         block_on(async {
             for (fail, code) in [
+                (ChatFail::Busy, "busy"),
                 (ChatFail::NoKey, "no_key"),
                 (ChatFail::Unreachable, "unreachable"),
                 (ChatFail::Auth, "auth"),

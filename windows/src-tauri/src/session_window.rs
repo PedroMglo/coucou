@@ -154,13 +154,25 @@ pub fn folder_name(path: &str) -> &str {
 
 // ── Sessions seen so far ──────────────────────────────────────────────────────
 
-/// Session ID → the processes that may own its window, nearest first: the one
+/// Backend and session ID → processes that may own its window, nearest first: the one
 /// that does on Windows, every ancestor on Linux. Empty for a session whose
 /// window could not be found, so it is not looked for on every event. Small:
 /// an old session is dropped once there are more than this many.
 pub(crate) const MAX_SESSIONS: usize = 64;
 
-static SESSIONS: Mutex<Vec<(String, Vec<u32>)>> = Mutex::new(Vec::new());
+#[derive(Clone)]
+pub struct SessionWindow {
+    pub owners: Vec<u32>,
+    pub folder: String,
+}
+
+struct Session {
+    backend: String,
+    id: String,
+    window: SessionWindow,
+}
+
+static SESSIONS: Mutex<Vec<Session>> = Mutex::new(Vec::new());
 
 /// A session ID arrives in a hook payload: only what Claude Code sends (a
 /// UUID) is kept, at most 128 characters.
@@ -168,32 +180,50 @@ pub(crate) fn valid_session(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-pub fn remember(session: &str, mut owners: Vec<u32>) {
+pub fn hook_backend(agent: Option<&str>) -> &str {
+    agent.filter(|agent| {
+        !agent.is_empty()
+            && agent.len() <= 24
+            && agent.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    }).unwrap_or("claude")
+}
+
+pub fn remember(backend: &str, session: &str, cwd: &str, mut owners: Vec<u32>) {
     if !valid_session(session) {
         return;
     }
     owners.truncate(MAX_DEPTH);
     let mut list = SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
-    list.retain(|(s, _)| s != session);
-    list.push((session.to_string(), owners));
+    list.retain(|entry| entry.backend != backend || entry.id != session);
+    let folder = folder_name(cwd).chars().take(256).collect();
+    list.push(Session {
+        backend: backend.to_owned(),
+        id: session.to_owned(),
+        window: SessionWindow { owners, folder },
+    });
     let excess = list.len().saturating_sub(MAX_SESSIONS);
     list.drain(..excess);
 }
 
 /// True once the session has been looked at, window found or not.
-pub fn known(session: &str) -> bool {
+pub fn known(backend: &str, session: &str) -> bool {
     let list = SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
-    list.iter().any(|(s, _)| s == session)
+    list.iter().any(|entry| entry.backend == backend && entry.id == session)
 }
 
-/// The processes that may own the session's window, nearest first, if any.
-pub fn lookup(session: &str) -> Option<Vec<u32>> {
+/// Legacy callers without a backend may only use an unambiguous ID.
+pub fn lookup(backend: Option<&str>, session: &str) -> Option<SessionWindow> {
     let list = SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
-    list.iter().find(|(s, _)| s == session).map(|(_, pids)| pids.clone()).filter(|pids| !pids.is_empty())
+    let mut matches = list.iter().filter(|entry| {
+        entry.id == session && backend.is_none_or(|backend| entry.backend == backend)
+    });
+    let entry = matches.next()?;
+    (matches.next().is_none() && !entry.window.owners.is_empty()).then(|| entry.window.clone())
 }
 
-pub fn forget(session: &str) {
-    SESSIONS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(s, _)| s != session);
+pub fn forget(backend: &str, session: &str) {
+    SESSIONS.lock().unwrap_or_else(|e| e.into_inner())
+        .retain(|entry| entry.backend != backend || entry.id != session);
 }
 
 #[cfg(test)]
@@ -376,29 +406,48 @@ mod tests {
     }
 
     #[test]
-    fn sessions_are_remembered_by_id_and_only_plausible_ids_are_kept() {
-        remember("s-test-1", vec![42]);
-        remember("s-test-1", vec![43, 44]);
-        assert_eq!(lookup("s-test-1"), Some(vec![43, 44]));
-        remember("not a session/../x", vec![7]);
-        assert!(!known("not a session/../x"));
-        forget("s-test-1");
-        assert!(!known("s-test-1"));
+    fn sessions_are_remembered_by_backend_and_id_and_only_plausible_ids_are_kept() {
+        remember("codex", "s-test-1", "/project/old", vec![42]);
+        remember("codex", "s-test-1", "/project/source", vec![43, 44]);
+        let entry = lookup(None, "s-test-1").unwrap();
+        assert_eq!(entry.owners, vec![43, 44]);
+        assert_eq!(entry.folder, "source");
+
+        remember("copilot", "s-test-1", "/other", vec![45]);
+        assert!(lookup(None, "s-test-1").is_none());
+        assert_eq!(lookup(Some("codex"), "s-test-1").unwrap().owners, vec![43, 44]);
+        assert_eq!(lookup(Some("copilot"), "s-test-1").unwrap().owners, vec![45]);
+        assert!(lookup(Some("antigravity"), "s-test-1").is_none());
+        forget("copilot", "s-test-1");
+        assert_eq!(lookup(None, "s-test-1").unwrap().owners, vec![43, 44]);
+
+        remember("codex", "not a session/../x", "", vec![7]);
+        assert!(!known("codex", "not a session/../x"));
+        forget("codex", "s-test-1");
+        assert!(!known("codex", "s-test-1"));
 
         // A session without a window is settled, with nothing to show.
-        remember("s-test-2", Vec::new());
-        assert!(known("s-test-2"));
-        assert_eq!(lookup("s-test-2"), None);
-        forget("s-test-2");
+        remember("claude", "s-test-2", "", Vec::new());
+        assert!(known("claude", "s-test-2"));
+        assert!(lookup(None, "s-test-2").is_none());
+        forget("claude", "s-test-2");
 
         // Only the latest sessions are kept. (One test: the list is shared.)
         for i in 0..(MAX_SESSIONS + 5) {
-            remember(&format!("s-cap-{i}"), vec![1]);
+            remember("codex", &format!("s-cap-{i}"), "", vec![1]);
         }
-        assert!(!known("s-cap-0"));
-        assert!(known(&format!("s-cap-{}", MAX_SESSIONS + 4)));
+        assert!(!known("codex", "s-cap-0"));
+        assert!(known("codex", &format!("s-cap-{}", MAX_SESSIONS + 4)));
         for i in 0..(MAX_SESSIONS + 5) {
-            forget(&format!("s-cap-{i}"));
+            forget("codex", &format!("s-cap-{i}"));
         }
+    }
+
+    #[test]
+    fn hook_backends_follow_the_island_routing() {
+        assert_eq!(hook_backend(None), "claude");
+        assert_eq!(hook_backend(Some("not/a/backend")), "claude");
+        assert_eq!(hook_backend(Some("antigravity")), "antigravity");
+        assert_eq!(hook_backend(Some("codex")), "codex");
     }
 }

@@ -4,16 +4,21 @@
 
 /** Every command the island invoked, oldest first: [name, args]. */
 export const calls = [];
+export const subscriptions = [];
 
 const listeners = new Map();
+const listenerIds = new Map();let nextListenerId=0;
+export const eventInternals={unregisterListener(event,id){if(listenerIds.get(event)===id){listeners.delete(event);listenerIds.delete(event);}}};
 
 export const internals = {
   transformCallback: (callback) => callback,
   invoke: async (cmd, args) => {
     if (cmd === "plugin:event|listen") {
-      listeners.set(args.event, args.handler);
-      return listeners.size;
+      subscriptions.push({ event: args.event, target: args.target });
+      const id=++nextListenerId;listeners.set(args.event, args.handler);listenerIds.set(args.event,id);
+      return id;
     }
+    if(cmd === "plugin:event|unlisten") return null;
     calls.push([cmd, args]);
     return null;
   },

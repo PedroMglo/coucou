@@ -8,7 +8,14 @@
     ],
     "resources": {
       "../target/release/coucou-hook.exe": null,
-      "../target/release/coucou-hook": "coucou-hook"
+      "../target/release/coucou-hook": "coucou-hook",
+      "../../extensions/copilot/extension.mjs": "copilot/extension.mjs",
+      "../../extensions/copilot/package.json": "copilot/package.json",
+      "../../extensions/copilot/dist/extension.js": "copilot/dist/extension.js",
+      "../../extensions/copilot/dist/bridge.js": "copilot/dist/bridge.js",
+      "../../extensions/copilot/dist/runtime.js": "copilot/dist/runtime.js",
+      "../../extensions/copilot/dist/public-history.js": "copilot/dist/public-history.js",
+      "../../extensions/copilot/dist/protocol.js": "copilot/dist/protocol.js"
     },
     "linux": {
       "appimage": {
@@ -17,13 +24,17 @@
       "deb": {
         "depends": [
           "libgtk-layer-shell0 (>= 0.6)",
-          "libasound2t64 | libasound2"
+          "libasound2t64 | libasound2",
+          "libpipewire-0.3-0",
+          "poppler-utils"
         ]
       },
       "rpm": {
         "depends": [
           "gtk-layer-shell",
-          "alsa-lib"
+          "alsa-lib",
+          "pipewire-libs",
+          "poppler-utils"
         ]
       }
     }
@@ -33,9 +44,9 @@
       {
         "label": "island",
         "title": "Coucou",
-        "url": "index.html",
-        "width": 240,
-        "height": 6,
+        "url": "pet-cards.html",
+        "width": 720,
+        "height": 320,
         "resizable": false,
         "decorations": false,
         "transparent": true,
@@ -50,7 +61,7 @@
         "maximizable": false,
         "minimizable": false,
         "closable": false,
-        "dragDropEnabled": true,
+        "dragDropEnabled": false,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required"
       }
     ]

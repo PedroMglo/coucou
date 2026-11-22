@@ -2,6 +2,7 @@
 // the pill see them (src-tauri/src/flow, speech, notes).
 
 import { invoke } from "@tauri-apps/api/core";
+import { flowWrite } from './flow-write';
 
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -50,7 +51,7 @@ export interface FlowPrefs {
   defaultStyle: Style;
   summaryEngine: "claude" | "off";
   openAtLaunch: boolean;
-  /** « OK Coucou »: listen for it and answer with Claude. */
+  /** « OK Coucou »: listen and answer with Claude or the selected Codex account. */
   voice: boolean;
   voiceOutput: VoiceOutput;
   voiceGender: "female" | "male";
@@ -74,13 +75,18 @@ export interface ModelsStatus {
 export interface FlowStatus {
   prefs: FlowPrefs;
   models: ModelsStatus;
+  recognition?:{engine:'whisper'|'parakeet';ready:boolean;whisperAvailable:boolean};
   /** "ok", or why the key can't be watched ("wayland", "no-display"). */
   keys: string;
   hasClaudeKey: boolean;
+  voiceProviderReady: boolean;
+  hotwordCapture?: "inactive" | "starting" | "listening" | "recovering";
   mics: { name: string; default: boolean }[];
   platform: "windows" | "linux";
   autostarted: boolean;
   userName?: string | null;
+  /** Missing on older backends; no clipboard read or model resolution. */
+  lastTextAvailable?: boolean;
 }
 
 export interface FlowEntry {
@@ -158,6 +164,7 @@ export interface Note {
   end?: number | null;
   app?: string | null;
   status: "recording" | "processing" | "ready" | "failed";
+  microphoneOnly?: boolean;
   speakers: Speaker[];
   lines: NoteLine[];
   summary?: string | null;
@@ -200,13 +207,13 @@ export interface VoiceView {
   answer: string;
 }
 
-export type VoiceOutput = "system" | "elevenlabs" | "off";
+export type VoiceOutput = "system" | "elevenlabs" | "local" | "edge" | "off";
 
 export const FlowBridge = {
   status: () => call<FlowStatus>("flow_status"),
   /** The Coucou window is on screen (shown, not minimised); `hub-visible` tells when it changes. */
   hubShown: () => call<boolean>("hub_shown"),
-  setPrefs: (prefs: FlowPrefs) => call<void>("flow_set_prefs", { prefs }),
+  setPrefs: (prefs: FlowPrefs) => flowWrite("flow_set_prefs", "Preferências", { prefs }),
   history: () => call<FlowEntry[]>("flow_history"),
   deleteEntry: (id: string) => callOrThrow<void>("flow_delete", { id }),
   clear: (everything: boolean) => callOrThrow<void>("flow_clear", { everything }),
@@ -219,6 +226,7 @@ export const FlowBridge = {
   setStyles: (styles: AppStyle[]) => callOrThrow<void>("flow_set_styles", { styles }),
   runningApps: () => call<{ id: string; name: string }[]>("flow_running_apps"),
   copy: (text: string) => call<boolean>("flow_copy", { text }),
+  copyLast: () => call<boolean>("flow_copy_last"),
   pasteAgain: () => call<void>("flow_paste_again"),
   download: () => call<void>("flow_models_download"),
   removeModels: () => call<void>("flow_models_remove"),
@@ -230,7 +238,7 @@ export const FlowBridge = {
   renameSpeaker: (id: string, speaker: string, name: string) => call<void>("notes_rename_speaker", { id, speaker, name }),
   toggleTodo: (id: string, todo: string) => call<void>("notes_toggle_todo", { id, todo }),
   deleteNote: (id: string) => call<void>("notes_delete", { id }),
-  summarize: (id: string) => call<void>("notes_summarize", { id }),
+  summarize: (id: string) => callOrThrow<void>("notes_summarize", { id }),
   retryNote: (id: string) => call<void>("notes_retry", { id }),
   markdown: (id: string) => call<string>("notes_markdown", { id }),
   exportNote: (id: string) => callOrThrow<string | null>("notes_export", { id }),
@@ -240,9 +248,9 @@ export const FlowBridge = {
   pillHover: (inside: boolean) => call<void>("pill_hover", { inside }),
   pillAction: (action: string, id?: number) => call<void>("pill_action", { action, id: id ?? null }),
   /** The pill has said what « OK Coucou » answered. */
-  voiceDone: (id: number) => call<void>("voice_done", { id, text: null }),
+  voiceDone: (id: number, played?: boolean) => call<void>("voice_done", { id, text: null, played: played ?? null }),
   /** speech-dispatcher or espeak-ng, where the webview has no voice. */
-  sayNative: (text: string, lang: string | null) => call<boolean>("voice_say_native", { text, lang }),
+  sayNative: (id: number) => call<boolean>("voice_say_native", { id }),
 };
 
 /** One colour per person in a call: you first, then the others. */

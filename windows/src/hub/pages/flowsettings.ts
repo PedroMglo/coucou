@@ -4,12 +4,30 @@
 
 import { h, clear } from "../../views/dom";
 import { t } from "../../i18n/i18n";
-import { onEvent } from "../../core/bridge";
+import { Bridge, onEvent } from "../../core/bridge";
 import { FlowBridge, flowKeyId, type Edge, type FlowKey, type ModelsStatus } from "../../core/flow";
 import { comboFromKeys } from "../keys";
 import type { HubContext } from "../shell";
 import { pageSave } from "../save";
 import { anchor, button, card, divider, keyKeycap, keycap, keyLabel, label, number, row, segmented, select, toggle } from "../ui";
+
+/** Dictation and pet conversations share this choice; model files stay installed. */
+export async function recognitionControl(ctx:HubContext,onChanged:()=>void):Promise<HTMLElement>{
+  const boot=await Bridge.boot();
+  const active=ctx.status.recognition;
+  const note=h('div',{class:'hub-note',text:`Reconhecimento ativo: ${active?.engine==='whisper'?'Whisper multilingue':'Parakeet multilingue'}${active&&!active.ready?' · modelo indisponível':''}. O áudio é processado neste computador, para ditado e conversa com os pets.`});
+  if(!boot)return note;
+  const feedback=h('div',{class:'hub-note'});
+  const picker=select<'auto'|'whisper'|'parakeet'>([['auto','Automático'],['whisper','Whisper multilingue'],['parakeet','Parakeet multilingue']],boot.settings.voiceAsrEngine??'auto',engine=>{
+    picker.disabled=true;
+    void Bridge.boot().then(async current=>{
+      if(!current)throw Error('Não foi possível ler as definições.');
+      await Bridge.saveSettings({...current.settings,voiceAsrEngine:engine});
+      await ctx.refresh();onChanged();
+    }).catch(error=>{feedback.textContent=String(error).replace(/^Error:\s*/,'');picker.disabled=false;});
+  });
+  return h('div',{},row('Motor de reconhecimento','Automático mantém o Whisper se já estiver configurado; caso contrário usa o Parakeet. Alternar preserva os modelos instalados.',picker),note,feedback);
+}
 
 /** Download / progress / installed, for the voice model. Redraws itself. */
 export function modelsControl(ctx: HubContext, onReady?: () => void): HTMLElement {
@@ -53,6 +71,35 @@ export function modelsControl(ctx: HubContext, onReady?: () => void): HTMLElemen
     ctx.status.models = models;
     draw(models);
     if (!wasReady && models.parakeet.state === "ready") onReady?.();
+  });
+  return el;
+}
+
+/** A new manual request: the backend captures its current last-text revision. */
+export function lastTextCopyControl(ctx:HubContext):HTMLElement{
+  const feedback=h('div',{class:'hub-note'});
+  let pending=false,disposed=false;
+  const supported=typeof ctx.status.lastTextAvailable==='boolean';
+  const copy=button('Copiar último texto',()=>{
+    if(pending||!supported||disposed)return;pending=true;
+    copy.disabled=true;feedback.textContent='A copiar…';
+    void FlowBridge.copyLast().then(ok=>{
+      pending=false;if(disposed||!el.isConnected)return;
+      feedback.textContent=ok===true?'Último texto copiado.':'A cópia não foi confirmada. O texto pode ter mudado, não estar disponível ou o pedido anterior ainda estar a terminar.';
+      copy.disabled=false;
+    });
+  },'',true);
+  copy.disabled=!supported||ctx.status.lastTextAvailable!==true;
+  feedback.textContent=!supported?'Esta versão do backend ainda não suporta a cópia do último texto.':ctx.status.prefs.keepDays===0?'O último texto fica apenas em memória nesta sessão; não se cria histórico.':'Usa a retenção escolhida. Limpar o histórico retira também o último texto disponível.';
+  const el=h('div',{},row('Copiar o texto mais recente disponível','Também quando a colagem automática foi impedida para preservar o clipboard.',copy),feedback);
+  // The shell builds pages off-DOM before attaching them. Leaving the page,
+  // rather than temporary disconnection during construction, owns cleanup.
+  let stopListening:(()=>void)|undefined;
+  const previous=ctx.onLeave;
+  ctx.onLeave=()=>{disposed=true;stopListening?.();stopListening=undefined;previous?.();};
+  void onEvent('flow-history',()=>{if(!disposed&&el.isConnected&&supported&&!pending)copy.disabled=false;}).then(unlisten=>{
+    if(disposed){unlisten();return;}
+    stopListening=unlisten;
   });
   return el;
 }
@@ -108,6 +155,8 @@ export async function flowSettingsPage(page: HTMLElement, ctx: HubContext) {
     divider(),
     row(t("Paste the last dictation again"), t("When the words went to the wrong place."), button(t("Paste again"), () => void FlowBridge.pasteAgain(), "", true)),
     divider(),
+    lastTextCopyControl(ctx),
+    divider(),
     row(t("Cancel a dictation"), null, keycap(t("Esc"))),
   );
   if (status.keys === "wayland") {
@@ -123,8 +172,12 @@ export async function flowSettingsPage(page: HTMLElement, ctx: HubContext) {
   // ── Microphone ──
   page.append(label(t("Microphone")));
   const mics: [string, string][] = [["", t("System default")], ...status.mics.map((m): [string, string] => [m.name, m.name])];
-  if (prefs.mic && !mics.some(([id]) => id === prefs.mic)) mics.push([prefs.mic, prefs.mic]);
-  const micCard = card(row(t("Microphone"), t("The one Coucou listens to for dictation and calls."), select(mics, prefs.mic, (mic) => void ctx.setPrefs((p) => (p.mic = mic)))));
+  const missingMic = prefs.mic !== "" && !mics.some(([id]) => id === prefs.mic);
+  if (missingMic) mics.push([prefs.mic, `${prefs.mic} · ${t("Not available")}`]);
+  const microphone = select(mics, prefs.mic, (mic) => void ctx.setPrefs((p) => (p.mic = mic)));
+  const savedOption = microphone.selectedOptions?.item(0);
+  if (missingMic && savedOption) savedOption.disabled = true;
+  const micCard = card(row(t("Microphone"), t("The one Coucou listens to for dictation and calls."), microphone));
   // Silence while you speak (flow/hush.rs): Windows mutes each app on its own.
   if (status.platform === "windows") {
     micCard.append(
@@ -139,8 +192,10 @@ export async function flowSettingsPage(page: HTMLElement, ctx: HubContext) {
   // ── Recognition ──
   page.append(label(t("Recognition")));
   page.append(anchor("flow.recognition", card(
+    await recognitionControl(ctx,()=>ctx.navigate('flowsettings')),
+    divider(),
     row(t("Parakeet, on your computer"), t("The most accurate, offline, 25 languages. Downloaded once (about {0} MB).", { 0: number(status.models.downloadMb) }), modelsControl(ctx)),
-    h("div", { class: "hub-note", text: t("Your voice never leaves this computer: Parakeet turns it into text here, and the recording is dropped as soon as it is pasted.") }),
+    h("div", { class: "hub-note", text: 'Parakeet reconhece português e inglês localmente. O segundo modelo distingue intervenientes nas gravações; não altera a voz das respostas dos pets.' }),
   )));
 
   // ── Notetaker ──

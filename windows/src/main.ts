@@ -1,6 +1,8 @@
-// Entry point: boot the bridge, wire the island, start the greeting.
+// The Linux pet-card entry composes explicit cards and the shared controller.
+// index.html retains the original presentation for the other application targets.
 
 import "./style.css";
+import {OllamaModelSelection} from './core/ollama-selection';
 import { Bridge, IS_TAURI, onEvent } from "./core/bridge";
 import { Sound } from "./core/sound";
 import { State, type Settings } from "./core/state";
@@ -26,6 +28,7 @@ function applyLanguage() {
 async function main() {
   const root = document.getElementById("root");
   if (!root) return;
+  State.petCardsOnly = document.documentElement.dataset.presentation === 'pet-cards';
 
   void Sound.preload();
 
@@ -41,7 +44,7 @@ async function main() {
     }
   }
 
-  const island = new Island(root);
+  const island = new Island(root, {cardsOnly: State.petCardsOnly});
   // The dev previews (dev/*.html) drive the island from the console.
   if (import.meta.env.DEV) Object.assign(window, { __island: island, __state: State });
 
@@ -58,10 +61,10 @@ async function main() {
   void Bridge.setSystemLanguages(systemLanguages());
   island.applySettings();
   State.loadIntegrationTasks();
-  if (boot && !boot.cursorPoll) island.followPageCursor();
+  if (boot && !boot.cursorPoll && !State.petCardsOnly) island.followPageCursor();
   await island.desktop.init();
 
-  await onEvent<{ x: number; y: number }>("cursor", ({ x, y }) => island.onCursor(x, y));
+  if (!State.petCardsOnly) await onEvent<{ x: number; y: number }>("cursor", ({ x, y }) => island.onCursor(x, y));
   await onEvent<boolean>("pointer-inside", (inside) => island.setPointerInside(inside));
   await onEvent<null>("closed-hover", () => island.wakeFromClosed());
 
@@ -80,7 +83,8 @@ async function main() {
         break;
       case "open":
         setPaused(false);
-        island.alert(State.defaultView());
+        if (State.petCardsOnly) void Bridge.petPanelOpen(360,50,undefined,'home');
+        else island.alert(State.defaultView());
         break;
       case "recap":
         setPaused(false);
@@ -149,7 +153,7 @@ async function main() {
   // The settings window writes preferences; apply them here without a restart.
   await onEvent<Settings>("settings-changed", (s) => {
     const previousMain = State.mainPillId;
-    State.settings = { ...State.settings, ...s };
+    State.settings = OllamaModelSelection.applySettings({ ...State.settings, ...s });
     applyLanguage();
     island.applySettings();
     State.loadIntegrationTasks();

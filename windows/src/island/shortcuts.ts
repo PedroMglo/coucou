@@ -1,3 +1,4 @@
+import { providerForPill } from "../core/providers";
 // Keyboard shortcuts → island. Port of IslandWindowController.handleHotKey and
 // handleIslandKey from the macOS app.
 //
@@ -12,6 +13,9 @@ import type { BotEmoteName, IslandViewName } from "../core/layout";
 import { cyclePill, islandKeyAction, navigate, pillByNumber, type IslandKeyAction } from "../core/shortcuts";
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
+import {resetDialogue} from "../core/chat-dialogue";
+import {requestDestinations} from "../core/request-destinations";
+import {presentRequest} from "./request-routing";
 
 const CLAUDE_DESKTOP_ID = "agent_claude-desktop";
 
@@ -50,6 +54,11 @@ function focusPill(host: ShortcutHost, id: string | null, open: boolean) {
 export function runGlobalShortcut(host: ShortcutHost, action: string, resume: () => void) {
   switch (action) {
     case "toggleIsland":
+      if (State.petCardsOnly) {
+        resume();
+        void Bridge.petPanelOpen(360,50,undefined,'home',true);
+        break;
+      }
       if (State.mode === "expanded") {
         host.collapse();
       } else {
@@ -62,12 +71,20 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
 
     case "openChat":
       resume();
+      {
+        const provider = providerForPill(State.focusTask?.id);
+        if (provider && !State.petCardsOnly) {
+          State.settings = { ...State.settings, chatProvider: provider };
+          void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
+        }
+      }
       host.alert("prompt");
       break;
 
     case "goToAlert": {
       const asking = State.tasks.find((t) => t.state === "question");
       const pending = State.pendingApproval;
+      const destination = State.petCardsOnly ? requestDestinations.first() : null;
       if (pending) {
         // The one card every agent's request uses: its own pill to the front,
         // its card (permission or question) up. Nothing is answered from here.
@@ -75,6 +92,9 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
         State.setFocus(pending.pillId);
         host.alert(pending.questions ? "question" : "approval");
         host.takeKeyboard();
+      } else if (destination) {
+        resume();
+        void presentRequest(destination);
       } else if (asking) {
         resume();
         State.setFocus(asking.id);
@@ -113,7 +133,7 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
       const on = !State.settings.soundEnabled;
       State.settings.soundEnabled = on;
       Sound.setEnabled(on);
-      void Bridge.saveSettings(State.settings);
+      void Bridge.saveSettings(State.settings).catch(Bridge.reportSettingsError);
       if (on) Sound.play("tick");
       host.emote(on ? "happy" : "annoyed");
       State.notify();
@@ -128,7 +148,7 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
         Sound.play("error");
         break;
       }
-      if (!State.mochiOnDesktop) resume();
+      if (!State.petCardsOnly && !State.mochiOnDesktop) resume();
       host.flyOutOrHome();
       break;
 
@@ -162,16 +182,13 @@ export function runIslandKey(host: ShortcutHost, action: IslandKeyAction) {
     case "diff":
       host.viewCommand("toggleDiff");
       break;
-    case "newChat":
-      // Not while an answer is on its way: it would land in the new chat.
-      if (State.stateOverride === "thinking") return;
-      State.chatHistory = [];
-      State.droppedFile = null;
-      State.promptContext = null;
-      void Bridge.chatReset();
-      Sound.play("blip");
-      host.setView("prompt");
+    case "newChat": {
+      const provider=State.chatProvider;
+      void resetDialogue(provider).then(ok=>{
+        if(ok && State.chatProvider===provider){Sound.play("blip");host.setView("prompt");}
+      });
       break;
+    }
     case "settings":
       void Bridge.openSettingsWindow();
       break;

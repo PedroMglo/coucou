@@ -17,7 +17,6 @@ document.addEventListener = () => {};
 window.addEventListener = () => {};
 document.documentElement = { lang: "en" };
 document.visibilityState = "hidden";
-Object.getPrototypeOf(root()).disabled = false;
 Object.getPrototypeOf(root()).querySelectorAll = function (selector) {
   const tags = selector.split(",").map(tag => tag.trim().toUpperCase());
   return [...this.walk()].filter(el => tags.includes(el.tagName));

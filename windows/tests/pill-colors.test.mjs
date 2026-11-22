@@ -84,7 +84,8 @@ test("a pill is created in the colour the user gave it", () => {
   State.settings.pillColors = { integration_claude: TEAL };
   State.loadIntegrationTasks();
   assert.equal(colorOf("integration_claude"), TEAL);
-  assert.equal(colorOf("integration_github"), pillDefinition("integration_github").color);
+  assert.equal(colorOf("integration_vercel"), pillDefinition("integration_vercel").color);
+  assert.equal(colorOf("integration_github"),undefined);
 });
 
 test("a colour picked later reaches the pills already on the island, and back", () => {

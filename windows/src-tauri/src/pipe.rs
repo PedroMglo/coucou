@@ -24,9 +24,9 @@
 // one place.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
@@ -39,6 +39,8 @@ use crate::agy_approvals;
 use crate::island::WINDOW_LABEL;
 use crate::log;
 use crate::session_window;
+#[path="pipe_native_source.rs"]mod native_source;
+#[path="pipe_external_approvals.rs"]pub(crate)mod external_approvals;
 
 /// Slightly under coucou-hook's own 110 s wait, so we always answer first.
 const DECISION_TIMEOUT: Duration = Duration::from_secs(108);
@@ -60,10 +62,29 @@ pub enum Reply {
 }
 
 /// Permission requests the island has been told about.
+struct PendingRequest {
+    sender:mpsc::Sender<Reply>, acknowledged:bool,
+    session_id:String, pet_id:String,
+    ack_deadline:Instant, deadline:Instant,
+    /// Set only by a scoped native card receipt, never by the old blind ACK.
+    card_presented:bool,
+    native:Option<native_source::Review>,
+    external_route:Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+impl PendingRequest {
+    fn new(sender:mpsc::Sender<Reply>, session_id:String, pet_id:String, now:Instant)->Self {
+        Self {sender,acknowledged:false,session_id,pet_id,
+            ack_deadline:now+ACK_TIMEOUT,deadline:now+DECISION_TIMEOUT,card_presented:false,native:None,external_route:None}
+    }
+    fn live(&self,now:Instant)->bool {
+        now < self.deadline && self.external_route.as_ref().is_none_or(|r|r.load(Ordering::Acquire)) && self.native.as_ref().is_none_or(|n|n.source_current()) && (self.acknowledged || now < self.ack_deadline)
+    }
+}
 #[derive(Default)]
-pub struct Pending(pub Mutex<HashMap<String, mpsc::Sender<Reply>>>);
+struct RelayState{requests:HashMap<String,PendingRequest>,routing:external_approvals::Routing}
+#[derive(Default)]
+pub struct Pending(Mutex<RelayState>);
 
-static COUNTER: AtomicU64 = AtomicU64::new(1);
 static RELAY_ERROR: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Last error encountered while opening the hook relay pipe/socket, if any.
@@ -128,7 +149,7 @@ pub fn start(app: AppHandle) {
                 continue;
             }
             let app = app.clone();
-            tauri::async_runtime::spawn(async move { handle(app, connected).await });
+            tauri::async_runtime::spawn(async move { handle(app, connected, relay_ancestors).await });
         }
     });
 }
@@ -179,14 +200,45 @@ pub fn start(app: AppHandle) {
                 }
             };
             // Only the relay run by our own user may drive the island.
-            if !matches!(stream.peer_cred(), Ok(c) if c.uid() == uid) {
-                log::line("refused a relay connection from another user");
-                continue;
-            }
+            let peer = match stream.peer_cred() {
+                Ok(peer) if peer.uid() == uid => peer,
+                _ => {
+                    log::line("refused a relay connection from another user");
+                    continue;
+                }
+            };
+            let origin = if relay_data_waiting(&stream) {
+                peer.pid()
+                    .and_then(|pid| u32::try_from(pid).ok())
+                    .and_then(crate::platform::RelayOrigin::capture)
+            } else {
+                None
+            };
             let app = app.clone();
-            tauri::async_runtime::spawn(async move { handle(app, stream).await });
+            tauri::async_runtime::spawn(async move {
+                handle(app, stream, |stream| match origin {
+                    Some(origin) => origin.ancestors(),
+                    None => relay_ancestors(stream),
+                }).await
+            });
         }
     });
+}
+
+#[cfg(target_os = "linux")]
+fn relay_data_waiting(stream: &tokio::net::UnixStream) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut byte = 0u8;
+    // Check only already queued data. An idle connection may later be passed
+    // to a different process, and this check must not consume any bytes.
+    unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            (&mut byte as *mut u8).cast(),
+            1,
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        ) == 1
+    }
 }
 
 /// One accepted relay connection, whatever carries it.
@@ -197,6 +249,9 @@ trait Relay: AsyncRead + AsyncWrite + Unpin {
     fn client_pid(&self) -> Option<u32> {
         None
     }
+    /// Named pipes have no writer-only half-close. Unix streams override this
+    /// because EOF alone does not mean their reply receiver has disappeared.
+    fn peer_disconnected(&self)->bool {true}
 }
 
 #[cfg(windows)]
@@ -213,6 +268,12 @@ impl Relay for NamedPipeServer {
 /// Dropping the stream closes it; the relay reads up to our newline first.
 #[cfg(target_os = "linux")]
 impl Relay for tokio::net::UnixStream {
+    fn peer_disconnected(&self)->bool {
+        use std::os::fd::AsRawFd;
+        let mut poll=libc::pollfd{fd:self.as_raw_fd(),events:0,revents:0};
+        let status=unsafe{libc::poll(&mut poll,1,0)};
+        status>0 && poll.revents&(libc::POLLHUP|libc::POLLERR|libc::POLLNVAL)!=0
+    }
     /// SO_PEERCRED: the process that connected, as the kernel saw it.
     fn client_pid(&self) -> Option<u32> {
         let pid = self.peer_cred().ok()?.pid()?;
@@ -220,7 +281,11 @@ impl Relay for tokio::net::UnixStream {
     }
 }
 
-async fn handle(app: AppHandle, mut pipe: impl Relay) {
+fn relay_ancestors(pipe: &impl Relay) -> Vec<u32> {
+    pipe.client_pid().map(crate::platform::process_ancestors).unwrap_or_default()
+}
+
+async fn handle<R: Relay>(app: AppHandle, mut pipe: R, ancestry: impl FnOnce(&R) -> Vec<u32>) {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
@@ -244,14 +309,29 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         return;
     }
 
+    // Never trust a relay-supplied pet owner. The app's live session record is
+    // the authority, so unrelated CLI sessions cannot be mistaken for our jobs.
+    payload.as_object_mut().unwrap().remove("coucou_pet_provider");
+    payload.as_object_mut().unwrap().remove("nativeIdentity");
+    payload.as_object_mut().unwrap().remove("coucou_decision_in_terminal");
+    let backend=payload["coucou_agent"].as_str().unwrap_or("").to_string();
+    let session=payload["session_id"].as_str().unwrap_or("").to_string();
+    let owner=app.state::<crate::chat::Chat>().hook_owner(&backend,&session);
+    let gate=payload["coucou_assistant_gate"]==true;
+    if gate && (backend!="antigravity" || owner.is_none()) {
+        let _=pipe.write_all(b"unowned\n").await;let _=pipe.flush().await;pipe.finish();return;
+    }
+    if let Some(owner)=&owner {payload["coucou_pet_provider"]=json!(owner);}
+
     let event = payload
         .get("hook_event_name")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
 
-    note_session_window(&pipe, &payload, &event);
-    crate::herdr::observe(&payload, &event);
+    if gate&&event!="PermissionRequest"{pipe.finish();return;}
+
+    note_session_window(&payload, &event, || ancestry(&pipe));
     // Counts for the weekly recap — never the command, path or prompt itself.
     crate::recap::observe(&app, &payload);
 
@@ -271,129 +351,158 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         return;
     }
 
-    let id = format!("{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
+    // This marker is added only by the standalone adapter after a native request is registered.
+    payload.as_object_mut().unwrap().remove("coucou_kind");
+    let native=if gate{
+        let chat=app.state::<crate::chat::Chat>();
+        let captured=chat.hook_binding(&backend,&session).and_then(|binding|native_source::Gate::capture(binding,&payload).ok());
+        let Some(captured)=captured else{pipe.finish();return;};
+        if !chat.hook_activity_bound(captured.binding(),"approval"){pipe.finish();return;}
+        captured.presentation(&mut payload);
+        let _=app.emit("assistant-tasks-changed",());Some(captured)
+    }else{None};
+
+    let Some(id)=crate::cli_chat::next_native_request_id()else{pipe.finish();return;};
     let (tx, mut rx) = mpsc::channel::<Reply>(4);
-    {
+    let started_at=Instant::now();
+    let registration={
         let pending = app.state::<Pending>();
-        pending.0.lock().unwrap().insert(id.clone(), tx);
-    }
+        let mut request=PendingRequest::new(tx,session.clone(),request_pet(&payload),started_at);
+        request.native=native.as_ref().map(|n|n.review());
+        let mut state=pending.0.lock().unwrap();external_approvals::register(&mut state,id.clone(),request,owner.is_none())
+    };
+    let external_route=match registration{
+        external_approvals::Registration::Terminal=>{
+            // Observation only: no respondible request ID/card or human wait.
+            payload.as_object_mut().unwrap().remove("request_id");
+            payload["coucou_decision_in_terminal"]=json!(true);
+            let _=app.emit_to(WINDOW_LABEL,"hook",payload);pipe.finish();return;
+        },
+        external_approvals::Registration::Queued(route)=>route,
+        external_approvals::Registration::Refused=>{pipe.finish();return;},
+    };
     crate::recap::note_request(&app, &id, &payload);
     payload["request_id"] = json!(id);
     log::line(format!("hook PermissionRequest id={id}"));
     let _ = app.emit_to(WINDOW_LABEL, "hook", payload);
 
-    // Answered in the terminal (or the app) instead: Claude Code ends the relay,
-    // its end of the connection closes, and the island must drop the card at
-    // once rather than keep offering a question that is already settled.
-    let decision = tokio::select! {
-        d = wait_for_decision(&id, &mut rx) => d,
-        () = client_gone(&mut pipe) => {
-            log::line(format!("hook id={id} answered elsewhere"));
-            crate::recap::forget_request(&app, &id);
+    // The human cannot answer a relay that has already gone away. This is
+    // common to every supported hook, including questions: no orphaned card.
+    let outcome=external_approvals::until_current(external_route.as_ref(),until_native_closed(&mut pipe,native.as_ref().map(|n|n.review()),wait_for_decision(&id,&mut rx,started_at))).await;
+    if matches!(&outcome,DecisionOutcome::Handoff("relay-closed")) {
+        log::line(format!("hook id={id} handed off reason=relay-closed"));
+    }
+    app.state::<Pending>().0.lock().unwrap().requests.remove(&id);
+    let mut decision=match outcome{
+        DecisionOutcome::Decision(decision)=>Some(decision),
+        DecisionOutcome::Handoff(reason)=>{
+            crate::recap::forget_request(&app,&id);
+            // The UI no longer owns a respondible card. The native CLI may
+            // still need the human in its terminal; this does not resolve it.
+            if !gate {let _=app.emit_to(WINDOW_LABEL,"approval-handoff",handoff_payload(&id,&session,&backend,owner.as_deref(),reason));}
             None
         }
     };
-    app.state::<Pending>().0.lock().unwrap().remove(&id);
+
+    if let Some(native)=&native {
+        if !native.current(){decision=None;}
+        // A handoff is still a native decision, not a whole-turn Interrupt.
+        // Never let an old hook's cleanup reset a newer hook/session epoch.
+        if decision.is_some(){app.state::<crate::chat::Chat>().hook_activity_bound(native.binding(),"working");}
+        else{let reason=if native.current(){"native-fallback"}else{"native-source-ended"};let _=app.emit_to(WINDOW_LABEL,"approval-handoff",handoff_payload(&id,&session,&backend,owner.as_deref(),reason));}
+        let _=app.emit("assistant-tasks-changed",());
+    }
 
     // No decision: say nothing at all. coucou-hook then writes nothing to stdout
     // and Claude Code asks in the terminal, exactly as if Coucou were closed.
-    // The island is told, so a card that came up late (or is still up after the
-    // long wait) goes instead of holding the view with nobody to answer (#857).
-    match decision {
-        Some(d) => {
-            let _ = pipe.write_all(format!("{d}\n").as_bytes()).await;
-            let _ = pipe.flush().await;
-        }
-        None => {
-            let _ = app.emit_to(WINDOW_LABEL, "approval-expired", &id);
-        }
+    if let Some(d) = decision.filter(|_|external_route.as_ref().is_none_or(|r|r.load(Ordering::Acquire))&&native.as_ref().is_none_or(|n|n.current())) {
+        let _ = pipe.write_all(format!("{d}\n").as_bytes()).await;
+        let _ = pipe.flush().await;
     }
     pipe.finish();
 }
 
-/// Antigravity is about to run a tool and its relay waits for a line. The island always
-/// gets the event, as for any agent. Then, when Approve commands from the notch is on and
-/// none of Antigravity's rules covers the command, the card comes up as a permission
-/// request: once the island says it is on screen the relay is told `pending` (it then
-/// waits for the click instead of a few seconds), and Allow, Deny or Reply in terminal
-/// (`ask`) follow. Anything else — no card, no ack, no click in time — is `ask`, and
-/// Antigravity shows its own prompt. The same flow as the Mac's processAgyApproval.
+fn handoff_payload(request_id:&str,session_id:&str,agent:&str,provider:Option<&str>,reason:&str)->Value{
+    json!({"requestId":request_id,"sessionId":session_id,"agent":agent,"provider":provider,"reason":reason})
+}
+
+/// Antigravity's standalone relay may request an in-app card on Windows.
+/// It shares the same external-route lease and presentation acknowledgement
+/// as the other relays. No response is treated as permission by Coucou.
 async fn agy_pre_tool(app: AppHandle, mut pipe: impl Relay, payload: Value) {
-    let enabled = app.state::<crate::Shared>().settings.lock().unwrap().agy_approvals_enabled;
+    let enabled = cfg!(windows) && app.state::<crate::Shared>().settings.lock().unwrap().agy_approvals_enabled;
     let gate = agy_approvals::gate(&payload, enabled, &crate::platform::home_dir());
-    log::line("hook PreToolUse");
-    let _ = app.emit_to(WINDOW_LABEL, "hook", payload.clone());
-    let Some(gate) = gate else {
+    let _ = app.emit_to(WINDOW_LABEL, "hook", &payload);
+    let Some((gate, id)) = gate.zip(crate::cli_chat::next_native_request_id()) else {
         reply_line(&mut pipe, "ask").await;
         pipe.finish();
         return;
     };
-
-    let id = format!("{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
+    let session = payload["session_id"].as_str().unwrap_or("").to_owned();
+    let started = Instant::now();
     let (tx, mut rx) = mpsc::channel::<Reply>(4);
-    app.state::<Pending>().0.lock().unwrap().insert(id.clone(), tx);
-    crate::recap::note_request(&app, &id, &payload);
+    let route = {
+        let pending = app.state::<Pending>();
+        let mut state = pending.0.lock().unwrap();
+        let request = PendingRequest::new(tx, session.clone(), request_pet(&payload), started);
+        external_approvals::register(&mut state, id.clone(), request, true)
+    };
+    let external_approvals::Registration::Queued(route) = route else {
+        reply_line(&mut pipe, "ask").await;
+        pipe.finish();
+        return;
+    };
     let mut card = payload;
     card["hook_event_name"] = json!("PermissionRequest");
     card["request_id"] = json!(id);
     card["tool_input"]["command"] = json!(gate.command);
-    log::line(format!("hook Antigravity command waits for the island id={id}"));
+    crate::recap::note_request(&app, &id, &card);
     let _ = app.emit_to(WINDOW_LABEL, "hook", card);
 
-    // The relay hung up (Antigravity stopped waiting, or the turn was cancelled): the
-    // card goes, nothing is written.
-    let first = tokio::select! {
-        r = tokio::time::timeout(ACK_TIMEOUT, rx.recv()) => r.ok().flatten(),
-        () = client_gone(&mut pipe) => {
-            agy_settled(&app, &id, "answered elsewhere");
-            return;
+    let start = tokio::time::Instant::from_std(started);
+    let outcome = external_approvals::until_current(route.as_ref(), async {
+        let ack_deadline = start + ACK_TIMEOUT;
+        let first = tokio::select! {
+            biased;
+            _ = relay_closed(&mut pipe) => return DecisionOutcome::Handoff("relay-closed"),
+            first = tokio::time::timeout_at(ack_deadline, rx.recv()) => first.ok().flatten(),
+        };
+        if tokio::time::Instant::now() >= ack_deadline {
+            return DecisionOutcome::Handoff("unacknowledged");
         }
-    };
-    let decision = match first {
-        Some(Reply::Ack) => {
-            reply_line(&mut pipe, "pending").await;
-            tokio::select! {
-                r = tokio::time::timeout(gate.wait, rx.recv()) => match r {
-                    Ok(Some(Reply::Decision(d))) => Some(d),
-                    Ok(Some(_)) | Ok(None) => None,
-                    Err(_) => {
-                        log::line(format!("hook id={id} timed out — Antigravity asks"));
-                        None
+        match first {
+            Some(Reply::Decision(value)) => DecisionOutcome::Decision(value),
+            Some(Reply::Ack) => {
+                reply_line(&mut pipe, "pending").await;
+                let wait = async {
+                    let deadline = start + gate.wait.min(DECISION_TIMEOUT);
+                    let value = tokio::time::timeout_at(deadline, rx.recv()).await;
+                    match value {
+                        Ok(Some(Reply::Decision(value))) if tokio::time::Instant::now() < deadline => DecisionOutcome::Decision(value),
+                        _ => DecisionOutcome::Handoff("released"),
                     }
-                },
-                () = client_gone(&mut pipe) => {
-                    agy_settled(&app, &id, "answered elsewhere");
-                    return;
-                }
+                };
+                until_relay_closed(&mut pipe, wait).await
             }
+            _ => DecisionOutcome::Handoff("not-shown"),
         }
-        // A click that beats the ack is still a click.
-        Some(Reply::Decision(d)) => Some(d),
-        Some(Reply::Decline) | None => None,
-    };
-    app.state::<Pending>().0.lock().unwrap().remove(&id);
-    // Only a click on Allow or Deny is a decision; `ask` hands the command back to
-    // Antigravity's own prompt, where its Always allow lives.
-    let word = match decision.as_deref() {
-        Some("allow") => "allow",
-        Some("deny") => "deny",
+    }).await;
+    app.state::<Pending>().0.lock().unwrap().requests.remove(&id);
+    let word = match &outcome {
+        DecisionOutcome::Decision(value) if route.as_ref().is_some_and(|r| r.load(Ordering::Acquire)) => {
+            match value.as_str() { "allow" => "allow", "deny" => "deny", _ => "ask" }
+        }
         _ => "ask",
     };
-    log::line(format!("hook id={id} answered {word}"));
     if word == "ask" {
         crate::recap::forget_request(&app, &id);
-        let _ = app.emit_to(WINDOW_LABEL, "approval-expired", &id);
+        let _ = app.emit_to(WINDOW_LABEL, "approval-handoff",
+            handoff_payload(&id, &session, "antigravity", None, "external-standalone"));
     }
-    reply_line(&mut pipe, word).await;
+    if !matches!(outcome, DecisionOutcome::Handoff("relay-closed")) {
+        reply_line(&mut pipe, word).await;
+    }
     pipe.finish();
-}
-
-/// The relay left before an answer: forget the request, take the card down.
-fn agy_settled(app: &AppHandle, id: &str, why: &str) {
-    log::line(format!("hook id={id} {why}"));
-    app.state::<Pending>().0.lock().unwrap().remove(id);
-    crate::recap::forget_request(app, id);
-    let _ = app.emit_to(WINDOW_LABEL, "approval-expired", id);
 }
 
 async fn reply_line(pipe: &mut impl Relay, word: &str) {
@@ -401,106 +510,262 @@ async fn reply_line(pipe: &mut impl Relay, word: &str) {
     let _ = pipe.flush().await;
 }
 
-/// Resolves once the relay has gone (end of stream or a broken pipe). It sends
-/// nothing after its one line, so any read result means it is done.
-async fn client_gone(pipe: &mut impl Relay) {
-    let mut probe = [0u8; 64];
-    loop {
-        match pipe.read(&mut probe).await {
-            Ok(0) | Err(_) => return,
-            Ok(_) => {}
-        }
-    }
-}
-
 /// Finds, once per session, the window it runs in — see session_window.rs.
 ///
-/// Only while the session is unknown, so the process snapshot is not taken on
-/// every event. The relay must still be running for its parents to be found:
-/// a permission request always is (it waits for us), a quick event may already
-/// have exited, and then a later event of the session tries again.
-fn note_session_window(pipe: &impl Relay, payload: &Value, event: &str) {
+/// Walk the full tree only for an unknown session. Linux may have witnessed
+/// the sender already when it accepted the data. With neither a witness nor
+/// a live relay, a later event can try again.
+fn note_session_window(payload: &Value, event: &str, ancestry: impl FnOnce() -> Vec<u32>) {
     let Some(session) = payload.get("session_id").and_then(Value::as_str) else { return };
+    let backend = session_window::hook_backend(payload["coucou_agent"].as_str());
     if event == "SessionEnd" {
-        session_window::forget(session);
+        session_window::forget(backend, session);
         return;
     }
-    if session_window::known(session) {
+    if session_window::known(backend, session) {
         return;
     }
-    let Some(relay) = pipe.client_pid() else { return };
-    let ancestors = crate::platform::process_ancestors(relay);
+    let ancestors = ancestry();
     // No ancestors: the relay was already gone, so try again next time. Some,
     // but none with a window (a classic console): settled, VS Code it is.
     if !ancestors.is_empty() {
-        session_window::remember(session, crate::platform::window_owners(&ancestors));
+        let cwd = payload["cwd"].as_str().unwrap_or_default();
+        session_window::remember(backend, session, cwd, crate::platform::window_owners(&ancestors));
     }
 }
 
-/// Two waits: a short one for "the card is up", then the long one for a human.
-async fn wait_for_decision(id: &str, rx: &mut mpsc::Receiver<Reply>) -> Option<String> {
-    match tokio::time::timeout(ACK_TIMEOUT, rx.recv()).await {
-        Ok(Some(Reply::Ack)) => {}
-        // A click that beats the ack is still a click.
-        Ok(Some(Reply::Decision(d))) => {
-            log::line(format!("hook id={id} answered {}", loggable(&d)));
-            return Some(d);
+/// A short acknowledgement wait inside one fixed total decision budget.
+enum DecisionOutcome {
+    Decision(String),
+    Handoff(&'static str),
+}
+
+async fn relay_closed(relay:&mut impl Relay) {
+    let mut extra=[0u8;1];
+    match relay.read(&mut extra).await {
+        Ok(0)=>{
+            // A client may finish its request writer while legitimately keeping
+            // its receiver open for the answer. Await actual HUP, not EOF.
+            while !relay.peer_disconnected(){tokio::time::sleep(Duration::from_millis(25)).await;}
         }
-        Ok(Some(Reply::Decline)) => {
-            log::line(format!("hook id={id} not shown — terminal takes over"));
-            return None;
+        // Extra input violates the one-line request contract; errors cannot
+        // establish a respondible connection either. Neither creates a grant.
+        _=>{},
+    }
+}
+#[cfg(test)]impl Relay for tokio::io::DuplexStream {}
+async fn until_relay_closed<R:Relay,F:std::future::Future<Output=DecisionOutcome>>(relay:&mut R,decision:F)->DecisionOutcome {
+    // Actual closure/invalid extra input wins over a simultaneously ready reply.
+    tokio::select! {biased;_=relay_closed(relay)=>DecisionOutcome::Handoff("relay-closed"),answer=decision=>answer}
+}
+
+async fn until_native_closed<R:Relay,F:std::future::Future<Output=DecisionOutcome>>(relay:&mut R,native:Option<native_source::Review>,decision:F)->DecisionOutcome{
+    let Some(native)=native else{return until_relay_closed(relay,decision).await;};
+    let invalid=async{while native.current(){tokio::time::sleep(Duration::from_millis(25)).await;}};
+    tokio::select!{biased;_=relay_closed(relay)=>DecisionOutcome::Handoff("relay-closed"),_=invalid=>DecisionOutcome::Handoff("native-source-ended"),answer=decision=>answer}
+}
+
+async fn wait_for_decision(id: &str, rx: &mut mpsc::Receiver<Reply>, started_at:Instant) -> DecisionOutcome {
+    let outcome = wait_for_decision_from(id, rx, ACK_TIMEOUT, DECISION_TIMEOUT,tokio::time::Instant::from_std(started_at)).await;
+    // Only this production wrapper logs. The state machine below is RAM-only,
+    // so channel fixtures never write the account's log or inspect an AppHandle.
+    match &outcome {
+        DecisionOutcome::Decision(decision) => {
+            // Retain the existing public categories, never arbitrary reply text.
+            let category = match loggable(decision) {
+                "allow" => "allow",
+                "deny" => "deny",
+                "a question" => "a question",
+                _ => "a decision",
+            };
+            log::line(format!("hook id={id} answered {category}"));
         }
-        Ok(None) => return None,
-        Err(_) => {
-            log::line(format!("hook id={id} island never acknowledged — terminal takes over"));
-            return None;
+        DecisionOutcome::Handoff(reason) => {
+            log::line(format!("hook id={id} handed off reason={reason}"));
         }
     }
+    outcome
+}
 
-    match tokio::time::timeout(DECISION_TIMEOUT, rx.recv()).await {
-        Ok(Some(Reply::Decision(d))) => {
-            log::line(format!("hook id={id} answered {}", loggable(&d)));
-            Some(d)
+#[cfg(test)]
+async fn wait_for_decision_with_limits(id:&str,rx:&mut mpsc::Receiver<Reply>,ack_timeout:Duration,total_timeout:Duration)->DecisionOutcome {
+    wait_for_decision_from(id,rx,ack_timeout,total_timeout,tokio::time::Instant::now()).await
+}
+async fn wait_for_decision_from(
+    _id: &str,
+    rx: &mut mpsc::Receiver<Reply>,
+    ack_timeout: Duration,
+    total_timeout: Duration,
+    start:tokio::time::Instant,
+) -> DecisionOutcome {
+    use tokio::time::{timeout_at, Instant};
+
+    // The total budget starts on entry, including the acknowledgement wait.
+    // Neither the first acknowledgement nor duplicates can extend it.
+    let total_deadline = start + total_timeout;
+    let ack_deadline = total_deadline.min(start + ack_timeout);
+    let mut acknowledged = false;
+
+    loop {
+        let deadline = if acknowledged { total_deadline } else { ack_deadline };
+        let timeout_reason = if acknowledged { "timeout" } else { "unacknowledged" };
+        // A permanently ready receiver must not starve the absolute deadline.
+        if Instant::now() >= deadline {
+            return DecisionOutcome::Handoff(timeout_reason);
         }
-        Ok(Some(Reply::Decline)) => {
-            log::line(format!("hook id={id} released without a decision"));
-            None
+        let reply = match timeout_at(deadline, rx.recv()).await {
+            Ok(reply) => reply,
+            Err(_) => return DecisionOutcome::Handoff(timeout_reason),
+        };
+        // timeout_at may poll an already-ready receive before its elapsed timer.
+        // Enforce the same strict deadline at that boundary as before the recv.
+        if Instant::now() >= deadline {
+            return DecisionOutcome::Handoff(timeout_reason);
         }
-        _ => {
-            log::line(format!("hook id={id} timed out — terminal takes over"));
-            None
+        match reply {
+            Some(Reply::Decision(decision)) => return DecisionOutcome::Decision(decision),
+            Some(Reply::Ack) => acknowledged = true,
+            Some(Reply::Decline) => {
+                return DecisionOutcome::Handoff(if acknowledged { "released" } else { "not-shown" });
+            }
+            None => return DecisionOutcome::Handoff("closed"),
         }
     }
 }
+
 
 /// The log says a question was answered, never with what.
 fn loggable(decision: &str) -> &str {
     if decision.starts_with('{') { "a question" } else { decision }
 }
 
-fn send(app: &AppHandle, request_id: &str, reply: Reply, keep: bool) {
-    let sender = {
+fn dispatch(map:&mut HashMap<String,PendingRequest>,request_id:&str,reply:Reply)->bool{
+    dispatch_at(map,request_id,reply,Instant::now())
+}
+fn dispatch_at(map:&mut HashMap<String,PendingRequest>,request_id:&str,reply:Reply,now:Instant)->bool{
+    let native=map.get(request_id).and_then(|r|r.native.clone());
+    if let Some(native)=native{
+        if matches!(&reply,Reply::Decision(s)if s!="allow"&&s!="deny"){return false;}
+        return native.with_current(||dispatch_current_at(map,request_id,reply,now)).unwrap_or(false);
+    }
+    dispatch_current_at(map,request_id,reply,now)
+}
+fn dispatch_current_at(map:&mut HashMap<String,PendingRequest>,request_id:&str,reply:Reply,now:Instant)->bool{
+    // A delayed UI callback cannot beat expiry merely because async cleanup
+    // has not removed the record yet. Duplicate ACKs never renew either clock.
+    if !map.get(request_id).is_some_and(|request|request.live(now)){return false;}
+    if matches!(reply,Reply::Ack){
+        let Some(request)=map.get_mut(request_id)else{return false};
+        // Do not let re-renders fill the channel and displace a human decision.
+        if request.acknowledged{return true;}
+        if request.sender.try_send(reply).is_ok(){request.acknowledged=true;true}else{false}
+    }else{
+        map.remove(request_id).is_some_and(|request|request.sender.try_send(reply).is_ok())
+    }
+}
+
+fn send(app: &AppHandle, request_id: &str, reply: Reply) {
+    let delivered = {
         let pending = app.state::<Pending>();
         let mut map = pending.0.lock().unwrap();
-        if keep { map.get(request_id).cloned() } else { map.remove(request_id) }
+        dispatch(&mut map.requests,request_id,reply)
     };
-    match sender {
-        Some(tx) => {
-            let _ = tx.try_send(reply);
-        }
-        None => log::line(format!("reply for id={request_id} — no pending request")),
-    }
+    if !delivered{log::line(format!("reply for id={request_id} — no pending request"));}
 }
 
 /// The island has the card on screen; the long wait may begin.
 pub fn acknowledge(app: &AppHandle, request_id: &str) {
-    send(app, request_id, Reply::Ack, true);
+    // On Linux the mapped controller can be empty. The old receipt proves only
+    // that a listener exists, not that the user has a respondible card.
+    #[cfg(not(target_os="linux"))]
+    send(app, request_id, Reply::Ack);
+    #[cfg(target_os="linux")]
+    {let _=(app,request_id);}
+}
+
+/// Match the frontend's hook routing, using only the owner inserted by handle
+/// after it discards relay-supplied owner metadata. Unknown agent names keep
+/// their own pill; they do not gain decision support from this routing helper.
+fn request_pet(payload:&Value)->String {
+    if let Some(pet)=payload["coucou_pet_provider"].as_str().and_then(crate::pet_config::pet_id){return pet.into();}
+    if let Some(agent)=payload["coucou_agent"].as_str().filter(|a|!a.is_empty()&&a.len()<=24&&*a!="claude"&&a.bytes().all(|b|b.is_ascii_lowercase()||b.is_ascii_digit()||b==b'-')) {
+        return format!("agent_{agent}");
+    }
+    if payload["term_editor"]=="cursor"{"agent_cursor".into()}else{"integration_claude".into()}
+}
+fn card_surface_ready(label:&str,visible:bool,collapsed:bool,rect:crate::island::IslandRect)->bool {
+    label==WINDOW_LABEL && visible && !collapsed &&
+        [rect.x,rect.y,rect.w,rect.h].iter().all(|v|v.is_finite()) &&
+        rect.x>=0.0 && rect.y>=0.0 && rect.w>0.0 && rect.h>0.0
+}
+fn native_card_ready(app:&AppHandle,window:&tauri::WebviewWindow)->bool {
+    let shared=app.state::<crate::Shared>();
+    let Ok(rect)=shared.gate.rect.try_lock()else{return false;};
+    let rect=*rect;
+    card_surface_ready(window.label(),window.is_visible().unwrap_or(false),
+        shared.gate.collapsed.load(Ordering::Acquire),rect)
+}
+fn present_at(map:&mut HashMap<String,PendingRequest>,id:&str,session:&str,pet:&str,ready:bool,now:Instant)->bool {
+    if !ready || !map.get(id).is_some_and(|r|r.session_id==session&&r.pet_id==pet&&r.live(now)){return false;}
+    if !dispatch_at(map,id,Reply::Ack,now){return false;}
+    if let Some(request)=map.get_mut(id){request.card_presented=true;}
+    true
+}
+
+/// A receipt for an already-rendered card, not an instruction to reveal or
+/// decide it. The caller and native input surface are checked independently of
+/// the frontend's selected pet. This applies to every legacy hook agent.
+/// All native surface reads and receipt/decision dispatch land together on
+/// GTK. No Pending/geometry mutex is held across scheduling or any await.
+async fn on_card_thread(app:AppHandle,window:tauri::WebviewWindow,action:impl FnOnce(&AppHandle,&tauri::WebviewWindow)->bool+Send+'static)->bool {
+    let current=app.clone();let(tx,rx)=tokio::sync::oneshot::channel();
+    if app.run_on_main_thread(move||{let _=tx.send(action(&current,&window));}).is_err(){return false;}
+    rx.await.unwrap_or(false)
+}
+#[tauri::command]
+pub async fn approval_presented(window:tauri::WebviewWindow,app:AppHandle,request_id:String,session_id:String,pet_id:String)->bool {
+    on_card_thread(app,window,move|app,window|{
+        let ready=native_card_ready(app,window);
+        let pending=app.state::<Pending>();
+        let shown=pending.0.try_lock().ok().is_some_and(|mut requests|
+            present_at(&mut requests.requests,&request_id,&session_id,&pet_id,ready,Instant::now()));
+        // No command, prompt, session, cwd, answers, or caller-supplied IDs.
+        log::line(if shown{"relay card receipt accepted"}else{"relay card receipt rejected"});
+        shown
+    }).await
+}
+
+fn card_dispatch_at(map:&mut HashMap<String,PendingRequest>,id:&str,reply:Reply,ready:bool,now:Instant)->bool {
+    if !ready || !map.get(id).is_some_and(|r|r.card_presented&&r.acknowledged&&r.live(now)){return false;}
+    dispatch_at(map,id,reply,now)
+}
+
+/// Card decisions require their still-live presentation. Phone answers keep
+/// their separate authenticated native hub path and do not use this function.
+pub async fn answer_from_card(app:AppHandle,window:tauri::WebviewWindow,request_id:String,decision:String)->bool {
+    let word=match decision.as_str(){"allow"=>"allow","deny"=>"deny",_=>return false};
+    on_card_thread(app,window,move|app,window|{
+        let ready=native_card_ready(app,window);let pending=app.state::<Pending>();
+        let accepted=pending.0.try_lock().ok().is_some_and(|mut requests|
+            card_dispatch_at(&mut requests.requests,&request_id,Reply::Decision(word.into()),ready,Instant::now()));
+        log::line(if accepted{"relay card decision accepted"}else{"relay card decision rejected"});
+        accepted
+    }).await
+}
+pub async fn answer_question_from_card(app:AppHandle,window:tauri::WebviewWindow,request_id:String,answers:std::collections::HashMap<String,Value>)->bool {
+    on_card_thread(app,window,move|app,window|{
+        let ready=native_card_ready(app,window);let pending=app.state::<Pending>();
+        let accepted=pending.0.try_lock().ok().is_some_and(|mut requests|
+            card_dispatch_at(&mut requests.requests,&request_id,Reply::Decision(json!({"answers":answers}).to_string()),ready,Instant::now()));
+        log::line(if accepted{"relay card answer accepted"}else{"relay card answer rejected"});
+        accepted
+    }).await
 }
 
 /// Nobody can act on this one — paused, or another card already holds the view.
 pub fn decline(app: &AppHandle, request_id: &str) {
     log::line(format!("decline id={request_id}"));
-    send(app, request_id, Reply::Decline, false);
+    send(app, request_id, Reply::Decline);
 }
 
 /// Called by the island's Allow / Deny buttons. Only ever a bare word: turning
@@ -511,7 +776,7 @@ pub fn answer(app: &AppHandle, request_id: &str, decision: &str) {
         _ => "deny",
     };
     log::line(format!("decision id={request_id} {word}"));
-    send(app, request_id, Reply::Decision(word.to_string()), false);
+    send(app, request_id, Reply::Decision(word.to_string()));
 }
 
 /// Called when an option is picked for a question Claude Code asked. `answers`
@@ -521,14 +786,344 @@ pub fn answer_question(app: &AppHandle, request_id: &str, answers: &HashMap<Stri
     log::line(format!("decision id={request_id} answered a question"));
     // One line: the relay reads up to the first newline.
     let line = json!({ "answers": answers }).to_string();
-    send(app, request_id, Reply::Decision(line), false);
+    send(app, request_id, Reply::Decision(line));
+}
+
+// Local channel fixtures; no UI, relay, file or model.
+#[cfg(test)]
+mod decision_wait_tests {
+    use super::{wait_for_decision_with_limits, DecisionOutcome, Reply};
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+
+    const OUTER: Duration = Duration::from_secs(2);
+    const LONG: Duration = Duration::from_secs(1);
+
+    async fn queued(replies: Vec<Reply>) -> DecisionOutcome {
+        let (tx, mut rx) = mpsc::channel(replies.len().max(1));
+        // Avoid send().unwrap(): Reply deliberately does not implement Debug.
+        for reply in replies { assert!(tx.try_send(reply).is_ok()); }
+        drop(tx);
+        tokio::time::timeout(OUTER,
+            wait_for_decision_with_limits("synthetic-request", &mut rx, LONG, LONG))
+            .await.expect("bounded local decision wait")
+    }
+
+    fn handoff(outcome: DecisionOutcome, expected: &str) {
+        match outcome {
+            DecisionOutcome::Handoff(reason) => assert_eq!(reason, expected),
+            DecisionOutcome::Decision(_) => panic!("expected a handoff, got a decision"),
+        }
+    }
+
+    fn decision(outcome: DecisionOutcome, expected: &str) {
+        match outcome {
+            DecisionOutcome::Decision(value) => assert_eq!(value, expected),
+            DecisionOutcome::Handoff(reason) => panic!("expected decision, got {reason}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn duplicate_ack_does_not_discard_a_following_decision() {
+        decision(queued(vec![Reply::Ack, Reply::Ack, Reply::Decision("allow".into())]).await, "allow");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn decision_before_ack_is_valid_and_preserves_the_exact_value() {
+        let value = r#"{"answers":{"synthetic-question":"synthetic-answer"}}"#;
+        decision(queued(vec![Reply::Decision(value.into()), Reply::Ack]).await, value);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn decline_before_ack_means_not_shown() {
+        handoff(queued(vec![Reply::Decline, Reply::Decision("allow".into())]).await, "not-shown");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn decline_after_duplicate_ack_means_released() {
+        handoff(queued(vec![Reply::Ack, Reply::Ack, Reply::Decline]).await, "released");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn channel_closed_before_ack_means_closed() {
+        handoff(queued(vec![]).await, "closed");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn channel_closed_after_ack_means_closed() {
+        handoff(queued(vec![Reply::Ack]).await, "closed");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn open_channel_without_ack_expires_as_unacknowledged() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let result = tokio::time::timeout(OUTER, wait_for_decision_with_limits(
+            "synthetic-unacknowledged", &mut rx, Duration::from_millis(15), LONG)).await;
+        // Keep the sender alive throughout the wait: closure cannot pass this.
+        drop(tx);
+        handoff(result.expect("ack deadline must be bounded"), "unacknowledged");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn expired_total_budget_beats_ready_ack_and_decision() {
+        let (tx, mut rx) = mpsc::channel(2);
+        assert!(tx.try_send(Reply::Ack).is_ok());
+        assert!(tx.try_send(Reply::Decision("allow".into())).is_ok());
+        handoff(wait_for_decision_with_limits("synthetic-expired", &mut rx,
+            LONG, Duration::ZERO).await, "unacknowledged");
+        // The zero total budget must be checked before receiving even ready data.
+        assert!(matches!(rx.try_recv(), Ok(Reply::Ack)));
+        drop(tx);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn continuous_duplicate_ack_cannot_extend_the_absolute_total_deadline() {
+        let (tx, mut rx) = mpsc::channel(1);
+        assert!(tx.try_send(Reply::Ack).is_ok());
+        let count = Arc::new(AtomicUsize::new(0));
+        let counted = count.clone();
+        let flooding_tx = tx.clone();
+        let flood = tokio::spawn(async move {
+            while flooding_tx.send(Reply::Ack).await.is_ok() {
+                counted.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let result = tokio::time::timeout(OUTER, wait_for_decision_with_limits(
+            "synthetic-flood", &mut rx, LONG, Duration::from_millis(100))).await;
+        // Clean up before assertions, also on an outer timeout. The original
+        // sender remains alive until here, so "closed" cannot masquerade as expiry.
+        flood.abort();
+        let _ = flood.await;
+        drop(tx);
+        handoff(result.expect("ready ACK flood must not starve the deadline"), "timeout");
+        assert!(count.load(Ordering::Relaxed) > 1, "fixture must deliver repeated ACKs");
+    }
+}
+
+#[cfg(test)]
+mod pending_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn repeated_ack_never_fills_the_queue_or_displaces_a_human_decision() {
+        let (sender,mut rx)=mpsc::channel(4);
+        let mut pending=HashMap::new();
+        pending.insert("synthetic".into(),PendingRequest::new(sender,"synthetic-session".into(),"codex".into(),Instant::now()));
+        for _ in 0..1000 { assert!(dispatch(&mut pending,"synthetic",Reply::Ack)); }
+        assert!(dispatch(&mut pending,"synthetic",Reply::Decision("deny".into())));
+        assert!(pending.is_empty());
+        assert!(matches!(rx.try_recv(),Ok(Reply::Ack)));
+        assert!(matches!(rx.try_recv(),Ok(Reply::Decision(value)) if value=="deny"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_decision_before_ack_is_preserved_and_late_replies_cannot_replace_it() {
+        let (sender,mut rx)=mpsc::channel(4);
+        let mut pending=HashMap::new();
+        pending.insert("synthetic".into(),PendingRequest::new(sender,"synthetic-session".into(),"codex".into(),Instant::now()));
+        assert!(dispatch(&mut pending,"synthetic",Reply::Decision("allow".into())));
+        assert!(!dispatch(&mut pending,"synthetic",Reply::Ack));
+        assert!(!dispatch(&mut pending,"synthetic",Reply::Decline));
+        assert!(matches!(rx.try_recv(),Ok(Reply::Decision(value)) if value=="allow"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_decline_releases_only_its_exact_pending_request() {
+        let (a,mut a_rx)=mpsc::channel(4);let (b,mut b_rx)=mpsc::channel(4);
+        let mut pending=HashMap::new();
+        pending.insert("a".into(),PendingRequest::new(a,"a-session".into(),"claude".into(),Instant::now()));
+        pending.insert("b".into(),PendingRequest::new(b,"b-session".into(),"copilot".into(),Instant::now()));
+        assert!(dispatch(&mut pending,"a",Reply::Decline));
+        assert!(!pending.contains_key("a"));assert!(pending.contains_key("b"));
+        assert!(matches!(a_rx.try_recv(),Ok(Reply::Decline)));
+        assert!(b_rx.try_recv().is_err());
+        assert!(!dispatch(&mut pending,"missing",Reply::Decision("allow".into())));
+    }
+
+    #[test]
+    fn handoff_event_has_only_the_exact_scoped_identity_and_reason() {
+        let payload=handoff_payload("synthetic-request","synthetic-session","codex",Some("integration_github"),"released");
+        assert_eq!(payload,json!({"requestId":"synthetic-request","sessionId":"synthetic-session","agent":"codex","provider":"integration_github","reason":"released"}));
+        assert_eq!(handoff_payload("r","s","claude",None,"timeout")["provider"],Value::Null);
+        assert!(payload.get("decision").is_none());assert!(payload.get("command").is_none());
+    }
+}
+
+#[cfg(test)]
+mod card_receipt_tests {
+    use super::*;
+    fn fixture(agent:&str)->(HashMap<String,PendingRequest>,mpsc::Receiver<Reply>,Instant) {
+        let now=Instant::now();let(tx,rx)=mpsc::channel(4);let mut requests=HashMap::new();
+        requests.insert("synthetic-request".into(),PendingRequest::new(tx,"synthetic-session".into(),agent.into(),now));
+        (requests,rx,now)
+    }
+    fn decision()->Reply{Reply::Decision("allow".into())}
+    #[test]fn canonical_pet_comes_from_trusted_owner_then_agent_then_claude_editor() {
+        for(agent,pet)in[("codex","agent_codex"),("copilot","agent_copilot"),("muse","agent_muse"),("antigravity","agent_antigravity")] {
+            assert_eq!(request_pet(&json!({"coucou_agent":agent})),pet);
+            assert_eq!(request_pet(&json!({"coucou_agent":agent,"coucou_pet_provider":"integration_github"})),"integration_github");
+        }
+        assert_eq!(request_pet(&json!({})),"integration_claude");
+        assert_eq!(request_pet(&json!({"term_editor":"cursor"})),"agent_cursor");
+        assert_eq!(request_pet(&json!({"coucou_agent":"claude","term_editor":"cursor"})),"agent_cursor");
+        assert_eq!(request_pet(&json!({"coucou_agent":"../../bad","coucou_pet_provider":"unknown"})),"integration_claude");
+        assert_eq!(request_pet(&json!({"coucou_agent":"codex","coucou_pet_provider":"ollama"})),"ai_ollama");
+    }
+    #[test]fn scoped_presentations_cover_every_supported_hook_without_answering() {
+        for agent in ["integration_claude","agent_cursor","agent_codex","agent_copilot","agent_muse","agent_antigravity","integration_github","ai_ollama"] {
+            let(mut requests,mut rx,now)=fixture(agent);
+            assert!(!present_at(&mut requests,"wrong-id","synthetic-session",agent,true,now));
+            assert!(!present_at(&mut requests,"synthetic-request","wrong-session",agent,true,now));
+            assert!(!present_at(&mut requests,"synthetic-request","synthetic-session","wrong-agent",true,now));
+            assert!(rx.try_recv().is_err());
+            assert!(present_at(&mut requests,"synthetic-request","synthetic-session",agent,true,now));
+            assert!(requests["synthetic-request"].card_presented);
+            assert!(matches!(rx.try_recv(),Ok(Reply::Ack)));
+            assert!(rx.try_recv().is_err());assert_eq!(requests.len(),1);
+        }
+    }
+    #[test]fn hidden_or_foreign_surface_never_receives_a_card_receipt() {
+        let rect=crate::island::IslandRect{x:10.0,y:0.0,w:600.0,h:180.0};
+        assert!(card_surface_ready("island",true,false,rect));
+        for(label,visible,collapsed)in[("pet-control",true,false),("companions",true,false),("island",false,false),("island",true,true)] {
+            assert!(!card_surface_ready(label,visible,collapsed,rect));
+        }
+        for rect in [crate::island::IslandRect::default(),crate::island::IslandRect{x:f64::NAN,..rect},crate::island::IslandRect{w:f64::INFINITY,..rect},crate::island::IslandRect{h:-1.0,..rect}] {
+            assert!(!card_surface_ready("island",true,false,rect));
+        }
+        let(mut requests,mut rx,now)=fixture("codex");
+        assert!(!present_at(&mut requests,"synthetic-request","synthetic-session","codex",false,now));
+        assert!(!requests["synthetic-request"].acknowledged);assert!(rx.try_recv().is_err());
+    }
+    #[test]fn a_card_cannot_decide_before_its_receipt_or_after_it_is_hidden() {
+        let(mut requests,mut rx,now)=fixture("codex");
+        assert!(!card_dispatch_at(&mut requests,"synthetic-request",decision(),true,now));
+        assert!(present_at(&mut requests,"synthetic-request","synthetic-session","codex",true,now));
+        assert!(matches!(rx.try_recv(),Ok(Reply::Ack)));
+        assert!(!card_dispatch_at(&mut requests,"synthetic-request",decision(),false,now));
+        assert!(requests.contains_key("synthetic-request"));assert!(rx.try_recv().is_err());
+        assert!(card_dispatch_at(&mut requests,"synthetic-request",decision(),true,now));
+        assert!(matches!(rx.try_recv(),Ok(Reply::Decision(value))if value=="allow"));
+        assert!(!card_dispatch_at(&mut requests,"synthetic-request",decision(),true,now));
+    }
+    #[test]fn old_blind_ack_is_not_a_card_receipt() {
+        let(mut requests,mut rx,now)=fixture("copilot");
+        assert!(dispatch_at(&mut requests,"synthetic-request",Reply::Ack,now));
+        assert!(matches!(rx.try_recv(),Ok(Reply::Ack)));
+        assert!(!card_dispatch_at(&mut requests,"synthetic-request",decision(),true,now));
+        assert!(rx.try_recv().is_err());assert_eq!(requests.len(),1);
+    }
+    #[test]fn expiry_is_enforced_before_async_cleanup_and_duplicate_receipts_cannot_renew_it() {
+        let(mut requests,mut rx,now)=fixture("codex");
+        let ack_deadline=requests["synthetic-request"].ack_deadline;
+        assert!(!present_at(&mut requests,"synthetic-request","synthetic-session","codex",true,ack_deadline));
+        assert!(!dispatch_at(&mut requests,"synthetic-request",decision(),ack_deadline));
+        assert!(present_at(&mut requests,"synthetic-request","synthetic-session","codex",true,now));
+        let deadline=requests["synthetic-request"].deadline;
+        for _ in 0..1000{assert!(present_at(&mut requests,"synthetic-request","synthetic-session","codex",true,now));}
+        assert_eq!(requests["synthetic-request"].deadline,deadline);
+        assert!(matches!(rx.try_recv(),Ok(Reply::Ack)));assert!(rx.try_recv().is_err());
+        assert!(!card_dispatch_at(&mut requests,"synthetic-request",decision(),true,deadline));
+        assert!(!present_at(&mut requests,"synthetic-request","synthetic-session","codex",true,deadline));
+        assert!(rx.try_recv().is_err());
+    }
+    #[test]fn ending_a_relay_never_reopens_or_consumes_another_request() {
+        let(mut requests,mut rx,now)=fixture("muse");
+        assert!(present_at(&mut requests,"synthetic-request","synthetic-session","muse",true,now));
+        let(tx,mut other_rx)=mpsc::channel(4);
+        requests.insert("other".into(),PendingRequest::new(tx,"other-session".into(),"codex".into(),now));
+        assert!(dispatch_at(&mut requests,"synthetic-request",Reply::Decline,now));
+        assert!(!present_at(&mut requests,"synthetic-request","synthetic-session","muse",true,now));
+        assert!(!card_dispatch_at(&mut requests,"synthetic-request",decision(),true,now));
+        assert!(requests.contains_key("other"));assert!(other_rx.try_recv().is_err());
+        assert!(matches!(rx.try_recv(),Ok(Reply::Ack)));assert!(matches!(rx.try_recv(),Ok(Reply::Decline)));
+    }
+    #[tokio::test(flavor="current_thread")]
+    async fn disconnected_client_retires_before_a_simultaneously_ready_answer() {
+        let(mut server,client)=tokio::io::duplex(64);drop(client);
+        let outcome=until_relay_closed(&mut server,async{DecisionOutcome::Decision("allow".into())}).await;
+        assert!(matches!(outcome,DecisionOutcome::Handoff("relay-closed")));
+    }
+    #[tokio::test(flavor="current_thread")]
+    async fn connected_client_still_receives_the_exact_human_question_result() {
+        let(mut server,_client)=tokio::io::duplex(64);
+        let reply=json!({"answers":{"synthetic-question":"synthetic-choice"}}).to_string();
+        let outcome=until_relay_closed(&mut server,async{DecisionOutcome::Decision(reply.clone())}).await;
+        assert!(matches!(outcome,DecisionOutcome::Decision(actual)if actual==reply));
+    }
+    #[cfg(target_os="linux")]
+    #[tokio::test(flavor="current_thread")]
+    async fn unix_writer_half_close_keeps_its_reply_receiver_usable() {
+        let(mut server,mut client)=tokio::net::UnixStream::pair().unwrap();
+        client.shutdown().await.unwrap();
+        let reply=json!({"answers":{"question":"choice"}}).to_string();
+        let outcome=until_relay_closed(&mut server,async{
+            tokio::time::sleep(Duration::from_millis(35)).await;
+            DecisionOutcome::Decision(reply.clone())
+        }).await;
+        assert!(matches!(outcome,DecisionOutcome::Decision(actual)if actual==reply));
+        server.write_all(b"synthetic-reply\n").await.unwrap();
+        let mut buf=[0u8;16];let n=client.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n],b"synthetic-reply\n");
+    }
+    #[cfg(target_os="linux")]
+    #[tokio::test(flavor="current_thread")]
+    async fn unix_full_close_after_writer_half_close_retires_without_any_decision() {
+        let(mut server,mut client)=tokio::net::UnixStream::pair().unwrap();
+        client.shutdown().await.unwrap();
+        let closer=tokio::spawn(async move{tokio::time::sleep(Duration::from_millis(35)).await;drop(client);});
+        let outcome=tokio::time::timeout(Duration::from_secs(2),until_relay_closed(&mut server,std::future::pending())).await.unwrap();
+        closer.await.unwrap();
+        assert!(matches!(outcome,DecisionOutcome::Handoff("relay-closed")));
+    }
+    #[tokio::test(flavor="current_thread")]
+    async fn time_spent_before_emit_counts_toward_the_original_ack_deadline() {
+        let(tx,mut rx)=mpsc::channel(4);assert!(tx.try_send(Reply::Ack).is_ok());assert!(tx.try_send(decision()).is_ok());
+        let started=tokio::time::Instant::now()-Duration::from_secs(2);
+        assert!(matches!(wait_for_decision_from("synthetic",&mut rx,Duration::from_secs(1),Duration::from_secs(10),started).await,DecisionOutcome::Handoff("unacknowledged")));
+        assert!(matches!(rx.try_recv(),Ok(Reply::Ack)));
+    }
+}
+
+#[cfg(test)]mod native_hook_lifecycle_tests{
+    use super::*;use crate::chat::{Chat,TurnLease};use std::sync::Arc;
+    fn owned()->(Chat,TurnLease,native_source::Gate){
+        let chat=Chat::default();let turn=chat.begin_cli("gemini-cli",Arc::default()).unwrap();let lease=chat.lease(&turn);chat.start_task(&turn,"synthetic","/fixture","antigravity","synthetic-model",None).unwrap();chat.remember_session(&turn,"native-session","/fixture",false);
+        let raw=json!({"coucou_assistant_gate":true,"coucou_pet_provider":"gemini-cli","coucou_agent":"antigravity","hook_event_name":"PermissionRequest","session_id":"native-session","tool_name":"Bash","tool_input":{"command":"synthetic"},"coucou_native_call":{"name":"run_command","args":{"CommandLine":"synthetic"}}});
+        let gate=native_source::Gate::capture(chat.hook_binding("antigravity","native-session").unwrap(),&raw).unwrap();(chat,lease,gate)
+    }
+    fn pending(gate:&native_source::Gate)->(HashMap<String,PendingRequest>,mpsc::Receiver<Reply>,Instant){let now=Instant::now();let(tx,rx)=mpsc::channel(4);let mut request=PendingRequest::new(tx,"native-session".into(),"agent_gemini".into(),now);request.native=Some(gate.review());(HashMap::from([("hook".into(),request)]),rx,now)}
+    #[test]fn native_hook_consumes_one_exact_card_decision_and_leaves_other_pets_untouched(){
+        let(_chat,_lease,gate)=owned();let(mut map,mut rx,now)=pending(&gate);let(tx,mut other)=mpsc::channel(4);map.insert("other".into(),PendingRequest::new(tx,"foreign".into(),"agent_copilot".into(),now));
+        assert!(!present_at(&mut map,"hook","foreign","agent_gemini",true,now));assert!(present_at(&mut map,"hook","native-session","agent_gemini",true,now));assert!(matches!(rx.try_recv(),Ok(Reply::Ack)));
+        assert!(!card_dispatch_at(&mut map,"hook",Reply::Decision("always".into()),true,now));assert!(!card_dispatch_at(&mut map,"hook",Reply::Decision("{\"answers\":{}}".into()),true,now));
+        assert!(card_dispatch_at(&mut map,"hook",Reply::Decision("allow".into()),true,now));assert!(!card_dispatch_at(&mut map,"hook",Reply::Decision("deny".into()),true,now));assert!(matches!(rx.try_recv(),Ok(Reply::Decision(s))if s=="allow"));assert!(map.contains_key("other")&&other.try_recv().is_err());
+    }
+    #[test]fn native_hook_stop_and_closed_source_refuse_delayed_ack_and_click_before_cleanup(){
+        for stop in [false,true]{let(chat,_lease,gate)=owned();let(mut map,mut rx,now)=pending(&gate);assert!(present_at(&mut map,"hook","native-session","agent_gemini",true,now));let _=rx.try_recv();if stop{chat.cancel_provider("gemini-cli");}else{drop(gate);}
+            assert!(!present_at(&mut map,"hook","native-session","agent_gemini",true,now));assert!(!card_dispatch_at(&mut map,"hook",Reply::Decision("allow".into()),true,now));assert!(rx.try_recv().is_err());}
+    }
+    #[tokio::test]async fn native_hook_stop_wins_over_a_simultaneously_ready_human_answer(){
+        let(chat,_lease,gate)=owned();let(mut server,_client)=tokio::io::duplex(64);chat.cancel_provider("gemini-cli");
+        let outcome=until_native_closed(&mut server,Some(gate.review()),async{DecisionOutcome::Decision("allow".into())}).await;assert!(matches!(outcome,DecisionOutcome::Handoff("native-source-ended")));
+    }
+    #[tokio::test]async fn native_hook_wait_is_withdrawn_when_the_exact_owner_turn_finishes(){
+        let(_chat,lease,gate)=owned();let(mut server,_client)=tokio::io::duplex(64);let dropper=tokio::spawn(async move{tokio::task::yield_now().await;drop(lease);});
+        let outcome=tokio::time::timeout(Duration::from_secs(2),until_native_closed(&mut server,Some(gate.review()),std::future::pending())).await.unwrap();dropper.await.unwrap();assert!(matches!(outcome,DecisionOutcome::Handoff("native-source-ended")));
+    }
+    #[tokio::test]async fn native_hook_relay_eof_wins_and_a_connected_gate_keeps_the_exact_once_result(){
+        let(_chat,_lease,gate)=owned();let(mut server,client)=tokio::io::duplex(64);drop(client);
+        assert!(matches!(until_native_closed(&mut server,Some(gate.review()),async{DecisionOutcome::Decision("allow".into())}).await,DecisionOutcome::Handoff("relay-closed")));
+        let(mut server,_client)=tokio::io::duplex(64);assert!(matches!(until_native_closed(&mut server,Some(gate.review()),async{DecisionOutcome::Decision("deny".into())}).await,DecisionOutcome::Decision(s)if s=="deny"));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    impl Relay for tokio::io::DuplexStream {}
 
     fn block_on<T>(f: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(f)
@@ -541,10 +1136,10 @@ mod tests {
     fn a_relay_that_hangs_up_is_seen_at_once() {
         block_on(async {
             let (mut ours, theirs) = tokio::io::duplex(64);
-            let waiting = tokio::time::timeout(Duration::from_millis(50), client_gone(&mut ours)).await;
+            let waiting = tokio::time::timeout(Duration::from_millis(50), relay_closed(&mut ours)).await;
             assert!(waiting.is_err(), "a live relay must not count as gone");
             drop(theirs);
-            let gone = tokio::time::timeout(Duration::from_millis(50), client_gone(&mut ours)).await;
+            let gone = tokio::time::timeout(Duration::from_millis(50), relay_closed(&mut ours)).await;
             assert!(gone.is_ok(), "a closed relay must be seen within the poll");
         });
     }

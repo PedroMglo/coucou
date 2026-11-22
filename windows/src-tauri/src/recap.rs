@@ -5,7 +5,7 @@
 // names are kept: the agent's pill ID and the project folder's last path
 // component. Never a command, a file path, file contents or a prompt.
 //
-// The history lives in recap.json under platform::local_dir()
+// The history lives in recap.json under platform::data_dir()
 // (%LOCALAPPDATA%\Coucou on Windows, ~/.local/share/coucou on Linux), keeps a
 // 12-week rolling window and a hard cap on its length, and is written whole to
 // a temporary file then renamed over the old one, so a crash never leaves half
@@ -130,6 +130,17 @@ pub struct HistoryView {
     pub turns: Vec<Turn>,
     pub decisions: Vec<Decision>,
     pub prefs: Prefs,
+}
+
+/// Causal result of an explicit preferences/history mutation. Preferences are
+/// the effective in-process state; a failed save is never a persistence ACK.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationReceipt {
+    pub prefs: Prefs,
+    pub persisted: bool,
+    pub history_cleared: bool,
+    pub error_code: Option<&'static str>,
 }
 
 /// A turn in progress, in memory only. The paths are only there to count
@@ -340,35 +351,72 @@ impl Recap {
         &self.history.prefs
     }
 
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.history.prefs.enabled = enabled;
+    fn mutation_receipt(&self, persisted: bool, history_cleared: bool,
+                        error_code: Option<&'static str>) -> MutationReceipt {
+        MutationReceipt { prefs: self.history.prefs.clone(), persisted,
+                          history_cleared, error_code }
+    }
+
+    /// Publish the new durable history before accepting it in memory. The
+    /// caller may already have applied a stricter in-process privacy setting.
+    fn commit_history(&mut self, next: History) -> MutationReceipt {
+        match write_history(&self.path, &next) {
+            Ok(()) => {
+                self.history = next;
+                self.mutation_receipt(true, false, None)
+            }
+            Err(err) => {
+                note(format!("could not save the weekly recap history: {err}"));
+                self.mutation_receipt(false, false, Some("writeFailed"))
+            }
+        }
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) -> MutationReceipt {
         if !enabled {
+            // Stop collecting immediately, even if the preference cannot be
+            // saved for next startup. The receipt makes that distinction clear.
+            self.history.prefs.enabled = false;
             self.drafts.clear();
             self.requests.clear();
         }
-        self.save();
+        let mut next = self.history.clone();
+        next.prefs.enabled = enabled;
+        self.commit_history(next)
     }
 
-    pub fn set_hide_projects(&mut self, hide: bool) {
-        self.history.prefs.hide_projects = hide;
-        self.save();
+    pub fn set_hide_projects(&mut self, hide: bool) -> MutationReceipt {
+        if hide {
+            // Keep project names hidden in this process after a failed save.
+            self.history.prefs.hide_projects = true;
+        }
+        let mut next = self.history.clone();
+        next.prefs.hide_projects = hide;
+        self.commit_history(next)
     }
 
     /// `week` is the Monday the recap was shown for, as YYYY-MM-DD.
-    pub fn mark_shown(&mut self, week: &str) {
+    pub fn mark_shown(&mut self, week: &str) -> MutationReceipt {
         if !is_week_key(week) {
-            return;
+            return self.mutation_receipt(false, false, Some("invalidWeek"));
         }
-        self.history.prefs.last_shown_week = week.to_string();
-        self.save();
+        let mut next = self.history.clone();
+        next.prefs.last_shown_week = week.to_string();
+        self.commit_history(next)
     }
 
-    /// Settings → General → Clear history. The preferences stay.
-    pub fn clear(&mut self) {
-        self.history.turns.clear();
-        self.history.decisions.clear();
-        self.drafts.clear();
-        self.save();
+    /// Settings -> General -> Clear history. Failure preserves the current
+    /// history and drafts, and never acknowledges a successful clear.
+    pub fn clear(&mut self) -> MutationReceipt {
+        let mut next = self.history.clone();
+        next.turns.clear();
+        next.decisions.clear();
+        let mut receipt = self.commit_history(next);
+        if receipt.persisted {
+            self.drafts.clear();
+            receipt.history_cleared = true;
+        }
+        receipt
     }
 
     /// 12-week window, then the hard caps (oldest first out).
@@ -431,6 +479,7 @@ fn read_history(path: &Path) -> History {
 
 /// Whole file to a temporary sibling, flushed, then renamed over the old one.
 fn write_history(path: &Path, history: &History) -> std::io::Result<()> {
+    #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed()?;
     if let Some(dir) = path.parent() {
         platform::ensure_private_dir(dir)?;
     }
@@ -624,29 +673,6 @@ fn decode_base64(data: &str) -> Option<Vec<u8>> {
 
 const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'];
 
-/// Writes `bytes` as `<stem>.png` in `dir`, or `<stem> (2).png`… when that name
-/// is taken. An existing file is never replaced.
-fn write_unique(dir: &Path, stem: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
-    for n in 1..1000 {
-        let name = if n == 1 { format!("{stem}.png") } else { format!("{stem} ({n}).png") };
-        let path = dir.join(name);
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                let written = file.write_all(bytes).and_then(|()| file.sync_all());
-                drop(file);
-                if let Err(err) = written {
-                    let _ = std::fs::remove_file(&path);
-                    return Err(err);
-                }
-                return Ok(path);
-            }
-            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err),
-        }
-    }
-    Err(std::io::Error::new(ErrorKind::AlreadyExists, "too many recap images with this name"))
-}
-
 /// The PNG the page rendered, checked and written to the first pictures folder
 /// that exists.
 fn save_png(dirs: &[PathBuf], data: &str, week: &str) -> Result<PathBuf, String> {
@@ -666,7 +692,7 @@ fn save_png(dirs: &[PathBuf], data: &str, week: &str) -> Result<PathBuf, String>
     } else {
         "Coucou weekly recap".to_string()
     };
-    write_unique(dir, &stem, &bytes)
+    platform::write_unique_export(dir, &stem, "png", &bytes)
         .map_err(|err| crate::i18n::tf("Could not save the image: {error}", &[("error", &err.to_string())]))
 }
 
@@ -685,7 +711,7 @@ fn now() -> i64 {
 }
 
 pub fn load() -> Store {
-    Store(Mutex::new(Recap::load(platform::local_dir().join("recap.json"), now())))
+    Store(Mutex::new(Recap::load(platform::data_dir().join("recap.json"), now())))
 }
 
 /// Called by the relay server for every hook event. An agent starting work is
@@ -728,23 +754,23 @@ pub fn recap_prefs(store: State<Store>) -> Prefs {
 }
 
 #[tauri::command]
-pub fn recap_set_enabled(store: State<Store>, enabled: bool) {
-    store.lock().set_enabled(enabled);
+pub fn recap_set_enabled(store: State<Store>, enabled: bool) -> MutationReceipt {
+    store.lock().set_enabled(enabled)
 }
 
 #[tauri::command]
-pub fn recap_set_hide_projects(store: State<Store>, hide: bool) {
-    store.lock().set_hide_projects(hide);
+pub fn recap_set_hide_projects(store: State<Store>, hide: bool) -> MutationReceipt {
+    store.lock().set_hide_projects(hide)
 }
 
 #[tauri::command]
-pub fn recap_mark_shown(store: State<Store>, week: String) {
-    store.lock().mark_shown(&week);
+pub fn recap_mark_shown(store: State<Store>, week: String) -> MutationReceipt {
+    store.lock().mark_shown(&week)
 }
 
 #[tauri::command]
-pub fn recap_clear(store: State<Store>) {
-    store.lock().clear();
+pub fn recap_clear(store: State<Store>) -> MutationReceipt {
+    store.lock().clear()
 }
 
 /// `data` is the canvas's PNG as a data URL. Returns where it was written.
@@ -764,6 +790,10 @@ pub fn recap_reveal_saved(store: State<Store>) {
         platform::reveal_folder(&dir.to_string_lossy());
     }
 }
+
+#[cfg(test)]
+#[path="recap_persistence_tests.rs"]
+mod persistence_tests;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

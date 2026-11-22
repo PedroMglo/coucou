@@ -18,7 +18,11 @@ pub fn line(message: impl AsRef<str>) {
     }
     let path = dir.join("coucou.log");
     // Keep it from growing forever: start fresh past ~1 MB.
-    if std::fs::metadata(&path).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+    // During Linux profile inventory, append to the already initialized stable
+    // file instead of changing its parent's directory identity by rotation.
+    #[cfg(target_os="linux")]let rotate=crate::pet_data::bootstrap::admitted();
+    #[cfg(not(target_os="linux"))]let rotate=true;
+    if rotate && std::fs::metadata(&path).map(|m| m.len() > 1_000_000).unwrap_or(false) {
         let _ = std::fs::remove_file(&path);
     }
     let mut options = std::fs::OpenOptions::new();

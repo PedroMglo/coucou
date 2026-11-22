@@ -22,8 +22,11 @@ class PillsTest {
         }.toList()
     }
 
-    @Test fun catalogMatchesDesktopExceptAppleMusic() {
-        val expected = reference().filter { it.id != "integration_music" }
+    @Test fun catalogMatchesSharedDesktopPills() {
+        // Apple Music has no Android equivalent. Guardian operates on the Linux
+        // host and has no phone card or place in the Android widget team picker.
+        val desktopOnly = setOf("integration_music", "agent_system_guardian")
+        val expected = reference().filterNot { it.id in desktopOnly }
         assertTrue("parsed too few pills from pills.ts", expected.size >= 20)
         assertEquals(expected.map { it.id }, Pills.catalog.map { it.id })
         for ((ref, mine) in expected.zip(Pills.catalog)) {

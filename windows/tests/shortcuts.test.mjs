@@ -13,6 +13,8 @@ import {
 } from "../src/core/shortcuts.ts";
 import { registerShortcutHandlers, runGlobalShortcut, runIslandKey } from "../src/island/shortcuts.ts";
 import { DEFAULT_SETTINGS, State } from "../src/core/state.ts";
+import { requestDestinations } from "../src/core/request-destinations.ts";
+import { Bridge } from "../src/core/bridge.ts";
 
 const MAC_IDS = [
   "toggleIsland", "openChat", "goToAlert", "jumpToTerminal", "attachFrontWindow",
@@ -288,12 +290,22 @@ const host = {
 };
 let desktopSupported = true;
 const resume = () => did.push("resume");
+const nativeShortcutRequests = new Set();
+let nativeShortcutSequence = 0;
+function nativeShortcutRequest(target) {
+  const id = `shortcut-native-${++nativeShortcutSequence}`;
+  nativeShortcutRequests.add(id);
+  return requestDestinations.add({ id, provider: "codex", target });
+}
 // The island listens on `window`, which here is the bare global object.
 const listeners = [];
 globalThis.addEventListener = (type, fn, capture) => listeners.push({ type, fn, capture });
 registerShortcutHandlers(host, resume);
 
 beforeEach(() => {
+  for (const id of nativeShortcutRequests) requestDestinations.end(id);
+  nativeShortcutRequests.clear();
+  State.petCardsOnly = false;
   did = [];
   calls.length = 0;
   State.tasks = [];
@@ -303,6 +315,7 @@ beforeEach(() => {
   State.isPinned = false;
   State.pendingApproval = null;
   State.stateOverride = null;
+  State.chatBusyProviders.clear();State.chatResettingProviders.clear();State.chatFeedback.clear();
   State.chatHistory = [];
   State.settings = { ...DEFAULT_SETTINGS };
   State.mochiOnDesktop = false;
@@ -360,6 +373,21 @@ test("the island toggle opens with the keyboard, and closes an open island", () 
   assert.deepEqual(did, ["collapse"]);
 });
 
+test("the pet island toggle uses native centre state rather than the legacy popup mode", async () => {
+  State.petCardsOnly = true;
+  State.mode = "expanded";
+  runGlobalShortcut(host, "toggleIsland", resume);
+  await new Promise(setImmediate);
+  assert.deepEqual(sent("pet_panel_open"), [{ x: 360, y: 50, pet: undefined, section: "home", toggle: true }]);
+  assert.deepEqual(did, ["resume"]);
+  for (const command of ["pet_panel_hide", "cli_agent_answer", "save_settings"]) assert.deepEqual(sent(command), []);
+});
+
+test("ordinary centre opening stays explicit and does not toggle an already open centre", async () => {
+  await Bridge.petPanelOpen(360, 50, "agent_codex", "sessions");
+  assert.deepEqual(sent("pet_panel_open"), [{ x: 360, y: 50, pet: "agent_codex", section: "sessions" }]);
+});
+
 test("go to alert: the permission first, then a question, else Mochi is annoyed", () => {
   runGlobalShortcut(host, "goToAlert", resume);
   assert.deepEqual(did, ["emote:annoyed"]);
@@ -397,6 +425,57 @@ test("go to alert brings up the unified card: any agent's pill, a question as a 
   assert.equal(State.focusId, "integration_claude");
   assert.deepEqual(sent("approval_decision"), []);
   assert.deepEqual(sent("approval_answer"), []);
+});
+
+test("go to alert reopens the exact native conversation without changing the selected pet or deciding", async () => {
+  State.petCardsOnly = true;
+  State.setFocus("integration_n8n");
+  const target = { petId: "agent_codex", provider: "codex", origin: "mochi", sessionId: "shortcut-cid-A", conversationId: "shortcut-cid-A" };
+  const request = nativeShortcutRequest(target);
+  const settings = structuredClone(State.settings);
+  runGlobalShortcut(host, "goToAlert", resume);
+  await new Promise(setImmediate);
+  assert.deepEqual(sent("pet_chat_open"), [{ request: { pet: "agent_codex", session: undefined, showSessions: false, target, requestId: request.id } }]);
+  assert.deepEqual(did, ["resume"]);
+  assert.equal(State.focusId, "integration_n8n");
+  assert.deepEqual(State.settings, settings);
+  for (const command of ["cli_agent_answer", "approval_decision", "approval_answer", "save_settings"]) assert.deepEqual(sent(command), []);
+});
+
+test("go to alert keeps native request order and skips an ended destination", async () => {
+  State.petCardsOnly = true;
+  const target = id => ({ petId: "agent_codex", provider: "codex", origin: "mochi", sessionId: id, conversationId: id });
+  const first = nativeShortcutRequest(target("shortcut-first")), second = nativeShortcutRequest(target("shortcut-second"));
+  runGlobalShortcut(host, "goToAlert", resume);
+  await new Promise(setImmediate);
+  assert.equal(sent("pet_chat_open").at(-1)?.request.requestId, first.id);
+  requestDestinations.end(first.id);
+  runGlobalShortcut(host, "goToAlert", resume);
+  await new Promise(setImmediate);
+  assert.equal(sent("pet_chat_open").at(-1)?.request.requestId, second.id);
+  requestDestinations.end(second.id);
+  const before = sent("pet_chat_open").length;
+  runGlobalShortcut(host, "goToAlert", resume);
+  await new Promise(setImmediate);
+  assert.equal(sent("pet_chat_open").length, before);
+  assert.deepEqual(sent("cli_agent_answer"), []);
+});
+
+test("a legacy pending card keeps priority and the original presentation ignores native routing", async () => {
+  State.petCardsOnly = true;
+  nativeShortcutRequest({ petId: "agent_codex", provider: "codex", origin: "mochi", sessionId: "shortcut-native-priority", conversationId: "shortcut-native-priority" });
+  State.pendingApproval = { requestId: "legacy-priority", sessionId: "s", pillId: "integration_claude", tool: "Bash", command: "ls" };
+  runGlobalShortcut(host, "goToAlert", resume);
+  await new Promise(setImmediate);
+  assert.deepEqual(did, ["resume", "alert:approval", "keyboard"]);
+  assert.deepEqual(sent("pet_chat_open"), []);
+  State.pendingApproval = null;
+  State.petCardsOnly = false;
+  did = [];
+  runGlobalShortcut(host, "goToAlert", resume);
+  await new Promise(setImmediate);
+  assert.deepEqual(did, ["emote:annoyed"]);
+  assert.deepEqual(sent("pet_chat_open"), []);
 });
 
 test("the island toggle opens on a waiting card, and folds it rather than dropping it", () => {
@@ -456,6 +535,16 @@ test("the desktop shortcut sends Mochi out, lifting Pause, and brings him home",
   assert.deepEqual(calls, []);
 });
 
+test("desktop pet presentation never changes pause or resumes work", () => {
+  State.petCardsOnly = true;
+  State.paused = true;
+  State.mochiOnDesktop = false;
+  runGlobalShortcut(host, "desktopToggle", resume);
+  assert.deepEqual(did, ["desktop"]);
+  assert.equal(State.paused, true);
+  assert.deepEqual(sent("set_paused"), []);
+});
+
 test("where Mochi can't leave the island (GNOME on Wayland), he says so", () => {
   desktopSupported = false;
   runGlobalShortcut(host, "desktopToggle", resume);
@@ -477,7 +566,7 @@ test("actions that aren't the island's do nothing here", () => {
   assert.deepEqual(calls, []);
 });
 
-test("island keys: pills by number, new chat, settings, pin", () => {
+test("island keys: pills by number, new chat, settings, pin", async () => {
   const ids = State.tasks.map((t) => t.id);
   runIslandKey(host, { kind: "pill", number: 2 });
   assert.equal(State.focusId, ids[1]);
@@ -487,11 +576,12 @@ test("island keys: pills by number, new chat, settings, pin", () => {
   assert.equal(State.focusId, ids[2 % ids.length]);
 
   State.chatHistory = [{ id: 1, role: "user", content: "hi" }];
-  State.stateOverride = "thinking";
+  State.chatBusyProviders.add(State.chatProvider);
   runIslandKey(host, { kind: "newChat" });
   assert.equal(State.chatHistory.length, 1, "not while an answer is on its way");
-  State.stateOverride = null;
+  State.chatBusyProviders.clear();
   runIslandKey(host, { kind: "newChat" });
+  await new Promise(resolve=>setTimeout(resolve,0));
   assert.deepEqual(State.chatHistory, []);
   assert.equal(sent("chat_reset").length, 1);
 

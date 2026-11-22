@@ -117,16 +117,13 @@ pub fn agy_approvals_set_enabled(
     if window.label() != crate::HUB_LABEL {
         return Err("only the Coucou window may change this".into());
     }
-    let updated = {
-        let mut current = shared.settings.lock().unwrap();
-        current.agy_approvals_enabled = enabled;
-        if let Err(err) = settings::save(&current) {
-            log::line(format!("could not save settings: {err}"));
-        }
-        current.clone()
-    };
+    if !cfg!(windows) {
+        return Err("Esta opção destina-se às sessões independentes no Windows.".into());
+    }
+    settings::update_with(&shared.settings, |next| next.agy_approvals_enabled = enabled,
+        settings::save, |next| { let _ = app.emit("settings-changed", next); },
+    ).map_err(|error| settings::save_error("Não foi possível confirmar a preferência", &error))?;
     log::line(format!("Antigravity approvals from the island {}", if enabled { "on" } else { "off" }));
-    let _ = app.emit("settings-changed", updated);
     Ok(status(enabled))
 }
 

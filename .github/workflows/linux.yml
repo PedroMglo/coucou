@@ -20,6 +20,7 @@ on:
   pull_request:
     paths:
       - 'windows/**'
+      - 'extensions/copilot/**'
       - '.github/workflows/linux.yml'
 
 permissions:
@@ -32,9 +33,9 @@ env:
 
 jobs:
   build:
-    # The oldest supported Ubuntu: an AppImage only runs on systems whose glibc
-    # is at least as new as the one it was built against.
-    runs-on: ubuntu-22.04
+    # Jammy's PipeWire headers are too old for the native capture dependency.
+    # AppImages require at least the glibc of this build image.
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.pack.outputs.version }}
       publish: ${{ steps.gate.outputs.publish }}
@@ -57,7 +58,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-layer-shell-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libdbus-1-dev libasound2-dev patchelf \
+            librsvg2-dev libssl-dev libdbus-1-dev libasound2-dev libpipewire-0.3-dev patchelf poppler-utils \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good
 
       - uses: actions/setup-node@v7
@@ -79,6 +80,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build the bundled Copilot bridge
+        working-directory: extensions/copilot
+        run: |
+          npm ci
+          npm run build
+
       # Same check as the Windows workflow: three files carry the version.
       - name: Check the tag and every version agree
         if: startsWith(github.ref, 'refs/tags/linux-v')
@@ -97,9 +104,12 @@ jobs:
       # The app bundles target/release/coucou-hook as a resource, and its build
       # script refuses to run until that file exists.
       - name: Test
+        env:
+          # Give debug test threads the same stack as the native goal driver.
+          RUST_MIN_STACK: '4194304'
         run: |
           cargo build --release -p coucou-hook
-          cargo test --workspace
+          cargo test --workspace --locked
 
       # linuxdeploy is itself an AppImage; runners have no FUSE, so it unpacks
       # itself instead of mounting.
@@ -157,7 +167,7 @@ jobs:
           v="$VERSION"
           notes="Coucou for Linux $v — Mochi at the top of your screen.
 
-          - **AppImage** (any distribution): \`chmod +x Coucou-Linux-$v-x86_64.AppImage\` and run it.
+          - **AppImage** (Ubuntu 24.04 or a compatible Linux distribution): \`chmod +x Coucou-Linux-$v-x86_64.AppImage\` and run it.
           - **Debian / Ubuntu**: \`sudo apt install ./Coucou-Linux-$v-amd64.deb\`
           - **Fedora / openSUSE**: \`sudo dnf install ./Coucou-Linux-$v-x86_64.rpm\`
 

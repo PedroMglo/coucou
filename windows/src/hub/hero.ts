@@ -4,10 +4,10 @@
 // its floor — they hop, look around, wave, and react when poked. Also the
 // glowing cards and the Mochis of empty pages. Port of FlowHubMochis.swift.
 //
-// One animation loop draws every live canvas; it stops when none is left or
-// the window is hidden, so a hidden window costs nothing, and skips the ones
-// scrolled out of sight.
+// One animation loop draws only the Hub canvases on screen. It slows down
+// at rest and stops when the native window is hidden.
 
+import { IS_TAURI } from "../core/bridge";
 import { BotEngine, hexToRGB } from "../mochi/engine";
 import { onScreen, shouldAnimate } from "./frames";
 import type { BotEmoteName, BotStateName } from "../core/layout";
@@ -22,56 +22,60 @@ interface Animated {
 }
 
 const live = new Set<Animated>();
-let frame: number | null = null;
-/** The stand-in timer while the webview gives no animation frames (see `ask`). */
-let fallback: number | null = null;
-/** No animation frame came after the last ask: the timer drives the loop. */
-let starved = false;
-let last = performance.now();
+const windowsWebview = IS_TAURI && navigator.userAgent.includes("Windows");
+const IDLE_DELAY_MS = 80;
+const INTERACTION_MS = 1200;
 const start = performance.now();
-/** The Coucou window is on screen, as Rust last said (`setWindowShown`). */
-let windowShown = true;
+let windowShown = !IS_TAURI;
+let frame: number | null = null;
+let idleTimer: number | null = null;
+let fallback: number | null = null;
+let starved = false;
+let last = start;
+let interactiveUntil = start + INTERACTION_MS;
 
 function running(): boolean {
-  // WebView2 can leave a window created hidden reporting "hidden" once shown:
-  // focused, it is in front of the user whatever the page thinks.
-  const visibility = document.hasFocus?.() ? "visible" : document.visibilityState;
+  // WebView2 can retain a hidden visibility state even while it has focus.
+  const visibility = windowsWebview && document.hasFocus() ? "visible" : document.visibilityState;
   return shouldAnimate(live.size, visibility, windowShown);
 }
 
 function loop(now: number) {
   frame = null;
-  if (fallback !== null) {
-    window.clearTimeout(fallback);
-    fallback = null;
-  }
-  const dt = Math.min(0.05, (now - last) / 1000);
+  if (fallback !== null) window.clearTimeout(fallback);
+  fallback = null;
+  if (!running()) return;
+  const dt = Math.min(0.12, (now - last) / 1000);
   last = now;
-  const t = (now - start) / 1000;
   stepVoice(dt, now);
-  for (const a of live) {
-    if (!a.el.isConnected) {
-      // Built but not shown yet: wait for it (a few seconds at most).
-      if (a.shown || now - (a.born ??= now) > 5000) live.delete(a);
+  for (const item of live) {
+    if (!item.el.isConnected) {
+      if (item.shown || now - (item.born ??= now) > 5000) live.delete(item);
       continue;
     }
-    a.shown = true;
-    if (onScreen(a.el.getBoundingClientRect(), window.innerWidth, window.innerHeight)) a.draw(dt, t);
+    item.shown = true;
+    if (onScreen(item.el.getBoundingClientRect(), window.innerWidth, window.innerHeight)) {
+      item.draw(dt, (now - start) / 1000);
+    }
   }
-  if (running()) ask();
+  if (!running()) return;
+  if (now < interactiveUntil) {
+    requestFrame();
+  } else {
+    idleTimer = window.setTimeout(() => {
+      idleTimer = null;
+      if (running()) requestFrame();
+    }, IDLE_DELAY_MS);
+  }
 }
 
-/**
- * The next frame. WebView2 gives a window created hidden no animation frames
- * until something wakes its compositor, so a timer stands in when
- * none comes: the bands stay alive at 30 frames a second instead of frozen,
- * and the loop goes back to real frames the moment one arrives.
- */
-function ask() {
+function requestFrame() {
   frame = requestAnimationFrame((now) => {
     starved = false;
     loop(now);
   });
+  if (!windowsWebview) return;
+  // A WebView2 created hidden sometimes needs a timer until native frames return.
   fallback = window.setTimeout(() => {
     fallback = null;
     if (frame === null) return;
@@ -82,27 +86,44 @@ function ask() {
 }
 
 function wake() {
-  if (frame === null && fallback === null && running()) {
+  if (!running() || frame !== null) return;
+  if (idleTimer !== null) {
+    window.clearTimeout(idleTimer);
+    idleTimer = null;
+  } else {
     last = performance.now();
-    ask();
   }
+  requestFrame();
 }
 
-document.addEventListener("visibilitychange", wake);
-window.addEventListener("focus", wake);
-
-/** The window was shown or hidden (the `hub-visible` event): hidden, the loop
- *  stops at once; shown, it starts again. */
-export function setWindowShown(shown: boolean) {
-  windowShown = shown;
-  if (!shown) {
-    if (frame !== null) cancelAnimationFrame(frame);
-    if (fallback !== null) window.clearTimeout(fallback);
-    frame = null;
-    fallback = null;
-  }
+function interact() {
+  interactiveUntil = performance.now() + INTERACTION_MS;
   wake();
 }
+
+function updateVisibility() {
+  if (running()) {
+    interact();
+    return;
+  }
+  if (frame !== null) cancelAnimationFrame(frame);
+  if (idleTimer !== null) window.clearTimeout(idleTimer);
+  if (fallback !== null) window.clearTimeout(fallback);
+  frame = idleTimer = fallback = null;
+  starved = false;
+}
+
+export function setWindowShown(shown: boolean) {
+  windowShown = shown;
+  updateVisibility();
+}
+
+document.addEventListener("visibilitychange", updateVisibility);
+window.addEventListener("focus", updateVisibility);
+document.addEventListener("pointermove", interact, { passive: true });
+document.addEventListener("pointerdown", interact, { passive: true });
+document.addEventListener("keydown", interact);
+document.addEventListener("wheel", interact, { passive: true });
 
 // ── The voice ─────────────────────────────────────────────────────────────────
 
@@ -116,7 +137,7 @@ let voice = 0;
 export function setVoiceLevel(level: number) {
   voiceGoal = Math.max(0, Math.min(1, level));
   voiceAt = performance.now();
-  wake();
+  interact();
 }
 
 /** One step of the eased level; the voice fades once the bands stop coming. */
@@ -128,7 +149,7 @@ function stepVoice(dt: number, now: number) {
 
 function add(a: Animated) {
   live.add(a);
-  wake();
+  interact();
 }
 
 function fit(canvas: HTMLCanvasElement): { w: number; h: number; ctx: CanvasRenderingContext2D | null } {

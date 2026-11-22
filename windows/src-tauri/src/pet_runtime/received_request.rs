@@ -1,0 +1,77 @@
+//! User-reviewed received request -> own goal DATA. The signed origin is never
+//! an execution/delegation/model-context grant and does not copy message text.
+use super::{model::{self,Spec},messages::ReceivedReference};
+use serde::{Serialize,Deserialize};
+pub(super)const TTL:u64=120_000;
+#[derive(Clone,Copy,PartialEq,Eq)]pub(super)enum Purpose{Request,Funded,Result,RecursiveFunded,RecursiveResult,PlannedData,DerivedFunded}
+impl Purpose{
+ pub(super)fn version(self)->u32{match self{Self::Request=>1,Self::Funded=>2,Self::Result=>3,Self::RecursiveFunded=>4,Self::RecursiveResult=>5,Self::PlannedData=>6,Self::DerivedFunded=>7}}
+ pub(super)fn request(self,pet:&str,source:&ReceivedReference,client:&str)->model::Result<String>{match self{Self::Request=>request_id(pet,source,client),Self::PlannedData=>planned_request_id(pet,source,client),Self::Funded|Self::DerivedFunded=>funded_request_id(pet,source),Self::Result|Self::RecursiveResult=>result_request_id(pet,source,client),Self::RecursiveFunded=>recursive_funded_request_id(pet,source)}}
+}
+fn hash(s:&str)->bool{super::authority::decode(s).is_some()}
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct Source{pub reference:ReceivedReference,pub sender_pet_id:String,pub sender_goal_id:String,pub sender_conversation_id:String,pub recipient_pet_id:String,pub receipt_hash:String,pub envelope_hash:String,pub received_at:u64,pub deadline_at:u64}
+impl Source{
+ pub(super)fn valid(&self)->bool{let s=self;s.reference.valid()&&crate::pet_config::blueprint(&s.sender_pet_id).is_some()&&crate::pet_config::blueprint(&s.recipient_pet_id).is_some()&&s.sender_pet_id!=s.recipient_pet_id&&model::goal_id(&s.sender_goal_id)&&crate::assistant_memory::valid_id(&s.sender_conversation_id)&&hash(&s.receipt_hash)&&hash(&s.envelope_hash)&&s.received_at>0&&s.received_at<s.deadline_at&&s.deadline_at<=8_640_000_000_000_000}
+}
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct Body{#[serde(default,skip_serializing_if="Option::is_none")]pub planned_dependencies:Option<Box<super::planned_peer_data::Published>>,#[serde(default,skip_serializing_if="Option::is_none")]pub delegation:Option<super::delegation::Payload>,pub schema_version:u32,pub purpose:String,pub key_id:String,pub review_id:String,pub client_request_id:String,pub actor_window:String,pub source:Source,pub target_goal_id:String,pub base_spec_hash:String,pub prepared_at:u64,pub approved_at:u64,pub expires_at:u64,pub context_copied:bool,pub execution_authority_granted:bool}
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct Origin{pub body:Body,pub tag:String}
+pub(super)fn base_hash(spec:&Spec)->model::Result<String>{let mut base=spec.clone();base.received_from=None;model::fingerprint(&base)}
+pub(super)fn result_request_id(pet:&str,source:&ReceivedReference,request:&str)->model::Result<String>{if !model::key(pet)||!source.valid()||!model::key(request){return Err(model::Error::InvalidInput);}Ok(format!("rq-{}",model::fingerprint(&("coucou-received-derived-result-goal-data-v1",pet,source,request))?))}
+pub(super)fn recursive_funded_request_id(pet:&str,source:&ReceivedReference)->model::Result<String>{if !model::key(pet)||!source.valid(){return Err(model::Error::InvalidInput);}Ok(format!("rq-{}",model::fingerprint(&("coucou-recursive-funded-goal-data-v1",pet,source))?))}
+pub(super)fn funded_request_id(pet:&str,source:&ReceivedReference)->model::Result<String>{request_id(pet,source,&format!("funded-{}",source.message_id))}
+pub(super)fn request_id(pet:&str,source:&ReceivedReference,request:&str)->model::Result<String>{if !model::key(pet)||!source.valid()||!model::key(request){return Err(model::Error::InvalidInput);}Ok(format!("rq-{}",model::fingerprint(&("coucou-received-request-goal-data-v1",pet,source,request))?))}
+pub(super)fn planned_request_id(pet:&str,source:&ReceivedReference,request:&str)->model::Result<String>{if !model::key(pet)||!source.valid()||!model::key(request){return Err(model::Error::InvalidInput);}Ok(format!("rq-{}",model::fingerprint(&("coucou-planned-peer-own-goal-data-v1",pet,source,request))?))}
+impl Origin{
+ pub(super)fn valid_for(&self,spec:&Spec)->bool{let b=&self.body;
+  if b.planned_dependencies.as_ref().is_some_and(|p|!matches!(b.schema_version,6|7)||!matches!(p.schema_version,3|4)||!p.valid()||p.source.goal_id!=b.source.sender_goal_id||p.source.pet_id!=b.source.sender_pet_id||p.source.conversation_id!=b.source.sender_conversation_id||p.generated_plan.decision_id!=b.source.reference.decision_id){return false;}
+  (if let Some(d)=&b.delegation{(if b.schema_version==4||b.schema_version==7&&d.schema_version==2&&b.planned_dependencies.as_ref().and_then(|p|p.source.received_request.as_ref()).is_some_and(|r|matches!(r.schema_version,2|4|7)){let mut pets=std::collections::BTreeSet::new();(if b.schema_version==4{b.purpose=="recursiveFundedDelegationOwnGoalDataOnly"}else{b.purpose=="derivedFundedDelegationOwnGoalDataOnly"})&&d.schema_version==2&&(2..=8).contains(&d.ancestors.len())&&d.ancestors.len()<=usize::from(d.max_depth)&&d.ancestors.last()==Some(&b.source.sender_pet_id)&&d.ancestors.iter().all(|p|crate::pet_config::blueprint(p).is_some()&&p!=&b.source.recipient_pet_id&&pets.insert(p))}else{(b.schema_version==2&&b.purpose=="fundedDelegationOwnGoalDataOnly"||b.schema_version==7&&b.purpose=="derivedFundedDelegationOwnGoalDataOnly")&&d.schema_version==1&&d.ancestors==vec![b.source.sender_pet_id.clone()]})&&d.allowance.valid()&&(1..=8).contains(&d.max_depth)&&spec.intent==d.subgoal&&spec.criteria==d.criteria}else{b.schema_version==1&&b.purpose=="receivedRequestOwnGoalDataOnly"||b.schema_version==3&&b.purpose=="receivedResultOwnGoalDataOnly"||b.schema_version==5&&b.purpose=="receivedRecursiveResultOwnGoalDataOnly"||b.schema_version==6&&b.purpose=="receivedPlannedPeerOwnGoalDataOnly"})&&model::token(&b.key_id)&&model::token(&b.review_id)&&model::key(&b.client_request_id)&&super::adapter::allowed(&b.actor_window)&&hash(&self.tag)&&b.source.valid()
+   &&b.prepared_at>=b.source.received_at&&b.prepared_at<=b.approved_at&&b.approved_at<b.expires_at&&b.expires_at<=b.source.deadline_at&&b.expires_at-b.prepared_at<=TTL
+   &&b.source.recipient_pet_id==spec.owner.pet_id&&b.source.sender_goal_id!=b.target_goal_id&&b.target_goal_id==model::id_for(spec)&&base_hash(spec).ok().as_ref()==Some(&b.base_spec_hash)
+   &&(if b.schema_version==6{planned_request_id(&spec.owner.pet_id,&b.source.reference,&b.client_request_id)}else if b.schema_version==4{recursive_funded_request_id(&spec.owner.pet_id,&b.source.reference)}else if b.delegation.is_some(){funded_request_id(&spec.owner.pet_id,&b.source.reference)}else if matches!(b.schema_version,3|5){result_request_id(&spec.owner.pet_id,&b.source.reference,&b.client_request_id)}else{request_id(&spec.owner.pet_id,&b.source.reference,&b.client_request_id)}).ok().as_ref()==Some(&spec.request_id)&&spec.restored_from.is_none()&&matches!(spec.context,model::Context::Unbound)&&!b.context_copied&&!b.execution_authority_granted
+ }
+}
+pub(super)fn message(body:&Body)->model::Result<Vec<u8>>{let mut bytes=b"coucou-received-request-goal-data-origin-v1\0".to_vec();bytes.extend(serde_json::to_vec(body).map_err(|_|model::Error::InvalidRecord)?);Ok(bytes)}
+#[cfg(target_os="linux")]use std::{sync::Arc,time::{Duration,Instant},path::Path};
+#[cfg(target_os="linux")]pub(super)struct Caller{origin:super::message_api::native::Origin,owner:model::Owner}
+#[cfg(target_os="linux")]impl Caller{
+ pub(super)fn capture(origin:super::message_api::native::Origin,descriptor:&crate::pet_capabilities::Descriptor)->model::Result<Self>{if !super::adapter::allowed(&origin.window)||!origin.frame.current(){return Err(model::Error::Conflict);}let owner=model::Owner::from_runtime_descriptor(descriptor)?;Ok(Self{origin,owner})}
+ pub(super)fn current(&self)->bool{self.origin.frame.current()}
+ pub(super)fn owner(&self)->&model::Owner{&self.owner}
+ pub(super)fn window(&self)->&str{&self.origin.window}
+}
+#[cfg(target_os="linux")]pub(super)struct Review{pub(super)witness:super::authority_store::received_request::Witness,base:Spec,pub(super)proposal:Proposal,expires:Instant}
+#[derive(Clone,Serialize)]#[serde(rename_all="camelCase")]
+pub struct Proposal{pub schema_version:u32,pub review_id:String,pub client_request_id:String,pub source:Source,pub received_message:super::messages::Envelope,pub future:Spec,pub target_goal_id:String,pub prepared_at:u64,pub expires_at:u64,pub context_copied:bool,pub execution_authority_granted:bool,pub budget_reserved:bool}
+#[cfg(target_os="linux")]pub(super)struct Approved{pub(super)review:Review,pub(super)human:Arc<dyn Fn()->bool+Send+Sync>,pub(super)signed:Option<Spec>}
+#[cfg(target_os="linux")]impl Review{
+ pub(super)fn prepare(authority:&Path,caller:Caller,reference:ReceivedReference,client_request_id:String,intent:String,criteria:Vec<String>,now:u64)->model::Result<Self>{if !caller.current(){return Err(model::Error::Conflict);}let purpose=super::authority::Authority::existing(authority).map_err(|e|e.control_error())?.received_request_purpose(&reference,&caller.owner().pet_id,now).map_err(|e|e.control_error())?;Self::prepare_mode(authority,caller,reference,client_request_id,intent,criteria,now,purpose,None)}
+ #[cfg(test)]pub(super)fn prepare_planned_at(authority:&Path,memory:&Path,caller:Caller,reference:ReceivedReference,client:String,intent:String,criteria:Vec<String>,now:u64)->model::Result<Self>{if !caller.current(){return Err(model::Error::Conflict);}let purpose=super::authority::Authority::existing(authority).map_err(|e|e.control_error())?.received_request_purpose(&reference,&caller.owner().pet_id,now).map_err(|e|e.control_error())?;if purpose!=Purpose::PlannedData{return Err(model::Error::InvalidInput);}Self::prepare_mode(authority,caller,reference,client,intent,criteria,now,purpose,Some(memory))}
+ pub(super)fn prepare_funded(authority:&Path,caller:Caller,reference:ReceivedReference,client_request_id:String,intent:String,criteria:Vec<String>,now:u64)->model::Result<Self>{if !caller.current(){return Err(model::Error::Conflict);}let purpose=super::authority::Authority::existing(authority).map_err(|e|e.control_error())?.received_funding_purpose(&reference,&caller.owner().pet_id,now).map_err(|e|e.control_error())?;Self::prepare_mode(authority,caller,reference,client_request_id,intent,criteria,now,purpose,None)}
+ // Same native purpose/authentication/consent, with only a fixture catalog path.
+ #[cfg(test)]pub(super)fn prepare_funded_at(authority:&Path,memory:&Path,caller:Caller,reference:ReceivedReference,client:String,intent:String,criteria:Vec<String>,now:u64)->model::Result<Self>{if !caller.current(){return Err(model::Error::Conflict);}let purpose=super::authority::Authority::existing(authority).map_err(|e|e.control_error())?.received_funding_purpose(&reference,&caller.owner().pet_id,now).map_err(|e|e.control_error())?;Self::prepare_mode(authority,caller,reference,client,intent,criteria,now,purpose,Some(memory))}
+ pub(super)fn prepare_recursive_funded(authority:&Path,caller:Caller,reference:ReceivedReference,client:String,intent:String,criteria:Vec<String>,now:u64)->model::Result<Self>{Self::prepare_mode(authority,caller,reference,client,intent,criteria,now,Purpose::RecursiveFunded,None)}
+ pub(super)fn prepare_result(authority:&Path,caller:Caller,reference:ReceivedReference,client:String,intent:String,criteria:Vec<String>,now:u64)->model::Result<Self>{let purpose=super::authority::Authority::existing(authority).map_err(|e|e.control_error())?.received_result_purpose(&reference,&caller.owner().pet_id,now).map_err(|e|e.control_error())?;Self::prepare_mode(authority,caller,reference,client,intent,criteria,now,purpose,None)}
+ #[cfg(test)]pub(super)fn prepare_result_at(authority:&Path,memory:&Path,caller:Caller,reference:ReceivedReference,client:String,intent:String,criteria:Vec<String>,now:u64)->model::Result<Self>{let purpose=super::authority::Authority::existing(authority).map_err(|e|e.control_error())?.received_result_purpose(&reference,&caller.owner().pet_id,now).map_err(|e|e.control_error())?;Self::prepare_mode(authority,caller,reference,client,intent,criteria,now,purpose,Some(memory))}
+ fn prepare_mode(authority:&Path,caller:Caller,reference:ReceivedReference,client_request_id:String,intent:String,criteria:Vec<String>,now:u64,purpose:Purpose,memory:Option<&Path>)->model::Result<Self>{
+  let funded=matches!(purpose,Purpose::Funded|Purpose::RecursiveFunded|Purpose::DerivedFunded);
+  let base=Spec{received_from:None,restored_from:None,request_id:purpose.request(&caller.owner.pet_id,&reference,&client_request_id)?,owner:caller.owner.clone(),context:model::Context::Unbound,intent,criteria};base.validate()?;
+  let witness=super::authority_store::received_request::Witness::capture_purpose(authority,caller,reference,now,purpose,memory).map_err(|e|e.control_error())?;let expires_at=now.checked_add(TTL).ok_or(model::Error::ClockRollback)?.min(witness.source().deadline_at);witness.target_current(&base,now).map_err(|e|e.control_error())?;let target_goal_id=model::id_for(&base);
+  if funded&&witness.envelope().delegation.as_ref().is_none_or(|d|d.subgoal!=base.intent||d.criteria!=base.criteria){return Err(model::Error::Conflict);}
+  let proposal=Proposal{schema_version:purpose.version(),review_id:witness.review_id().into(),client_request_id,source:witness.source().clone(),received_message:witness.envelope().clone(),future:base.clone(),target_goal_id,prepared_at:now,expires_at,context_copied:false,execution_authority_granted:false,budget_reserved:false};
+  if expires_at<=now{return Err(model::Error::Conflict);}Ok(Self{witness,base,proposal,expires:Instant::now()+Duration::from_millis(expires_at-now)})
+ }
+ pub(super)fn proposal(&self)->Proposal{self.proposal.clone()}
+ pub(super)fn approve(self,now:u64,human:Arc<dyn Fn()->bool+Send+Sync>)->model::Result<Approved>{if now<self.proposal.prepared_at||now>=self.proposal.expires_at||Instant::now()>=self.expires||!self.witness.caller_current()||!human(){return Err(model::Error::Conflict);}Ok(Approved{review:self,human,signed:None})}
+}
+#[cfg(target_os="linux")]pub(super)struct Certificate<'a>{pub(super)approved:&'a Approved}
+#[cfg(target_os="linux")]impl Approved{
+ pub(super)fn confirm(&mut self,store:&super::store::Store,now:u64)->model::Result<model::Receipt>{self.confirm_clock(store,||now)}
+ pub(super)fn confirm_clock(&mut self,store:&super::store::Store,clock:impl Fn()->u64)->model::Result<model::Receipt>{
+  if self.signed.is_none(){let at=clock();self.current(at)?;let _lock=self.review.witness.lock().map_err(|e|e.control_error())?;self.review.witness.current(at).map_err(|e|e.control_error())?;let mut spec=self.review.base.clone();spec.received_from=Some(self.review.witness.seal(&spec,&self.review.proposal.client_request_id,self.review.proposal.prepared_at,self.review.proposal.expires_at,at).map_err(|e|e.control_error())?);spec.validate()?;self.signed=Some(spec);}
+  store.create_reviewed_goal_clock(&Certificate{approved:self},clock)
+ }
+ pub(super)fn current(&self,now:u64)->model::Result<()>{let p=&self.review.proposal;if now<p.prepared_at||now>=p.expires_at||Instant::now()>=self.review.expires||!self.review.witness.caller_current()||!(self.human)(){return Err(model::Error::Conflict);}Ok(())}
+}

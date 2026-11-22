@@ -1,0 +1,426 @@
+//! User-editable identities, model policies and Mochi integration grants.
+use serde::{Deserialize,Serialize};
+use std::{collections::{BTreeMap},hash::{Hash,Hasher},io::{Read,Write},path::{Path,PathBuf},sync::Mutex};
+use tauri::{AppHandle,Emitter};
+#[path="pet_factory.rs"]
+mod factory;
+#[path="pet_inference_config.rs"]mod inference_config;
+#[path="pet_system_access.rs"]pub(crate)mod system_access;
+pub use inference_config::*;
+pub use factory::{Adapter,Blueprint,RuntimeKind};
+pub use crate::pet_inference::Choice as InferenceChoice;
+pub fn blueprint(id:&str)->Option<&'static Blueprint>{factory::blueprint(id)}
+pub fn blueprints()->impl Iterator<Item=&'static Blueprint>{factory::blueprints()}
+const MAX_BYTES:u64=256*1024;
+static EDIT:Mutex<()>=Mutex::new(());
+// Mechanical resource admission must not perform profile IO while holding a
+// chat/queue mutex. Native reads/writes refresh this projection; transports
+// re-read the authoritative profile before an effect, so a stale projection
+// can refuse work but cannot silently redirect or authorize it.
+static RESOURCE_SNAPSHOT:Mutex<Option<std::sync::Arc<Configuration>>>=Mutex::new(None);
+fn publish_resource_snapshot(config:&Configuration){if let Ok(mut snapshot)=RESOURCE_SNAPSHOT.lock(){*snapshot=Some(std::sync::Arc::new(config.clone()));}}
+pub(crate)fn resource_snapshot()->Result<std::sync::Arc<Configuration>,String>{RESOURCE_SNAPSHOT.try_lock().map_err(|_|"O perfil de inferência está ocupado.")?.clone().ok_or("O perfil de inferência ainda não foi confirmado.".into())}
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct Profile {pub model:String,pub effort:String}
+#[derive(Clone,Debug,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct Pet {pub name:String,pub aliases:Vec<String>,pub provider:String,pub mode:String,pub fast:Profile,pub reasoning:Profile,#[serde(default,skip_serializing_if="Option::is_none")]pub permissions:Option<Permissions>,#[serde(default,skip_serializing_if="Option::is_none")]pub local_execution:Option<LocalExecution>,#[serde(default,skip_serializing_if="Option::is_none")]pub inference:Option<InferenceChoice>,#[serde(default,skip_serializing_if="Option::is_none")]pub inference_revision:Option<String>,#[serde(default,skip_serializing_if="Option::is_none")]pub system_access:Option<system_access::Policy>}
+/// Missing in an older configuration means disabled. New bundled identities may
+/// explicitly opt into proposals; every actual command still needs approval.
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct LocalExecution {
+ pub mode:LocalExecutionMode,
+ #[serde(default="task_timeout")]pub task_timeout_ms:u64,
+ #[serde(default="approval_timeout")]pub approval_timeout_ms:u64,
+ #[serde(default="command_timeout")]pub command_timeout_ms:u64,
+ #[serde(default="max_calls")]pub max_calls:usize,
+ #[serde(default="max_output")]pub max_output_bytes:usize,
+ #[serde(default,skip_serializing_if="Option::is_none")]pub allowed_programs:Option<Vec<String>>,
+}
+#[derive(Clone,Copy,Debug,Serialize,Deserialize,PartialEq,Eq)]
+#[serde(rename_all="camelCase")]
+pub enum LocalExecutionMode {Disabled,Ask}
+fn task_timeout()->u64{300_000} fn approval_timeout()->u64{120_000}
+fn command_timeout()->u64{60_000} fn max_calls()->usize{8} fn max_output()->usize{512*1024}
+impl Default for LocalExecution {
+ fn default()->Self{Self{mode:LocalExecutionMode::Disabled,task_timeout_ms:task_timeout(),approval_timeout_ms:approval_timeout(),command_timeout_ms:command_timeout(),max_calls:max_calls(),max_output_bytes:max_output(),allowed_programs:None}}
+}
+impl LocalExecution {
+ pub fn validate(&self)->Result<(),String>{
+  if !(100..=300_000).contains(&self.task_timeout_ms)||!(100..=120_000).contains(&self.approval_timeout_ms)||!(100..=60_000).contains(&self.command_timeout_ms)||!(1..=8).contains(&self.max_calls)||!(1024..=512*1024).contains(&self.max_output_bytes){return Err("Limites de execução local inválidos.".into());}
+  if self.allowed_programs.as_ref().is_some_and(|ps|ps.len()>64||ps.iter().any(|p|p.len()>4096||!std::path::Path::new(p).is_absolute()||p.chars().any(char::is_control))){return Err("Os programas permitidos devem ter caminhos absolutos.".into());}Ok(())
+ }
+}
+#[cfg(test)]mod local_execution_tests{
+ use super::*;
+ #[test]fn new_default_asks_but_missing_legacy_policy_stays_disabled(){let c=defaults();assert_eq!(c.local_execution().mode,LocalExecutionMode::Ask);let mut legacy=serde_json::to_value(c).unwrap();legacy["pets"]["ai_ollama"].as_object_mut().unwrap().remove("localExecution");let old:Configuration=serde_json::from_value(legacy).unwrap();assert_eq!(old.local_execution().mode,LocalExecutionMode::Disabled);validate(&old).unwrap();assert!(serde_json::to_value(old).unwrap()["pets"]["ai_ollama"].get("localExecution").is_none());}
+ #[test]fn no_autoapprove_unknown_grant_or_excess_limit_is_accepted(){assert!(serde_json::from_value::<LocalExecution>(serde_json::json!({"mode":"always"})).is_err());assert!(serde_json::from_value::<LocalExecution>(serde_json::json!({"mode":"ask","fullAccess":true})).is_err());let mut p=LocalExecution::default();p.task_timeout_ms=300_001;assert!(p.validate().is_err());p=LocalExecution::default();p.max_calls=9;assert!(p.validate().is_err());p=LocalExecution::default();p.allowed_programs=Some(vec!["relative".into()]);assert!(p.validate().is_err());}
+ #[test]fn another_pet_cannot_borrow_the_local_execution_grant(){let mut c=defaults();c.pets.get_mut("agent_codex").unwrap().local_execution=Some(LocalExecution::default());assert!(validate(&c).is_err());}
+}
+#[derive(Clone,Debug,Default,Serialize,Deserialize,PartialEq)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct Permissions {pub documents:bool,pub email_drafts:bool,pub music:bool,pub open_apps:bool}
+#[derive(Clone,Debug,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct Configuration {pub version:u32,#[serde(default,skip_serializing_if="Option::is_none")]pub catalog_revision:Option<u32>,pub reasoning_terms:Vec<String>,pub reasoning_length:usize,pub pets:BTreeMap<String,Pet>}
+
+#[cfg(test)]mod guardian_catalog_tests{
+ use super::*;
+ #[test]fn guardian_health_legacy_catalog_adds_only_unbound_identity_and_preserves_existing_preferences(){
+  let mut old=defaults();old.catalog_revision=None;old.pets.remove("agent_system_guardian");old.pets.get_mut("agent_codex").unwrap().name="My Codex".into();old.pets.get_mut("ai_ollama").unwrap().fast.model="keep-existing-model".into();
+  let bytes=serde_json::to_vec(&old).unwrap();let migrated=resolve_existing_bytes(&bytes).unwrap();assert_eq!(migrated.catalog_revision,Some(1));assert_eq!(migrated.pets.len(),26);
+  for(id,p)in &old.pets{assert_eq!(serde_json::to_value(&migrated.pets[id]).unwrap(),serde_json::to_value(p).unwrap());}
+  let guardian=&migrated.pets["agent_system_guardian"];assert!(guardian.provider.is_empty()&&guardian.fast.model.is_empty()&&guardian.reasoning.model.is_empty());assert!(guardian.inference.is_none()&&guardian.inference_revision.is_none()&&guardian.system_access.is_none()&&guardian.local_execution.is_none());assert_eq!(guardian.permissions,Some(Permissions::default()));
+  let b=blueprint("agent_system_guardian").unwrap();assert_eq!(b.introduced_in,1);assert_eq!(b.runtime_identity_adapter("agent_system_guardian",None).as_deref(),Some("agent_system_guardian"));assert_eq!(b.runtime.inference_adapters,vec![Adapter::Ollama]);assert!(!b.routing.execute);
+ }
+ #[test]fn guardian_health_missing_acknowledged_identity_or_future_catalog_cannot_reset_or_downgrade(){
+  let mut current=defaults();current.pets.remove("agent_system_guardian");assert!(resolve_existing_bytes(&serde_json::to_vec(&current).unwrap()).is_err());
+  current=defaults();current.catalog_revision=Some(2);assert!(resolve_existing_bytes(&serde_json::to_vec(&current).unwrap()).is_err());
+  current=defaults();current.catalog_revision=None;current.pets.remove("agent_system_guardian");current.pets.remove("agent_codex");assert!(resolve_existing_bytes(&serde_json::to_vec(&current).unwrap()).is_err());
+  current=defaults();current.catalog_revision=None;assert!(resolve_existing_bytes(&serde_json::to_vec(&current).unwrap()).is_err());
+ }
+}
+#[derive(Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct Document {pub config:Configuration,pub path:String,pub revision:String}
+#[derive(Clone,Debug,PartialEq)]
+pub struct Selection {pub model:String,pub effort:String,pub mode:String}
+pub fn defaults()->Configuration {factory::bundled()}
+/// Availability is bundled policy, separate from stable history/account identity.
+pub fn retired(id:&str)->bool {factory::retired(id)}
+pub fn require_active(id:&str)->Result<(),String>{
+ if retired(id){Err("O pet GitHub está temporariamente desativado. O histórico e as preferências foram preservados.".into())}else{Ok(())}
+}
+pub fn require_active_provider(provider:&str)->Result<(),String>{
+ if let Some(id)=integration_pet(provider){require_active(id)?;}Ok(())
+}
+/// Domain eligibility is separate from preserved account/profile metadata.
+pub fn require_inference_provider(provider:&str)->Result<(),String>{
+ require_active_provider(provider)?;
+ if integration_pet(provider).and_then(blueprint).is_some_and(|b|!b.features.inference){return Err("Este pet representa uma aplicação ou serviço, sem conversa ou modelos de IA. Usa as suas funções próprias.".into());}
+ Ok(())
+}
+pub fn path()->PathBuf {crate::settings::config_dir().join("pets.json")}
+pub fn service_ids()->impl Iterator<Item=&'static str>{blueprints().filter(|p|p.service).map(|p|p.id.as_str())}
+pub fn service(id:&str)->bool {blueprint(id).is_some_and(|p|p.service)}
+pub fn pet_id(provider:&str)->Option<&'static str>{factory::for_task_provider(provider)}
+pub fn integration_pet(provider:&str)->Option<&'static str>{factory::for_provider(provider)}
+impl Configuration {
+ pub fn uses_optional_assistant(&self,id:&str)->bool{
+  self.pets.get(id).zip(blueprint(id)).is_some_and(|(p,b)|b.features.inference&&b.runtime.assistant_adapter.is_some_and(|adapter|b.configured_adapter(&p.provider)==Some(adapter)))
+ }
+ pub fn local_execution_for(&self,pet_id:&str)->LocalExecution{self.pets.get(pet_id).and_then(|p|p.local_execution.clone()).unwrap_or_default()}
+ pub fn local_execution(&self)->LocalExecution{self.local_execution_for("ai_ollama")}
+ pub fn permissions(&self,id:&str)->Result<Permissions,String>{
+  let pet=self.pets.get(id).ok_or("Pet desconhecido.")?;
+  Ok(pet.permissions.clone().unwrap_or_else(||defaults().pets[id].permissions.clone().unwrap_or_default()))
+ }
+}
+pub fn require(id:&str,capability:&str)->Result<(),String>{
+ require_active(id)?;let c=read()?;let p=c.permissions(id)?;
+ let allowed=match capability{"documents"=>p.documents,"emailDrafts"=>p.email_drafts,"music"=>p.music,"openApps"=>p.open_apps,_=>false};
+ if allowed{Ok(())}else{Err(format!("{} não tem acesso a {capability}. Altera as permissões na gestão deste pet.",c.pets[id].name))}
+}
+fn normalized(text:&str)->String {crate::voice::wake::normalize(text)}
+fn short_text(text:&str,max:usize)->bool {!text.trim().is_empty() && text.chars().count()<=max && !text.chars().any(char::is_control)}
+pub(crate)fn validate(c:&Configuration)->Result<(),String> {
+ let base=defaults();
+ if c.catalog_revision!=base.catalog_revision || !matches!(c.version,1|2) || c.version==1&&c.pets.values().any(|p|p.inference.is_some()||p.inference_revision.is_some()) || c.pets.len()!=base.pets.len() || !(200..=12000).contains(&c.reasoning_length) || c.reasoning_terms.len()>80 {return Err("Versão ou limites inválidos na configuração dos pets.".into());}
+ let mut names=BTreeMap::<String,String>::new();
+ for(id,p)in &base.pets {for name in std::iter::once(&p.name).chain(&p.aliases){names.insert(normalized(name),id.clone());}}
+ for (id,p) in &c.pets {
+  base.pets.get(id).ok_or("ID de pet desconhecido. Os IDs são estáveis; edita o nome apresentado.")?;
+  if !blueprint(id).is_some_and(|b|b.accepts_provider(&p.provider)){return Err(format!("O provider de {id} identifica a sua conta nativa e não pode ser trocado por outra conta."));}
+  if !short_text(&p.name,40) || p.aliases.len()>20 || !["auto","fast","reasoning"].contains(&p.mode.as_str()) {return Err(format!("Nome, aliases ou modo inválido em {id}."));}
+  for name in std::iter::once(&p.name).chain(&p.aliases) {
+   if !short_text(name,80) {return Err(format!("Nome de voz inválido em {id}."));}
+   let key=normalized(name);
+   if key.is_empty() || ["ola","ditado","ditar","parar conversa","desligar microfone","estado da tarefa","interrompe a tarefa"].contains(&key.as_str()) {return Err(format!("Nome de voz reservado: {name}."));}
+   if let Some(owner)=names.insert(key,id.clone()) {if owner!=*id {return Err(format!("Dois pets reconhecem o nome {name}. Escolhe nomes diferentes."));}}
+  }
+  for profile in [&p.fast,&p.reasoning] {
+   let profile_adapter=blueprint(id).and_then(|b|if p.provider.is_empty(){b.runtime.assistant_adapter}else{b.configured_adapter(&p.provider)});
+   if profile.model.starts_with('@') || (!matches!(profile_adapter,Some(Adapter::Codex|Adapter::Copilot)) && !profile.effort.is_empty()) || profile.model.len()>256 || profile.model.chars().any(char::is_control) || !["","low","medium","high","xhigh","max"].contains(&profile.effort.as_str()) {return Err(format!("Modelo ou esforço inválido em {id}."));}
+   if !profile.model.is_empty() && !crate::cli_chat::model_matches(&p.provider,&profile.model) {return Err(format!("O modelo de {id} não pertence à sua conta/família."));}
+   if p.provider=="ollama" && (profile.model.ends_with(":cloud") || profile.model.ends_with("-cloud")) {return Err("O pet Ollama usa apenas os modelos locais.".into());}
+  }
+  if p.inference_revision.as_ref().is_some_and(|r|!crate::pet_inference::revision_key(r)||blueprint(id).is_none_or(|b|b.runtime.inference_adapters.is_empty())){return Err("Revisão de inferência inválida para este pet.".into());}
+  if let Some(policy)=&p.system_access{if c.version!=2||!policy.valid(){return Err("Concessão de Sistema inválida para este pet.".into());}}
+  if let Some(choice)=&p.inference{
+   choice.validate(blueprint(id).ok_or("Pet sem contrato de inferência.")?)?;
+   if p.inference_revision.is_none(){return Err("Falta a revisão nativa do binding. Revê a escolha na gestão do pet.".into());}
+  }
+  if let Some(policy)=&p.local_execution {if id!="ai_ollama"&&!p.inference.as_ref().is_some_and(|choice|choice.backend==crate::pet_inference::Backend::Ollama) {return Err("Este pet ainda não tem um adaptador de ferramentas locais configurado.".into());}policy.validate()?;}
+ }
+ if c.reasoning_terms.iter().any(|s|!short_text(s,100)) {return Err("Termo de raciocínio inválido.".into());}
+ Ok(())
+}
+fn bytes(path:&Path)->Result<Vec<u8>,String> {
+ let mut options=std::fs::OpenOptions::new();options.read(true);
+ #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.custom_flags(libc::O_NOFOLLOW);}
+ let file=options.open(path).map_err(|e|format!("Não foi possível ler pets.json: {e}"))?;
+ if !file.metadata().map_err(|e|e.to_string())?.is_file(){return Err("pets.json deve ser um ficheiro normal.".into());}
+ let mut bytes=Vec::new();file.take(MAX_BYTES+1).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+ if bytes.len() as u64>MAX_BYTES {return Err("pets.json excede 256 KiB.".into());}Ok(bytes)
+}
+fn revision(data:&[u8])->String {let mut h=std::collections::hash_map::DefaultHasher::new();data.hash(&mut h);format!("{:016x}",h.finish())}
+fn write(path:&Path,c:&Configuration)->Result<(),String> {
+ write_guarded(path,c,||true)
+}
+fn write_guarded(path:&Path,c:&Configuration,current:impl Fn()->bool)->Result<(),String> {
+ if !current(){return Err("O perfil ou a revisão da alteração deixou de estar atual. Nenhuma alteração foi aplicada.".into());}
+ #[cfg(target_os="linux")]crate::pet_data::bootstrap::write_allowed().map_err(|_|"O perfil está indisponível; a configuração anterior foi conservada.".to_string())?;
+ validate(c)?;let dir=path.parent().ok_or("Falta a pasta dos pets.")?;
+ std::fs::create_dir_all(dir).map_err(|e|e.to_string())?;
+ if std::fs::symlink_metadata(dir).is_ok_and(|m|m.file_type().is_symlink()) || std::fs::symlink_metadata(path).is_ok_and(|m|m.file_type().is_symlink()) {return Err("A configuração dos pets não aceita symlinks.".into());}
+ let data=serde_json::to_vec_pretty(c).map_err(|e|e.to_string())?;
+ if data.len() as u64>MAX_BYTES {return Err("Configuração demasiado grande.".into());}
+ static SEQ:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+ let temp=path.with_extension(format!("json.{}-{}.tmp",std::process::id(),SEQ.fetch_add(1,std::sync::atomic::Ordering::Relaxed)));
+ let result=(||->Result<(),String>{
+  let mut o=std::fs::OpenOptions::new();o.write(true).create_new(true);
+  #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;o.mode(0o600).custom_flags(libc::O_NOFOLLOW);}
+  let mut f=o.open(&temp).map_err(|e|e.to_string())?;f.write_all(&data).and_then(|_|f.write_all(b"\n")).and_then(|_|f.sync_all()).map_err(|e|e.to_string())?;drop(f);
+  if !current(){return Err("O perfil ou a revisão mudou antes da gravação. Recarrega antes de repetir.".into());}
+  std::fs::rename(&temp,path).map_err(|e|e.to_string())?;
+  #[cfg(unix)]std::fs::File::open(dir).and_then(|d|d.sync_all()).map_err(|_|"A alteração pode ter sido gravada, mas a persistência não foi confirmada. Recarrega o perfil antes de repetir.".to_string())?;
+  Ok(())
+ })();if result.is_err(){let _=std::fs::remove_file(temp);}result
+}
+fn read_at(path:&Path)->Result<Document,String> {read_at_policy(path,true)}
+fn read_at_policy(path:&Path,create_defaults:bool)->Result<Document,String> {
+ if create_defaults && !path.exists() {write_guarded(path,&defaults(),||!path.exists())?;}
+ let data=bytes(path)?;let c=resolve_existing_bytes(&data)?;Ok(Document{config:c,path:path.to_string_lossy().to_string(),revision:revision(&data)})
+}
+/// Pure existing-profile resolution, shared by runtime and native restoration review.
+pub(crate)fn resolve_existing_bytes(data:&[u8])->Result<Configuration,String>{
+ let mut c:Configuration=serde_json::from_slice(data).map_err(|e|format!("Corrige pets.json: {e}"))?;
+ // Explicit catalogue migration only. Loading does not publish or grant access.
+ let base=defaults();let seen=c.catalog_revision.unwrap_or(0);let current=base.catalog_revision.unwrap_or(0);
+ if seen>current{return Err("Este perfil usa uma revisão mais recente do catálogo; os dados foram preservados.".into());}
+ for b in blueprints().filter(|b|b.introduced_in>seen){
+  if c.pets.contains_key(&b.id){return Err("O perfil contém uma identidade posterior à revisão do catálogo.".into());}
+  c.pets.insert(b.id.clone(),base.pets[&b.id].clone());
+ }
+ c.catalog_revision=base.catalog_revision;
+ // Upgrade the existing Copilot identity without replacing names, aliases or grants.
+ if let Some(p)=c.pets.get_mut("agent_copilot") {if p.provider.is_empty(){let base=defaults();p.provider="copilot".into();if p.fast.model.is_empty(){p.fast=base.pets["agent_copilot"].fast.clone();}if p.reasoning.model.is_empty(){p.reasoning=base.pets["agent_copilot"].reasoning.clone();}}}
+ // Native service controls and an explicitly configured assistant coexist.
+ // Preserve the backend choice, names, models and grants already stored.
+ // Retain stable IDs/history while retiring the duplicated Gravity model pets.
+ for(id,legacy)in[("agent_gemini","gemini-cli"),("integration_claude","claude-cli")]{if let Some(p)=c.pets.get_mut(id){if p.provider==legacy{p.provider.clear();}}}
+ validate(&c)?;
+ let base=defaults();for(id,p)in &mut c.pets{if p.permissions.is_none(){p.permissions=base.pets[id].permissions.clone();}}
+ Ok(c)
+}
+pub fn read()->Result<Configuration,String> {let _edit=EDIT.lock().unwrap();let config=read_at(&path())?.config;publish_resource_snapshot(&config);Ok(config)}
+/// Read existing identities with the same in-memory upgrades/validation, without
+/// creating defaults, directories or files when configuration is unavailable.
+pub(crate) fn read_existing()->Result<Configuration,String> {
+ let _edit=EDIT.lock().map_err(|_|"As identidades dos pets estão indisponíveis.")?;
+ let config=read_at_policy(&path(),false)?.config;publish_resource_snapshot(&config);Ok(config)
+}
+/// Native callers supply this path; it is never taken from model arguments.
+pub(crate) fn read_existing_at(path:&Path)->Result<Configuration,String> {
+ let _edit=EDIT.lock().map_err(|_|"As identidades dos pets estão indisponíveis.".to_string())?;
+ Ok(read_at_policy(path,false)?.config)
+}
+#[cfg(all(test,unix))]
+#[path = "pet_config_read_tests.rs"]
+mod read_existing_tests;
+pub fn identity_name(id:&str)->String {read().ok().and_then(|c|c.pets.get(id).map(|p|p.name.clone())).or_else(||defaults().pets.get(id).map(|p|p.name.clone())).unwrap_or_else(||id.into())}
+pub fn aliases()->Result<BTreeMap<String,Vec<String>>,String> {
+ let config=read()?;Ok(config.pets.into_iter().filter(|(id,p)|!retired(id)&&(id.as_str()=="integration_spotify"||!p.provider.is_empty())).map(|(id,mut p)|{p.aliases.push(p.name);(if service(&id){id}else{p.provider},p.aliases)}).collect())
+}
+impl Configuration {
+ /// An explicitly addressed monitor/API pet must never borrow the selected CLI.
+ pub fn unavailable_address(&self,text:&str)->Option<String> {
+  let normalized_text=normalized(text);
+  let mut text=normalized_text.as_str();
+  for prefix in ["ola ","hey ","ok "] {if let Some(rest)=text.strip_prefix(prefix){text=rest;break;}}
+  for prefix in ["chama o ","chama ","muda para ","troca para ","falar com "] {if let Some(rest)=text.strip_prefix(prefix){text=rest;break;}}
+  let mut addressed:Vec<_>=self.pets.iter().flat_map(|(id,p)|std::iter::once(&p.name).chain(&p.aliases).map(move|name|(normalized(name),id,p))).filter(|(name,_,_)|!name.is_empty() && (text==name || text.strip_prefix(name.as_str()).is_some_and(|rest|rest.starts_with(' ')))).collect();
+  addressed.sort_by_key(|(name,_,_)|std::cmp::Reverse(name.len()));
+  addressed.first().filter(|(_,id,p)|retired(id)||p.provider.is_empty()).map(|(_,_,p)|p.name.clone())
+ }
+ pub fn select(&self,provider:&str,requested:&str,query:&str)->Result<Selection,String> {
+  require_inference_provider(provider)?;let id=pet_id(provider).ok_or("Este pet não tem perfil de modelos.")?;let p=self.pets.get(id).ok_or("Falta o perfil deste pet.")?;
+  if let Some(target)=crate::pet_inference::Target::configured(self,id)?{
+   if !requested.is_empty()&&requested!="@default"&&requested!=target.choice.model{return Err("Este pet tem um modelo explícito. Revê o binding do pet antes de escolher outro modelo.".into());}
+   return Ok(Selection{model:target.choice.model,effort:String::new(),mode:"binding".into()});
+  }
+  if p.provider.is_empty(){
+   if blueprint(id).is_some_and(|b|b.runtime.adapter==Some(Adapter::Lmstudio)){return Err("Associa primeiro este pet ao LM Studio no perfil do pet.".into());}
+   if blueprint(id).is_some_and(|b|b.runtime.assistant_adapter.is_some()){return Err("Este pet mantém os controlos nativos. Configura um backend de AI para conversar.".into());}
+   return Err("Os modelos Gemini e Claude da conta Gravity estão no pet Gravity. Escolhe o modelo nesse pet.".into());
+  }
+  if !requested.is_empty() && !requested.starts_with('@') {return Ok(Selection{model:requested.into(),effort:String::new(),mode:"manual".into()});}
+  let requested=if requested=="@default" || requested.is_empty(){p.mode.as_str()}else{requested.strip_prefix('@').unwrap_or(&p.mode)};
+  let text=normalized(query);
+  let deep=if text.starts_with("modo rapido ") || text.starts_with("resposta rapida ") || text.starts_with("fast mode ") {false} else {text.starts_with("modo raciocinio ") || self.reasoning_terms.iter().any(|term|text.contains(&normalized(term))) || query.chars().count()>=self.reasoning_length};
+  let explicit=if text.starts_with("modo rapido ") || text.starts_with("fast mode "){Some("fast")}else if text.starts_with("modo raciocinio ") || text.starts_with("reasoning mode "){Some("reasoning")}else{None};
+  let mode=match explicit.unwrap_or(requested) {"auto"=>if deep {"reasoning"} else {"fast"},"fast"=>"fast","reasoning"=>"reasoning",_=>return Err("Modo de modelo desconhecido.".into())};
+  let profile=if mode=="reasoning" {&p.reasoning} else {&p.fast};
+  if profile.model.is_empty(){return Err(format!("Escolhe um modelo {mode} para {} no centro de tarefas.",p.name));}
+  Ok(Selection{model:profile.model.clone(),effort:profile.effort.clone(),mode:mode.into()})
+ }
+}
+pub fn select(provider:&str,requested:&str,query:&str)->Result<Selection,String> {read()?.select(provider,requested,query)}
+#[tauri::command]
+pub fn pet_configuration()->Result<Document,String> {let _edit=EDIT.lock().unwrap();let doc=read_at(&path())?;publish_resource_snapshot(&doc.config);Ok(doc)}
+#[tauri::command]
+pub fn pet_roster(shared:tauri::State<'_,crate::Shared>)->Vec<String>{
+ let settings=shared.settings.lock().unwrap();let base=defaults();let mut ids=vec![settings.main_pill.clone()];
+ for id in &settings.active_integrations{if !ids.contains(id){ids.push(id.clone());}}
+ ids.retain(|id|base.pets.contains_key(id)&&!retired(id));ids
+}
+fn save_at(file:&Path,config:&Configuration,expected:&str)->Result<Document,String> {
+ let current=read_at(file)?;
+ if current.revision!=expected {return Err("pets.json foi alterado entretanto. Reabre a configuração antes de guardar.".into());}
+ // Older whole-document editors own the legacy preferences only. Even a fresh
+ // revision cannot remove/replace a binding through this compatibility command.
+ let mut merged=config.clone();
+ if !matches!(merged.version,1|2)||current.config.version==1&&merged.version!=1{return Err("Altera o binding na gestão própria do pet.".into());}
+ merged.version=current.config.version;
+ for(id,pet)in &mut merged.pets{
+  pet.inference=current.config.pets.get(id).and_then(|p|p.inference.clone());
+  pet.inference_revision=current.config.pets.get(id).and_then(|p|p.inference_revision.clone());
+  pet.system_access=current.config.pets.get(id).and_then(|p|p.system_access.clone());
+ }
+ write_guarded(file,&merged,||bytes(file).is_ok_and(|data|revision(&data)==current.revision))?;read_at(file)
+}
+#[tauri::command]
+pub fn pet_configuration_save(app:AppHandle,config:Configuration,expected_revision:String)->Result<Document,String> {
+ let _edit=EDIT.lock().unwrap();let doc=save_at(&path(),&config,&expected_revision)?;publish_resource_snapshot(&doc.config);let _=app.emit("pet-configuration-changed",&doc.config);Ok(doc)
+}
+
+#[cfg(test)]mod tests {
+ use super::*;
+ #[test]fn integration_grants_are_specific_revocable_and_email_defaults_only_to_ollama(){
+  let mut c=defaults();for(id,pet)in &c.pets{assert_eq!(pet.permissions.as_ref().unwrap().email_drafts,id=="ai_ollama","{id}");}
+  assert!(c.permissions("ai_ollama").unwrap().documents);assert!(c.permissions("ai_ollama").unwrap().email_drafts);
+  c.pets.get_mut("ai_ollama").unwrap().permissions.as_mut().unwrap().email_drafts=false;assert!(!c.permissions("ai_ollama").unwrap().email_drafts);
+  c.pets.get_mut("ai_ollama").unwrap().permissions=None;assert!(c.permissions("ai_ollama").unwrap().email_drafts);
+  assert!(c.permissions("unknown").is_err());
+  let mut value=serde_json::to_value(&c).unwrap();value["pets"]["agent_codex"]["permissions"]["nativeCliAutoApprove"]=serde_json::json!(true);assert!(serde_json::from_value::<Configuration>(value).is_err());
+ }
+ #[test]fn quick_and_deep_requests_choose_native_profiles_without_permission_fields(){
+  let c=defaults();validate(&c).unwrap();
+  let fast=c.select("codex","@auto","Responde apenas olá").unwrap();assert_eq!(fast.model,"gpt-6-luna");assert_eq!(fast.effort,"low");
+  let deep=c.select("codex","@auto","Pensa a fundo na arquitetura deste serviço").unwrap();assert_eq!(deep.model,"gpt-6.1-sol");assert_eq!(deep.effort,"high");
+  assert_eq!(c.select("codex","@fast","auditoria de segurança").unwrap().mode,"fast");
+  assert_eq!(c.select("antigravity","@auto","abre o Spotify").unwrap().model,"gemini-3.8-flash-low");
+  assert!(c.select("gemini-cli","@reasoning","olá").is_err());assert!(c.select("claude-cli","@fast","olá").is_err());
+  assert_eq!(c.select("codex","chosen-model","olá").unwrap().mode,"manual");
+ }
+ #[test]fn configured_inference_pets_have_two_profiles_and_keep_their_spoken_owner(){
+  let c=defaults();let aliases:BTreeMap<_,_>=c.pets.iter().filter(|(id,p)|id.as_str()=="integration_spotify"||!p.provider.is_empty()).map(|(id,p)|(if service(id){id.clone()}else{p.provider.clone()},p.aliases.clone())).collect();
+  for pet in crate::voice::dialogue::Pet::ALL {
+   let owner=pet.provider();let id=pet_id(owner).unwrap();
+   if !blueprint(id).unwrap().features.inference {
+    assert!(c.select(owner,"@fast","olá").is_err(),"{id}");
+    continue;
+   }
+   if retired(id)||c.pets[id].provider.is_empty(){continue;}
+   for mode in ["@fast","@reasoning"] {assert!(!c.select(owner,mode,"olá").unwrap().model.is_empty(),"{id}");}
+   for name in std::iter::once(&c.pets[id].name).chain(&c.pets[id].aliases) {
+    assert!(matches!(crate::voice::dialogue::parse_with_aliases(&format!("{name}, check the logs por favor"),&aliases),crate::voice::dialogue::Command::Select(selected,ref query) if selected==pet && query=="check the logs por favor"),"{id}: {name}");
+   }
+  }
+ }
+ #[test]fn explicit_voice_modes_and_unavailable_addresses_do_not_fall_into_another_pet(){
+  let mut c=defaults();c.pets.get_mut("agent_codex").unwrap().mode="fast".into();
+  assert_eq!(c.select("codex","@default","modo raciocínio analisa este problema").unwrap().mode,"reasoning");
+  assert_eq!(c.select("codex","@reasoning","modo rápido responde olá").unwrap().mode,"fast");
+  assert_eq!(c.unavailable_address("Olá Copilot, abre a app"),None);
+  assert_eq!(c.unavailable_address("Olá Cursor, abre a app"),Some("Cursor".into()));
+  assert_eq!(c.unavailable_address("Claude Desktop, abre a app"),Some("Claude Desktop".into()));
+  assert_eq!(c.unavailable_address("explica como funciona o Copilot"),None);
+  assert_eq!(c.unavailable_address("GitHub, verifica o CI"),Some("GitHub".into()));
+ }
+ #[test]fn identities_remain_stable_and_ambiguous_names_or_cloud_local_models_are_rejected(){
+  let mut c=defaults();c.pets.get_mut("agent_codex").unwrap().name="Cody".into();validate(&c).unwrap();assert_eq!(c.pets["agent_codex"].provider,"codex");
+  c.pets.get_mut("agent_antigravity").unwrap().aliases.push("Cody".into());assert!(validate(&c).is_err());
+  let mut c=defaults();c.pets.get_mut("ai_ollama").unwrap().fast.model="model:cloud".into();assert!(validate(&c).is_err());
+  let mut c=defaults();c.pets.get_mut("agent_codex").unwrap().provider="openai".into();assert!(validate(&c).is_err());
+ }
+ #[test]fn configuration_roundtrip_keeps_literal_names_and_rejects_unknown_fields(){
+  let root=std::env::temp_dir().join(format!("coucou-pet-prefs-{}",std::process::id()));std::fs::create_dir_all(&root).unwrap();let path=root.join("pets.json");
+  let first=read_at(&path).unwrap();assert_eq!(first.config.pets.len(),defaults().pets.len());
+  let mut edited=first.config;edited.pets.get_mut("agent_codex").unwrap().name="Cody".into();write(&path,&edited).unwrap();let second=read_at(&path).unwrap();assert_ne!(first.revision,second.revision);assert_eq!(second.config.pets["agent_codex"].name,"Cody");
+  let changed=bytes(&path).unwrap();assert!(save_at(&path,&defaults(),&first.revision).is_err());assert_eq!(bytes(&path).unwrap(),changed);
+  let mut invalid=serde_json::to_value(&second.config).unwrap();invalid["approvalPolicy"]=serde_json::json!("never");assert!(serde_json::from_value::<Configuration>(invalid).is_err());
+  std::fs::remove_dir_all(root).unwrap();
+ }
+}
+
+#[cfg(test)]mod spoty_audio_tests{
+ use super::*;
+ #[test]fn optional_assistant_configuration_keeps_native_grants_and_rejects_another_account(){
+  let mut c=defaults();let before=c.pets["integration_spotify"].permissions.clone();
+  c.pets.get_mut("integration_spotify").unwrap().provider="codex".into();validate(&c).unwrap();assert!(!c.uses_optional_assistant("integration_spotify"));assert_eq!(c.pets["integration_spotify"].permissions,before);
+  c.pets.get_mut("integration_spotify").unwrap().provider="copilot".into();assert!(validate(&c).is_err());
+ }
+ #[test]fn spoty_retains_identity_and_profiles_without_an_llm_backend(){
+  let config=defaults();let pet=&config.pets["integration_spotify"];assert!(pet.provider.is_empty());assert!(pet.aliases.iter().any(|a|a=="spoty"));
+  validate(&config).unwrap();assert!(config.select("integration_spotify","@fast","pausa").is_err());assert!(!config.uses_optional_assistant("integration_spotify"));assert_eq!(crate::cli_chat::backend("integration_spotify"),None);
+  assert!(matches!(crate::voice::dialogue::parse("Spoty, silenciar sistema"),crate::voice::dialogue::Command::Select(crate::voice::dialogue::Pet::Spotify,ref query)if query=="silenciar sistema"));
+ }
+ #[test]fn legacy_spotify_backend_models_and_grants_are_preserved_without_overwriting_private_file(){
+  let dir=std::env::temp_dir().join(format!("coucou-spoty-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+  std::fs::create_dir(&dir).unwrap();let path=dir.join("pets.json");let mut config=defaults();let p=config.pets.get_mut("integration_spotify").unwrap();p.provider="codex".into();p.name="Som pessoal".into();p.aliases.push("audio pessoal".into());let fast=p.fast.clone();let grants=p.permissions.clone();
+  let bytes=serde_json::to_vec(&config).unwrap();std::fs::write(&path,&bytes).unwrap();let doc=read_at(&path).unwrap();let pet=&doc.config.pets["integration_spotify"];
+  assert_eq!(pet.provider,"codex");assert!(!doc.config.uses_optional_assistant("integration_spotify"));assert!(doc.config.select("integration_spotify","@fast","explica a playlist").is_err());assert_eq!(pet.name,"Som pessoal");assert!(pet.aliases.iter().any(|a|a=="audio pessoal"));assert_eq!(pet.fast,fast);assert_eq!(pet.permissions,grants);assert_eq!(std::fs::read(&path).unwrap(),bytes);
+  std::fs::remove_dir_all(dir).unwrap();
+ }
+}
+
+#[cfg(test)]mod domain_feature_tests{
+ use super::*;
+ #[test]fn preserved_service_profiles_do_not_allow_model_selection_or_new_conversation_admission(){
+  let config=defaults();let before=serde_json::to_vec(&config).unwrap();let chat=crate::chat::Chat::default();
+  for id in service_ids(){
+   assert!(crate::assistant_memory::supported(id));assert_eq!(pet_id(id),Some(id));assert!(require_inference_provider(id).is_err());assert_eq!(crate::cli_chat::backend(id),None);
+   for model in ["@fast","@auto","explicit-model"]{assert!(config.select(id,model,"pedido").is_err());}
+   assert!(chat.check_admission(id).is_err());assert!(chat.begin_cli(id,std::sync::Arc::default()).is_err());
+  }
+  for id in ["codex","copilot","antigravity","ollama"]{assert!(require_inference_provider(id).is_ok());}
+  assert_eq!(serde_json::to_vec(&config).unwrap(),before);validate(&config).unwrap();
+ }
+}
+
+#[cfg(test)]mod retirement_tests {
+ use super::*;
+ #[test]fn retired_pet_cannot_select_even_an_explicit_model_or_borrow_another_owner(){
+  let mut c=defaults();let before=serde_json::to_value(&c).unwrap();
+  for model in ["@auto","@fast","@reasoning","chosen-model",""]{assert!(c.select("integration_github",model,"pedido").is_err());}
+  assert_eq!(serde_json::to_value(&c).unwrap(),before);validate(&c).unwrap();
+  c.pets.get_mut("integration_github").unwrap().name="Git antigo".into();
+  assert_eq!(c.unavailable_address("Git antigo, abre issues"),Some("Git antigo".into()));
+  assert_eq!(c.unavailable_address("github, verifica CI"),Some("Git antigo".into()));
+  assert_eq!(c.unavailable_address("explica GitHub"),None);
+  assert_eq!(c.unavailable_address("Copilot CLI, ajuda"),None);
+ }
+ #[test]fn history_classification_and_sibling_models_remain_available(){
+  assert!(service("integration_github"));assert_eq!(crate::cli_chat::backend("integration_github"),None);
+  assert_eq!(pet_id("integration_github"),Some("integration_github"));
+  assert!(crate::assistant_memory::supported("integration_github"));
+  for provider in ["codex","copilot","antigravity","ollama"]{
+   assert!(require_active_provider(provider).is_ok());assert!(defaults().select(provider,"@fast","olá").is_ok(),"{provider}");
+  }
+  // Before reading HOME preferences or touching a dropped file.
+  assert!(matches!(crate::pet_files::ingest("integration_github","/not/a/real/file"),Err(error)if error.contains("temporariamente")));
+  assert!(require("integration_github","documents").unwrap_err().contains("temporariamente"));
+ }
+}
+
+#[cfg(test)]mod lmstudio_binding_tests{
+ use super::*;
+ #[test]fn explicit_native_binding_preserves_legacy_empty_profiles_and_other_pet_permissions(){
+  let original=defaults();let before=serde_json::to_value(&original).unwrap();assert_eq!(original.pets["ai_lmstudio"].provider,"");validate(&original).unwrap();assert_eq!(serde_json::to_value(&original).unwrap(),before);
+  let mut bound=original.clone();bound.pets.get_mut("ai_lmstudio").unwrap().provider="lmstudio".into();validate(&bound).unwrap();assert_eq!(bound.pets["ai_lmstudio"].permissions,original.pets["ai_lmstudio"].permissions);assert_eq!(serde_json::to_value(&bound.pets["ai_ollama"]).unwrap(),before["pets"]["ai_ollama"]);assert_eq!(blueprint("ai_lmstudio").unwrap().configured_adapter(""),None);
+  for provider in ["codex","ollama","custom"]{bound.pets.get_mut("ai_lmstudio").unwrap().provider=provider.into();assert!(validate(&bound).is_err());}
+ }
+}

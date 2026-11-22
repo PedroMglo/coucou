@@ -55,6 +55,7 @@ pub struct ChatConfig {
 /// Why a turn failed, as far as the phone may know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatFail {
+    Busy,
     NoKey,
     Unreachable,
     Auth,
@@ -77,7 +78,7 @@ pub fn reason(code: &str) -> &'static str {
     match code {
         "off" => "Chat from the phone is turned off on the computer.",
         "not_allowed" => "That model is not allowed for the phone.",
-        "busy" => "Another answer is still being written.",
+        "busy" => "The computer is busy. Try again shortly.",
         "rate" => "Too many messages. Try again in a few minutes.",
         "too_long" => "The message is too long.",
         "empty" => "Nothing to send.",
@@ -92,6 +93,7 @@ pub fn reason(code: &str) -> &'static str {
 
 fn fail_code(f: ChatFail) -> &'static str {
     match f {
+        ChatFail::Busy => "busy",
         ChatFail::NoKey => "no_key",
         ChatFail::Unreachable => "unreachable",
         ChatFail::Auth => "auth",

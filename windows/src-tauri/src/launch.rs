@@ -24,7 +24,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use crate::{flow, herdr, platform, session_window};
+use crate::{platform, session_window};
 
 /// What to start: a program, its arguments, extra environment, its folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -335,37 +335,7 @@ pub async fn pick_folder(app: tauri::AppHandle, start: Option<String>) -> Option
 /// Brings the session's window forward and pastes the paths into it.
 /// "pasted"; "copied" when they could only be put on the clipboard (the
 /// window wasn't found, or the keystroke was refused); "failed".
-#[tauri::command]
-pub async fn drop_into_session(session_id: String, path: Option<String>, paths: Vec<String>) -> String {
-    let paths: Vec<String> = paths.into_iter().filter(|p| Path::new(p).is_absolute()).take(32).collect();
-    if paths.is_empty() {
-        return "failed".into();
-    }
-    let text = drop_text(&paths, cfg!(windows));
-    let folder = path.as_deref().map(session_window::folder_name).unwrap_or_default().to_string();
-    tauri::async_runtime::spawn_blocking(move || {
-        let in_herdr = herdr::focus(&session_id);
-        let focused = session_window::lookup(&session_id)
-            .is_some_and(|owners| platform::focus_session_window(&owners, &folder))
-            || in_herdr;
-        crate::log::line(format!("drop: {} file(s) into a session, window found: {focused}", paths.len()));
-        if !focused {
-            return if flow::paste::copy(&text) { "copied" } else { "failed" }.to_string();
-        }
-        // The window takes a moment to come forward and take the keyboard.
-        std::thread::sleep(Duration::from_millis(250));
-        // A Linux terminal pastes with Ctrl+Shift+V (VS Code's terminal too);
-        // Windows Terminal, VS Code and the console with Ctrl+V.
-        match flow::paste::paste(&text, cfg!(target_os = "linux")) {
-            flow::paste::Outcome::Pasted => "pasted",
-            flow::paste::Outcome::Copied => "copied",
-            flow::paste::Outcome::Failed => "failed",
-        }
-        .to_string()
-    })
-    .await
-    .unwrap_or_else(|_| "failed".into())
-}
+
 
 #[cfg(test)]
 mod tests {

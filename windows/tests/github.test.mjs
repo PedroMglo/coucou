@@ -181,34 +181,34 @@ beforeEach(() => {
   State.loadIntegrationTasks();
 });
 
-test("an alert badges the GitHub pill when another pill is on screen", () => {
+test("retired GitHub alerts cannot recreate a pet or add a badge", () => {
   emit("github-alerts", [{ kind: "mainFailed", repo: "a/b" }]);
-  assert.equal(github().pillBadge, "error");
-  assert.equal(github().state, "idle", "Mochi's state is left alone, as on macOS");
+  assert.equal(github(),undefined);
 });
 
-test("no badge while the GitHub pill is the one on screen", () => {
+test("a stale focus request cannot select retired GitHub", () => {
   State.setFocus(GITHUB);
   emit("github-alerts", [{ kind: "reviewRequested", prId: "a/b#1" }]);
-  assert.equal(github().pillBadge, null);
+  assert.equal(github(),undefined);
+  assert.notEqual(State.focusId,GITHUB);
 });
 
 test("nothing happens while paused", () => {
   State.paused = true;
   emit("github-alerts", [{ kind: "ciFailed", prId: "a/b#1" }]);
-  assert.equal(github().pillBadge ?? null, null);
+  assert.equal(github(),undefined);
 });
 
-test("showing the GitHub card asks Rust for a refresh, once per showing", () => {
+test("retired GitHub never asks Rust for a refresh even after stale focus requests", () => {
   State.setFocus(GITHUB);
   assert.deepEqual(sent("github_refresh"), [], "not while the island is closed");
   State.mode = "expanded";
   State.notify();
   State.notify();
-  assert.deepEqual(sent("github_refresh"), [{ section: "pulse" }]);
+  assert.deepEqual(sent("github_refresh"), []);
   State.setFocus("integration_claude");
   State.setFocus(GITHUB);
-  assert.deepEqual(sent("github_refresh"), [{ section: "pulse" }, { section: "pulse" }]);
+  assert.deepEqual(sent("github_refresh"), []);
 });
 
 test("the shared pulse card renders GitLab branding, stars, activity and safe profile links", async () => {
@@ -327,7 +327,7 @@ test("GitHub, GitLab and Gitea cards coexist and keep their own navigation", asy
   const oldIntegrations = State.integrations;
   State.integrations = {};
   try {
-    const hooks = { detailOpen: false, openDetail: () => {}, closeDetail: () => {}, openSettings: () => {} };
+    const hooks = { detail: null, openDetail: () => {}, closeDetail: () => {}, openSettings: () => {} };
     for (const provider of providers) {
       const id = `integration_${provider}`;
       const pulse = { login: "me", fetchedAt: 1, myPRs: [{ ...pr("me/app#1", "success"), url: `https://${provider}.com/me/app/pull/1` }], toReview: [], mainCI: [] };
@@ -337,7 +337,7 @@ test("GitHub, GitLab and Gitea cards coexist and keep their own navigation", asy
     calls.length = 0;
     const details = cards.map((card, index) => {
       card.find(".gh-stat")[0].fire("click");
-      return renderIntegrationCard({ id: `integration_${providers[index]}` }, { ...hooks, detailOpen: true });
+      return renderIntegrationCard({ id: `integration_${providers[index]}` }, { ...hooks, detail: {} });
     });
     assert.deepEqual(sent("github_refresh"), [{ section: "pulse" }]);
     assert.deepEqual(sent("refresh_integration"), [{ id: "integration_gitlab" }, { id: "integration_gitea" }]);

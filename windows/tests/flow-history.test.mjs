@@ -19,7 +19,6 @@ window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 document.documentElement = { lang: "en" };
 document.visibilityState = "hidden";
 const proto = Object.getPrototypeOf(root());
-proto.disabled = false;
 proto.prepend = function (...nodes) {
   const before = [...this.childNodes];
   this.replaceChildren(...nodes, ...before);

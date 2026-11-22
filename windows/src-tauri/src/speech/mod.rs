@@ -8,6 +8,9 @@
 // ~/.local/share/coucou/Models (Linux). From then on everything runs offline.
 
 pub mod audio;
+pub mod local_tts;
+pub mod edge_tts;
+pub mod whisper;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -282,7 +285,7 @@ fn threads() -> i32 {
 }
 
 /// The loaded recognizer, loading it on first use (about 2 s).
-pub fn recognizer() -> Option<Arc<OfflineRecognizer>> {
+fn load_recognizer() -> Option<Arc<OfflineRecognizer>> {
     if let Some(r) = recognizer_slot().lock().unwrap().clone() {
         return Some(r);
     }
@@ -310,6 +313,40 @@ pub fn recognizer() -> Option<Arc<OfflineRecognizer>> {
     }
     *recognizer_slot().lock().unwrap() = r.clone();
     r
+}
+
+/// Models are loaded only for voice work, then evicted after one idle minute.
+/// One sleeping task per cache, not a polling thread or a timer per dictation.
+pub fn recognizer() -> Option<Arc<OfflineRecognizer>> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static REAPING: AtomicBool = AtomicBool::new(false);
+    static USED: OnceLock<Mutex<Instant>> = OnceLock::new();
+    let result = load_recognizer()?;
+    *USED.get_or_init(|| Mutex::new(Instant::now())).lock().unwrap() = Instant::now();
+    if !REAPING.swap(true, Ordering::AcqRel) {
+        tauri::async_runtime::spawn(async {
+            let timeout = std::time::Duration::from_secs(60);
+            let mut wait = timeout;
+            loop {
+                tokio::time::sleep(wait).await;
+                let mut slot = recognizer_slot().lock().unwrap();
+                let elapsed = USED.get().unwrap().lock().unwrap().elapsed();
+                if elapsed >= timeout && slot.as_ref().is_none_or(|r| Arc::strong_count(r) == 1) {
+                    *slot = None;
+                    REAPING.store(false, Ordering::Release);
+                    drop(slot);
+                    // glibc can retain freed ONNX arenas. Return unused pages
+                    // once on eviction; no global allocator tuning or polling.
+                    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                    unsafe { libc::malloc_trim(0); }
+                    crate::log::line("Parakeet released after idle timeout");
+                    break;
+                }
+                wait = timeout.checked_sub(elapsed).unwrap_or(timeout);
+            }
+        });
+    }
+    Some(result)
 }
 
 /// Loads the model in the background, so the first dictation is not slowed down.

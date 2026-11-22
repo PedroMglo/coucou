@@ -78,7 +78,10 @@ export function h<K extends keyof HTMLElementTagNameMap>(
 ): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
-    if (v == null || v === false) continue;
+    // ARIA states use the strings "true"/"false"; unlike HTML boolean
+    // attributes, an empty value or omission does not express their state.
+    const aria = k.startsWith("aria-");
+    if (v == null || v === false && !aria) continue;
     if (v instanceof Msg) {
       const text = String(v);
       write(el, k, text);
@@ -90,7 +93,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(
     else if (k.startsWith("on") && typeof v === "function") {
       el.addEventListener(k.slice(2).toLowerCase(), v as EventListener);
     } else if (k === "style") el.setAttribute("style", String(v));
-    else el.setAttribute(k, v === true ? "" : String(v));
+    else el.setAttribute(k, v === true && !aria ? "" : String(v));
   }
   for (const c of children) {
     if (c == null || c === false) continue;

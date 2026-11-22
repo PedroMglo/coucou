@@ -9,7 +9,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc, atomic::AtomicBool};
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -17,6 +17,8 @@ use serde::Serialize;
 
 use super::SAMPLE_RATE;
 use crate::flow::logic::bands;
+#[path="audio_selection.rs"]mod selection;
+#[path="audio_worker.rs"]mod worker;
 
 // ── Resampling ────────────────────────────────────────────────────────────────
 
@@ -203,7 +205,7 @@ pub fn input_devices() -> Vec<InputDevice> {
     if let Ok(devices) = host.input_devices() {
         for d in devices {
             let name = device_name(&d);
-            if name.is_empty() || is_monitor(&d) || out.iter().any(|x: &InputDevice| x.name == name) {
+            if name.is_empty() || is_monitor(&d) || is_default_alias(&d) || out.iter().any(|x: &InputDevice| x.name == name) {
                 continue;
             }
             out.push(InputDevice { default: Some(&name) == default.as_ref(), name });
@@ -213,90 +215,144 @@ pub fn input_devices() -> Vec<InputDevice> {
     out
 }
 
+fn is_default_alias(d: &cpal::Device) -> bool {
+    // The picker already has "System default". PipeWire exposes a virtual
+    // default device as well as the real microphones; do not list it twice.
+    #[cfg(target_os = "linux")]
+    if let Ok(id) = d.id() {
+        return id.host() == cpal::HostId::PipeWire && id.id() == "input_default";
+    }
+    false
+}
+
 fn is_monitor(d: &cpal::Device) -> bool {
+    // PipeWire exposes sinks as duplex devices for capture, rather than as
+    // PulseAudio's separately named .monitor sources.
+    #[cfg(target_os = "linux")]
+    if d.id().is_ok_and(|id| id.host() == cpal::HostId::PipeWire) {
+        return d.supports_output();
+    }
     let id = device_id(d).to_lowercase();
     let name = device_name(d).to_lowercase();
     id.ends_with(".monitor") || name.starts_with("monitor of")
 }
 
-fn open_device(source: &Source) -> Option<cpal::Device> {
+fn open_device(source: &Source) -> Result<cpal::Device, String> {
     let host = cpal::default_host();
     match source {
-        Source::Mic(Some(name)) => host
-            .input_devices()
-            .ok()
-            .and_then(|mut it| it.find(|d| device_name(d) == *name))
-            .or_else(|| host.default_input_device()),
-        Source::Mic(None) => host.default_input_device(),
+        Source::Mic(name) => selection::microphone(name.as_deref(),
+            ||host.input_devices().map_err(|_|selection::Failure::Unavailable),
+            ||host.default_input_device(),
+            |d|selection::Description{name:device_name(d),monitor:is_monitor(d),default_alias:is_default_alias(d)}
+        ).map_err(selection::Failure::message),
         Source::System => system_device(&host),
     }
 }
 
 #[cfg(windows)]
-fn system_device(host: &cpal::Host) -> Option<cpal::Device> {
+fn system_device(host: &cpal::Host) -> Result<cpal::Device, String> {
     // WASAPI turns an output opened for input into its loopback.
-    host.default_output_device()
+    host.default_output_device().ok_or_else(||selection::Failure::Missing.message())
 }
 
 #[cfg(not(windows))]
-fn system_device(host: &cpal::Host) -> Option<cpal::Device> {
-    let sink = host.default_output_device()?;
-    let sink_id = device_id(&sink);
-    let wanted = format!("{}.monitor", sink_id.rsplit(':').next().unwrap_or(&sink_id));
-    let mut monitors: Vec<cpal::Device> = host.input_devices().ok()?.filter(is_monitor).collect();
-    let pos = monitors.iter().position(|d| device_id(d).ends_with(&wanted));
-    match pos {
-        Some(i) => Some(monitors.swap_remove(i)),
-        None => monitors.into_iter().next(),
+fn system_device(host: &cpal::Host) -> Result<cpal::Device, String> {
+    #[cfg(target_os = "linux")]
+    if host.id() == cpal::HostId::PipeWire {
+        // CPAL's virtual sink captures the default output and follows
+        // WirePlumber's default changes, including Bluetooth reconnects.
+        return selection::unique(host.devices().map_err(|_|selection::Failure::Unavailable.message())?,|d|d.id().is_ok_and(|id|id.host()==cpal::HostId::PipeWire&&id.id()=="sink_default")).map_err(selection::Failure::message);
     }
+    let sink = host.default_output_device().ok_or_else(||selection::Failure::Missing.message())?;
+    let sink_id = sink.id().map_err(|_|selection::Failure::Unavailable.message())?;
+    let wanted = format!("{}.monitor", sink_id.id());
+    let devices=host.input_devices().map_err(|_|selection::Failure::Unavailable.message())?;
+    selection::unique(devices,|d|is_monitor(d)&&d.id().is_ok_and(|id|id.host()==sink_id.host()&&id.id()==wanted)).map_err(selection::Failure::message)
 }
 
 /// An open input. Dropping it (or `stop`) closes the device.
 pub struct Capture {
-    stop: Option<mpsc::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    owner: Option<worker::Owner>,
+    device_id: String,
+}
+/// Stable backend feature owners. Changing a microphone or selecting another
+/// pet must not manufacture a fresh capture owner after a failed startup.
+#[derive(Clone,Copy)]
+pub enum CaptureUse{Voice,Dictation,MeetingMicrophone,MeetingSystem}
+impl CaptureUse{
+    fn key(self,source:&Source)->Result<&'static str,String>{
+        match(self,source){
+            (Self::Voice,Source::Mic(_))=>Ok("voice"),
+            (Self::Dictation,Source::Mic(_))=>Ok("dictation"),
+            (Self::MeetingMicrophone,Source::Mic(_))=>Ok("notesMicrophone"),
+            (Self::MeetingSystem,Source::System)=>Ok("notesSystem"),
+            _=>Err("The audio source does not belong to this capture operation.".into()),
+        }
+    }
 }
 
 impl Capture {
-    /// Opens `source` and calls `sink` with 16 kHz mono samples from the audio
-    /// thread. The stream lives on its own thread (cpal streams can't move).
-    pub fn start(source: Source, sink: impl FnMut(&[f32]) + Send + 'static) -> Result<Capture, String> {
-        let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
-        let (stop_tx, stop_rx) = mpsc::channel::<()>();
-        let thread = std::thread::Builder::new()
-            .name("coucou-audio".into())
-            .spawn(move || {
-                let stream = match build_stream(&source, sink) {
-                    Ok(s) => s,
-                    Err(err) => {
-                        let _ = ready_tx.send(Err(err));
-                        return;
-                    }
-                };
-                if let Err(err) = stream.play() {
-                    let _ = ready_tx.send(Err(err.to_string()));
-                    return;
-                }
-                let _ = ready_tx.send(Ok(()));
-                let _ = stop_rx.recv();
-                drop(stream);
-            })
-            .map_err(|e| e.to_string())?;
-        match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(())) => Ok(Capture { stop: Some(stop_tx), thread: Some(thread) }),
-            Ok(Err(err)) => Err(err),
-            Err(_) => Err("the audio device did not answer".into()),
-        }
+    /// The original native worker owns its request and endpoint until join.
+    pub fn start(source:Source,usage:CaptureUse,sink:impl FnMut(&[f32])+Send+'static)->Result<Capture,String>{
+        Self::start_owned(source,usage,None,None,sink)
+    }
+    /// Cancelling the caller revokes startup/play/data delivery without
+    /// turning normal capture completion into cancellation of the whole turn.
+    pub fn start_stoppable(source:Source,stop:Arc<AtomicBool>,sink:impl FnMut(&[f32])+Send+'static)->Result<Capture,String>{
+        Self::start_stoppable_for(source,CaptureUse::Voice,stop,sink)
+    }
+    pub(crate) fn start_stoppable_for(source:Source,usage:CaptureUse,stop:Arc<AtomicBool>,sink:impl FnMut(&[f32])+Send+'static)->Result<Capture,String>{
+        Self::start_owned(source,usage,Some(stop),None,sink)
+    }
+    pub(crate) fn start_hotword(
+        source: Source,
+        stop: Arc<AtomicBool>,
+        expected_device: Option<String>,
+        sink: impl FnMut(&[f32]) + Send + 'static,
+    ) -> Result<Capture, String> {
+        Self::start_owned(source, CaptureUse::Voice, Some(stop), expected_device, sink)
     }
 
-    pub fn stop(&mut self) {
-        if let Some(tx) = self.stop.take() {
-            let _ = tx.send(());
-        }
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
+    pub(crate) fn device_id(&self) -> &str {
+        &self.device_id
     }
+
+    fn start_owned(
+        source: Source,
+        usage: CaptureUse,
+        stop: Option<Arc<AtomicBool>>,
+        expected_device: Option<String>,
+        mut sink: impl FnMut(&[f32]) + Send + 'static,
+    ) -> Result<Capture, String> {
+        if matches!(&source,Source::Mic(Some(name))if name.is_empty()||name.len()>1024||name.chars().any(char::is_control)){return Err(selection::Failure::Invalid.message());}
+        let request=usage.key(&source)?;
+        let (identity_tx, identity_rx) = mpsc::channel();
+        let owner=worker::start(request,Duration::from_secs(5),stop,move|authority|{
+            let device=open_device(&source)?;
+            let identity=device.id().map_err(|_|"The selected audio endpoint has no verifiable native identity.".to_owned())?.to_string();
+            if expected_device.as_deref().is_some_and(|expected| expected != identity.as_str()) {
+                return Err("The original microphone has not returned.".into());
+            }
+            authority.device(&identity)?;
+            if !authority.current(){return Err("Audio capture was cancelled before opening the device.".into());}
+            identity_tx.send(identity).map_err(|_| "The capture owner is no longer available.".to_owned())?;
+            let current=authority.guard();
+            build_stream(&device,&source,move|data|{if current(){sink(data);}})
+        },|stream|stream.play().map_err(|error|error.to_string()))?;
+        let device_id = identity_rx.try_recv().map_err(|_| "The capture has no native device identity.".to_owned())?;
+        Ok(Capture{owner:Some(owner),device_id})
+    }
+    pub fn stop(&mut self){drop(self.owner.take());}
+}
+
+#[cfg(test)]
+#[test]
+fn capture_feature_owner_is_stable_across_targets_and_refuses_wrong_source_before_native_io(){
+    let a=Source::Mic(Some("first microphone".into()));let b=Source::Mic(Some("another microphone".into()));
+    assert_eq!(CaptureUse::Voice.key(&a).unwrap(),CaptureUse::Voice.key(&b).unwrap());
+    assert_ne!(CaptureUse::Voice.key(&a).unwrap(),CaptureUse::Dictation.key(&a).unwrap());
+    assert!(Capture::start(Source::System,CaptureUse::Voice,|_|panic!("wrong source captured")).is_err());
+    assert!(Capture::start(a,CaptureUse::MeetingSystem,|_|panic!("wrong source captured")).is_err());
 }
 
 impl Drop for Capture {
@@ -305,8 +361,7 @@ impl Drop for Capture {
     }
 }
 
-fn build_stream(source: &Source, mut sink: impl FnMut(&[f32]) + Send + 'static) -> Result<cpal::Stream, String> {
-    let device = open_device(source).ok_or("no audio device")?;
+fn build_stream(device:&cpal::Device,source: &Source, mut sink: impl FnMut(&[f32]) + Send + 'static) -> Result<cpal::Stream, String> {
     let supported = if *source == Source::System && cfg!(windows) {
         device.default_output_config().map_err(|e| e.to_string())?
     } else {
@@ -344,19 +399,19 @@ fn build_stream(source: &Source, mut sink: impl FnMut(&[f32]) + Send + 'static) 
             config,
             move |data: &[f32], _| push(&mut data.iter().copied()),
             err_fn,
-            None,
+            Some(Duration::from_secs(2)),
         ),
         cpal::SampleFormat::I16 => device.build_input_stream::<i16, _, _>(
             config,
             move |data: &[i16], _| push(&mut data.iter().map(|&s| s as f32 / 32768.0)),
             err_fn,
-            None,
+            Some(Duration::from_secs(2)),
         ),
         cpal::SampleFormat::I32 => device.build_input_stream::<i32, _, _>(
             config,
             move |data: &[i32], _| push(&mut data.iter().map(|&s| s as f32 / 2_147_483_648.0)),
             err_fn,
-            None,
+            Some(Duration::from_secs(2)),
         ),
         cpal::SampleFormat::I24 => device.build_input_stream::<cpal::I24, _, _>(
             config,
@@ -368,7 +423,7 @@ fn build_stream(source: &Source, mut sink: impl FnMut(&[f32]) + Send + 'static) 
             config,
             move |data: &[u16], _| push(&mut data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0)),
             err_fn,
-            None,
+            Some(Duration::from_secs(2)),
         ),
         other => return Err(format!("unsupported sample format {other:?}")),
     };
@@ -558,4 +613,43 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]), 8);
     }
+}
+
+/// Opt-in device checks: discarded samples only, never a recording or a model
+/// call. Run on a desktop with `cargo test capture_probe -- --ignored --nocapture`.
+#[cfg(all(test, target_os = "linux"))]
+mod capture_probe {
+    use super::*;
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::time::Instant;
+
+    fn probe(source: Source) {
+        for run in 0..20 {
+            let samples = Arc::new(AtomicUsize::new(0));
+            let counter = samples.clone();
+            let before = Instant::now();
+            let mut capture = Capture::start(source.clone(), if source==Source::System{CaptureUse::MeetingSystem}else{CaptureUse::Dictation}, move |data| {
+                counter.fetch_add(data.len(), Ordering::Relaxed);
+            }).expect("capture starts");
+            let started = before.elapsed();
+            std::thread::sleep(Duration::from_millis(400));
+            let stopping = Instant::now();
+            capture.stop();
+            let stopped = stopping.elapsed();
+            let count = samples.load(Ordering::Relaxed);
+            eprintln!("capture {source:?} run={run} start_ms={:.2} stop_ms={:.2} samples={count}",
+                started.as_secs_f64()*1000.0, stopped.as_secs_f64()*1000.0);
+            assert!(count > 0, "audio frames arrive");
+            assert!(started < Duration::from_secs(3), "bounded start");
+            assert!(stopped < Duration::from_secs(1), "prompt stop");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the user's microphone and PipeWire session"]
+    fn microphone() { probe(Source::Mic(None)); }
+
+    #[test]
+    #[ignore = "requires the user's PipeWire session and active playback"]
+    fn system_sound() { probe(Source::System); }
 }

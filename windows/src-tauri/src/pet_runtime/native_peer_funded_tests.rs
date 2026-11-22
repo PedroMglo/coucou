@@ -1,0 +1,20 @@
+//! Real native peer Driver for source pools, funded recipients and recursion.
+use super::*;
+use crate::pet_runtime::{native_peer_plan,disclosure_consent::Consent,lease_controller::dispatcher::Phase};
+fn requested(s:&Setup,g:&Record,b:Budget)->Record{
+ let at=now();let(config,settings)=s.observe().unwrap();let observe:native_peer_plan::Observe=Arc::new(move||Ok((config.clone(),settings.clone())));
+ let r=AdmissionReview::prepare_deterministic(g,crate::pet_runtime::deterministic_runtime_tests::evidence(g,at),b,nonce().unwrap(),nonce().unwrap(),at).unwrap().with_native_peer_plan(g,&s.f.path.join("goals"),&s.f.path.join("authority"),observe,Some(crate::pet_runtime::planning::Start::WhenAvailable),at).unwrap();
+ let a=r.approve_with_scopes(g,crate::pet_runtime::deterministic_runtime_tests::evidence(g,at),None,Some(Consent::BoundedNativePeerPlan),at).unwrap();let c=s.a.certify(&a,g,at).unwrap();let q=current_store(s).enqueue_certified(&c,at).unwrap().record;assert_eq!(q.schema_version,47);q
+}
+fn drive(s:&Setup,q:&Record)->Record{let(g,o)=crate::pet_runtime::deterministic_runtime_tests::owned(&s.f,&s.a,q,&s.main);let(d,status)=native_peer_plan::tests::run_with(&s.f,o,s.config.clone(),s.settings.clone());assert_eq!(status.phase,Phase::Completed);drop(d);current_store(s).read(&g.id,&g.spec.owner.pet_id).unwrap()}
+#[test]fn native_peer_funded_recipient_uses_own_review_and_same_parent_reservation_for_all_factory_identities(){
+ for pet in ["agent_codex","agent_copilot","agent_antigravity","ai_ollama","ai_lmstudio","ai_openai","integration_spotify"]{
+  let s=setup();let(parent,_parent_owner,r)=source(&s,pet);let g=own_draft(&s,&r);let q=requested(&s,&g,child_budget(&r));assert_eq!(q.admissions[0].spec.schema_version,11);let done=drive(&s,&q);assert_eq!(done.admissions.len(),1);let row=&done.admissions[0];let p=&g.plans[0];let receipt=s.a.message_at(&row.spec,row.proof.as_ref().unwrap(),&p.id,&p.steps[0].id).unwrap().unwrap();assert_eq!(receipt.envelope().schema_version,5);assert!(!receipt.envelope().provider_use_authorized);let v=s.a.delegation_view(&parent,&parent.admissions[0].spec.decision_id,now()).unwrap();assert!(v.held.is_some());assert_eq!(row.spec.budget.max_model_calls,0);
+ }
+}
+#[test]fn native_peer_root_fanout_recursive_pool_and_leaf_use_the_common_driver_without_coordinator_or_models(){
+ let s=setup();let mut b=budget();b.max_model_calls=0;b.max_tool_calls=8;b.max_output_bytes=131072;
+ let root=pool_draft(&s,"ai_ollama","ai_lmstudio",vec![crate::pet_runtime::criteria::NATIVE_MESSAGE_CRITERION.into()],2,b.clone(),Allowance{model_calls:0,tool_calls:3,output_bytes:32768});let q=requested(&s,&root,b);assert_eq!(q.admissions[0].spec.schema_version,10);let done=drive(&s,&q);let root_done=done.clone();let row=&done.admissions[0];let p=&done.plans[0];let r=s.a.message_at(&row.spec,row.proof.as_ref().unwrap(),&p.id,&p.steps[0].id).unwrap().unwrap();let sibling=s.a.message_at(&row.spec,row.proof.as_ref().unwrap(),&p.id,&p.steps[1].id).unwrap().unwrap();assert_ne!(r.envelope().message_id,sibling.envelope().message_id);
+ let g=pool_plan(&s,&r,"integration_spotify",2);let q=requested(&s,&g,limits(&r));assert_eq!(q.admissions[0].spec.schema_version,17);let done=drive(&s,&q);let row=&done.admissions[0];let p=&done.plans[0];let nested=s.a.message_at(&row.spec,row.proof.as_ref().unwrap(),&p.id,&p.steps[0].id).unwrap().unwrap();assert_eq!(nested.envelope().schema_version,7);
+ let g=own_data(&s,&nested);let g=plan(&s,&g,crate::pet_runtime::plans::OperationProposal{operation_id:"pet.reply".into(),version:2,arguments:json!({"toPetId":nested.envelope().origin.pet_id,"source":ReceivedReference::from_receipt(&nested).unwrap(),"text":"Own bounded leaf result, not authority","expiresAt":nested.envelope().deadline_at})});let q=requested(&s,&g,limits(&nested));assert_eq!(q.admissions[0].spec.schema_version,18);let leaf=drive(&s,&q);assert_eq!(leaf.state,State::Completed);let v=s.a.delegation_view(&root_done,&root_done.admissions[0].spec.decision_id,now()).unwrap();assert_eq!(v.reservations.len(),2);assert!(v.reservations.iter().any(|r|r.message_id==sibling.envelope().message_id));
+}

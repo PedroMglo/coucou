@@ -36,14 +36,18 @@ export interface WhatsNewFile {
 
 /** -1, 0 or 1, numerically: 0.10.0 is after 0.9.3, 0.5 equals 0.5.0. */
 export function compareVersions(a: string, b: string): number {
-  const x = a.split(".").map((n) => Number.parseInt(n, 10) || 0);
-  const y = b.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const [ar, ab] = a.split("-mochi.");
+  const [br, bb] = b.split("-mochi.");
+  const x = ar.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const y = br.split(".").map((n) => Number.parseInt(n, 10) || 0);
   for (let i = 0; i < Math.max(x.length, y.length); i++) {
     const l = x[i] ?? 0;
     const r = y[i] ?? 0;
     if (l !== r) return l > r ? 1 : -1;
   }
-  return 0;
+  const leftBuild = ab === undefined ? Infinity : Number.parseInt(ab, 10);
+  const rightBuild = bb === undefined ? Infinity : Number.parseInt(bb, 10);
+  return leftBuild === rightBuild ? 0 : leftBuild > rightBuild ? 1 : -1;
 }
 
 /** The entry of exactly this version, or null (then there is no card). */

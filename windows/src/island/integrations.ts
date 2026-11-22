@@ -1,3 +1,4 @@
+import {petRetired} from "../core/pet-factory";
 // Integration events → island state. Port of the `handle…` methods in the Swift
 // pollers: a genuinely new item flips the pill to finished/error, badges it when
 // the pill isn't focused, plays a sound, and clears itself after 60 s.
@@ -28,6 +29,7 @@ export function registerIntegrationHandlers(island: Island) {
  * is focused, as on macOS.
  */
 export function handleGitHubAlerts(events: GitHubEvent[]) {
+  if(petRetired(GITHUB))return;
   if (State.paused) return;
   const alert = gitHubAlert(events);
   if (!alert) return;
@@ -42,6 +44,7 @@ let gitHubShown = false;
 
 /** The GitHub card just came on screen (focused, island opened): refresh it if stale. */
 function refreshGitHubWhenShown() {
+  if(petRetired(GITHUB))return;
   const shown = State.mode === "expanded" && State.focusTask?.id === GITHUB;
   if (shown && !gitHubShown) void Bridge.githubRefresh("pulse");
   gitHubShown = shown;
@@ -92,6 +95,7 @@ export async function refreshHookPills() {
 }
 
 export function handleIntegrationUpdate(island: Pick<Island, "reveal">, update: IntegrationUpdate) {
+  if(petRetired(update.id))return;
   if (State.paused) return;
 
   const previous = State.integrations[update.id];
@@ -99,7 +103,8 @@ export function handleIntegrationUpdate(island: Pick<Island, "reveal">, update: 
     data: update.error ? (previous?.data ?? {}) : update.data,
     error: update.error,
     loaded: update.error ? (previous?.loaded ?? false) : true,
-    configured: true,
+    configured: update.error ? previous?.configured ?? true : true,
+    activity: update.event ?? (update.id !== "integration_n8n" || (typeof update.data.id === "string" && update.data.id === previous?.data.id) ? previous?.activity ?? null : null),
   };
 
   const event = update.event;
@@ -115,7 +120,7 @@ export function handleIntegrationUpdate(island: Pick<Island, "reveal">, update: 
       Sound.play(event.success ? "finish" : "error");
       // Same as the Swift pollers: show the compact island so the badge is seen,
       // but never steal the screen for a successful deploy.
-      island.reveal();
+      if (!State.settings.companionMode) island.reveal();
 
       const existing = clearTimers.get(update.id);
       if (existing != null) window.clearTimeout(existing);
@@ -123,8 +128,14 @@ export function handleIntegrationUpdate(island: Pick<Island, "reveal">, update: 
         update.id,
         window.setTimeout(() => {
           clearTimers.delete(update.id);
+          const info = State.integrations[update.id];
+          const cleared = info?.activity === event;
+          if (cleared) info.activity = null;
           const t = State.tasks.find((x) => x.id === update.id);
-          if (!t || (t.state !== "finished" && t.state !== "error")) return;
+          if (!t || (t.state !== "finished" && t.state !== "error")) {
+            if (cleared) State.notify();
+            return;
+          }
           t.state = "idle";
           t.steps = [];
           t.stepIndex = 0;

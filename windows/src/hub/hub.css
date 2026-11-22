@@ -2,6 +2,11 @@
    and on top of each page a coloured band where little Mochis walk. Same
    look as the Mac's Coucou window (FlowHub.swift). */
 
+/* Layout classes such as .hub-card must not expose inactive views/reviews. */
+body.hub-window [hidden] {
+  display: none !important;
+}
+
 :root {
   --hub-panel: #0e0f11;
   --hub-card: #18191c;
