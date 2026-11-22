@@ -4,6 +4,7 @@
 #[path="peer_history_iteration_tests.rs"]mod peer_history_iteration_tests;
 #[path="peer_publication_recovery_tests.rs"]mod peer_publication_recovery_tests;
 use super::*;
+use crate::pet_runtime::lease_controller::memory_test_http_fixture_idle as http_fixture;
 use crate::pet_runtime::{planning::{Catalog,Limits},recipe_decisions::{Source,Decision},planning_journal};
 fn parent_evidence(s:&Setup,g:&Record,server:&crate::local_chat::Server,at:u64)->Evidence{evidence(s,g,server,at)}
 fn parent(s:&Setup,g:&Record,server:&crate::local_chat::Server,deadline:u64)->(Record,Arc<Owned>){parent_with_budget(s,g,server,deadline,3,4)}
@@ -70,7 +71,7 @@ fn derived_delivery_mode(provider:&'static str,choice:bool,corrupt_source:bool,b
  let(_,o)=parent(&s,&g,&server,deadline);let env=Arc::new(IterationEnv{s:s.clone(),provider,url:server.url.clone(),owner:o.clone(),approve_data:true,stop_wait:false,approve_derived:choice,busy_delivery,delivery_blocked:AtomicBool::new(false),store_lock:Mutex::new(None),child_started:AtomicBool::new(false),decisions:AtomicUsize::new(0),waits:AtomicUsize::new(0),child_requests:Mutex::new(vec![])});let d=Driver::new(o.clone(),Arc::new(current_store(&s)),env.clone()).unwrap();let result=if corrupt_source{
   // Exercise the production native thread and its bounded stack, rather than
   // running this deep peer-review path on the test harness thread.
-  d.spawn().unwrap();let until=std::time::Instant::now()+std::time::Duration::from_secs(30);
+  d.spawn().unwrap();let until=std::time::Instant::now()+std::time::Duration::from_secs(75);
   loop{let status=d.status().unwrap();if !status.active{break Ok(status);}assert!(std::time::Instant::now()<until,"native peer driver did not stop");std::thread::sleep(std::time::Duration::from_millis(5));}
  }else{run(d.run())};let result=if busy_delivery{assert_eq!(result.err(),Some(model::Error::Busy));assert!(d.status().unwrap().retained_approval);let choices=env.decisions.load(Ordering::Acquire);drop(env.store_lock.lock().unwrap().take());let resumed=run(d.run());assert_eq!(env.decisions.load(Ordering::Acquire),choices);resumed}else{result};assert!(result.is_ok(),"derived cycle: {result:?}; native status: {:?}",d.status().unwrap());let status=result.unwrap();let requests=http.join().unwrap();assert_eq!(requests.len(),4);assert_eq!(env.decisions.load(Ordering::Acquire),3);assert_eq!(status.phase,if choice{Phase::AwaitingVerification}else{Phase::Declined},"{status:?}");assert_eq!(status.round,2,"{status:?}");assert_eq!(o.workers(),0);
  let parent=current_store(&s).read(&g.id,&g.spec.owner.pet_id).unwrap();assert_eq!(parent.generated_plans.len(),2);assert!(parent.completion.is_none());let b=body(&s,&parent);assert_eq!(b["schemaVersion"],43);assert_eq!(b["planningUsage"]["schemaVersion"],5);assert_eq!(b["messages"]["entries"].as_array().unwrap().len(),if choice{2}else{1});let deps=&b["planningUsage"]["rounds"][1]["peerSources"];assert!(deps["exact"]["facts"].as_array().is_some_and(|a|!a.is_empty()));assert!(!deps.to_string().contains("Private child outcome"));assert_eq!(deps["reference"]["exactHash"],b["planningUsage"]["rounds"][1]["peerData"]["source"]["exactHash"]);

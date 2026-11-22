@@ -2,7 +2,16 @@ use super::*;
 use crate::pet_runtime::{project_goal_observation as observed,store::Store};
 struct F{project:ProjectFixture,store:Store,goal:Record,now:u64}
 impl F{
- fn new()->Self{let mut project=ProjectFixture::new();project.bind();let now=crate::assistant_memory::now();let store=Store::ensure_native(&project.files.root.join("goals")).unwrap();let g=store.create(project.goal.spec.clone(),now).unwrap().record;let goal=store.mutate(&g.id,"ai_ollama",&g.revision,"project-binding".into(),Action::BindContext{binding:project.goal.execution_context.clone().unwrap()},now+1).unwrap().record;Self{project,store,goal,now:now+2}}
+ fn new()->Self{
+  let mut project=ProjectFixture::new();
+  project.bind();
+  let now=crate::assistant_memory::now();
+  let store=Store::ensure_native(&project.files.root.join("goals")).unwrap();
+  let g=store.create(project.goal.spec.clone(),now).unwrap().record;
+  let goal=store.mutate(&g.id,"ai_ollama",&g.revision,"project-binding".into(),
+      Action::BindContext{binding:project.goal.execution_context.clone().unwrap()},now).unwrap().record;
+  Self{project,store,goal,now}
+ }
  fn scope(&self)->observed::Selection{observed::Selection::capture(&self.project.files.catalog(),"ai_ollama",&self.project.project.conversation_ids[0],&self.project.choice(),vec![observed::Reference::of(&self.goal).unwrap()],true,self.now).unwrap()}
  fn capture(&self,scope:&observed::Selection,now:u64)->Result<observed::Snapshot>{observed::capture(&self.store,&self.project.files.root.join("authority"),&self.project.files.catalog(),scope,None,now)}
 }

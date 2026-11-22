@@ -38,9 +38,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            windows/target
-          key: phone-link-win-${{ hashFiles('windows/Cargo.lock') }}
-          restore-keys: phone-link-win-
+          key: phone-link-win-source-${{ hashFiles('windows/Cargo.lock') }}
+          restore-keys: phone-link-win-source-
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm test

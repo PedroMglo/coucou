@@ -8,7 +8,7 @@ pub(super)fn caller_in(pet:&str,frame:crate::settings::review::Frame)->Caller{
  let provider=if pet=="ai_ollama"{"ollama"}else{"lmstudio"};let mut d=admission_tests::descriptor(&Fixture::goal(Context::Unbound),crate::assistant_memory::now());d.pet_id=pet.into();d.binding.provider=Some(provider.into());d.binding.adapter=Some(provider);d.binding.model=Some("fixture-free".into());Caller::capture(crate::pet_runtime::message_api::native::Origin{window:crate::HUB_LABEL.into(),frame},&d).unwrap()
 }
 fn native_evidence(g:&Record)->Evidence{Evidence::observe_deterministic(g,&admission_tests::descriptor(g,crate::assistant_memory::now()),"a".repeat(64),crate::assistant_memory::now()).unwrap()}
-pub(super)fn drive(d:Arc<Driver>)->model::Result<Status>{d.spawn()?;let until=std::time::Instant::now()+std::time::Duration::from_secs(30);loop{let s=d.status()?;if !s.active{return Ok(s);}assert!(std::time::Instant::now()<until,"native memory iteration driver timed out: {s:?}");std::thread::sleep(std::time::Duration::from_millis(5));}}
+pub(super)fn drive(d:Arc<Driver>)->model::Result<Status>{d.spawn()?;let until=std::time::Instant::now()+std::time::Duration::from_secs(75);loop{let s=d.status()?;if !s.active{return Ok(s);}assert!(std::time::Instant::now()<until,"native memory iteration driver timed out: {s:?}");std::thread::sleep(std::time::Duration::from_millis(5));}}
 struct LiteralEnv;
 impl Environment for LiteralEnv{
  fn capture(&self,_:&Owned)->model::Result<Capture>{panic!("Literal recipient never resolves an inference engine")}

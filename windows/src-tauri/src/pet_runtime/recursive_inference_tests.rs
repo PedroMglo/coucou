@@ -1,6 +1,7 @@
 //! Recursive source, own R43 consent and the same finite native Driver.
 //! HTTP/model metadata are synthetic; no credentials, paid quota or devices.
 use super::*;
+use crate::pet_runtime::lease_controller::memory_test_http_fixture_idle as http_fixture;
 use crate::pet_runtime::{received_request::Review as DataReview,messages::ReceivedReference};
 fn at()->u64{crate::assistant_memory::now()}
 fn setup()->Setup{let mut s=Setup::new();s.settings.active_integrations=s.config.pets.keys().cloned().collect();s}

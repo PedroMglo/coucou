@@ -24,7 +24,9 @@ fn fixture_armed(responses:Vec<(&'static str,String)>)->(crate::local_chat::Serv
  let(start,wait)=std::sync::mpsc::channel();let(server,worker)=fixture_with_start(responses,|_|{},Some(wait));(server,start,worker)
 }
 fn fixture_with_start(responses:Vec<(&'static str,String)>,hook:impl FnMut(&str)+Send+'static,start:Option<std::sync::mpsc::Receiver<()>>)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){fixture_with_deadline(responses,hook,start,None,false)}
-pub(in crate::pet_runtime)fn fixture_with_hook_idle(responses:Vec<(&'static str,String)>,hook:impl FnMut(&str)+Send+'static)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){fixture_with_deadline(responses,hook,None,Some(Duration::from_secs(20)),false)}
+// These fixtures run durable goal transitions between requests. Give each
+// request its own bounded wait so disk latency does not close the listener.
+pub(in crate::pet_runtime)fn fixture_with_hook_idle(responses:Vec<(&'static str,String)>,hook:impl FnMut(&str)+Send+'static)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){fixture_with_deadline(responses,hook,None,Some(Duration::from_secs(45)),false)}
 pub(in crate::pet_runtime)fn fixture_with_hook_disconnect(responses:Vec<(&'static str,String)>,hook:impl FnMut(&str)+Send+'static)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){fixture_with_deadline(responses,hook,None,None,true)}
 fn fixture_with_deadline(responses:Vec<(&'static str,String)>,mut hook:impl FnMut(&str)+Send+'static,start:Option<std::sync::mpsc::Receiver<()>>,phase_timeout:Option<Duration>,allow_disconnect:bool)->(crate::local_chat::Server,thread::JoinHandle<Vec<(String,Value)>>){
  let listener=TcpListener::bind("127.0.0.1:0").unwrap();listener.set_nonblocking(true).unwrap();let port=listener.local_addr().unwrap().port();

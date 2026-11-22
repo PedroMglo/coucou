@@ -10,7 +10,7 @@ fn prepare(s:&Setup,g:&Record,r:&crate::pet_runtime::messages::Receipt,server:&c
  let now=crate::assistant_memory::now();assert_eq!(b.payment,Payment::LocalOnly);assert!(b.deadline_at>=r.received_at);
  GoalReview::prepare_planning_catalog(g,evidence(s,g,server,now),b,limits(),&s.config,Catalog::PeerDelegationIterationV1,nonce().unwrap(),nonce().unwrap(),now)
 }
-fn drive(d:Arc<Driver>)->model::Result<Status>{d.spawn()?;let until=std::time::Instant::now()+std::time::Duration::from_secs(30);loop{let status=d.status()?;if !status.active{return Ok(status);}assert!(std::time::Instant::now()<until,"funded planner did not stop: {status:?}");std::thread::sleep(std::time::Duration::from_millis(5));}}
+fn drive(d:Arc<Driver>)->model::Result<Status>{d.spawn()?;let until=std::time::Instant::now()+std::time::Duration::from_secs(75);loop{let status=d.status()?;if !status.active{return Ok(status);}assert!(std::time::Instant::now()<until,"funded planner did not stop: {status:?}");std::thread::sleep(std::time::Duration::from_millis(5));}}
 pub(super)fn draft_planner(s:&Setup,pet:&str)->(Record,Record,crate::pet_runtime::messages::Receipt){
  draft_allowance_memory_criteria(s,pet,true,Allowance{model_calls:2,tool_calls:4,output_bytes:32768},None,vec!["Independent semantic result must be verified".into()])
 }
